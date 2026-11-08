@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use contract::events::{CallStatus, Event, HandoffTrigger, OnFork};
+use contract::events::{CallStatus, CompactionTrigger, Event, OnFork};
 use contract::hook::*;
 use serde_json::{Map, json};
 
@@ -575,9 +575,9 @@ fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
                 cancel: &cancel,
             });
         }
-        "before_handoff" => {
-            session.before_handoff(&BeforeHandoff {
-                trigger: HandoffTrigger::Person,
+        "before_compaction" => {
+            session.before_compaction(&BeforeCompaction {
+                trigger: CompactionTrigger::Person,
                 instructions: None,
                 conversation: &[],
                 cancel: &cancel,
@@ -662,7 +662,7 @@ fn state_changed_hooks_carry_and_no_change_hooks_drain_once() {
         ("session_start", "{context='context'}"),
         ("turn_start", "{context='context'}"),
         ("turn_end", "{message='message'}"),
-        ("before_handoff", "{note='note'}"),
+        ("before_compaction", "{note='note'}"),
     ] {
         for (return_value, changed) in [(returned, true), ("nil", false)] {
             let home = Home::new();
@@ -731,7 +731,7 @@ fn state_later_chain_failures_drop_carried_lines_but_keep_the_taken_view() {
         ("session_start", "{context='context'}"),
         ("turn_start", "{context='context'}"),
         ("turn_end", "{message='message'}"),
-        ("before_handoff", "{note='note'}"),
+        ("before_compaction", "{note='note'}"),
     ] {
         for policy in ["blocking", "non-blocking"] {
             let home = Home::new();
@@ -805,7 +805,7 @@ fn state_superseded_changes_keep_both_hooks_lines_in_order() {
             "assert(arg.arguments.n == 1); return {arguments={n=2}}",
         ),
         (
-            "before_handoff",
+            "before_compaction",
             "return {note='first'}",
             "assert(arg.note == 'first'); return {note='second'}",
         ),

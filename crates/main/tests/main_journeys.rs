@@ -2635,7 +2635,7 @@ fn replay_tool_call(id: &str, name: &str, arguments: &Value) -> Response {
 
 /// User messages decoded from one captured Anthropic Messages request:
 /// each `role: user` message's text parts joined, mirroring
-/// `user_messages` (`handoff_kept.rs`) for the Responses envelope.
+/// `user_messages` (`compaction_kept.rs`) for the Responses envelope.
 fn replay_user_messages(body: &[u8]) -> Vec<String> {
     let request: Value = serde_json::from_slice(body).unwrap();
     request["messages"]
@@ -2659,7 +2659,7 @@ fn replay_user_messages(body: &[u8]) -> Vec<String> {
 }
 
 /// The `seq` of the logged turn whose input contains `text`, mirroring
-/// `turn_started_seq` (`handoff_kept.rs`) over the session's events file.
+/// `turn_started_seq` (`compaction_kept.rs`) over the session's events file.
 fn replay_turn_seq(lines: &[Value], text: &str) -> u64 {
     lines
         .iter()
@@ -2699,16 +2699,16 @@ fn replay_ask(run: &mut Run, text: &str, wait_for: &str) {
 }
 
 /// The recorded #3969 exchange replayed: the person's messages that still
-/// bind survive a handoff on the Databricks Anthropic route. Discovery
+/// bind survive a compaction on the Databricks Anthropic route. Discovery
 /// answers the two Unity Catalog endpoints once at startup, then the
-/// turns run the scripted pre-handoff replies with the recorded text
-/// reply answering the first post-handoff request; the journey asserts
-/// the labelled pair blocks handoff_kept pins. Evidence for #3969, whose
-/// parent dropped kept messages' replies from the post-handoff request.
+/// turns run the scripted pre-compaction replies with the recorded text
+/// reply answering the first post-compaction request; the journey asserts
+/// the labelled pair blocks compaction_kept pins. Evidence for #3969, whose
+/// parent dropped kept messages' replies from the post-compaction request.
 #[test]
-fn replay_databricks_handoff_keeps_labelled_pairs() {
+fn replay_databricks_compaction_keeps_labelled_pairs() {
     run_journey(
-        "replay_databricks_handoff_keeps_labelled_pairs",
+        "replay_databricks_compaction_keeps_labelled_pairs",
         // As in the earlier journeys: the body borrows the fake server,
         // so the standard `catch_unwind` wrapper applies.
         std::panic::AssertUnwindSafe(|| {
@@ -2731,11 +2731,11 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
             script.push(replay_text_reply("The skill is loaded."));
             script.push(replay_tool_call(
                 "toolu_2",
-                "handoff",
-                &json!({"note": "The handoff note."}),
+                "compact",
+                &json!({"note": "The compaction note."}),
             ));
             script.push(Response::stream(
-                include_bytes!("fixtures/provider_replay/3969_post_handoff_text.sse").as_slice(),
+                include_bytes!("fixtures/provider_replay/3969_post_compaction_text.sse").as_slice(),
             ));
             let server = ProviderServer::start(script).unwrap();
             let host = install_replay_databricks_package(&setup, &server);
@@ -2766,8 +2766,8 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
             replay_ask(&mut run, "Which color?", "Which color should I use?");
             replay_ask(&mut run, "Blue.", "Which number should I use?");
             replay_ask(&mut run, "Seven.", "The skill is loaded.");
-            replay_ask(&mut run, "Please hand off now.", "lovely human");
-            // Confirm the reviewer, skill tool and handoff all ran before
+            replay_ask(&mut run, "Please compact now.", "lovely human");
+            // Confirm the reviewer, skill tool and compaction all ran before
             // inspecting the request bytes, so a broken setup cannot
             // masquerade as the regression.
             let sessions = sessions(&setup);
@@ -2805,12 +2805,12 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
             let resent = lines
                 .iter()
                 .find(|line| line["kind"] == "skills_resent")
-                .expect("the loaded skill was resent after handoff");
+                .expect("the loaded skill was resent after compaction");
             assert_eq!(resent["payload"]["skills"].as_array().unwrap().len(), 1);
             let completed = lines
                 .iter()
-                .find(|line| line["kind"] == "handoff_completed")
-                .expect("the handoff completed");
+                .find(|line| line["kind"] == "compaction_completed")
+                .expect("the compaction completed");
             assert_eq!(completed["payload"]["outcome"], "completed");
             let requests = server.requests();
             assert!(requests.len() >= 8, "{}", requests.len());
@@ -2833,16 +2833,16 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
             assert!(before.contains("Which color?"));
             assert!(before.contains("Blue."));
             assert!(before.contains("Seven."));
-            assert!(before.contains("Please hand off now."));
+            assert!(before.contains("Please compact now."));
             assert!(
                 !before.contains("The person's earlier message:")
                     && !before.contains("The person's new message:")
                     && !before.contains("Skills reloaded from the previous context:"),
-                "handoff-only framing must not leak into ordinary requests"
+                "compaction-only framing must not leak into ordinary requests"
             );
             let messages = replay_user_messages(&post.body);
             let flattened = messages.join("");
-            // docs/handoff.md, "What the model sees after a handoff", item 4:
+            // docs/compaction.md, "What the model sees after a compaction", item 4:
             // "each in its own labelled block" — two kept answers, two blocks.
             // The Anthropic envelope carries them in one user message, so
             // the count and the order below read the flattened text.
@@ -2853,8 +2853,8 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
             );
             let pair_one = "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
             let pair_two = "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
-            let current = "The person's new message:\nPlease hand off now.";
-            let note = "The handoff note.";
+            let current = "The person's new message:\nPlease compact now.";
+            let note = "The compaction note.";
             let skill = &resent["payload"]["skills"][0];
             let skill_block = format!(
                 "Skills reloaded from the previous context:\n{} — {}\n\n{}",
@@ -2862,7 +2862,7 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
                 skill["path"].as_str().unwrap(),
                 skill["content"].as_str().unwrap(),
             );
-            // docs/handoff.md, "What the model sees after a handoff", "In order:":
+            // docs/compaction.md, "What the model sees after a compaction", "In order:":
             // each block present once, oldest first, then the new message,
             // the note and the reloaded skill.
             let positions: Vec<usize> = [pair_one, pair_two, current, note, skill_block.as_str()]

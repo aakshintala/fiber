@@ -28,7 +28,7 @@ impl Tool for NameSession {
             name: "name_session".to_owned(),
             description: "Names this session, so the session list and the terminal show what \
                  the work is about. Name the session after the first prompt, and rename it \
-                 when the work's topic changes, a handoff included."
+                 when the work's topic changes, a compaction included."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -63,7 +63,7 @@ impl Tool for NameSession {
         match crate::tool_util::parsed::<Args>(arguments) {
             Ok(Args { name }) => Output {
                 control: Some(Control {
-                    handoff: None,
+                    compact: None,
                     questions: None,
                     skill: None,
                     name: Some(name),

@@ -161,11 +161,11 @@ Fiber: a message from session {session_id}. Another session wrote it, not the pe
 
 ## nudge
 
-Fiber: your context holds {tokens} tokens. At {trigger_at} tokens Fiber will ask you for a handoff note and continue this work from it in a fresh context, so carry on as normal. The whole session stays in the session log at {session_log}.
+Fiber: your context holds {tokens} tokens. At {trigger_at} tokens Fiber will ask you for a compaction note and continue this work from it in a fresh context, so carry on as normal. The whole session stays in the session log at {session_log}.
 
-## handoff-note
+## compaction-note
 
-Fiber is about to restart your context. Write a handoff note. The next agent continues this work from your note, with only the system prompt, the project's instruction files, the person's latest message and, when the session keeps them, the person's earlier messages that still bind, besides.
+Fiber is about to restart your context. Write a compaction note. The next agent continues this work from your note, with only the system prompt, the project's instruction files, the person's latest message and, when the session keeps them, the person's earlier messages that still bind, besides.
 
 - Say what the work is, what is done, what is in progress and what comes next.
 - Record the decisions made and why, and what failed and why.
@@ -178,29 +178,29 @@ The session log is at {session_log}. The next agent can read and search it.
 
 Reply with the note only, and make no tool calls.
 
-## handoff-focus
+## compaction-focus
 
 The person asked that the next stretch of work focus on:
 
 {instructions}
 
-## handoff-jobs
+## compaction-jobs
 
 Fiber: these background jobs are still running. Each one's end is reported when it happens.
 
 {jobs}
 
-## handoff-earlier
+## compaction-earlier
 
 The person's earlier message:
 {message}
 
-## handoff-new
+## compaction-new
 
 The person's new message:
 {message}
 
-## handoff-skill
+## compaction-skill
 
 Skills reloaded from the previous context:
 {name} — {path}

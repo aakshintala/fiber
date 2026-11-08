@@ -843,8 +843,8 @@ fn answers_input(note: Option<&'static str>) -> Input<'static> {
     })
 }
 
-fn handoff_input(trigger: &'static str) -> Input<'static> {
-    Input::HandoffBand(crate::ext::HandoffBand {
+fn compaction_input(trigger: &'static str) -> Input<'static> {
+    Input::CompactionBand(crate::ext::CompactionBand {
         trigger,
         ts: 1,
         state: crate::ext::TurnBandState::Done(crate::ext::TurnSizes {
@@ -1583,9 +1583,9 @@ fn each_new_slot_caches_by_input_and_width() {
         ("steer", steer_input("wait"), steer_input("stop")),
         ("answers", answers_input(Some("go")), answers_input(None)),
         (
-            "handoff_band",
-            handoff_input("automatic"),
-            handoff_input("the model handed off"),
+            "compaction_band",
+            compaction_input("automatic"),
+            compaction_input("the model compacted"),
         ),
         ("error_line", error_input("down"), error_input("up")),
         ("notice", notice_input("down"), notice_input("up")),
@@ -1633,7 +1633,7 @@ fn each_new_slot_failure_holds_without_width() {
         ("group_line", group_line_input(false)),
         ("steer", steer_input("wait")),
         ("answers", answers_input(Some("go"))),
-        ("handoff_band", handoff_input("automatic")),
+        ("compaction_band", compaction_input("automatic")),
         ("error_line", error_input("down")),
         ("notice", notice_input("down")),
     ];

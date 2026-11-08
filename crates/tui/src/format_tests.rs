@@ -1087,7 +1087,7 @@ const KIND_WORDS: [(&str, &str); 11] = [
     ("delegate_models", "delegate"),
     ("session_list", "session"),
     ("session_search", "session"),
-    ("handoff", "session"),
+    ("compact", "session"),
     ("name_session", "session"),
 ];
 

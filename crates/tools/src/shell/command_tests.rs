@@ -1911,11 +1911,11 @@ fn only_a_shell_exit_lists_the_group_before_moving() {
 }
 
 /// A stop that becomes due while the member listing is parked wins before
-/// any handoff: the listing's answer cannot move a command its timeout or
+/// any transfer: the listing's answer cannot move a command its timeout or
 /// cancellation already claimed. The fixture `ps` reports its start, then
 /// holds until the test releases it; the stop lands while it is parked.
 #[test]
-fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
+fn cancel_or_timeout_during_member_listing_wins_before_transfer() {
     fn always_alive(_pgid: u32) -> bool {
         true
     }

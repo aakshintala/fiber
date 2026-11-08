@@ -346,8 +346,8 @@ pub enum Op {
     TurnRequest,
     /// A model call, from sending the request until the stream ends.
     TurnModelCall,
-    /// One handoff, end to end.
-    TurnHandoff,
+    /// One compaction, end to end.
+    TurnCompaction,
     /// One hook chain other than the tool hooks, named by the chain.
     Hook(HookChain),
     /// One MCP server, from starting or dialing it until its tool list
@@ -411,7 +411,7 @@ impl Op {
             Self::ToolRun => "tool.run",
             Self::TurnRequest => "turn.request",
             Self::TurnModelCall => "turn.model_call",
-            Self::TurnHandoff => "turn.handoff",
+            Self::TurnCompaction => "turn.compaction",
             Self::Hook(chain) => chain.hook_name(),
             Self::McpConnect => "mcp.connect",
             Self::JobsStart => "jobs.start",
@@ -448,8 +448,8 @@ pub enum HookChain {
     BeforeModelCall,
     /// A turn's end.
     TurnEnd,
-    /// Before a handoff's note is written.
-    BeforeHandoff,
+    /// Before a compaction's note is written.
+    BeforeCompaction,
 }
 
 impl HookChain {
@@ -462,7 +462,7 @@ impl HookChain {
             Self::BeforeMessage => "hook.before_message",
             Self::BeforeModelCall => "hook.before_model_call",
             Self::TurnEnd => "hook.turn_end",
-            Self::BeforeHandoff => "hook.before_handoff",
+            Self::BeforeCompaction => "hook.before_compaction",
         }
     }
 }

@@ -1508,7 +1508,7 @@ fn macos_marker_strip_tolerates_a_pty_carriage_return() {
 /// no later output to wake on, so the observation itself must wake the
 /// loop (`docs/sandbox.md`, "On macOS": no move before the marker is
 /// observed). The test asserts delivery, not a count; the observable
-/// handoff timing is pinned by
+/// transfer timing is pinned by
 /// `macos_confined_quiet_call_hands_off_right_after_its_marker`.
 #[cfg(target_os = "macos")]
 #[test]

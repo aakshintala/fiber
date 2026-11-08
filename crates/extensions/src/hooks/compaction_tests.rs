@@ -1,4 +1,4 @@
-//! The `before_handoff` chain (`docs/extensions.md`, "The hook points",
+//! The `before_compaction` chain (`docs/extensions.md`, "The hook points",
 //! "When several hooks share a point" and "When a hook fails"): what each
 //! hook is shown, and what its answer decides.
 
@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use contract::ActionId;
 use contract::ErrorCode;
-use contract::events::{HandoffTrigger, ToolCallRequested};
-use contract::hook::{BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, Hooks};
+use contract::events::{CompactionTrigger, ToolCallRequested};
+use contract::hook::{BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, Hooks};
 use contract::provider::{ImageRef, Input, PdfRef};
 use contract::tool::Cancel;
 use fakes::{Deadline, ProviderServer, Response};
@@ -56,7 +56,7 @@ impl Cancel for Flag {
 /// A hook whose `run` is `body`.
 fn hook(on_failure: &str, body: &str) -> String {
     format!(
-        "fiber.hook(\"before_handoff\", {{ timeout = 1000, on_failure = \"{on_failure}\",\n\
+        "fiber.hook(\"before_compaction\", {{ timeout = 1000, on_failure = \"{on_failure}\",\n\
            run = function(call) {body} end }})\n"
     )
 }
@@ -64,24 +64,24 @@ fn hook(on_failure: &str, body: &str) -> String {
 /// A hook in `phase` whose `run` is `body`.
 fn phased_hook(phase: &str, on_failure: &str, body: &str) -> String {
     format!(
-        "fiber.hook(\"before_handoff\", {{ phase = \"{phase}\", timeout = 1000, on_failure = \"{on_failure}\",\n\
+        "fiber.hook(\"before_compaction\", {{ phase = \"{phase}\", timeout = 1000, on_failure = \"{on_failure}\",\n\
            run = function(call) {body} end }})\n"
     )
 }
 
-/// Runs the `before_handoff` chain on its own thread under a deadline, so a
+/// Runs the `before_compaction` chain on its own thread under a deadline, so a
 /// hook that never answers fails the test instead of hanging it.
 #[track_caller]
 fn dispatch(
     session: &Arc<SessionExtensions>,
-    trigger: HandoffTrigger,
+    trigger: CompactionTrigger,
     instructions: Option<String>,
     conversation: Vec<Input>,
-) -> BeforeHandoffAnswer {
+) -> BeforeCompactionAnswer {
     let session = Arc::clone(session);
     bounded(move || {
         let instructions = instructions.as_deref();
-        session.before_handoff(&BeforeHandoff {
+        session.before_compaction(&BeforeCompaction {
             trigger,
             instructions,
             conversation: &conversation,
@@ -90,15 +90,15 @@ fn dispatch(
     })
 }
 
-fn note(answer: &BeforeHandoffAnswer) -> Option<(&str, &str)> {
+fn note(answer: &BeforeCompactionAnswer) -> Option<(&str, &str)> {
     match &answer.outcome {
-        BeforeHandoffOutcome::Note { text, extension } => Some((text, extension)),
-        BeforeHandoffOutcome::NoNote | BeforeHandoffOutcome::Failed(_) => None,
+        BeforeCompactionOutcome::Note { text, extension } => Some((text, extension)),
+        BeforeCompactionOutcome::NoNote | BeforeCompactionOutcome::Failed(_) => None,
     }
 }
 
 #[test]
-fn one_hook_writes_the_note_and_is_shown_the_handoff() {
+fn one_hook_writes_the_note_and_is_shown_the_compaction() {
     let home = Home::new();
     home.install(
         "echo",
@@ -109,7 +109,7 @@ fn one_hook_writes_the_note_and_is_shown_the_handoff() {
         text: "Fix the bug.".into(),
         images: Vec::new(),
     }];
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation);
     let (text, extension) = note(&answer).expect("a hook wrote a note");
     assert_eq!(extension, "fiber.test/echo");
     let shown: Value = serde_json::from_str(text).unwrap();
@@ -124,7 +124,7 @@ fn one_hook_writes_the_note_and_is_shown_the_handoff() {
     // With instructions, the hook is shown them.
     let answer = dispatch(
         &session,
-        HandoffTrigger::Person,
+        CompactionTrigger::Person,
         Some("Focus on the parser.".into()),
         vec![Input::User {
             text: "hi".into(),
@@ -154,10 +154,15 @@ fn each_hook_sees_the_note_before_it_and_the_last_note_wins() {
         images: Vec::new(),
     }];
     // Both return a note: the second wins and names its extension.
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation.clone());
+    let answer = dispatch(
+        &session,
+        CompactionTrigger::Auto,
+        None,
+        conversation.clone(),
+    );
     assert_eq!(note(&answer), Some(("second saw first", "fiber.test/two")));
     // The second returns nothing: the first note stands and names the first.
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation);
     assert_eq!(note(&answer), Some(("first", "fiber.test/one")));
 }
 
@@ -168,12 +173,12 @@ fn an_empty_note_changes_nothing() {
     let home = Home::new();
     home.install(
         "pair",
-        "fiber.hook(\"before_handoff\", { timeout = 1000, on_failure = \"non-blocking\",\n\
+        "fiber.hook(\"before_compaction\", { timeout = 1000, on_failure = \"non-blocking\",\n\
            run = function(call)\n\
              if fired == nil then fired = true blank = \"\" return nil\n\
              else blank = \" \\n\" return { note = \"first\" } end\n\
            end })\n\
-         fiber.hook(\"before_handoff\", { timeout = 1000, on_failure = \"non-blocking\",\n\
+         fiber.hook(\"before_compaction\", { timeout = 1000, on_failure = \"non-blocking\",\n\
            run = function(call) return { note = blank } end })\n",
     );
     let session = home.load(&[]);
@@ -184,10 +189,10 @@ fn an_empty_note_changes_nothing() {
         }]
     };
     // An empty note alone writes nothing.
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
-    assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
+    assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
     // A blank note after an earlier note leaves it standing.
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
     assert_eq!(note(&answer), Some(("first", "fiber.test/pair")));
 }
 
@@ -199,14 +204,14 @@ fn nil_and_an_empty_table_return_nothing() {
     let session = home.load(&[]);
     let answer = dispatch(
         &session,
-        HandoffTrigger::Auto,
+        CompactionTrigger::Auto,
         None,
         vec![Input::User {
             text: "hi".into(),
             images: Vec::new(),
         }],
     );
-    assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+    assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
     assert!(answer.notices.is_empty());
 }
 
@@ -227,7 +232,7 @@ fn bad_returns_fail_the_hook() {
             let session = home.load(&[]);
             let answer = dispatch(
                 &session,
-                HandoffTrigger::Auto,
+                CompactionTrigger::Auto,
                 None,
                 vec![Input::User {
                     text: "hi".into(),
@@ -235,7 +240,7 @@ fn bad_returns_fail_the_hook() {
                 }],
             );
             if on_failure == "blocking" {
-                let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
+                let BeforeCompactionOutcome::Failed(failure) = &answer.outcome else {
                     panic!(
                         "{shape}: a blocking failure ends the chain, not {:?}",
                         answer.outcome
@@ -256,7 +261,7 @@ fn bad_returns_fail_the_hook() {
                 assert_eq!(notice.extension.as_deref(), Some("fiber.test/aaa"));
                 assert!(
                     notice.message.starts_with(
-                        "The `before_handoff` hook failed, so its change was dropped: "
+                        "The `before_compaction` hook failed, so its change was dropped: "
                     ),
                     "{shape}: {}",
                     notice.message
@@ -277,14 +282,14 @@ fn a_json_null_returns_nothing_and_a_function_fails_the_hook() {
     let session = home.load(&[]);
     let answer = dispatch(
         &session,
-        HandoffTrigger::Auto,
+        CompactionTrigger::Auto,
         None,
         vec![Input::User {
             text: "hi".into(),
             images: Vec::new(),
         }],
     );
-    assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+    assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
     for on_failure in ["blocking", "non-blocking"] {
         let home = Home::new();
         home.install(
@@ -294,7 +299,7 @@ fn a_json_null_returns_nothing_and_a_function_fails_the_hook() {
         let session = home.load(&[]);
         let answer = dispatch(
             &session,
-            HandoffTrigger::Auto,
+            CompactionTrigger::Auto,
             None,
             vec![Input::User {
                 text: "hi".into(),
@@ -302,7 +307,7 @@ fn a_json_null_returns_nothing_and_a_function_fails_the_hook() {
             }],
         );
         if on_failure == "blocking" {
-            let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
+            let BeforeCompactionOutcome::Failed(failure) = &answer.outcome else {
                 panic!(
                     "a blocking failure ends the chain, not {:?}",
                     answer.outcome
@@ -310,7 +315,7 @@ fn a_json_null_returns_nothing_and_a_function_fails_the_hook() {
             };
             assert_eq!(failure.extension, "fiber.test/fun");
         } else {
-            assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+            assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
             assert_eq!(answer.notices.len(), 1);
         }
     }
@@ -328,7 +333,7 @@ fn a_blocking_failure_drops_an_earlier_note_and_runs_no_later_hook() {
     let session = home.load(&[]);
     let answer = dispatch(
         &session,
-        HandoffTrigger::Auto,
+        CompactionTrigger::Auto,
         None,
         vec![Input::User {
             text: "hi".into(),
@@ -337,7 +342,7 @@ fn a_blocking_failure_drops_an_earlier_note_and_runs_no_later_hook() {
     );
     // The failure carries no note: the earlier note is dropped, and the
     // later hook, which would have returned one, never ran.
-    let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
+    let BeforeCompactionOutcome::Failed(failure) = &answer.outcome else {
         panic!(
             "a blocking failure ends the chain, not {:?}",
             answer.outcome
@@ -366,7 +371,7 @@ fn sanitize_hooks_run_before_transform_ones() {
     let session = home.load(&[]);
     let answer = dispatch(
         &session,
-        HandoffTrigger::Auto,
+        CompactionTrigger::Auto,
         None,
         vec![Input::User {
             text: "hi".into(),
@@ -380,7 +385,7 @@ fn sanitize_hooks_run_before_transform_ones() {
 fn hooks_order_reorders_this_point_and_leaves_after_tool_alone() {
     let note_hook = |text: &str| {
         format!(
-            "fiber.hook(\"before_handoff\", {{ timeout = 1000, on_failure = \"non-blocking\",\n\
+            "fiber.hook(\"before_compaction\", {{ timeout = 1000, on_failure = \"non-blocking\",\n\
                run = function(call) return {{ note = \"{text}\" }} end }})\n\
              fiber.hook(\"after_tool\", {{ timeout = 1000, on_failure = \"non-blocking\",\n\
                run = function(call) return {{ content = call.content .. \"|{text}\" }} end }})\n"
@@ -397,11 +402,11 @@ fn hooks_order_reorders_this_point_and_leaves_after_tool_alone() {
     };
     // By name, `mmm` runs first and `zzz`'s note wins.
     let session = home.load(&[]);
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
     assert_eq!(note(&answer), Some(("zzz", "fiber.test/zzz")));
-    // `hooks.order.before_handoff` runs `zzz` first, so `mmm` wins.
-    let session = home.load(&[r#"hooks.order.before_handoff=["fiber.test/zzz"]"#]);
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
+    // `hooks.order.before_compaction` runs `zzz` first, so `mmm` wins.
+    let session = home.load(&[r#"hooks.order.before_compaction=["fiber.test/zzz"]"#]);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
     assert_eq!(note(&answer), Some(("mmm", "fiber.test/mmm")));
     // The order names this point only: `after_tool` still runs by name.
     let changed = bounded({
@@ -439,27 +444,27 @@ fn a_check_hook_is_not_registered() {
     let home = Home::new();
     home.install(
         "checking",
-        "fiber.hook(\"before_handoff\", { phase = \"check\", timeout = 1000, on_failure = \"non-blocking\",\n\
+        "fiber.hook(\"before_compaction\", { phase = \"check\", timeout = 1000, on_failure = \"non-blocking\",\n\
            run = function(call) return { note = \"x\" } end })\n",
     );
     let session = home.load(&[]);
     assert!(
         session.notices().iter().any(|notice| notice.message
-            == "`before_handoff` hook not registered: a `check` hook exists only at \
+            == "`before_compaction` hook not registered: a `check` hook exists only at \
                 `before_message`, `before_tool` and `before_model_call`"),
         "{:?}",
         session.notices()
     );
     let answer = dispatch(
         &session,
-        HandoffTrigger::Auto,
+        CompactionTrigger::Auto,
         None,
         vec![Input::User {
             text: "hi".into(),
             images: Vec::new(),
         }],
     );
-    assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+    assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
 }
 
 #[test]
@@ -504,7 +509,7 @@ fn tool_search_results_render_as_the_tools_answer_with_or_without_a_call() {
             ]),
         ),
     ] {
-        let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+        let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation);
         let (text, _) = note(&answer).expect("a hook wrote a note");
         assert_eq!(serde_json::from_str::<Value>(text).unwrap(), expected);
     }
@@ -600,7 +605,7 @@ fn the_conversation_renders_as_neutral_messages() {
             pdfs: Vec::new(),
         },
     ];
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation);
     let (text, _) = note(&answer).expect("a hook wrote a note");
     let messages: Value = serde_json::from_str(text).unwrap();
     assert_eq!(
@@ -650,8 +655,8 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
     let home = Home::new();
     home.install("small", &hook("blocking", r#"return { note = "small" }"#));
     let session = home.load(&[]);
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
-    let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
+    let BeforeCompactionOutcome::Failed(failure) = &answer.outcome else {
         panic!("an over-cap hook fails, not {:?}", answer.outcome)
     };
     assert_eq!(failure.extension, "fiber.test/small");
@@ -659,7 +664,7 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
     // calls: a small conversation returns its note.
     let answer = dispatch(
         &session,
-        HandoffTrigger::Auto,
+        CompactionTrigger::Auto,
         None,
         vec![Input::User {
             text: "hi".into(),
@@ -673,8 +678,8 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
         &hook("non-blocking", r#"return { note = "small" }"#),
     );
     let session = home.load(&[]);
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
-    assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
+    assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
     assert_eq!(answer.notices.len(), 1);
     assert_eq!(
         answer.notices[0].extension.as_deref(),
@@ -684,7 +689,7 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
     let raised = Home::new();
     raised.install_with_memory("big", &hook("blocking", r#"return { note = "big" }"#), 8);
     let session = raised.load(&[]);
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation());
     assert_eq!(note(&answer), Some(("big", "fiber.test/big")));
 }
 
@@ -703,12 +708,12 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     home.install(
         "gate",
         &format!(
-            "fiber.hook(\"before_handoff\", {{ timeout = 30000, on_failure = \"non-blocking\",\n\
+            "fiber.hook(\"before_compaction\", {{ timeout = 30000, on_failure = \"non-blocking\",\n\
                run = function(call)\n\
                  host.http({{ url = \"{url}/gate\" }})\n\
                  return {{ note = \"first:\" .. tostring(seen2 or 0) }}\n\
                end }})\n\
-             fiber.hook(\"before_handoff\", {{ timeout = 30000, on_failure = \"non-blocking\",\n\
+             fiber.hook(\"before_compaction\", {{ timeout = 30000, on_failure = \"non-blocking\",\n\
                run = function(call)\n\
                  seen2 = (seen2 or 0) + 1\n\
                  return {{ note = tostring(call.note) .. \"+second\" }}\n\
@@ -730,8 +735,8 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     let (done_tx, done_rx) = mpsc::channel();
     let first = Arc::clone(&session);
     std::thread::spawn(move || {
-        let answer = first.before_handoff(&BeforeHandoff {
-            trigger: HandoffTrigger::Auto,
+        let answer = first.before_compaction(&BeforeCompaction {
+            trigger: CompactionTrigger::Auto,
             instructions: None,
             conversation: &conversation(),
             cancel,
@@ -750,10 +755,10 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     );
     cancel.fired.store(true, Ordering::SeqCst);
     server.release();
-    let answer: BeforeHandoffAnswer = Deadline::after(GATE_WAIT)
+    let answer: BeforeCompactionAnswer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the chain");
-    assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);
+    assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
     assert!(answer.notices.is_empty());
     // The second run, with the cancel off: the first hook reports how often
     // the second ran. `first:0` proves it never ran above.
@@ -761,8 +766,8 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     let (done_tx, done_rx) = mpsc::channel();
     let second = Arc::clone(&session);
     std::thread::spawn(move || {
-        let answer = second.before_handoff(&BeforeHandoff {
-            trigger: HandoffTrigger::Auto,
+        let answer = second.before_compaction(&BeforeCompaction {
+            trigger: CompactionTrigger::Auto,
             instructions: None,
             conversation: &[Input::User {
                 text: "hi".into(),
@@ -776,7 +781,7 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         server.await_requests(2, Deadline::after(GATE_WAIT)),
         "waited for the second hook to reach its gate"
     );
-    let answer: BeforeHandoffAnswer = Deadline::after(GATE_WAIT)
+    let answer: BeforeCompactionAnswer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the chain");
     assert_eq!(note(&answer), Some(("first:0+second", "fiber.test/gate")));
@@ -800,8 +805,8 @@ fn a_cancel_before_the_call_still_runs_the_first_hook() {
                 text: "hi".into(),
                 images: Vec::new(),
             }];
-            session.before_handoff(&BeforeHandoff {
-                trigger: HandoffTrigger::Auto,
+            session.before_compaction(&BeforeCompaction {
+                trigger: CompactionTrigger::Auto,
                 instructions: None,
                 conversation: &conversation,
                 cancel: &cancel,
@@ -861,7 +866,7 @@ fn pdf_parts_render_with_and_without_pages() {
             ],
         },
     ];
-    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation);
     let (text, _) = note(&answer).expect("a hook wrote a note");
     let messages: Value = serde_json::from_str(text).unwrap();
     assert_eq!(

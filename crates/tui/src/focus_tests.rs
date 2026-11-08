@@ -86,7 +86,7 @@ fn ties_keep_draw_order() {
 /// The regions and targets of a screen with a panel, a rail and an
 /// extension widget's card: no panel, rail or widget ids exist until #669
 /// and #688, so a notice and "+N more" stand in for the panel's and the
-/// widget's cards, and handoff notes for the rail's.
+/// widget's cards, and compaction notes for the rail's.
 fn screened() -> (Regions, Vec<Hit>) {
     let regions = Regions {
         panel: Some(Rect::new(60, 0, 20, 20)),

@@ -61,7 +61,6 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "pwd" => &["cwd"],
         "settings" => &["config"],
         "keys" => &["keybindings", "keymap"],
-        "handoff" => &["compact"],
         "rules" => &["permissions"],
         "close" => &["stop"],
         "name" => &["rename"],
@@ -257,10 +256,10 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_fork,
     },
     CommandEntry {
-        name: "handoff",
-        description: "Starts a handoff.",
+        name: "compact",
+        description: "Starts a compaction.",
         hint: Some("[instructions]"),
-        run: run_handoff,
+        run: run_compaction,
     },
     CommandEntry {
         name: "name",
@@ -395,9 +394,9 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.toggle_rail())
 }
 
-fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
+fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("handoff", args).0)
+    Some(app.send_command("compact", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {

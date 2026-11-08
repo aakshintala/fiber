@@ -172,7 +172,7 @@ impl Loop {
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Message(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)

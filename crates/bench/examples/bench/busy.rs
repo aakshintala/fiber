@@ -1,5 +1,5 @@
 //! The busy workloads (`docs/performance.md`, "Budgets"): a turn of 429
-//! tool calls with the context window full to the handoff point (peak RSS
+//! tool calls with the context window full to the compaction point (peak RSS
 //! and log bytes), the same turn once more under strace (fsyncs), and
 //! `web_fetch` converting a 10 MiB HTML page (peak RSS). Also the pieces
 //! the resume workloads share: scripted replies, a session started in a
@@ -66,7 +66,7 @@ const TOOL_CALLS: usize = 429;
 /// a per-turn leak to show past the 1 MiB the row allows.
 pub(crate) const TEN_TURNS: usize = 10;
 
-/// The handoff trigger: `handoff.tokens`' default of 400,000 comes before
+/// The compaction trigger: `compaction.tokens`' default of 400,000 comes before
 /// 0.7 of the fake model's 1,000,000-token window.
 pub(crate) const TRIGGER_TOKENS: usize = 400_000;
 
@@ -460,7 +460,7 @@ pub(crate) fn expect(notes: &mut Vec<String>, what: &str, got: usize, want: usiz
 }
 
 /// The self-checks of a turn that ran `calls` tool calls, one model
-/// request more than that, and no handoff.
+/// request more than that, and no compaction.
 fn check_turn(
     notes: &mut Vec<String>,
     server: &ProviderServer,
@@ -482,8 +482,8 @@ fn check_turn(
     );
     expect(
         notes,
-        "handoff_started lines",
-        count(lines, "handoff_started", "", ""),
+        "compaction_started lines",
+        count(lines, "compaction_started", "", ""),
         0,
     );
 }
@@ -548,7 +548,7 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
 }
 
 /// The 10-turn run's samples: the anon RSS still resident once the
-/// first turn's handoff settles, and once the tenth's settles. The
+/// first turn's compaction settles, and once the tenth's settles. The
 /// judge reads both from each pass's entry, so the verdict compares
 /// each session with itself.
 pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
@@ -558,32 +558,32 @@ pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
     )]
 }
 
-/// The note the model writes at each handoff of the 10-turn run: short,
+/// The note the model writes at each compaction of the 10-turn run: short,
 /// so the restarted context is the note alone.
-pub(crate) const HANDOFF_NOTE: &str = "the busy turns so far are in the session log";
+pub(crate) const COMPACTION_NOTE: &str = "the busy turns so far are in the session log";
 
-/// One handoff's note reply, reporting the turn's end context as the
+/// One compaction's note reply, reporting the turn's end context as the
 /// turn's own replies do: after it the session holds the note and what
 /// comes after (`docs/performance.md`, "What a budget covers").
-fn handoff_note(turn: &Turn) -> Response {
-    text_reply(HANDOFF_NOTE, turn.content)
+fn compaction_note(turn: &Turn) -> Response {
+    text_reply(COMPACTION_NOTE, turn.content)
 }
 
-/// The 10-turn run's script: each turn's replies, then its handoff's
+/// The 10-turn run's script: each turn's replies, then its compaction's
 /// note, in the order the session asks for them. One pass is ten turns
 /// of `TOOL_CALLS` calls and one closing reply each, plus ten notes.
 pub(crate) fn ten_turn_script(turn: &Turn) -> Vec<Response> {
     (0..TEN_TURNS)
-        .flat_map(|_| turn.script.iter().cloned().chain([handoff_note(turn)]))
+        .flat_map(|_| turn.script.iter().cloned().chain([compaction_note(turn)]))
         .collect()
 }
 
-/// Ten busy turns in one session, each followed by its handoff, as a
+/// Ten busy turns in one session, each followed by its compaction, as a
 /// session past the trigger does them: the first turn on the command
-/// line, the rest over a `full` connection, with a `handoff` driver
+/// line, the rest over a `full` connection, with a `compact` driver
 /// command after every turn. The readings are the retained anon RSS
-/// after the first turn's handoff and after the tenth's, so growth is
-/// what the session keeps across handoffs, not its context. Each turn
+/// after the first turn's compaction and after the tenth's, so growth is
+/// what the session keeps across compactions, not its context. Each turn
 /// repeats the busy turn's shape, so the script serves every turn's
 /// replies and every note in order. The harness repeats the pass every
 /// run, so the judge takes the median growth (`docs/performance.md`,
@@ -611,16 +611,16 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
             until_stdout(ctx, &session, "turn_completed", TURN)?;
             let pid = session.proc.pid();
             let mut client = crate::resume::subscribe(ctx, home, &id)?;
-            // Each turn ends with its handoff, driven as the resume
-            // workload drives them; a handoff command carries no message,
+            // Each turn ends with its compaction, driven as the resume
+            // workload drives them; a compact command carries no message,
             // so its turn ends at once after the note
-            // (`crates/loop/src/handoff.rs`, `run_person_handoff`).
-            let handoff_id = "c_h1".to_owned();
+            // (`crates/loop/src/compaction.rs`, `run_person_compaction`).
+            let compaction_id = "c_h1".to_owned();
             crate::resume::run_turn(
                 ctx,
                 &mut client,
-                &handoff_id,
-                &crate::resume::command(&handoff_id, "handoff", &json!({})),
+                &compaction_id,
+                &crate::resume::command(&compaction_id, "compact", &json!({})),
             )?;
             let first = quiescent_anon_kib_of(pid, |wait| {
                 waited += wait;
@@ -635,12 +635,12 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                     &prompt_id,
                     &crate::resume::command(&prompt_id, "prompt", &content),
                 )?;
-                let handoff_id = format!("c_h{n}");
+                let compaction_id = format!("c_h{n}");
                 crate::resume::run_turn(
                     ctx,
                     &mut client,
-                    &handoff_id,
-                    &crate::resume::command(&handoff_id, "handoff", &json!({})),
+                    &compaction_id,
+                    &crate::resume::command(&compaction_id, "compact", &json!({})),
                 )?;
             }
             drop(client);
@@ -677,7 +677,7 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
             count(&lines, "tool_call_completed", "status", "completed"),
             TEN_TURNS * TOOL_CALLS,
         );
-        // Each prompt turn and each handoff turn ends its own turn.
+        // Each prompt turn and each compaction turn ends its own turn.
         expect(
             notes,
             "turn_completed lines",
@@ -686,20 +686,20 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         );
         expect(
             notes,
-            "handoff_started lines",
-            count(&lines, "handoff_started", "", ""),
+            "compaction_started lines",
+            count(&lines, "compaction_started", "", ""),
             TEN_TURNS,
         );
         expect(
             notes,
-            "completed handoffs",
-            count(&lines, "handoff_completed", "outcome", "completed"),
+            "completed compactions",
+            count(&lines, "compaction_completed", "outcome", "completed"),
             TEN_TURNS,
         );
         expect(
             notes,
-            "automatic handoffs",
-            count(&lines, "handoff_started", "trigger", "auto"),
+            "automatic compactions",
+            count(&lines, "compaction_started", "trigger", "auto"),
             0,
         );
         Ok(ten_turn_samples(first, last))

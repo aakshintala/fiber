@@ -12,9 +12,9 @@ use std::fs;
 use std::path::Path;
 
 use contract::events::{
-    Empty, Environment, Event, EventKind, FiberStarted, HandoffCompleted, HandoffStarted,
-    HandoffTrigger, InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested,
-    ToolCallStarted, TurnStarted, Variables, VariablesSource,
+    CompactionCompleted, CompactionStarted, CompactionTrigger, Empty, Environment, Event,
+    EventKind, FiberStarted, InputItem, Note, OpeningMessage, Outcome, TextCompleted,
+    ToolCallRequested, ToolCallStarted, TurnStarted, Variables, VariablesSource,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId};
@@ -439,9 +439,9 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
     )
     .unwrap();
     assert_eq!(looped.chosen, Some(contract::ThinkingLevel::High));
-    // The default handoff settings against a 100,000-token window: the
+    // The default compaction settings against a 100,000-token window: the
     // window fraction loses to the token trigger.
-    assert_eq!(looped.handoff.trigger_at, Some(70_000));
+    assert_eq!(looped.compaction.trigger_at, Some(70_000));
 }
 
 #[test]
@@ -716,7 +716,7 @@ fn pinned(looped_dir: &Path) -> bool {
     use contract::events::{CallStatus, Control};
     let folded = crate::resume::resumed(looped_dir).unwrap();
     let control = Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("a later name".to_owned()),
@@ -868,19 +868,19 @@ fn latest_name_is_none_when_the_log_cannot_be_read() {
 }
 
 use super::command::Target;
-use crate::handoff::Carry;
-/// Fold tests for a handoff inherited by position (`docs/events.md`,
-/// "Rewind"): a handoff completed in the old session at or before the
+use crate::compaction::Carry;
+/// Fold tests for a compaction inherited by position (`docs/events.md`,
+/// "Rewind"): a compaction completed in the old session at or before the
 /// point applies to the new session, and one after it does not. The logs
-/// below are hand-written in the shape a live handoff writes: a turn's
-/// input, `handoff_started`, the note's text, `handoff_completed` naming
+/// below are hand-written in the shape a live compaction writes: a turn's
+/// input, `compaction_started`, the note's text, `compaction_completed` naming
 /// the note's action, then the `opening_message`.
 use contract::{ErrorCode, TurnId};
 
 const HA: &str = "s_aaaaaaaaaaaaaaaa";
 const HB: &str = "s_bbbbbbbbbbbbbbbb";
 
-fn handoff_envelope(
+fn compaction_envelope(
     session: &str,
     seq: u64,
     turn: Option<&str>,
@@ -899,7 +899,7 @@ fn handoff_envelope(
     }
 }
 
-fn handoff_session_started(from: Option<(&str, u64)>) -> Event {
+fn compaction_session_started(from: Option<(&str, u64)>) -> Event {
     Event::SessionStarted(contract::events::SessionStarted {
         workspace: "/w".to_owned(),
         variables: Variables {
@@ -919,7 +919,7 @@ fn handoff_session_started(from: Option<(&str, u64)>) -> Event {
     })
 }
 
-fn handoff_turn(text: &str) -> Event {
+fn compaction_turn(text: &str) -> Event {
     Event::TurnStarted(TurnStarted {
         input: vec![InputItem::Message {
             content: vec![ContentPart::Text {
@@ -934,25 +934,25 @@ fn handoff_turn(text: &str) -> Event {
     })
 }
 
-fn handoff_step() -> Event {
+fn compaction_step() -> Event {
     Event::StepStarted(Empty {})
 }
 
-fn handoff_begun() -> Event {
-    Event::HandoffStarted(HandoffStarted {
-        trigger: HandoffTrigger::Auto,
+fn compaction_begun() -> Event {
+    Event::CompactionStarted(CompactionStarted {
+        trigger: CompactionTrigger::Auto,
     })
 }
 
-fn handoff_note_text(text: &str) -> Event {
+fn compaction_note_text(text: &str) -> Event {
     Event::TextCompleted(TextCompleted {
         text: text.to_owned(),
         provider_item: None,
     })
 }
 
-fn handoff_done(outcome: Outcome, note: Option<&str>) -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_done(outcome: Outcome, note: Option<&str>) -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome,
         error: None,
         note: note.map(|action| Note::Actions {
@@ -963,7 +963,7 @@ fn handoff_done(outcome: Outcome, note: Option<&str>) -> Event {
     })
 }
 
-fn handoff_opening() -> Event {
+fn compaction_opening() -> Event {
     Event::OpeningMessage(OpeningMessage {
         environment: Environment {
             date: "2023-11-14".to_owned(),
@@ -981,34 +981,34 @@ fn handoff_opening() -> Event {
     })
 }
 
-/// The old session: turn 1, a handoff turn 2 carrying "the handoff note",
-/// then turn 3. The handoff turn's `turn_started` is seq 3, its completion
+/// The old session: turn 1, a compaction turn 2 carrying "the compaction note",
+/// then turn 3. The compaction turn's `turn_started` is seq 3, its completion
 /// seq 6, the opening seq 7.
-fn handoff_log() -> Vec<Envelope> {
+fn compaction_log() -> Vec<Envelope> {
     vec![
-        handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
-        handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
-        handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
-        handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
-        handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
-        handoff_envelope(
+        compaction_envelope(HA, 0, None, None, &compaction_session_started(None)),
+        compaction_envelope(HA, 1, Some("t_1"), None, &compaction_turn("one")),
+        compaction_envelope(HA, 2, Some("t_1"), None, &compaction_step()),
+        compaction_envelope(HA, 3, Some("t_2"), None, &compaction_turn("two")),
+        compaction_envelope(HA, 4, Some("t_2"), None, &compaction_begun()),
+        compaction_envelope(
             HA,
             5,
             Some("t_2"),
             Some("a_note"),
-            &handoff_note_text("the handoff note"),
+            &compaction_note_text("the compaction note"),
         ),
-        handoff_envelope(
+        compaction_envelope(
             HA,
             6,
             Some("t_2"),
             None,
-            &handoff_done(Outcome::Completed, Some("a_note")),
+            &compaction_done(Outcome::Completed, Some("a_note")),
         ),
-        handoff_envelope(HA, 7, None, None, &handoff_opening()),
-        handoff_envelope(HA, 8, Some("t_2"), None, &handoff_step()),
-        handoff_envelope(HA, 9, Some("t_3"), None, &handoff_turn("three")),
-        handoff_envelope(HA, 10, Some("t_3"), None, &handoff_step()),
+        compaction_envelope(HA, 7, None, None, &compaction_opening()),
+        compaction_envelope(HA, 8, Some("t_2"), None, &compaction_step()),
+        compaction_envelope(HA, 9, Some("t_3"), None, &compaction_turn("three")),
+        compaction_envelope(HA, 10, Some("t_3"), None, &compaction_step()),
     ]
 }
 
@@ -1023,19 +1023,19 @@ fn write_chain(sessions: &Path, session: &str, lines: &[Envelope]) {
     fs::write(dir.join("events.jsonl"), text).unwrap();
 }
 
-/// Parent A holding the handoff log, child B forked from A at `at`: the
+/// Parent A holding the compaction log, child B forked from A at `at`: the
 /// fold of B to its first line, and the window's rendered conversation.
 fn folded_at(sessions: &Path, at: u64) -> (crate::resume::Resumed, Vec<contract::provider::Input>) {
-    write_chain(sessions, HA, &handoff_log());
+    write_chain(sessions, HA, &compaction_log());
     write_chain(
         sessions,
         HB,
-        &[handoff_envelope(
+        &[compaction_envelope(
             HB,
             0,
             None,
             None,
-            &handoff_session_started(Some((HA, at))),
+            &compaction_session_started(Some((HA, at))),
         )],
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
@@ -1093,10 +1093,10 @@ fn user_input(text: &str) -> contract::provider::Input {
 }
 
 #[test]
-fn a_handoff_before_the_point_applies_to_the_fork() {
-    let home = fakes::TempDir::new("loop-handoff-before");
+fn a_compaction_before_the_point_applies_to_the_fork() {
+    let home = fakes::TempDir::new("loop-compaction-before");
     let sessions = home.path().join("sessions");
-    // Past the opening message, at a step boundary: the handoff is at or
+    // Past the opening message, at a step boundary: the compaction is at or
     // before the point, so the fork inherits it.
     let (folded, conversation) = folded_at(&sessions, 8);
     // The window is turn 2's `turn_started` in the parent segment, and no
@@ -1109,19 +1109,19 @@ fn a_handoff_before_the_point_applies_to_the_fork() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\ntwo")
     );
-    assert_eq!(conversation[2], user_input("the handoff note"));
+    assert_eq!(conversation[2], user_input("the compaction note"));
 }
 
 #[test]
-fn a_handoff_after_the_point_does_not_apply_to_the_fork() {
-    let home = fakes::TempDir::new("loop-handoff-after");
+fn a_compaction_after_the_point_does_not_apply_to_the_fork() {
+    let home = fakes::TempDir::new("loop-compaction-after");
     let sessions = home.path().join("sessions");
-    // At turn 1's closing step, before the handoff turn: the handoff is
+    // At turn 1's closing step, before the compaction turn: the compaction is
     // after the point, so the fork keeps the earlier context.
     let (folded, conversation) = folded_at(&sessions, 2);
     assert_eq!(folded.window, (0, 0));
@@ -1133,9 +1133,9 @@ fn a_handoff_after_the_point_does_not_apply_to_the_fork() {
             ..Carry::default()
         }
     );
-    // The conversation the same lines render with the handoff lines past
+    // The conversation the same lines render with the compaction lines past
     // the point deleted: turn 1's input alone, with no note anywhere.
-    let kept: Vec<Envelope> = handoff_log()
+    let kept: Vec<Envelope> = compaction_log()
         .into_iter()
         .filter(|line| line.seq.is_some_and(|seq| seq.0 <= 2))
         .collect();
@@ -1147,22 +1147,22 @@ fn a_handoff_after_the_point_does_not_apply_to_the_fork() {
 }
 
 #[test]
-fn a_point_on_the_handoffs_completion_applies_it() {
-    let home = fakes::TempDir::new("loop-handoff-point");
+fn a_point_on_the_compactions_completion_applies_it() {
+    let home = fakes::TempDir::new("loop-compaction-point");
     let sessions = home.path().join("sessions");
-    // The point is inclusive: folded at the `handoff_completed` line
-    // itself, the handoff applies.
+    // The point is inclusive: folded at the `compaction_completed` line
+    // itself, the compaction applies.
     let (folded, conversation) = folded_at(&sessions, 6);
     assert_eq!(folded.window, (0, 3));
     assert_eq!(folded.seed, seeded(&["one"], &own_log(&sessions, HB)));
     // The carried input and the note, with no opening message: that line
     // is past the point.
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation,
         [
             user_input("The person's new message:\ntwo"),
-            user_input("the handoff note")
+            user_input("the compaction note")
         ]
     );
     // One line earlier, on the note's own line, it does not: the
@@ -1182,10 +1182,10 @@ fn a_point_on_the_handoffs_completion_applies_it() {
 }
 
 #[test]
-fn the_command_door_refuses_the_handoffs_completion_line() {
-    let home = fakes::TempDir::new("loop-handoff-door");
+fn the_command_door_refuses_the_compactions_completion_line() {
+    let home = fakes::TempDir::new("loop-compaction-door");
     let sessions = home.path().join("sessions");
-    write_chain(&sessions, HA, &handoff_log());
+    write_chain(&sessions, HA, &compaction_log());
     let dir = sessions.join(HA);
     let lines = log::read(&dir).unwrap();
     let target = Target {
@@ -1197,10 +1197,10 @@ fn the_command_door_refuses_the_handoffs_completion_line() {
     // completion names no step boundary.
     let refused = super::command::point_for(&lines, &target, Some(Seq(6)), false).unwrap_err();
     assert_eq!(refused.code, ErrorCode::NotStepBoundary);
-    // Neither does the note's own line: a handoff's lines are next.
+    // Neither does the note's own line: a compaction's lines are next.
     let refused = super::command::point_for(&lines, &target, Some(Seq(5)), false).unwrap_err();
     assert_eq!(refused.code, ErrorCode::NotStepBoundary);
-    // A real boundary still opens: the step the handoff turn started.
+    // A real boundary still opens: the step the compaction turn started.
     assert_eq!(
         super::command::point_for(&lines, &target, Some(Seq(2)), false).unwrap(),
         2
@@ -1208,12 +1208,12 @@ fn the_command_door_refuses_the_handoffs_completion_line() {
 }
 
 #[test]
-fn a_handoff_started_with_no_completion_does_not_apply() {
-    // The process died mid-handoff: `handoff_started` and the note's text
+fn a_compaction_started_with_no_completion_does_not_apply() {
+    // The process died mid-compaction: `compaction_started` and the note's text
     // are logged, then a new process's `fiber_started`, and the turn went
-    // on. With no `handoff_completed` before the point, the handoff did
+    // on. With no `compaction_completed` before the point, the compaction did
     // not take effect.
-    let home = fakes::TempDir::new("loop-handoff-unfinished");
+    let home = fakes::TempDir::new("loop-compaction-unfinished");
     let sessions = home.path().join("sessions");
     let died = Event::FiberStarted(FiberStarted {
         version: "0.0.1".to_owned(),
@@ -1223,32 +1223,32 @@ fn a_handoff_started_with_no_completion_does_not_apply() {
         &sessions,
         HA,
         &[
-            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
-            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
-            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
-            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
-            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
-            handoff_envelope(
+            compaction_envelope(HA, 0, None, None, &compaction_session_started(None)),
+            compaction_envelope(HA, 1, Some("t_1"), None, &compaction_turn("one")),
+            compaction_envelope(HA, 2, Some("t_1"), None, &compaction_step()),
+            compaction_envelope(HA, 3, Some("t_2"), None, &compaction_turn("two")),
+            compaction_envelope(HA, 4, Some("t_2"), None, &compaction_begun()),
+            compaction_envelope(
                 HA,
                 5,
                 Some("t_2"),
                 Some("a_note"),
-                &handoff_note_text("the lost note"),
+                &compaction_note_text("the lost note"),
             ),
-            handoff_envelope(HA, 6, None, None, &died),
-            handoff_envelope(HA, 7, Some("t_2"), None, &handoff_step()),
-            handoff_envelope(HA, 8, Some("t_3"), None, &handoff_turn("three")),
+            compaction_envelope(HA, 6, None, None, &died),
+            compaction_envelope(HA, 7, Some("t_2"), None, &compaction_step()),
+            compaction_envelope(HA, 8, Some("t_3"), None, &compaction_turn("three")),
         ],
     );
     write_chain(
         &sessions,
         HB,
-        &[handoff_envelope(
+        &[compaction_envelope(
             HB,
             0,
             None,
             None,
-            &handoff_session_started(Some((HA, 8))),
+            &compaction_session_started(Some((HA, 8))),
         )],
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
@@ -1270,7 +1270,7 @@ fn a_handoff_started_with_no_completion_does_not_apply() {
     let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
     let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
     // The open window closes at the new process: the note lines never
-    // stay, and the context is what it was before the handoff.
+    // stay, and the context is what it was before the compaction.
     assert_eq!(
         conversation,
         [user_input("one"), user_input("two"), user_input("three")]
@@ -1278,47 +1278,47 @@ fn a_handoff_started_with_no_completion_does_not_apply() {
 }
 
 #[test]
-fn a_handoff_with_another_outcome_does_not_apply() {
-    // The handoff failed: its completion names the note's action, but the
+fn a_compaction_with_another_outcome_does_not_apply() {
+    // The compaction failed: its completion names the note's action, but the
     // outcome is not `completed`, so the fork keeps the earlier context.
-    let home = fakes::TempDir::new("loop-handoff-failed");
+    let home = fakes::TempDir::new("loop-compaction-failed");
     let sessions = home.path().join("sessions");
     write_chain(
         &sessions,
         HA,
         &[
-            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
-            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
-            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
-            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
-            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
-            handoff_envelope(
+            compaction_envelope(HA, 0, None, None, &compaction_session_started(None)),
+            compaction_envelope(HA, 1, Some("t_1"), None, &compaction_turn("one")),
+            compaction_envelope(HA, 2, Some("t_1"), None, &compaction_step()),
+            compaction_envelope(HA, 3, Some("t_2"), None, &compaction_turn("two")),
+            compaction_envelope(HA, 4, Some("t_2"), None, &compaction_begun()),
+            compaction_envelope(
                 HA,
                 5,
                 Some("t_2"),
                 Some("a_note"),
-                &handoff_note_text("the failed note"),
+                &compaction_note_text("the failed note"),
             ),
-            handoff_envelope(
+            compaction_envelope(
                 HA,
                 6,
                 Some("t_2"),
                 None,
-                &handoff_done(Outcome::Failed, Some("a_note")),
+                &compaction_done(Outcome::Failed, Some("a_note")),
             ),
-            handoff_envelope(HA, 7, Some("t_2"), None, &handoff_step()),
-            handoff_envelope(HA, 8, Some("t_3"), None, &handoff_turn("three")),
+            compaction_envelope(HA, 7, Some("t_2"), None, &compaction_step()),
+            compaction_envelope(HA, 8, Some("t_3"), None, &compaction_turn("three")),
         ],
     );
     write_chain(
         &sessions,
         HB,
-        &[handoff_envelope(
+        &[compaction_envelope(
             HB,
             0,
             None,
             None,
-            &handoff_session_started(Some((HA, 8))),
+            &compaction_session_started(Some((HA, 8))),
         )],
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
@@ -1351,7 +1351,7 @@ fn a_handoff_with_another_outcome_does_not_apply() {
 
 const HC: &str = "s_cccccccccccccccc";
 
-/// A chain A -> B -> C with the handoff in the middle segment B: the fold
+/// A chain A -> B -> C with the compaction in the middle segment B: the fold
 /// of C to its first line, and the window's rendered conversation. B is
 /// forked from A at 1; C is forked from B at `at`.
 fn folded_chain(
@@ -1362,47 +1362,53 @@ fn folded_chain(
         sessions,
         HA,
         &[
-            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
-            handoff_envelope(HA, 1, Some("t_a1"), None, &handoff_turn("a-one")),
+            compaction_envelope(HA, 0, None, None, &compaction_session_started(None)),
+            compaction_envelope(HA, 1, Some("t_a1"), None, &compaction_turn("a-one")),
         ],
     );
     write_chain(
         sessions,
         HB,
         &[
-            handoff_envelope(HB, 0, None, None, &handoff_session_started(Some((HA, 1)))),
-            handoff_envelope(HB, 1, Some("t_b1"), None, &handoff_turn("b-one")),
-            handoff_envelope(HB, 2, Some("t_b1"), None, &handoff_step()),
-            handoff_envelope(HB, 3, Some("t_b2"), None, &handoff_turn("b-two")),
-            handoff_envelope(HB, 4, Some("t_b2"), None, &handoff_begun()),
-            handoff_envelope(
+            compaction_envelope(
+                HB,
+                0,
+                None,
+                None,
+                &compaction_session_started(Some((HA, 1))),
+            ),
+            compaction_envelope(HB, 1, Some("t_b1"), None, &compaction_turn("b-one")),
+            compaction_envelope(HB, 2, Some("t_b1"), None, &compaction_step()),
+            compaction_envelope(HB, 3, Some("t_b2"), None, &compaction_turn("b-two")),
+            compaction_envelope(HB, 4, Some("t_b2"), None, &compaction_begun()),
+            compaction_envelope(
                 HB,
                 5,
                 Some("t_b2"),
                 Some("a_mid"),
-                &handoff_note_text("the middle note"),
+                &compaction_note_text("the middle note"),
             ),
-            handoff_envelope(
+            compaction_envelope(
                 HB,
                 6,
                 Some("t_b2"),
                 None,
-                &handoff_done(Outcome::Completed, Some("a_mid")),
+                &compaction_done(Outcome::Completed, Some("a_mid")),
             ),
-            handoff_envelope(HB, 7, None, None, &handoff_opening()),
-            handoff_envelope(HB, 8, Some("t_b2"), None, &handoff_step()),
-            handoff_envelope(HB, 9, Some("t_b3"), None, &handoff_turn("b-three")),
+            compaction_envelope(HB, 7, None, None, &compaction_opening()),
+            compaction_envelope(HB, 8, Some("t_b2"), None, &compaction_step()),
+            compaction_envelope(HB, 9, Some("t_b3"), None, &compaction_turn("b-three")),
         ],
     );
     write_chain(
         sessions,
         HC,
-        &[handoff_envelope(
+        &[compaction_envelope(
             HC,
             0,
             None,
             None,
-            &handoff_session_started(Some((HB, at))),
+            &compaction_session_started(Some((HB, at))),
         )],
     );
     let folded = crate::history::forked(&sessions.join(HC), Seq(0)).unwrap();
@@ -1418,11 +1424,11 @@ fn folded_chain(
 }
 
 #[test]
-fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
-    let home = fakes::TempDir::new("loop-handoff-middle");
+fn a_compaction_in_a_middle_segment_applies_to_the_grandchild() {
+    let home = fakes::TempDir::new("loop-compaction-middle");
     let sessions = home.path().join("sessions");
-    // C continues B past the handoff: the window names B's segment and the
-    // handoff turn's start there.
+    // C continues B past the compaction: the window names B's segment and the
+    // compaction turn's start there.
     let (folded, conversation) = folded_chain(&sessions, 8);
     assert_eq!(folded.window, (1, 3));
     assert_eq!(
@@ -1434,13 +1440,13 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\nb-two")
     );
     assert_eq!(conversation[2], user_input("the middle note"));
-    // C continued before the handoff instead: the handoff is after the
+    // C continued before the compaction instead: the compaction is after the
     // point, so the window stays at the chain's start.
     let (earlier, before) = folded_chain(&sessions, 2);
     assert_eq!(earlier.window, (0, 0));
@@ -1456,66 +1462,66 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
 }
 
 #[test]
-fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
-    // Two completed handoffs with the fork between them: the first moves
+fn of_two_compactions_only_the_one_at_or_before_the_point_applies() {
+    // Two completed compactions with the fork between them: the first moves
     // the window, the second is past the point and changes nothing.
-    let home = fakes::TempDir::new("loop-two-handoffs");
+    let home = fakes::TempDir::new("loop-two-compactions");
     let sessions = home.path().join("sessions");
     write_chain(
         &sessions,
         HA,
         &[
-            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
-            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
-            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
-            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
-            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
-            handoff_envelope(
+            compaction_envelope(HA, 0, None, None, &compaction_session_started(None)),
+            compaction_envelope(HA, 1, Some("t_1"), None, &compaction_turn("one")),
+            compaction_envelope(HA, 2, Some("t_1"), None, &compaction_step()),
+            compaction_envelope(HA, 3, Some("t_2"), None, &compaction_turn("two")),
+            compaction_envelope(HA, 4, Some("t_2"), None, &compaction_begun()),
+            compaction_envelope(
                 HA,
                 5,
                 Some("t_2"),
                 Some("a_first"),
-                &handoff_note_text("the first note"),
+                &compaction_note_text("the first note"),
             ),
-            handoff_envelope(
+            compaction_envelope(
                 HA,
                 6,
                 Some("t_2"),
                 None,
-                &handoff_done(Outcome::Completed, Some("a_first")),
+                &compaction_done(Outcome::Completed, Some("a_first")),
             ),
-            handoff_envelope(HA, 7, None, None, &handoff_opening()),
-            handoff_envelope(HA, 8, Some("t_2"), None, &handoff_step()),
-            handoff_envelope(HA, 9, Some("t_3"), None, &handoff_turn("three")),
-            handoff_envelope(HA, 10, Some("t_3"), None, &handoff_begun()),
-            handoff_envelope(
+            compaction_envelope(HA, 7, None, None, &compaction_opening()),
+            compaction_envelope(HA, 8, Some("t_2"), None, &compaction_step()),
+            compaction_envelope(HA, 9, Some("t_3"), None, &compaction_turn("three")),
+            compaction_envelope(HA, 10, Some("t_3"), None, &compaction_begun()),
+            compaction_envelope(
                 HA,
                 11,
                 Some("t_3"),
                 Some("a_second"),
-                &handoff_note_text("the second note"),
+                &compaction_note_text("the second note"),
             ),
-            handoff_envelope(
+            compaction_envelope(
                 HA,
                 12,
                 Some("t_3"),
                 None,
-                &handoff_done(Outcome::Completed, Some("a_second")),
+                &compaction_done(Outcome::Completed, Some("a_second")),
             ),
-            handoff_envelope(HA, 13, None, None, &handoff_opening()),
-            handoff_envelope(HA, 14, Some("t_3"), None, &handoff_step()),
-            handoff_envelope(HA, 15, Some("t_4"), None, &handoff_turn("four")),
+            compaction_envelope(HA, 13, None, None, &compaction_opening()),
+            compaction_envelope(HA, 14, Some("t_3"), None, &compaction_step()),
+            compaction_envelope(HA, 15, Some("t_4"), None, &compaction_turn("four")),
         ],
     );
     write_chain(
         &sessions,
         HB,
-        &[handoff_envelope(
+        &[compaction_envelope(
             HB,
             0,
             None,
             None,
-            &handoff_session_started(Some((HA, 8))),
+            &compaction_session_started(Some((HA, 8))),
         )],
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
@@ -1529,14 +1535,14 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
     .unwrap();
     let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
     let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
-    // The first handoff's context only: its opening, the carried input
+    // The first compaction's context only: its opening, the carried input
     // and its note, with no line of the second.
     assert_eq!(conversation.len(), 3);
     assert!(
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the first opening renders first: {conversation:?}"
     );
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\ntwo")
@@ -1548,7 +1554,7 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
     );
 }
 
-fn handoff_hook_context(text: &str) -> Event {
+fn compaction_hook_context(text: &str) -> Event {
     Event::ContextAdded(contract::events::ContextAdded {
         text: text.to_owned(),
         extension: "fiber.test/session-start".to_owned(),
@@ -1556,34 +1562,40 @@ fn handoff_hook_context(text: &str) -> Event {
     })
 }
 
-/// The old session with a `session_start` hook context after the handoff's
+/// The old session with a `session_start` hook context after the compaction's
 /// opening message, then a third turn. The opening is seq 7, the context
 /// seq 8.
 fn hook_context_log() -> Vec<Envelope> {
     vec![
-        handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
-        handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
-        handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
-        handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
-        handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
-        handoff_envelope(
+        compaction_envelope(HA, 0, None, None, &compaction_session_started(None)),
+        compaction_envelope(HA, 1, Some("t_1"), None, &compaction_turn("one")),
+        compaction_envelope(HA, 2, Some("t_1"), None, &compaction_step()),
+        compaction_envelope(HA, 3, Some("t_2"), None, &compaction_turn("two")),
+        compaction_envelope(HA, 4, Some("t_2"), None, &compaction_begun()),
+        compaction_envelope(
             HA,
             5,
             Some("t_2"),
             Some("a_note"),
-            &handoff_note_text("the handoff note"),
+            &compaction_note_text("the compaction note"),
         ),
-        handoff_envelope(
+        compaction_envelope(
             HA,
             6,
             Some("t_2"),
             None,
-            &handoff_done(Outcome::Completed, Some("a_note")),
+            &compaction_done(Outcome::Completed, Some("a_note")),
         ),
-        handoff_envelope(HA, 7, None, None, &handoff_opening()),
-        handoff_envelope(HA, 8, None, None, &handoff_hook_context("the hook context")),
-        handoff_envelope(HA, 9, Some("t_2"), None, &handoff_step()),
-        handoff_envelope(HA, 10, Some("t_3"), None, &handoff_turn("three")),
+        compaction_envelope(HA, 7, None, None, &compaction_opening()),
+        compaction_envelope(
+            HA,
+            8,
+            None,
+            None,
+            &compaction_hook_context("the hook context"),
+        ),
+        compaction_envelope(HA, 9, Some("t_2"), None, &compaction_step()),
+        compaction_envelope(HA, 10, Some("t_3"), None, &compaction_turn("three")),
     ]
 }
 
@@ -1592,12 +1604,12 @@ fn folded_hook_context(sessions: &Path, at: u64) -> Vec<contract::provider::Inpu
     write_chain(
         sessions,
         HB,
-        &[handoff_envelope(
+        &[compaction_envelope(
             HB,
             0,
             None,
             None,
-            &handoff_session_started(Some((HA, at))),
+            &compaction_session_started(Some((HA, at))),
         )],
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
@@ -1614,7 +1626,7 @@ fn folded_hook_context(sessions: &Path, at: u64) -> Vec<contract::provider::Inpu
 }
 
 #[test]
-fn a_hook_context_after_the_handoffs_opening_is_inherited() {
+fn a_hook_context_after_the_compactions_opening_is_inherited() {
     let home = fakes::TempDir::new("loop-hook-context");
     let sessions = home.path().join("sessions");
     // Past the hook context: it sits between the opening message and the
@@ -1626,13 +1638,13 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         "the opening message renders first: {conversation:?}"
     );
     assert_eq!(conversation[1], user_input("the hook context"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[2],
         user_input("The person's new message:\ntwo")
     );
-    assert_eq!(conversation[3], user_input("the handoff note"));
-    // On the opening message's own line: the handoff applies but the
+    assert_eq!(conversation[3], user_input("the compaction note"));
+    // On the opening message's own line: the compaction applies but the
     // context after it does not.
     let earlier = folded_hook_context(&sessions, 7);
     assert_eq!(earlier.len(), 3);
@@ -1640,9 +1652,9 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         matches!(&earlier[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message still renders first: {earlier:?}"
     );
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(earlier[1], user_input("The person's new message:\ntwo"));
-    assert_eq!(earlier[2], user_input("the handoff note"));
+    assert_eq!(earlier[2], user_input("the compaction note"));
     assert!(
         earlier.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the hook context"))),
         "the context past the point stays out: {earlier:?}"

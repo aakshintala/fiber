@@ -7,7 +7,7 @@
 //! EMAIL] | --import-claude PATH | --import-pi PATH | --scan FILE]
 //! [<session directory>]`
 //!
-//! At each completed handoff with person messages the jig prints the
+//! At each completed compaction with person messages the jig prints the
 //! reviewer's selection request and reads one answer line on stdin, in the
 //! selection's number grammar (`none`, or comma-separated numbers). EOF
 //! keeps every person message through the existing fallback, as

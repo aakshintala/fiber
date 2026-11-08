@@ -1246,9 +1246,9 @@ impl Screen {
 /// names the card with `auto` right-aligned, the directory placeholder
 /// on the next row, the model reads `fake/m` with thinking `high`
 /// right-aligned, the context bar is 17 cells of `▆` with its
-/// marker and size, then the handoff rows; the scripted turn's fixed
+/// marker and size, then the compaction rows; the scripted turn's fixed
 /// usage reads `tokens in / out  10 / 3` with 40% cache hits, the
-/// cache-reset countdown, the context sits at 0% with the handoff
+/// cache-reset countdown, the context sits at 0% with the compaction
 /// marker at 70.0k, the cost is still unknown, and one turn ran
 /// (`panel.rs`).
 fn expected_card(text: usize, _panel: u16) -> Vec<String> {
@@ -1261,23 +1261,23 @@ fn expected_card(text: usize, _panel: u16) -> Vec<String> {
         " ".repeat(text - "fake/m".len() - "high".len())
     ));
     // The context rows: the 17-cell bar with its marker and size, then
-    // the handoff rows. The trigger reads 70.0k.
+    // the compaction rows. The trigger reads 70.0k.
     let bar_pad = text - 17 - 1 - "13".len();
     rows.push(format!(
         "{}│{}13",
         "\u{2586}".repeat(17),
         " ".repeat(bar_pad)
     ));
-    let handoff = "handoff at 70.0k";
+    let compaction = "compacts at 70.0k";
     let share = "0% of window";
-    if handoff.len() + 1 + share.len() <= text {
+    if compaction.len() + 1 + share.len() <= text {
         rows.push(format!(
-            "{handoff}{}0% of window",
-            " ".repeat(text - handoff.len() - share.len())
+            "{compaction}{}0% of window",
+            " ".repeat(text - compaction.len() - share.len())
         ));
     } else {
         let room = text - share.len() - 1;
-        let kept: String = handoff.chars().take(room - 1).collect();
+        let kept: String = compaction.chars().take(room - 1).collect();
         rows.push(format!("{kept}… {share}"));
     }
     rows.push(fit_row("then a summary, fresh context", text));
@@ -1455,7 +1455,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     // floor beside the 84-column conversation minimum), so the grid
     // follows to the new size with the conversation still on it.
     run.resize(116, 30);
-    // The card's handoff phrase is whole only when redrawn: retained
+    // The card's compaction phrase is whole only when redrawn: retained
     // bytes truncated to 116 columns lose its tail. It reads settled
     // turn-1 usage, unlike the card's turn count, which stays stale
     // when `turn_started` lines are missed under load. The parked cursor
@@ -3384,6 +3384,70 @@ fn unknown_slash_is_refused_while_paths_and_fresh_skills_are_sent() {
             .is_some_and(|text| text.contains("Write the failing test first."))),
         "{lasts:?}"
     );
+    quit_live(run);
+}
+
+/// `/compact focus on X` restarts the context from a note requested with
+/// those instructions and draws the compaction band; the command's retired
+/// name is an unknown command that sends nothing.
+#[test]
+fn compact_with_instructions_restarts_from_a_note_that_names_them() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([reply("First reply."), reply("The note.")]).unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    // A first prompt attaches the session. A step is one round-trip and a
+    // reply with no tool call ends the turn, so the turn makes one request
+    // (`docs/loop.md`, "One step").
+    let first = run.output().len();
+    run.write(b"first marker\r");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first turn's request"
+    );
+    run.wait_screen("the first reply", |grid| {
+        grid.contents.contains("First reply.")
+    });
+    run.turn_finished(first);
+    // The command asks the model for a note, naming the instructions: one
+    // note request, making two in all (`docs/compaction.md`, "A person":
+    // "Fiber asks for the note exactly as for an automatic compaction").
+    run.write(b"/compact focus on X\r");
+    assert!(server.await_requests(2, setup.deadline), "the note request");
+    let requests = server.requests();
+    let texts = user_texts(&requests[1].body);
+    let at = texts
+        .iter()
+        .position(|text| text.contains("The person asked that the next stretch of work focus on:"))
+        .unwrap_or_else(|| panic!("the focus section is in the note request: {texts:?}"));
+    assert!(texts[at].ends_with("focus on X"), "{:?}", texts[at]);
+    run.wait_screen("the compaction band", |grid| {
+        grid.contents
+            .contains(" ⇄ compaction · you asked with /compact")
+    });
+    // The retired name is refused: the exact notice shows and nothing
+    // more goes out (`docs/tui.md`, "Slash commands": an unrecognised
+    // `/name` is refused and kept in the input box), so the count stays two.
+    run.write(b"/handoff\r");
+    run.wait_screen("the unknown-command notice", |grid| {
+        grid.contents
+            .contains("Unknown command /handoff. Type / for the list.")
+    });
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "the refused command sent nothing");
+    for (at, request) in requests.iter().enumerate() {
+        for text in user_texts(&request.body) {
+            assert!(
+                !text.contains("/handoff"),
+                "request {at} carries the refused text: {text}"
+            );
+        }
+    }
+    // The refused draft is kept; clear it before quitting.
+    run.write(b"\x03");
     quit_live(run);
 }
 

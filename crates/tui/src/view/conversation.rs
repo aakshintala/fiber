@@ -20,13 +20,13 @@ const NEW_BELOW: &str = " ↓ New messages below · End ";
 /// the search box when it is open.
 const COPIED: &str = " Copied ";
 
-/// Whether the line draws on a card tint: a turn, surface or handoff
+/// Whether the line draws on a card tint: a turn, surface or compaction
 /// card, whose sides draw as a thin box without colour, and which marks
 /// the pinned row's tint (`docs/tui.md`, "Look").
 fn card_tint(line: &Line<'_>) -> bool {
     line.style.bg == Some(Role::Turn.color())
         || line.style.bg == Some(Role::Surface.color())
-        || line.style.bg == Some(Role::Handoff.color())
+        || line.style.bg == Some(Role::Compaction.color())
 }
 
 /// Draws one conversation row into its rect: the line with its own
@@ -362,14 +362,14 @@ mod tests {
     #[test]
     fn every_card_tint_draws_the_thin_box_sides() {
         // The pin draws through `draw_row`, and the row loop shares its tint
-        // check: a turn, surface or handoff background draws the thin-box
+        // check: a turn, surface or compaction background draws the thin-box
         // sides without colour, so flipping any arm of the check drops a side
         // here (`docs/tui.md`, "Look").
         crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
         for (name, role) in [
             ("turn", Role::Turn),
             ("surface", Role::Surface),
-            ("handoff", Role::Handoff),
+            ("compaction", Role::Compaction),
         ] {
             let line = ratatui::text::Line::styled("tinted", Style::new().bg(role.color()));
             let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));

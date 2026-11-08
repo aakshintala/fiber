@@ -190,16 +190,16 @@ history rather than copying it. The existing session keeps its history.
 `/fork` is a rewind to the latest point.
 _Avoid_: branch, backtrack, checkpoint, undo
 
-### Handoff
+### Compaction
 
-Restarting the model's context from a handoff note, appended to the session log
+Restarting the model's context from a compaction note, appended to the session log
 so nothing before it is lost. Started automatically, by a person, or by a tool.
-_Avoid_: compaction, summary, collapse, reset
+_Avoid_: summary, collapse, reset
 
-### Handoff note
+### Compaction note
 
-The text a handoff restarts the model's context from, written by the session's
-own model, or by an extension's `before_handoff` hook.
+The text a compaction restarts the model's context from, written by the session's
+own model, or by an extension's `before_compaction` hook.
 _Avoid_: summary
 
 ### Prompt cache
@@ -220,7 +220,7 @@ _Avoid_: prefix, header
 The first message of a session's conversation, written by Fiber: the
 environment, the project's instruction files, extension sections and the
 skills listing. It is
-logged once and written again after each handoff. See `docs/system-prompt.md`.
+logged once and written again after each compaction. See `docs/system-prompt.md`.
 _Avoid_: environment context, session context
 
 ### Instruction file

@@ -358,7 +358,7 @@ fn cache_expiry_pins_repins_and_clears() {
     copy["origin_session_id"] = json!("s_delegate");
     w.feed("usage_recorded", Some("a4"), &copy);
     let mut reviewer = usage("g5", 5, None);
-    reviewer["reviewer"] = json!({"purpose": "handoff"});
+    reviewer["reviewer"] = json!({"purpose": "compaction"});
     w.feed("usage_recorded", None, &reviewer);
     w.feed("usage_recorded", None, &usage("g6", 5, None));
     assert_eq!(w.status().cache_expires, pinned);
@@ -384,7 +384,7 @@ fn cache_expiry_pins_repins_and_clears() {
     assert_eq!(w.status().cache_expires, None);
     w.feed("usage_recorded", Some("a7"), &usage("g7", 10, None));
     assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
-    // A reload, a model switch and a handoff each clear the pin; the
+    // A reload, a model switch and a compaction each clear the pin; the
     // next qualifying request re-pins either way.
     w.feed(
         "reloaded",
@@ -405,7 +405,7 @@ fn cache_expiry_pins_repins_and_clears() {
     w.feed("usage_recorded", Some("a9"), &usage("g9", 10, None));
     assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 12}),
     );
@@ -711,9 +711,9 @@ fn only_a_session_model_reply_sets_the_context() {
     // The latest wins.
     w.feed("usage_recorded", Some("a2"), &usage("g5", 7, None));
     assert_eq!(w.status().context.unwrap().tokens, 12);
-    // A handoff clears it until the next reply.
+    // A compaction clears it until the next reply.
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 12}),
     );
@@ -751,9 +751,9 @@ fn a_record_that_reported_no_input_tokens_never_moves_the_context() {
     assert_eq!(w.status().context.unwrap().tokens, 505);
     w.feed("usage_recorded", Some("a3"), &usage("g3", 0, None));
     assert_eq!(w.status().context.unwrap().tokens, 505);
-    // After a handoff it waits for the next record that reports its input.
+    // After a compaction it waits for the next record that reports its input.
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 505}),
     );
@@ -788,10 +788,10 @@ fn a_late_correction_of_an_earlier_call_never_moves_the_context() {
     w.feed("usage_recorded", Some("a1"), &usage("g1", 40, Some(0.5)));
     assert_eq!(w.status().context.unwrap().tokens, 12);
     assert_eq!(w.status().spend.cost, Some(0.5));
-    // After a handoff, a correction of a call before it leaves the context
+    // After a compaction, a correction of a call before it leaves the context
     // unknown until the next reply.
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 12}),
     );

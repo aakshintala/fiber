@@ -16,7 +16,7 @@ use contract::{ActionId, ErrorCode, TurnId};
 use serde_json::Value;
 use support::lock;
 
-use crate::{Error, Loop, Step, cancel, completion, ended, handoff, mint, usage, util};
+use crate::{Error, Loop, Step, cancel, compaction, completion, ended, mint, usage, util};
 
 impl Loop {
     /// Writes the subdirectory lines the last step's calls queued: after
@@ -93,7 +93,7 @@ impl Loop {
     /// `budget_exceeded`, as `job_stop` stops one (`docs/loop.md`,
     /// "Spending budget"). Every budget end passes through here, and no
     /// other path stops them: `over_budget` stays pure, because the
-    /// handoff note request also reads it and a failed note does not end
+    /// compaction note request also reads it and a failed note does not end
     /// the turn. A delegate whose one-way trip has been claimed stops
     /// itself with the tree-stop code instead of draining failed: the
     /// parent's stop signal is already coming for the same trip, and on
@@ -133,7 +133,7 @@ impl Loop {
             pending_asks,
             known_hosts,
             changes,
-            handoff,
+            compaction,
             diag,
             ..
         } = self;
@@ -142,7 +142,7 @@ impl Loop {
             reviewed,
             asks: pending_asks,
             had: &mut changes.had,
-            carry: &mut handoff.carry,
+            carry: &mut compaction.carry,
             known: known_hosts,
         };
         let mut emit = |event: &Event, action: &ActionId| {
@@ -216,7 +216,7 @@ impl Loop {
         mut opened: VecDeque<ActionId>,
         turn: &TurnId,
         message: &ActionId,
-    ) -> Result<(handoff::Calls, Finish), Error> {
+    ) -> Result<(compaction::Calls, Finish), Error> {
         let mut calls = Vec::new();
         let usage = reply.usage();
         for action in reply.actions {
@@ -340,7 +340,7 @@ impl Loop {
         let tokens = reply.tokens.clone();
         // The text `turn_end` hooks are shown: read before the reply is
         // written, which moves it.
-        let note = crate::handoff::reply_note(&reply);
+        let note = crate::compaction::reply_note(&reply);
         let (calls, finish) = self.write_reply(reply, opened, turn, message)?;
         self.measure(&tokens);
         if finish == Finish::OutputLimit {

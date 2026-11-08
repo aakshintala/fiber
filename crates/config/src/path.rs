@@ -1,4 +1,4 @@
-//! Dotted key paths, such as `models."openai/gpt-5.6".handoff.tokens`, and the
+//! Dotted key paths, such as `models."openai/gpt-5.6".compaction.tokens`, and the
 //! merge rule of `docs/configuration.md`, "Layers".
 
 use serde_json::{Map, Value};

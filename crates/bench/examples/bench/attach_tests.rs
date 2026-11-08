@@ -126,17 +126,17 @@ fn plan_turns_needs_one_turn_at_most_and_fails_on_empty_growth() {
 }
 
 #[test]
-fn the_probe_fixtures_measure_one_turn_then_a_turn_with_its_handoff() {
-    assert_eq!((PROBE_A.turns, PROBE_A.handoffs), (1, 0));
-    assert_eq!((PROBE_B.turns, PROBE_B.handoffs), (2, 1));
+fn the_probe_fixtures_measure_one_turn_then_a_turn_with_its_compaction() {
+    assert_eq!((PROBE_A.turns, PROBE_A.compactions), (1, 0));
+    assert_eq!((PROBE_B.turns, PROBE_B.compactions), (2, 1));
     assert_eq!(PROBE_A.reply_bytes, TURN_REPLY_BYTES);
     assert_eq!(PROBE_B.reply_bytes, TURN_REPLY_BYTES);
     // Exactly what each generation consumes, so back-to-back generations
     // in one home serve exactly their own entries.
     assert_eq!(PROBE_A.script_prefix().len(), 1);
     assert_eq!(PROBE_B.script_prefix().len(), 3);
-    // A growth turn stays far below the handoff trigger, so no automatic
-    // handoff runs while the log grows. A compile-time check pins it.
+    // A growth turn stays far below the compaction trigger, so no automatic
+    // compaction runs while the log grows. A compile-time check pins it.
 }
 
 #[test]
@@ -145,10 +145,10 @@ fn the_attach_script_ends_with_the_tail() {
         metric: "terminal_attach_ms",
         turns: 3,
         reply_bytes: TURN_REPLY_BYTES,
-        handoffs: 2,
+        compactions: 2,
     };
     let script = fixture.script_with_last(ATTACH_TAIL);
-    assert_eq!(script.len(), fixture.turns + fixture.handoffs + 1);
+    assert_eq!(script.len(), fixture.turns + fixture.compactions + 1);
     let last = script.last().unwrap();
     assert!(
         String::from_utf8_lossy(&last.body).contains(ATTACH_TAIL),

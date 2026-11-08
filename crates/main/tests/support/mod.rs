@@ -2512,12 +2512,12 @@ pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
 /// order, whatever order `main` pushes them in.
 pub(crate) const TOOL_NAMES: [&str; 18] = [
     "ask_user",
+    "compact",
     "delegate_fork",
     "delegate_message",
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "handoff",
     "jobs",
     "name_session",
     "read",

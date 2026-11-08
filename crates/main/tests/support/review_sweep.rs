@@ -599,7 +599,7 @@ fn resolved_for(
 }
 
 /// Reads the scratch log's `permission_requested` lines for the call under
-/// review and returns the last escalation cause a reviewer handoff named.
+/// review and returns the last escalation cause a reviewer compaction named.
 /// A reviewer failure carries its message; block budgets carry the
 /// reviewer's reason.
 fn escalation_for(log_dir: &Path, action: &str) -> Result<Option<String>, String> {

@@ -409,7 +409,7 @@ fn run_with(
         ));
     };
     if req.own_group {
-        // The waiter takes the child through a handoff, so a spawn failure
+        // The waiter takes the child through a transfer, so a spawn failure
         // keeps it here for the stop and the reap instead of dropping it in
         // a closure that never runs.
         let (wait_tx, wait_rx) = mpsc::channel::<Child>();
@@ -443,7 +443,7 @@ fn run_with(
                 std::io::Error::other("host.exec waiter gone"),
             ));
         }
-        // The stdin writer started before the handoff above moved the
+        // The stdin writer started before the transfer above moved the
         // child.
         let outcome = supervise(
             req,

@@ -12,9 +12,9 @@ mod extension_harness;
 #[path = "../support/mod.rs"]
 mod support;
 
+mod compaction_kept;
 mod continue_session;
 mod from_session;
-mod handoff_kept;
 mod history_page_failed;
 mod quit_after_completed;
 mod reload;

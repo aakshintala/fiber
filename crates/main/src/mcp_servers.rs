@@ -200,7 +200,7 @@ pub(crate) struct SessionServers {
     /// Every runnable prompt of every server that listed, tagged with its
     /// server's name (`docs/mcp.md`, "Prompts and resources").
     pub prompts: mcp::Prompts,
-    /// Run on every completed handoff: clears what the file tools have seen.
+    /// Run on every completed compaction: clears what the file tools have seen.
     pub forget: Arc<dyn Fn() + Send + Sync>,
     /// The image child's driver, which pasted images are processed through.
     pub images: Arc<dyn contract::images::Images>,
