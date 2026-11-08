@@ -172,15 +172,15 @@ impl CallView {
         self.artifact.is_some()
     }
 
-    /// Lays the call's rows out again at `width` from the call it
-    /// keeps, so a message wraps where the view is drawn now. Paging,
+    /// Lays the call's width-dependent rows (`prefix` and `plain`) out
+    /// again at `width` from the call it keeps, so a message wraps where
+    /// the view is drawn now; `closing` takes no width. Paging,
     /// follow, search and the notice stay; the selection and the first
     /// row shown move only when the new row count leaves them past the
     /// last row.
     fn rebuild(&mut self, width: u16) {
         self.plain = opened::uncapped(&self.source, width);
         self.prefix = opened::prefix(&self.source, width);
-        self.closing = opened::closing(&self.source);
         self.width = width;
         let rows = self.rows().len();
         self.list.clamp(rows);
