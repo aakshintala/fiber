@@ -168,14 +168,6 @@ crates/cli/src/models_tests.rs	fiber-4326	plan	2026-11-08T08:06:52Z	Amoghs-MacBo
 crates/extensions/src/providers.rs	fiber-4326	grant	2026-11-08T08:10:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4326-source-newer-cache-stale	
 crates/extensions/tests/models.rs	fiber-4326	grant	2026-11-08T08:11:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4326-source-newer-cache-stale	
 docs/delegates.md	fiber-4326	grant	2026-11-08T08:11:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4326-source-newer-cache-stale	
-crates/tui/src/steering.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/items.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/view/input_box_tests.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/main_journeys.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/delegate_steering_tests.rs	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
-crates/tui/src/app/snapshots/tui__app__delegate_steering_tests__queued_delegate_steering.snap	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
-crates/main/tests/main_journeys/delegate_steering.rs	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
 crates/tui/src/event_loop_tests.rs	fiber-4402	plan	2026-11-08T11:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/remote_run_tests.rs	fiber-4402	plan	2026-11-08T11:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/bench/examples/bench/attach.rs	fiber-4233	plan	2026-11-08T13:00:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4233-compaction-rename	
