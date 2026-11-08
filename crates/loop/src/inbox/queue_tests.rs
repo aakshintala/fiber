@@ -134,11 +134,16 @@ fn message_drain_takes_a_shell_start_and_end_with_the_messages_in_arrival_order(
     let taken: Vec<&'static str> = queue
         .take_messages()
         .into_iter()
-        .map(|delivery| match delivery {
-            Delivery::ShellStarted(..) => "started",
-            Delivery::Message(..) => "message",
-            Delivery::Shell(..) => "ended",
-            _ => panic!("only a message or a driver shell line is taken early"),
+        .map(|delivery| {
+            if matches!(delivery, Delivery::ShellStarted(..)) {
+                "started"
+            } else if matches!(delivery, Delivery::Message(..)) {
+                "message"
+            } else if matches!(delivery, Delivery::Shell(..)) {
+                "ended"
+            } else {
+                panic!("only a message or a driver shell line is taken early")
+            }
         })
         .collect();
     assert_eq!(taken, ["started", "message", "ended"]);

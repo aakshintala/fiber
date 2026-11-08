@@ -299,6 +299,7 @@ fn hand_off_with_timeout(
             shared,
             ask: None,
             job: None,
+            paced: None,
             feed: None,
         },
         cap: OUTPUT_CAP,

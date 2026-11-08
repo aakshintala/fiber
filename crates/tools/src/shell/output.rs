@@ -436,14 +436,26 @@ pub(super) fn write_or_drop(file: &mut File, bytes: &[u8]) {
     }
 }
 
-/// A running job's `job_delta` lines (`docs/events.md`, `job_delta`), paced
-/// as `tool_call_delta` is (`docs/tools.md`, "Progress"): the first change
-/// after idle goes out at once, held changes collapse into one per
-/// interval, and the end flushes what is held. Only the job's drive thread
-/// holds one, so nothing emits after the job's end is reported.
-pub(super) struct JobStream {
-    job_id: JobId,
-    emit: Arc<dyn Emit>,
+/// Where a paced stream's text comes from and where it goes.
+enum Source {
+    /// A job's output: the bytes queued for jobs, emitted as `job_delta`
+    /// through the job's own emitter.
+    Job { job_id: JobId, emit: Arc<dyn Emit> },
+    /// A foreground call's output: the bytes queued for the call, emitted
+    /// as text-only `tool_call_delta` through the emitter the drive loop
+    /// holds.
+    Call,
+}
+
+/// A running command's streamed output, paced as `tool_call_delta` is
+/// (`docs/tools.md`, "Progress"): the first change after idle goes out at
+/// once, held changes collapse into one per interval, and the end flushes
+/// what is held. A job's lines are `job_delta` (`docs/events.md`,
+/// `job_delta`); a foreground call's, when its emitter asks for pacing, are
+/// `tool_call_delta`. Only the command's drive thread holds one, so nothing
+/// emits after the command's end is reported.
+pub(super) struct PacedStream {
+    source: Source,
     /// The encoded length of this stream's event with an empty `text`:
     /// the envelope every delta's pace starts from, serialised once.
     envelope: u64,
@@ -456,21 +468,28 @@ pub(super) struct JobStream {
     next_due: Option<Instant>,
 }
 
-impl JobStream {
-    pub(super) fn new(job_id: JobId, emit: Arc<dyn Emit>) -> Self {
-        let empty = Event::JobDelta(JobDelta {
-            job_id: job_id.clone(),
-            progress: Progress {
-                text: Some(String::new()),
-                details: None,
-            },
-        });
-        let envelope = serde_json::to_vec(&empty)
+impl PacedStream {
+    /// A job's stream: `job_delta` lines through `emit`.
+    pub(super) fn job(job_id: JobId, emit: Arc<dyn Emit>) -> Self {
+        Self::of(Source::Job { job_id, emit })
+    }
+
+    /// A foreground call's stream: `tool_call_delta` lines through the
+    /// emitter each `pass` and `flush` is given.
+    pub(super) fn call() -> Self {
+        Self::of(Source::Call)
+    }
+
+    fn of(source: Source) -> Self {
+        let empty = Progress {
+            text: Some(String::new()),
+            details: None,
+        };
+        let envelope = serde_json::to_vec(&Self::event(&source, empty))
             .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
             .unwrap_or(0);
         Self {
-            job_id,
-            emit,
+            source,
             envelope,
             carry: Vec::new(),
             held: String::new(),
@@ -478,12 +497,33 @@ impl JobStream {
         }
     }
 
+    fn event(source: &Source, progress: Progress) -> Event {
+        match source {
+            Source::Job { job_id, .. } => Event::JobDelta(JobDelta {
+                job_id: job_id.clone(),
+                progress,
+            }),
+            Source::Call => Event::ToolCallDelta(progress),
+        }
+    }
+
+    /// The bytes the reader queued for this stream and whether the queue
+    /// dropped some since the last take.
+    fn take(&self, shared: &Shared) -> (Vec<u8>, bool) {
+        let mut inner = lock(&shared.inner);
+        match self.source {
+            Source::Job { .. } => inner.pending.take(),
+            Source::Call => inner.stream.take(),
+        }
+    }
+
     /// Takes the bytes the reader queued, and writes the held text when it
     /// is due at `clock`'s now. When the take reports dropped bytes, any
     /// incomplete sequence carried from the last take is discarded first,
-    /// since its start is gone.
-    pub(super) fn pass(&mut self, shared: &Shared, clock: &dyn Clock) {
-        let (fresh, dropped) = lock(&shared.inner).pending.take();
+    /// since its start is gone. `emit` is the drive loop's emitter: a
+    /// job's stream writes through its own.
+    pub(super) fn pass(&mut self, shared: &Shared, clock: &dyn Clock, emit: &dyn Emit) {
+        let (fresh, dropped) = self.take(shared);
         if dropped {
             self.carry.clear();
         }
@@ -495,7 +535,7 @@ impl JobStream {
         pace::cap_held(&mut self.held);
         let now = clock.now();
         if !self.held.is_empty() && self.next_due.is_none_or(|due| now >= due) {
-            let bytes = self.send();
+            let bytes = self.send(emit);
             self.next_due = now.checked_add(pace::interval(bytes)).or(Some(now));
         }
     }
@@ -513,8 +553,8 @@ impl JobStream {
     /// goes out as U+FFFD, so the texts concatenate to the lossy whole.
     /// When the take reports dropped bytes, any incomplete sequence carried
     /// from the last take is discarded first, since its start is gone.
-    pub(super) fn flush(&mut self, shared: &Shared) {
-        let (fresh, dropped) = lock(&shared.inner).pending.take();
+    pub(super) fn flush(&mut self, shared: &Shared, emit: &dyn Emit) {
+        let (fresh, dropped) = self.take(shared);
         if dropped {
             self.carry.clear();
         }
@@ -523,23 +563,26 @@ impl JobStream {
         self.held.push_str(&String::from_utf8_lossy(&rest));
         pace::cap_held(&mut self.held);
         if !self.held.is_empty() {
-            self.send();
+            self.send(emit);
         }
     }
 
     /// Emits the held text and returns the delta's encoded size, counted
     /// without serialising: the envelope plus the text's escaped length.
-    fn send(&mut self) -> u64 {
+    fn send(&mut self, call_emit: &dyn Emit) -> u64 {
         let text = std::mem::take(&mut self.held);
         let bytes = self.envelope.saturating_add(escaped_len(&text));
-        let event = Event::JobDelta(JobDelta {
-            job_id: self.job_id.clone(),
-            progress: Progress {
+        let event = Self::event(
+            &self.source,
+            Progress {
                 text: Some(text),
                 details: None,
             },
-        });
-        self.emit.emit(&event);
+        );
+        match &self.source {
+            Source::Job { emit, .. } => emit.emit(&event),
+            Source::Call => call_emit.emit(&event),
+        }
         bytes
     }
 }

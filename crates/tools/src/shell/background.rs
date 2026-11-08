@@ -23,7 +23,7 @@ use support::cancel::Token;
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
 use super::moved::Moved;
-use super::output::{JobStream, align_char_boundary};
+use super::output::{PacedStream, align_char_boundary};
 use super::sandbox::protected::Report as ProtectedReport;
 use super::tty;
 use super::{Limit, assemble};
@@ -283,7 +283,7 @@ fn hand_off(
     let path = opened.path.clone();
     let job_id = opened.started.job_id.clone();
     let end = opened.end;
-    let stream = JobStream::new(job_id.clone(), opened.emit);
+    let stream = PacedStream::job(job_id.clone(), opened.emit);
     let errors = errors_path(&opened.path);
     // A monitor's standard error file, or why it could not be created.
     let mut sink = None;

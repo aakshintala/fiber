@@ -469,6 +469,7 @@ fn the_drain_polls_while_the_group_may_be_occupied() {
             shared: drive_shared,
             ask: None,
             job: None,
+            paced: None,
             feed: None,
         };
         let cancel = CancelToken::new();
@@ -1067,6 +1068,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             shared,
             ask: None,
             job: None,
+            paced: None,
             feed: None,
         },
         cap: OUTPUT_CAP,
@@ -1168,7 +1170,7 @@ impl Job {
         moved.arm(&cancel);
         moved.detach_call_cancel();
         let deltas = Arc::new(fakes::jobs::JobDeltas::default());
-        let stream = super::super::output::JobStream::new(
+        let stream = super::super::output::PacedStream::job(
             contract::JobId("j_t".to_owned()),
             Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
         );
@@ -1727,6 +1729,7 @@ fn drive_shell_exit(ps: &std::path::Path) -> (LoopEnd, Run) {
         shared,
         ask: None,
         job: None,
+        paced: None,
         feed: None,
     };
     let cancel = CancelToken::new();
@@ -1811,6 +1814,7 @@ fn only_a_shell_exit_lists_the_group_before_moving() {
         shared,
         ask: None,
         job: None,
+        paced: None,
         feed: None,
     };
     let cancel = CancelToken::new();
@@ -2617,7 +2621,7 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
     // The job's common finish consumes the guard: the adopted end restores
     // and reports exactly once.
     let deltas = Arc::new(fakes::jobs::JobDeltas::default());
-    let stream = super::super::output::JobStream::new(
+    let stream = super::super::output::PacedStream::job(
         contract::JobId("j_t".to_owned()),
         Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
     );
@@ -2756,4 +2760,356 @@ fn a_failed_job_open_preserves_the_guard_on_resume() {
         b"original",
         "the resumed end restores"
     );
+}
+
+/// An emitter that answers the start hook and records what it saw: each
+/// `starting` call with the probe's answer at that moment, in order with
+/// the deltas.
+struct Hook {
+    answer: bool,
+    paced: bool,
+    /// Read at each `starting`, before it answers.
+    probe: Box<dyn Fn() -> bool + Send + Sync>,
+    seen: std::sync::Mutex<Vec<bool>>,
+    recorder: Recorder,
+}
+
+impl Hook {
+    fn new(answer: bool, paced: bool, probe: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            answer,
+            paced,
+            probe: Box::new(probe),
+            seen: std::sync::Mutex::new(Vec::new()),
+            recorder: Recorder::default(),
+        }
+    }
+
+    /// The probe's answer at each `starting`, in call order.
+    fn probes(&self) -> Vec<bool> {
+        lock(&self.seen).clone()
+    }
+}
+
+impl contract::emit::Emit for Hook {
+    fn emit(&self, event: &contract::events::Event) {
+        self.recorder.emit(event);
+    }
+
+    fn starting(&self) -> bool {
+        let probed = (self.probe)();
+        lock(&self.seen).push(probed);
+        self.answer
+    }
+
+    fn paced(&self) -> bool {
+        self.paced
+    }
+}
+
+const START_DEADLINE: Duration = Duration::from_secs(40);
+
+/// Runs `command` under `program` in `work` on its own thread with `hook`
+/// as its emitter, on the process clock: a stuck drive fails the test at
+/// the deadline instead of hanging it.
+fn execute_hooked(
+    program: std::path::PathBuf,
+    command: &str,
+    work: &std::path::Path,
+    hook: &Arc<Hook>,
+) -> mpsc::Receiver<io::Result<super::Ran>> {
+    let command = command.to_owned();
+    let work = work.to_path_buf();
+    let hook = Arc::clone(hook);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let cancel = CancelToken::new();
+        let sandbox = crate::shell::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        };
+        let ran = super::execute(
+            &program,
+            &command,
+            &work,
+            Some(Duration::from_secs(3600)),
+            &fakes::clock::SystemClock,
+            &cancel,
+            &*hook,
+            MovePolicy::Stay,
+            None,
+            None,
+            None,
+            &sandbox,
+            &work,
+            None,
+        );
+        let _sent = tx.send(ran);
+    });
+    rx
+}
+
+fn finished_of(ran: io::Result<super::Ran>) -> super::Finished {
+    match ran {
+        Ok(super::Ran::Finished(finished, _)) => finished,
+        Ok(_) => panic!("a command that may not move finished or was declined"),
+        Err(error) => panic!("the command started: {error}"),
+    }
+}
+
+#[test]
+fn the_start_hook_is_asked_once_before_the_process_exists() {
+    let dir = fakes::TempDir::new("fiber-shell-starting");
+    let work = dir.path().to_path_buf();
+    let marker = work.join("ran");
+    let probe = marker.clone();
+    // The probe sees whether the command's own file exists yet.
+    let hook = Arc::new(Hook::new(true, false, move || probe.exists()));
+    let rx = execute_hooked("/bin/sh".into(), "touch ran", &work, &hook);
+    let finished = finished_of(
+        Deadline::after(START_DEADLINE)
+            .recv(&rx)
+            .expect("the command ended"),
+    );
+    assert_eq!(exit_code_of(finished.status), 0);
+    assert_eq!(
+        hook.probes(),
+        [false],
+        "asked exactly once, before the command wrote its file"
+    );
+    assert!(marker.is_file(), "the command ran after the hook said yes");
+}
+
+#[test]
+fn a_declined_start_runs_nothing_and_returns_the_declined_shape() {
+    let dir = fakes::TempDir::new("fiber-shell-declined");
+    let work = dir.path().to_path_buf();
+    let marker = work.join("ran");
+    let hook = Arc::new(Hook::new(false, false, || false));
+    let rx = execute_hooked("/bin/sh".into(), "touch ran", &work, &hook);
+    let ran = Deadline::after(START_DEADLINE)
+        .recv(&rx)
+        .expect("the call returned");
+    assert!(
+        matches!(ran, Ok(super::Ran::Declined)),
+        "a declined start is neither a run nor an error"
+    );
+    assert_eq!(hook.probes().len(), 1, "asked once");
+    assert!(!marker.exists(), "the declined command never ran");
+    assert!(
+        hook.recorder.events().is_empty(),
+        "a declined start streams nothing"
+    );
+}
+
+#[test]
+fn the_start_hook_is_not_asked_for_a_workdir_that_is_not_a_directory() {
+    use contract::tool::Tool as _;
+    let dir = fakes::TempDir::new("fiber-shell-no-workdir");
+    let hook = Arc::new(Hook::new(true, false, || false));
+    let shell = crate::Shell::new(
+        dir.path().to_path_buf(),
+        Arc::new(fakes::clock::SystemClock),
+    );
+    let missing = dir.path().join("no-such-dir");
+    let args = serde_json::json!({"command": "touch ran", "workdir": missing});
+    let output = shell.run(
+        args.as_object().expect("object"),
+        &CancelToken::default(),
+        &*hook,
+    );
+    assert!(output.error.is_some(), "the missing directory is refused");
+    assert!(output.process.is_none(), "nothing ran");
+    assert!(
+        hook.probes().is_empty(),
+        "a refused call never asks to start"
+    );
+}
+
+#[test]
+fn a_spawn_failure_after_starting_reports_the_error() {
+    let dir = fakes::TempDir::new("fiber-shell-no-program");
+    let work = dir.path().to_path_buf();
+    let hook = Arc::new(Hook::new(true, false, || false));
+    let rx = execute_hooked(work.join("no-such-shell-4177"), "true", &work, &hook);
+    let ran = Deadline::after(START_DEADLINE)
+        .recv(&rx)
+        .expect("the call returned");
+    let Err(error) = ran else {
+        panic!("a program that does not exist does not start");
+    };
+    assert_eq!(error.kind(), ErrorKind::NotFound);
+    assert!(
+        error.to_string().contains("os error 2"),
+        "the message names the cause: {error}"
+    );
+    assert_eq!(hook.probes().len(), 1, "asked once, then the spawn failed");
+    assert!(
+        hook.recorder.events().is_empty(),
+        "a spawn that failed streamed nothing"
+    );
+}
+
+/// A foreground command whose emitter asks for pacing: a held change goes
+/// out on the park deadline, though no later chunk arrives to carry it.
+#[test]
+fn a_paced_call_flushes_a_held_change_on_the_park_deadline() {
+    let dir = fakes::TempDir::new("fiber-shell-paced");
+    let work = dir.path().to_path_buf();
+    let first = work.join("first");
+    let second = work.join("second");
+    fakes::fifo(&first);
+    fakes::fifo(&second);
+    let mut first_hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&first)
+        .unwrap();
+    let mut second_hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&second)
+        .unwrap();
+    let hook = Arc::new(Hook::new(true, true, || false));
+    let rx = execute_hooked(
+        "/bin/sh".into(),
+        "printf a; read -r _ < first; printf b; read -r _ < second",
+        &work,
+        &hook,
+    );
+    let wait = Deadline::after(START_DEADLINE);
+    // The first change after idle goes out at once.
+    assert!(hook.recorder.wait_for_text("a", wait), "a goes out at once");
+    {
+        use std::io::Write as _;
+        writeln!(first_hold, "go").unwrap();
+    }
+    // `b` arrives within the 100 ms the first delta holds back, so it is
+    // held; with the command quiet, only the park deadline can send it.
+    assert!(
+        hook.recorder.wait_for_text("ab", wait),
+        "the held b goes out on the park deadline: {:?}",
+        hook.recorder.text()
+    );
+    {
+        use std::io::Write as _;
+        writeln!(second_hold, "go").unwrap();
+    }
+    let finished = finished_of(wait.recv(&rx).expect("the command ended"));
+    assert_eq!(exit_code_of(finished.status), 0);
+    assert_eq!(hook.recorder.text(), "ab");
+}
+
+/// An emitter that does not ask for pacing keeps the tool's own unpaced
+/// deltas: one per chunk, each text-only and as soon as it is read.
+#[test]
+fn an_unpaced_call_emits_each_chunk_as_it_is_read() {
+    let dir = fakes::TempDir::new("fiber-shell-unpaced");
+    let work = dir.path().to_path_buf();
+    let first = work.join("first");
+    let second = work.join("second");
+    fakes::fifo(&first);
+    fakes::fifo(&second);
+    let mut first_hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&first)
+        .unwrap();
+    let mut second_hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&second)
+        .unwrap();
+    let hook = Arc::new(Hook::new(true, false, || false));
+    let rx = execute_hooked(
+        "/bin/sh".into(),
+        "printf a; read -r _ < first; printf b; read -r _ < second; printf c",
+        &work,
+        &hook,
+    );
+    let wait = Deadline::after(START_DEADLINE);
+    assert!(hook.recorder.wait_for_text("a", wait));
+    {
+        use std::io::Write as _;
+        writeln!(first_hold, "go").unwrap();
+    }
+    assert!(hook.recorder.wait_for_text("ab", wait));
+    {
+        use std::io::Write as _;
+        writeln!(second_hold, "go").unwrap();
+    }
+    let finished = finished_of(wait.recv(&rx).expect("the command ended"));
+    assert_eq!(exit_code_of(finished.status), 0);
+    let texts: Vec<String> = hook
+        .recorder
+        .events()
+        .into_iter()
+        .map(|event| {
+            let contract::events::Event::ToolCallDelta(progress) = event else {
+                panic!("only deltas stream: {event:?}");
+            };
+            assert_eq!(progress.details, None, "a text-only delta");
+            progress.text.expect("a delta carries text")
+        })
+        .collect();
+    assert_eq!(texts, ["a", "b", "c"]);
+}
+
+/// A paced foreground call that moves to a job writes what its stream
+/// holds before it moves and drops the stream: the job's own stream
+/// carries the output from there.
+#[test]
+fn a_paced_call_that_moves_flushes_its_held_text_and_drops_its_stream() {
+    fn always_alive(_pgid: u32) -> bool {
+        true
+    }
+    let shared = Arc::new(Shared::default());
+    let clock = FakeClock::new();
+    let recorder = Recorder::default();
+    let mut paced = super::super::output::PacedStream::call();
+    // "a" goes out at once and starts the interval: "b" is then held.
+    lock(&shared.inner).stream.push(b"a");
+    paced.pass(&shared, clock.as_ref(), &recorder);
+    assert_eq!(recorder.text(), "a");
+    lock(&shared.inner).stream.push(b"b");
+    let mut progress = Run {
+        phase: Phase::Running,
+        stop: None,
+        sent_signal: false,
+        seen_empty: false,
+        stream_carry: Vec::new(),
+        timeout_at: None,
+        move_at: None,
+        members: None,
+        pgid: 99,
+        hosted: None,
+        listing: None,
+        shared,
+        ask: None,
+        job: None,
+        paced: Some(paced),
+        feed: None,
+    };
+    let cancel = CancelToken::new();
+    let end = pump_inner(
+        &mut progress,
+        MovePolicy::Background,
+        clock.as_ref(),
+        &cancel,
+        &recorder,
+        always_alive,
+        std::path::Path::new("ps"),
+    );
+    assert!(matches!(
+        end,
+        LoopEnd::Move(MoveReason::StartedInBackground)
+    ));
+    assert_eq!(
+        recorder.text(),
+        "ab",
+        "the held text went out before the move"
+    );
+    assert!(progress.paced.is_none(), "the call's stream is dropped");
 }
