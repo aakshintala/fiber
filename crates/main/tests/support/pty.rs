@@ -83,21 +83,36 @@ impl Reader {
         writer: Writer,
         deadline: Deadline,
     ) -> (Self, mpsc::Receiver<()>) {
-        let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (wake, wakes) = mpsc::channel();
+        (
+            Self::start_with_wake(master, shared, writer, deadline, wake),
+            wakes,
+        )
+    }
+
+    /// As [`Reader::start`], sending each wake on `wake`, so a test that
+    /// also wakes on other events (a recorded hub command) shares one
+    /// receiver. The reader sends one `()` per chunk appended, after the
+    /// chunk is published and the lock released.
+    #[track_caller]
+    pub(crate) fn start_with_wake(
+        master: fs::File,
+        shared: Arc<Mutex<Shared>>,
+        writer: Writer,
+        deadline: Deadline,
+        wake: mpsc::Sender<()>,
+    ) -> Self {
+        let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (done, finished) = mpsc::channel();
         let master = OwnedFd::from(master);
         thread::Builder::new()
             .spawn(move || Self::drain(master, stop_read, shared, writer, wake, done, deadline))
             .unwrap();
-        (
-            Self {
-                stop: stop_write,
-                done: finished,
-                deadline,
-            },
-            wakes,
-        )
+        Self {
+            stop: stop_write,
+            done: finished,
+            deadline,
+        }
     }
 
     /// Drains `master` on a thread as in [`Reader::start`], sharing the
@@ -567,6 +582,10 @@ pub(crate) struct Shared {
     /// the dump holds the output through it, never a snapshot taken
     /// after quit.
     dump_len: Option<usize>,
+    /// The text a retained frame must hold, once armed by [`Shared::retain`].
+    needle: Option<String>,
+    /// The first whole frame, from arming on, whose text holds `needle`.
+    retained: Option<Grid>,
 }
 
 impl Shared {
@@ -591,7 +610,25 @@ impl Shared {
             ended: false,
             snapshot_len: 0,
             dump_len: None,
+            needle: None,
+            retained: None,
         }
+    }
+
+    /// Arms retention: from now on the first whole frame whose text holds
+    /// `needle` is kept, however the reads cut the stream, so a wait that
+    /// looks after a later frame replaced it still sees it. Clears any
+    /// frame retained before. Panics on an empty needle, which every
+    /// frame holds.
+    pub(crate) fn retain(&mut self, needle: &str) {
+        assert!(!needle.is_empty(), "a retained needle must not be empty");
+        self.needle = Some(needle.to_owned());
+        self.retained = None;
+    }
+
+    /// The frame [`Shared::retain`] kept, if one has drawn since arming.
+    pub(crate) fn retained(&self) -> Option<Grid> {
+        self.retained.clone()
     }
 
     /// The chunk's query replies, in stream order. Only the query tail
@@ -613,13 +650,33 @@ impl Shared {
     /// completes, never a snapshot taken after quit. Unset, no file is
     /// written. The write failure is ignored: a bad path surfaces as a
     /// missing dump where the dump is read, never as a look-test failure.
+    ///
+    /// While retention is armed and nothing is retained, the chunk parses
+    /// in slices that each end where a block closes, and the first
+    /// resulting grid whose text holds the needle is kept: a read holding
+    /// several frames, or closing one and opening the next, never hides a
+    /// frame from the retained check.
     pub(crate) fn publish(&mut self, bytes: &[u8]) {
         if let Some((cols, rows)) = self.pending_size.take() {
             self.parser.screen_mut().set_size(rows, cols);
         }
-        self.parser.process(bytes);
+        let closes = self.sync_through(bytes);
+        let mut parsed = 0;
+        if self.retained.is_none()
+            && let Some(needle) = self.needle.clone()
+        {
+            for close in closes {
+                self.parser.process(&bytes[parsed..close]);
+                parsed = close;
+                let grid = Grid::of(&self.parser);
+                if grid.contents.contains(&needle) {
+                    self.retained = Some(grid);
+                    break;
+                }
+            }
+        }
+        self.parser.process(&bytes[parsed..]);
         self.output.extend_from_slice(bytes);
-        self.sync_through(bytes);
         if !self.sync_open {
             self.grid = Grid::of(&self.parser);
             self.snapshot_len = self.output.len();
@@ -634,8 +691,11 @@ impl Shared {
     }
 
     /// Folds `chunk`'s markers into the block state in stream order, then
-    /// keeps the tail for a marker split across two reads.
-    fn sync_through(&mut self, chunk: &[u8]) {
+    /// keeps the tail for a marker split across two reads. Returns the
+    /// offsets in `chunk` just past each end marker it folded; a marker
+    /// split across reads closes at the offset of its last byte.
+    fn sync_through(&mut self, chunk: &[u8]) -> Vec<usize> {
+        let mut closes = Vec::new();
         let mut both = std::mem::take(&mut self.sync_tail);
         let split = both.len();
         both.extend_from_slice(chunk);
@@ -647,11 +707,13 @@ impl Shared {
             } else if both[at..].starts_with(SYNC_END) && at + SYNC_END.len() > split {
                 self.sync_open = false;
                 at += SYNC_END.len();
+                closes.push(at - split);
             } else {
                 at += 1;
             }
         }
         self.sync_tail = both[both.len().saturating_sub(SYNC_KEEP)..].to_vec();
+        closes
     }
 
     /// The grid rebuilt from the output so far: whole frames only.
