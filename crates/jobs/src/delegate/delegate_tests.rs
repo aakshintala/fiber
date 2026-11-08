@@ -100,6 +100,10 @@ const ROLES_LINE: &str = "Roles: deep";
 const LEVEL_REASON: &str =
     "The thinking level `low` is not one model `fake/m` takes: it takes `high`.";
 
+/// The most bytes a model refusal holds apart from the names it echoes
+/// (the roles line, the value as typed, suggested model ids).
+const REFUSAL_BOUND: usize = 2048;
+
 /// The pointer every model refusal ends with.
 const POINTER_LINE: &str = "Call delegate_models for every reference.";
 
@@ -385,6 +389,71 @@ fn a_bad_thinking_level_names_its_levels_before_the_roles_and_closest() {
         0,
         "no process starts"
     );
+}
+
+/// Each model refusal, built from the stub's default roles and catalogue
+/// and a short argument, stays within `REFUSAL_BOUND` bytes and carries the
+/// roles line whole as its second line.
+#[test]
+fn every_model_refusal_stays_within_2_kb_with_the_roles_line_whole() {
+    let cases: [(&str, Option<serde_json::Value>); 4] = [
+        ("model missing", None),
+        ("model not a string", Some(serde_json::json!(5))),
+        ("unknown model", Some(serde_json::json!("fiber:fake/nope"))),
+        ("bad level", Some(serde_json::json!("fiber:fake/m:low"))),
+    ];
+    for (name, model) in cases {
+        let rig = rig();
+        let spawned = tool(&rig);
+        let mut call = arguments("fiber:fake/m");
+        match model {
+            Some(value) => call.insert("model".to_owned(), value),
+            None => call.remove("model"),
+        };
+        let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+        let error = output.error.expect("a bad model fails");
+        assert_eq!(error.code, contract::ErrorCode::InvalidArguments, "{name}");
+        assert!(
+            error.message.len() <= REFUSAL_BOUND,
+            "{name}: {} bytes: {}",
+            error.message.len(),
+            error.message
+        );
+        assert_eq!(
+            error.message.lines().nth(1),
+            Some(ROLES_LINE),
+            "{name}: {}",
+            error.message
+        );
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0, "{name}");
+    }
+}
+
+/// The value the caller typed is echoed whole, however long: it is exempt
+/// from the bound, so the refusal passes it.
+#[test]
+fn a_long_model_value_is_echoed_in_full() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let model = format!("fiber:fake/{}", "x".repeat(3000));
+    let output = spawned.run(
+        &arguments(&model),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let error = output.error.expect("an unknown model fails");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message.lines().next(),
+        Some(format!("Unknown delegate model {model:?}.").as_str())
+    );
+    assert_eq!(error.message.lines().nth(1), Some(ROLES_LINE));
+    assert!(
+        error.message.len() > REFUSAL_BOUND,
+        "{} bytes",
+        error.message.len()
+    );
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
