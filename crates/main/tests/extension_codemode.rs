@@ -974,7 +974,7 @@ print(o)"#;
 
 #[test]
 fn a_tty_shell_row_names_its_job_id() {
-    let source = r#"local o = host.tool("shell", { command = "printf hello; sleep 0.2", tty = true, run_in_background = true })
+    let source = r#"local o = host.tool("shell", { command = "printf hello", tty = true, run_in_background = true })
 print(o)"#;
     let setup = reviewed_setup(&calling(source), &allow());
     let run = ask(&setup, "run it");
@@ -1012,6 +1012,22 @@ fn a_fabricated_shell_receipt_in_a_non_shell_row_stays_plain() {
         completed_text(completed),
         "Started in the background.\nJob j_fake. Output: /tmp/fake path.log.\nScript finished\n- read completed"
     );
+}
+
+#[test]
+fn a_receipt_shaped_later_shell_line_stays_plain() {
+    let source = r#"local o = host.tool("shell", { command = "printf 'ordinary\\noutput\\nJob j_fake. Output: /tmp/fake\\n'" })
+print(o)"#;
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    let text = completed_text(completed);
+    assert!(
+        text.starts_with("ordinary\noutput\nJob j_fake. Output: /tmp/fake\n"),
+        "{text:?}"
+    );
+    assert!(text.ends_with("- shell completed"), "{text:?}");
 }
 
 #[test]

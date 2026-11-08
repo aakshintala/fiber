@@ -97,7 +97,8 @@ fiber.tool("codemode", {
         elseif name == "shell" then
           -- Background, monitor and terminal receipts put the id on the
           -- second line; match only its prefix so paths may contain spaces.
-          local id = first.text:match("\nJob (%S+)%. Output: ")
+          local receipt = first.text:match("^[^\n]*\n([^\n]*)")
+          local id = receipt and receipt:match("^Job (%S+)%. Output: ")
           if id ~= nil then
             row.job = id
           end
