@@ -355,7 +355,10 @@ fn resetting_an_absent_override_writes_and_creates_nothing() {
 #[test]
 fn the_expected_value_must_equal_the_stored_one() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"compaction": {"window_fraction": 0.5}}"#);
+    setup.write(
+        &setup.global(),
+        r#"{"compaction": {"window_fraction": 0.5}}"#,
+    );
     let before = file_text(&setup.global());
     // Just below and just above: nothing is removed.
     for other in [json!(0.499), json!(0.501)] {
@@ -366,7 +369,13 @@ fn the_expected_value_must_equal_the_stored_one() {
         assert_eq!(file_text(&setup.global()), before);
     }
     assert_eq!(
-        reset(&setup, Layer::Global, "compaction.window_fraction", json!(0.5)).unwrap(),
+        reset(
+            &setup,
+            Layer::Global,
+            "compaction.window_fraction",
+            json!(0.5)
+        )
+        .unwrap(),
         config::Reset::Removed(setup.global())
     );
 }
@@ -436,7 +445,11 @@ fn a_reset_does_not_follow_a_repository_link() {
     let setup = Setup::new();
     let outside = setup.root().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(outside.join("config.json"), r#"{"compaction": {"tokens": 4}}"#).unwrap();
+    std::fs::write(
+        outside.join("config.json"),
+        r#"{"compaction": {"tokens": 4}}"#,
+    )
+    .unwrap();
     std::os::unix::fs::symlink(&outside, setup.workspace().join(".fiber")).unwrap();
     assert!(reset(&setup, Layer::Repository, "compaction.tokens", json!(4)).is_err());
     assert_eq!(
