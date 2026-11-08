@@ -7230,3 +7230,81 @@ fn a_gated_opening_session_still_hands_an_import_answer_to_its_handler() {
     let retry = press(&mut app, Key::Char('1'));
     assert_ne!(retry["id"], line["id"]);
 }
+
+/// The `command` field of each line, in order.
+fn command_names(lines: Vec<String>) -> Vec<String> {
+    commands(lines)
+        .iter()
+        .map(|line| line["command"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_new_app_draws_the_home_screen_with_no_guard() {
+    for (workspace, chip_reads_no_workspace) in [(Some(PathBuf::from("/w")), false), (None, true)] {
+        let mut app = App::new(workspace);
+        app.set_size(80, 24);
+        assert!(app.on_home());
+        assert!(app.home_screen().is_some());
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        assert_eq!(
+            crate::view::text(&buf).contains("no workspace"),
+            chip_reads_no_workspace
+        );
+    }
+}
+
+#[test]
+fn a_new_app_seeds_the_launch_directory_and_opens_the_picker_only_without_one() {
+    let app = App::new(PathBuf::from("/w"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/w")));
+    assert!(!app.home_picker_open());
+    for none in [App::new(None), App::new(PathBuf::new())] {
+        assert_eq!(none.home_workspace(), None);
+        assert!(none.home_picker_open());
+    }
+}
+
+#[test]
+fn hub_hello_sends_homes_startup_reads() {
+    let mut local = App::new(PathBuf::from("/w"));
+    assert_eq!(command_names(local.on_line(hello())), ["feed", "recent"]);
+    let mut bare = App::new(None);
+    let lines = bare.on_line(hello());
+    assert_eq!(
+        command_names(lines.clone()),
+        ["feed", "recent", "directories"]
+    );
+    assert_eq!(commands(lines)[2]["args"]["path"], "~/");
+}
+
+#[test]
+fn set_home_replaces_the_seeded_home() {
+    let mut app = App::new(None);
+    // The seed queues nothing before a hub line arrives.
+    assert!(app.home_outgoing().is_empty());
+    assert!(app.home_picker_open());
+    app.set_home(launch());
+    assert!(!app.home_picker_open());
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/w")));
+    // The replaced home keys prompt history by its project.
+    app.attach(contract::SessionId(SENDER.to_owned()));
+    app.set_size(160, 40);
+    app.on_line(hello());
+    let asked = match app.on_key(Key::Up, crate::app::testkit::now()) {
+        Effect::Send(lines) => commands(lines),
+        _ => Vec::new(),
+    };
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0]["command"], "prompt_history");
+    assert_eq!(asked[0]["args"]["project"], "-w");
+    // A launch that saved the rail hidden hides it; one that did not, does not.
+    assert!(app.chrome().layout().expect("a layout").rail.is_some());
+    app.set_home(Launch {
+        rail_hidden: true,
+        ..launch()
+    });
+    assert_eq!(app.chrome().layout().expect("a layout").rail, None);
+}
