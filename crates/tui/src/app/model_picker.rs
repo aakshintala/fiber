@@ -140,6 +140,20 @@ impl App {
     /// an owed start pick drops: the open's own read supersedes it.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
         self.close_config_view();
+        self.open_picker_here(mode)
+    }
+
+    /// Opens the model picker above the open `/settings` view, which stays
+    /// open and keeps its row focused: the choice saves to that row's key
+    /// ([`App::settings_choice`]). The view is closed by nothing here, so
+    /// no other opener can reach its target.
+    pub(in crate::app) fn open_model_picker_over_settings(&mut self) -> super::Effect {
+        self.open_picker_here(Mode::Choose)
+    }
+
+    /// The open every opener shares, once the configuration view is dealt
+    /// with.
+    fn open_picker_here(&mut self, mode: Mode) -> super::Effect {
         self.close_session_view();
         let _ = self.take_start_pick();
         let on_screen = if self.on_home() {
@@ -201,6 +215,9 @@ impl App {
     /// the next `start` carrying a session-only choice. The picker closes
     /// either way. With the hub not up, nothing is sent and it stays open.
     pub(crate) fn choose(&mut self, choice: Choice) -> super::Effect {
+        if let Some(effect) = self.settings_choice(&choice) {
+            return effect;
+        }
         let Some(session) = self.session().cloned() else {
             return self.choose_on_home(choice);
         };

@@ -215,6 +215,7 @@ fn frame(rows: usize) -> Frame {
         below: vec!["below".to_owned()],
         field: None,
         footer: "keys".to_owned(),
+        chrome: None,
     }
 }
 
@@ -273,6 +274,7 @@ fn top_row(title: &str, command: &'static str, width: u16) -> Buffer {
         below: Vec::new(),
         field: None,
         footer: String::new(),
+        chrome: None,
     };
     render(&frame, area, &mut buf, &mut Vec::new());
     buf
@@ -390,6 +392,7 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
         below: Vec::new(),
         field: None,
         footer: "keys".to_owned(),
+        chrome: None,
     };
     let area = Rect::new(0, 0, 20, 4);
     let mut buf = Buffer::empty(area);
@@ -432,6 +435,7 @@ fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
         below: Vec::new(),
         field: None,
         footer: String::new(),
+        chrome: None,
     };
     let area = Rect::new(0, 0, 20, 4);
     let mut buf = Buffer::empty(area);
@@ -730,6 +734,7 @@ fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Fr
         below: below.iter().map(|line| (*line).to_owned()).collect(),
         field: field.map(|(text, caret)| (text.to_owned(), caret)),
         footer: "move".to_owned(),
+        chrome: None,
     }
 }
 
