@@ -8,7 +8,7 @@ use contract::provider::{Finish, Input};
 use contract::shapes::Failure;
 use contract::{CommandId, Envelope, ErrorCode, Seq, TurnId};
 
-use crate::handoff::{failure, reply_note};
+use crate::compaction::{failure, reply_note};
 use crate::prompt::{fill, message};
 use crate::retry::Attempted;
 use crate::{Error, Loop, cancel};

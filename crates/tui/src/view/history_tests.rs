@@ -129,7 +129,7 @@ fn three_matches_with_the_second_selected() {
         &[
             "how do I backfill embeddings for old sessions?",
             "back up the state file before the migration",
-            "roll back the handoff note",
+            "roll back the compaction note",
         ],
         "back",
     );
@@ -165,7 +165,7 @@ fn the_panel_titles_counts_and_bars_exactly_its_selection() {
         &[
             "how do I backfill embeddings for old sessions?",
             "back up the state file before the migration",
-            "roll back the handoff note",
+            "roll back the compaction note",
         ],
         "back",
     );
@@ -182,7 +182,7 @@ fn the_panel_titles_counts_and_bars_exactly_its_selection() {
     let text = row.trim_start();
     assert!(text.starts_with("› "), "{row:?}");
     // Recall order is newest first: the selection opens on "roll back".
-    assert!(text.contains("roll back the handoff note"), "{row:?}");
+    assert!(text.contains("roll back the compaction note"), "{row:?}");
     // The query hit reads bold; the slab writes no cell outside itself.
     let hit = row.find("back").expect("the hit");
     let x = u16::try_from(row[..hit].chars().count()).expect("a column");

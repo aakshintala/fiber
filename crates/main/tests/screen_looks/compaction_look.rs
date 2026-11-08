@@ -1,8 +1,8 @@
-//! Binary-level test of the handoff band (`docs/tui.md`, "Handoff"): the
+//! Binary-level test of the compaction band (`docs/tui.md`, "Compaction"): the
 //! real binary on a 160x48 pty in truecolour, with the scripted provider
-//! running a read past the 400k automatic handoff, writing the note, then
-//! answering. The band is one row on the `handoff` tint with half-block
-//! edges, reading " ⇄ handoff · automatic at 400k" with the sizes right
+//! running a read past the 400k automatic compaction, writing the note, then
+//! answering. The band is one row on the `compaction` tint with half-block
+//! edges, reading " ⇄ compaction · automatic at 400k" with the sizes right
 //! ("402k → 32k") and the time dim; the card ends at the band, a second
 //! card continues the turn, and its ▣ line closes it.
 
@@ -23,14 +23,14 @@ use serde_json::json;
 use support::pty::{Colour, Grid, Run};
 use support::{Setup, TRUECOLOUR, write_json};
 
-/// The dark theme's secondary and handoff colours in truecolour
-/// (`docs/tui.md`, "Handoff").
+/// The dark theme's secondary and compaction colours in truecolour
+/// (`docs/tui.md`, "Compaction").
 const SECONDARY: Colour = Colour::Rgb(179, 157, 219);
-const HANDOFF: Colour = Colour::Rgb(31, 26, 46);
+const COMPACTION: Colour = Colour::Rgb(31, 26, 46);
 /// A turn card's background in truecolour.
 const TURN: Colour = Colour::Rgb(16, 16, 23);
 
-/// The scripted turn: a read past the handoff, the note, then done with
+/// The scripted turn: a read past the compaction, the note, then done with
 /// the usage that sizes the band after.
 fn script(setup: &Setup) {
     write_json(
@@ -47,7 +47,7 @@ fn script(setup: &Setup) {
 /// The sized band's row, its content columns and its sizes column.
 /// Every cell property the test asserts — the arrow and the trigger
 /// text, each span's foreground, bold and dim, the clock's shape, the
-/// right padding, the handoff tint and both edges — is checked here,
+/// right padding, the compaction tint and both edges — is checked here,
 /// so a partial redraw cannot satisfy the wait.
 fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     let band = find_row(&grid.rows, "402k → 32k")?;
@@ -63,19 +63,19 @@ fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     let last = above.rfind('▄')?;
     let right = above[..last].chars().count();
     let text = row_text(grid, band, 160);
-    // Left to right: " ⇄ ", "handoff", then the trigger after " · ".
-    let head = " ⇄ handoff · automatic at 400k";
+    // Left to right: " ⇄ ", "compaction", then the trigger after " · ".
+    let head = " ⇄ compaction · automatic at 400k";
     let content: String = text.chars().skip(left).take(right - left + 1).collect();
     if !content.starts_with(head) || content.chars().count() != right - left + 1 {
         return None;
     }
-    // " ⇄ " and "handoff" in secondary and bold; the trigger dim.
+    // " ⇄ " and "compaction" in secondary and bold; the trigger dim.
     let secondary = |col: usize| grid.cell(col as u16, band).fg == SECONDARY;
     let bold = |col: usize| grid.cell(col as u16, band).bold;
-    if !(left..left + 10).all(|col| secondary(col) && bold(col)) {
+    if !(left..left + 13).all(|col| secondary(col) && bold(col)) {
         return None;
     }
-    if !(left + 10..left + 30).all(|col| grid.cell(col as u16, band).dim) {
+    if !(left + 13..left + 33).all(|col| grid.cell(col as u16, band).dim) {
         return None;
     }
     // Right-aligned, the sizes bold and the clock dim; the clock reads
@@ -99,16 +99,16 @@ fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     if grid.cell(right as u16, band).symbol.as_str() != " " {
         return None;
     }
-    // The content row sits on the handoff tint; half-block edges over
+    // The content row sits on the compaction tint; half-block edges over
     // the default background wrap it above and below.
-    if !(left..=right).all(|col| grid.cell(col as u16, band).bg == HANDOFF) {
+    if !(left..=right).all(|col| grid.cell(col as u16, band).bg == COMPACTION) {
         return None;
     }
     let edges = [(top_y, "▄"), (below_y, "▀")];
     if !edges.iter().all(|(row, want)| {
         (left..=right).all(|col| {
             let cell = grid.cell(col as u16, *row);
-            cell.symbol.as_str() == *want && cell.fg == HANDOFF && cell.bg == Colour::Default
+            cell.symbol.as_str() == *want && cell.fg == COMPACTION && cell.bg == Colour::Default
         })
     }) {
         return None;
@@ -146,19 +146,19 @@ fn is_clock(text: &str) -> bool {
 }
 
 #[test]
-fn the_handoff_band_matches_the_doc() {
+fn the_compaction_band_matches_the_doc() {
     let setup = Setup::new();
     fs::write(setup.workspace().join("a.txt"), "hello\n").unwrap();
     script(&setup);
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "handoff": {"tokens": 400000},
+        &json!({"model": "scripted/s.json", "compaction": {"tokens": 400000},
             "hub": {"idle_exit_ms": 1000}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
-    // The band once the request after the handoff reports its size.
+    // The band once the request after the compaction reports its size.
     let grid = run.wait_screen("the sized band", |grid| band_cells(grid).is_some());
     let (band, left, right, sizes_at) = band_cells(&grid).expect("the sized band");
     let width = right - left + 1;
@@ -169,19 +169,19 @@ fn the_handoff_band_matches_the_doc() {
     assert_eq!(below[..first].chars().count(), left as usize);
     let text = row_text(&grid, band, 160);
     let content: String = text.chars().skip(left as usize).take(width).collect();
-    // Left to right: " ⇄ ", "handoff", then the trigger after " · ".
-    let head = " ⇄ handoff · automatic at 400k";
+    // Left to right: " ⇄ ", "compaction", then the trigger after " · ".
+    let head = " ⇄ compaction · automatic at 400k";
     assert!(content.starts_with(head), "{content:?}");
     assert_eq!(content.chars().count(), width, "{content:?}");
-    // "⇄" and "handoff" in secondary, "handoff" bold; the trigger dim.
+    // "⇄" and "compaction" in secondary, "compaction" bold; the trigger dim.
     for col in left..left + 3 {
         assert_eq!(grid.cell(col, band).fg, SECONDARY, "col {col}");
     }
-    for col in left + 3..left + 10 {
+    for col in left + 3..left + 13 {
         assert_eq!(grid.cell(col, band).fg, SECONDARY, "col {col}");
         assert!(grid.cell(col, band).bold, "col {col}");
     }
-    for col in left + 10..left + 30 {
+    for col in left + 13..left + 33 {
         assert!(grid.cell(col, band).dim, "col {col}");
     }
     // Right-aligned, the sizes bold and the clock dim; the clock reads
@@ -203,17 +203,17 @@ fn the_handoff_band_matches_the_doc() {
     // final column is the band's blank right padding.
     assert_eq!(sizes_at + 10 + 3 + 5, right as usize, "{content:?}");
     assert_eq!(grid.cell(right, band).symbol.as_str(), " ");
-    assert_eq!(grid.cell(right, band).bg, HANDOFF);
-    // The content row sits on the handoff tint across its width.
+    assert_eq!(grid.cell(right, band).bg, COMPACTION);
+    // The content row sits on the compaction tint across its width.
     for col in left..=right {
-        assert_eq!(grid.cell(col, band).bg, HANDOFF, "col {col}");
+        assert_eq!(grid.cell(col, band).bg, COMPACTION, "col {col}");
     }
     // Half-block edges over the default background, above and below.
     for (row, want) in [(band - 1, "▄"), (band + 1, "▀")] {
         for col in left..=right {
             let cell = grid.cell(col, row);
             assert_eq!(cell.symbol.as_str(), want, "col {col}");
-            assert_eq!(cell.fg, HANDOFF, "col {col}");
+            assert_eq!(cell.fg, COMPACTION, "col {col}");
             assert_eq!(cell.bg, Colour::Default, "col {col}");
         }
     }

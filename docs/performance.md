@@ -38,7 +38,7 @@ build takes about 8 ms and 2.5 ms. Both include resolving each path and
 reading the index. No Linux figure is measured.
 
 Two rows hold work to the size of what it covers. Memory kept after 10 busy
-turns, each followed by its handoff, stays within 1 MiB of the memory kept after one, so state that grows
+turns, each followed by its compaction, stays within 1 MiB of the memory kept after one, so state that grows
 with every tool call the session has ever made fails it. The `paging` jig's
 scale-16 session is about 75 MiB, the size of the owner's longest sessions;
 its re-count and search may take at most 24 times their scale-1 time in the same run, so the ratio, not the machine, decides. The page count is 16 times; the rest allows for cache capacity, which grows the time per page at 75 MiB while the work per page stays flat (#2187), and for runner noise: readings run about 20 to 20.6 times (#2640).
@@ -54,9 +54,9 @@ The keeper row measures the keeper process while its one shell job runs:
 the job is the workload the budget covers, so the fresh-install load above
 does not apply to it.
 
-Memory follows the context window, not the transcript. After a handoff the
-session holds the handoff note and what came after it, and a resumed session
-reads from its last handoff (`docs/handoff.md`). A 2-million-token session and
+Memory follows the context window, not the transcript. After a compaction the
+session holds the compaction note and what came after it, and a resumed session
+reads from its last compaction (`docs/compaction.md`). A 2-million-token session and
 a 20-thousand-token one fit the same ceiling.
 
 ## Budgets
@@ -79,7 +79,7 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |
 | Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
-| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
+| Session, memory kept after 10 busy turns, each followed by its compaction | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 72 ms | 34 ms | 109 ms | 82 % | 74 % |
 | `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |
@@ -178,9 +178,9 @@ stay in the committed files by hand. The attaching first-frame row's two toleran
 
 The busy-or-resumed ceiling holds on three workloads:
 
-- a turn of 429 tool calls with the context window full to the handoff point
+- a turn of 429 tool calls with the context window full to the compaction point
 - resuming a 20,000-token session
-- resuming a 2,000,000-token session that has handed off 7 times
+- resuming a 2,000,000-token session that has compacted 7 times
 
 `web_fetch` holds at most one whole copy of the 10 MiB page: an HTML page
 streams into its artifact and its converter in 64 KiB pieces, so only its

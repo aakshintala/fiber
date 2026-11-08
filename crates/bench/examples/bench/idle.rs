@@ -318,7 +318,7 @@ const SEED: Fixture = Fixture {
     metric: "terminal_idle_seed",
     turns: 1,
     reply_bytes: 64,
-    handoffs: 0,
+    compactions: 0,
 };
 
 /// Runs and closes one prompted session in `home`, checking that its

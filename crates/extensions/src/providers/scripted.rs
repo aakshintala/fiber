@@ -23,7 +23,7 @@ pub const START_ONLY: &str =
     "Choose a scripted model when the session starts: `fiber ask --model scripted/<path>`.";
 
 /// A scripted model's context window, in tokens: large enough that no size
-/// notice or handoff fires on a script.
+/// notice or compaction fires on a script.
 pub(crate) const SCRIPTED_CONTEXT_WINDOW: u64 = 1_000_000;
 
 impl Providers {

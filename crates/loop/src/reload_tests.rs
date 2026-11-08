@@ -239,7 +239,7 @@ fn prepared() -> ReloadPrepared {
             reviewer_notes: "new notes".into(),
             limits: BlockLimits::default(),
             retry: Retry::default(),
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             budget: Some(10.0),
             idle_exit: Some(Duration::from_secs(100)),
             warm_cap: Some(2),
@@ -340,10 +340,10 @@ impl contract::hook::Hooks for StatefulHooks {
             notices: Vec::new(),
         }
     }
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<contract::inbox::Delivery>) {}

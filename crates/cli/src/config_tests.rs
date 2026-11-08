@@ -110,7 +110,7 @@ fn get_of_a_set_key_prints_compact_json_and_the_file() {
 #[test]
 fn get_of_a_default_prints_the_built_in_defaults() {
     let setup = Setup::new();
-    let (result, out, err) = setup.get("handoff.enabled");
+    let (result, out, err) = setup.get("compaction.enabled");
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(out, "true from the built-in defaults\n");
@@ -121,7 +121,7 @@ fn a_project_value_beats_a_repository_value_and_names_the_project_file() {
     let setup = Setup::new();
     setup.write(
         &setup.workspace().join(".fiber/config.json"),
-        &json!({"handoff": {"tokens": 50}}),
+        &json!({"compaction": {"tokens": 50}}),
     );
     let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
     let file = setup
@@ -129,8 +129,8 @@ fn a_project_value_beats_a_repository_value_and_names_the_project_file() {
         .join("projects")
         .join(project.as_str())
         .join("config.json");
-    setup.write(&file, &json!({"handoff": {"tokens": 100}}));
-    let (result, out, err) = setup.get("handoff.tokens");
+    setup.write(&file, &json!({"compaction": {"tokens": 100}}));
+    let (result, out, err) = setup.get("compaction.tokens");
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(out, format!("100 from {}\n", file.display()));
@@ -244,7 +244,7 @@ fn get_prints_no_provider_notice_when_loading_them_fails() {
 fn set_of_a_non_model_key_prints_the_config_notice() {
     let setup = Setup::new();
     setup.write(&setup.home().join("config.json"), &json!({"frobnicate": 1}));
-    let (result, err) = setup.set_capturing(Layer::Global, "handoff.tokens", "200000");
+    let (result, err) = setup.set_capturing(Layer::Global, "compaction.tokens", "200000");
     result.unwrap();
     assert_eq!(
         err,
@@ -316,7 +316,7 @@ fn get_of_an_unset_key_without_a_default_names_it_on_stderr_and_succeeds() {
 fn set_parses_a_number_and_a_bare_string() {
     let setup = Setup::new();
     setup
-        .set(Layer::Global, "handoff.tokens", "200000")
+        .set(Layer::Global, "compaction.tokens", "200000")
         .unwrap();
     setup.set(Layer::Global, "model", "openai/gpt-5.6").unwrap();
     let written: serde_json::Value =
@@ -324,7 +324,7 @@ fn set_parses_a_number_and_a_bare_string() {
             .unwrap();
     assert_eq!(
         written,
-        json!({"handoff": {"tokens": 200000}, "model": "openai/gpt-5.6"})
+        json!({"compaction": {"tokens": 200000}, "model": "openai/gpt-5.6"})
     );
 }
 
@@ -414,7 +414,7 @@ fn config_set_exits_zero_and_writes_the_file() {
     if std::env::var_os(CHILD).is_some() {
         std::process::exit(super::config_set(
             Layer::Global,
-            "handoff.tokens",
+            "compaction.tokens",
             "200000",
             &fakes::clock::SystemClock,
         ));
@@ -429,7 +429,7 @@ fn config_set_exits_zero_and_writes_the_file() {
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
             .unwrap();
-    assert_eq!(written, json!({"handoff": {"tokens": 200000}}));
+    assert_eq!(written, json!({"compaction": {"tokens": 200000}}));
 }
 
 /// The model check's fixture: installs the extension `extension` registering
@@ -755,7 +755,7 @@ fn config_set_text_returns_the_layers_file_for_project_and_repository() {
         &setup.home(),
         &setup.workspace(),
         Layer::Project,
-        "handoff.tokens",
+        "compaction.tokens",
         "100",
         &fakes::clock::SystemClock,
     )
@@ -766,7 +766,7 @@ fn config_set_text_returns_the_layers_file_for_project_and_repository() {
         &setup.home(),
         &setup.workspace(),
         Layer::Repository,
-        "handoff.tokens",
+        "compaction.tokens",
         "50",
         &fakes::clock::SystemClock,
     )

@@ -27,8 +27,8 @@ fork or when a server reconnects. So:
 - nothing in the conversation is rendered from the clock or from state outside
   the log: wake inputs, notices, monitor batches, the jobs line and the nudge are
   built from logged fields, and the envelope `ts` never reaches the model
-- the conversation only grows at its end, apart from a handoff
-  (`docs/handoff.md`)
+- the conversation only grows at its end, apart from a compaction
+  (`docs/compaction.md`)
 
 ## The preamble
 
@@ -318,7 +318,7 @@ Each of these costs one rebuild and is logged:
 
 | Cause | Event | Rebuilt from |
 |---|---|---|
-| Handoff | `handoff_completed` | after the preamble (`docs/handoff.md`) |
+| Compaction | `compaction_completed` | after the preamble (`docs/compaction.md`) |
 | `reload` | `reloaded`, `preamble_built` | the start |
 | Switch | `model_changed`, `preamble_built` | the start |
 | Resume with changed inputs | `fiber_started`, `preamble_built` | the first changed byte |
@@ -339,11 +339,11 @@ A cache entry also expires after its lifetime with no request.
   the call under review with its declared effects, then the stage's
   instruction. Both stages send byte-identical bytes up to the stage
   instruction, so every reviewer
-  pass of either stage extends one cache chain between handoffs. The
+  pass of either stage extends one cache chain between compactions. The
   `reviewer_sent` cursor moves past the whole batch once, so the next review
-  reuses the cache the concurrent requests wrote. At a handoff
+  reuses the cache the concurrent requests wrote. At a compaction
   the chain restarts from the kept messages (`docs/permissions.md`, "At a
-  handoff"), so the reviewer misses the cache once, as the model does. A call
+  compaction"), so the reviewer misses the cache once, as the model does. A call
   must render identically when it later appears in history, because the chain
   depends on it. Where a provider routes by key, its key is the reviewed
   session's own id plus `reviewer`, a delegate's included.

@@ -1338,7 +1338,7 @@ fn status_row_one_at_the_floors() {
     }
 }
 
-/// The 8-cell bar fills toward the handoff point with no marker: at
+/// The 8-cell bar fills toward the compaction point with no marker: at
 /// zero, below, at and past the trigger, and against the window with
 /// none. It lives in the input box's status row ("The input box"), so
 /// row one carries no bar and no `ctx`.
@@ -1347,7 +1347,7 @@ fn the_narrow_bar_fills_without_a_marker() {
     use crate::theme::{Role, style};
     let mut app = attached(100, 30);
     app.on_line(full_preamble());
-    // Five of eight at 268k of the 400k handoff, and no attention
+    // Five of eight at 268k of the 400k compaction, and no attention
     // marker anywhere in the row: every `│` is the dim joiner.
     app.on_line(full_status());
     let row = &crate::view::status_rows::status(&app, 100)[0];

@@ -84,7 +84,7 @@ pub fn check_run() -> Option<(&'static str, std::ffi::OsString)> {
 }
 
 /// The context window every fake model declares, in tokens: the window
-/// fixtures build sessions with, so size notices and the handoff trigger
+/// fixtures build sessions with, so size notices and the compaction trigger
 /// run as they do in production.
 pub const CONTEXT_WINDOW: u64 = 1_000_000;
 

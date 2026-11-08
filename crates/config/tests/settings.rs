@@ -22,7 +22,7 @@ fn every_plain_key_is_listed_with_its_default() {
     let setup = Setup::new();
     let rows = setup.load(&[]).unwrap().settings();
     assert_eq!(
-        row(&rows, "handoff.tokens").value,
+        row(&rows, "compaction.tokens").value,
         SettingValue::Value(json!(400000), Source::Default)
     );
     assert_eq!(row(&rows, "model").value, SettingValue::Unset);
@@ -62,17 +62,17 @@ fn a_star_key_lists_each_instance_a_layer_sets() {
 #[test]
 fn the_layer_is_the_highest_that_sets_it() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"handoff": {"tokens": 1}}"#);
-    setup.write(&setup.repository(), r#"{"handoff": {"tokens": 2}}"#);
+    setup.write(&setup.global(), r#"{"compaction": {"tokens": 1}}"#);
+    setup.write(&setup.repository(), r#"{"compaction": {"tokens": 2}}"#);
     let rows = setup.load(&[]).unwrap().settings();
     assert_eq!(
-        row(&rows, "handoff.tokens").value,
+        row(&rows, "compaction.tokens").value,
         SettingValue::Value(json!(2), Source::Repository(setup.repository()))
     );
-    setup.write(&setup.project(), r#"{"handoff": {"tokens": 3}}"#);
+    setup.write(&setup.project(), r#"{"compaction": {"tokens": 3}}"#);
     let rows = setup.load(&[]).unwrap().settings();
     assert_eq!(
-        row(&rows, "handoff.tokens").value,
+        row(&rows, "compaction.tokens").value,
         SettingValue::Value(json!(3), Source::Project(setup.project()))
     );
 }
@@ -80,10 +80,10 @@ fn the_layer_is_the_highest_that_sets_it() {
 #[test]
 fn a_run_override_shows_as_dash_c() {
     let setup = Setup::new();
-    setup.write(&setup.project(), r#"{"handoff": {"tokens": 3}}"#);
-    let rows = setup.load(&["handoff.tokens=9"]).unwrap().settings();
+    setup.write(&setup.project(), r#"{"compaction": {"tokens": 3}}"#);
+    let rows = setup.load(&["compaction.tokens=9"]).unwrap().settings();
     assert_eq!(
-        row(&rows, "handoff.tokens").value,
+        row(&rows, "compaction.tokens").value,
         SettingValue::Value(json!(9), Source::Run)
     );
 }
@@ -176,7 +176,7 @@ fn each_keys_write_scope() {
     );
     let rows = setup.load(&[]).unwrap().settings();
     for (key, scope) in [
-        ("handoff.tokens", WriteScope::Any { repo: true }),
+        ("compaction.tokens", WriteScope::Any { repo: true }),
         ("tui.hover", WriteScope::Any { repo: false }),
         ("diagnostics.level", WriteScope::GlobalOnly),
         ("repository_extensions", WriteScope::RepoOnly),

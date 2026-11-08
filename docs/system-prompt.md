@@ -6,7 +6,7 @@ comes from. This is what is true now. It is settled by
 that ticket's resolution holds the rationale and the rejected alternatives.
 
 Vocabulary is `GLOSSARY.md`: preamble, opening message, session log, workspace,
-handoff. The cache rules this page follows are `docs/prompt-cache.md`.
+compaction. The cache rules this page follows are `docs/prompt-cache.md`.
 
 ## Two parts
 
@@ -68,7 +68,7 @@ cache miss that follows is one the person started, and the rebuild is logged
 ### Fiber's text
 
 Fiber's text says who the model is, how instruction files bind it, and how its
-context restarts at a handoff. The model is an expert software engineer working
+context restarts at a compaction. The model is an expert software engineer working
 inside Fiber; it is not Fiber. Its work includes discussing, brainstorming and
 planning with the person, not only changing files. The opening line is adapted
 from pi's (MIT license).
@@ -143,7 +143,7 @@ An extension's manifest may name a prompt file in its package
 (`prompt` in `extension.json`, `docs/configuration.md`). Its text goes in the
 system prompt under a heading naming the extension. This is how an extension
 gives standing guidance across its tools, such as which to call first, that
-must survive a handoff. A tool's own description stays in its tool definition.
+must survive a compaction. A tool's own description stays in its tool definition.
 
 An extension with a prompt file is read at session start, without starting
 a VM (`docs/extensions.md`, "Loading, and cost when nothing is
@@ -161,7 +161,7 @@ the person, and holds, in order:
 3. The extension sections.
 4. The skills listing.
 
-It is written at session start and again after every completed handoff, and
+It is written at session start and again after every completed compaction, and
 logged as `opening_message`.
 
 ### Environment
@@ -243,7 +243,7 @@ never cut. The person cannot change the budget.
 A directory below the workspace or an added folder may have its own `AGENTS.md` or `CLAUDE.md`, as
 in a monorepo. Fiber sends one the first time a tool call's declared paths
 (`docs/tools.md`) fall under its directory. It is appended as its own message,
-once per context. After a handoff it is sent again only when a call touches
+once per context. After a compaction it is sent again only when a call touches
 that directory again.
 
 A subdirectory file over 32 KiB (32768 bytes) is sent as a stub instead of
@@ -267,8 +267,8 @@ loaded from it, and the folders below it are read only through "Subdirectory
 files" above.
 
 When a folder is added, Fiber appends a message naming it. The opening message
-rebuilt at a handoff lists the folded added folders in first-event order
-(`docs/events.md`, "`directory_added`"), so a handoff does not lose them. The
+rebuilt at a compaction lists the folded added folders in first-event order
+(`docs/events.md`, "`directory_added`"), so a compaction does not lose them. The
 system prompt does not change.
 
 ### Skills listing
@@ -400,7 +400,7 @@ A change counts as the session's own when the file still matches what Fiber
 recorded after the last call whose declared paths included it. Outside changes
 are an editor, a `git pull` or another agent.
 
-A chain of diffs lasts at most one context. A handoff writes a fresh opening
+A chain of diffs lasts at most one context. A compaction writes a fresh opening
 message from the current files, so the next context starts from full text.
 
 The check runs only at turn start. An outside edit made during a turn reaches
@@ -424,31 +424,31 @@ is left out, and its `skill_invalid` notice is raised once, at the first turn
 start that finds it. An added skill that outranks a listed skill of the same
 name raises `skill_shadowed` naming both paths, and the `skill` tool loads the
 winner from then on. The name is already listed, so no line is appended: the
-model is given the winner's description on `reload` or after a handoff, as for
+model is given the winner's description on `reload` or after a compaction, as for
 any changed description.
 
 An edit to a skill's body needs nothing: the `skill` tool reads the file when
 the skill is loaded. An edit to a description is not checked at turn start. It
 reaches the model on `reload`, which sends each changed skill again as an added
-line with its new description, or in the next opening message after a handoff.
+line with its new description, or in the next opening message after a compaction.
 
 ### The date
 
 When a turn starts on a later date than the model was last given, Fiber appends
 one line with the new date.
 
-## After a handoff
+## After a compaction
 
-A handoff writes a new `opening_message` from the current files and the current
+A compaction writes a new `opening_message` from the current files and the current
 date. The model then sees the system prompt and tools, the opening message,
 the context `session_start` hooks add, the turn's input, the note, the jobs
-line and the skills it had loaded (`docs/handoff.md`). The cache
-already misses after the tools at a handoff, so the fresh message costs nothing
+line and the skills it had loaded (`docs/compaction.md`). The cache
+already misses after the tools at a compaction, so the fresh message costs nothing
 extra.
 
 When the session has a reviewer, the person's earlier messages that still bind
-come verbatim before the turn's input (`docs/handoff.md`, "What the model sees
-after a handoff").
+come verbatim before the turn's input (`docs/compaction.md`, "What the model sees
+after a compaction").
 
 ## Delegates, forks and rewinds
 
@@ -475,19 +475,19 @@ Every text Fiber sends the model is a Markdown file in the `loop`, `tools`,
 | `crates/loop/prompt/system.md` | Fiber's system prompt text |
 | `crates/tools/prompt/guidelines.md` | the built-in tools' guidelines, one `##` section per tool |
 | `crates/loop/prompt/opening.md` | the opening message |
-| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the subdirectory stub, the extension section heading and budget line, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the handoff note request, the handoff jobs line, the moved-result line, the delegate's final message and its questions, the fork's task, the rewind summary request, the rewind note, the quota notice, and the cancelled search's result line |
-| `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass`, the `handoff` section with the selection request at a handoff and the `handoff-reask` section with the re-ask note when a selection reply does not read (`docs/permissions.md`, "The reviewer") |
+| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the subdirectory stub, the extension section heading and budget line, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the compaction note request, the compaction jobs line, the moved-result line, the delegate's final message and its questions, the fork's task, the rewind summary request, the rewind note, the quota notice, and the cancelled search's result line |
+| `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass`, the `compaction` section with the selection request at a compaction and the `compaction-reask` section with the re-ask note when a selection reply does not read (`docs/permissions.md`, "The reviewer") |
 
 In `messages.md`, a section's text runs from its `## name` line to the next
 line starting `## `, with blank lines at either end removed. Placeholders are
 `{name}`. A test pins every file's bytes, so an edit is a
 deliberate, reviewed change to what every session caches.
 
-The note request says what `docs/handoff.md` requires: a fresh agent continues
+The note request says what `docs/compaction.md` requires: a fresh agent continues
 the work, and the note refers by path or URL instead of copying, names the
 skills to load, leaves out secrets, and gives the session log's path. The
-person's `/handoff` instructions follow it. The nudge says how full the context
-is, that a handoff keeps the work going, and the log's path. Its numbers come
+person's `/compact` instructions follow it. The nudge says how full the context
+is, that a compaction keeps the work going, and the log's path. Its numbers come
 from `context_nudged`.
 
 The opening line is adapted from pi's. The rest is written for Fiber, and no

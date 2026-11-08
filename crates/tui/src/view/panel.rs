@@ -400,11 +400,11 @@ fn card_rows(
 }
 /// The Session card's rows at `text` columns in `docs/tui.md` order:
 /// the working-directory title, the branch slot, the model slot, the
-/// context bar with its handoff and explainer rows, then every figure
+/// context bar with its compaction and explainer rows, then every figure
 /// row. Each slot draws from the first frame; the branch text outside
 /// a repository and the trailing tools line stay conditional. Labels
 /// read dim with their figures right-aligned in the text colour; the
-/// bar is 17 cells of `▆` toward the handoff point.
+/// bar is 17 cells of `▆` toward the compaction point.
 fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
@@ -473,11 +473,11 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
     // The context bar and the two lines under it draw from the first
     // frame. Figures not known yet show dim dashes, so no row moves
     // when preamble and status folds land (`docs/tui.md`, "The panel").
-    // The handoff line follows the preamble alone; the bar fill, the
+    // The compaction line follows the preamble alone; the bar fill, the
     // size and the share follow the status, with dim dashes until then.
-    let handoff = match panel.trigger_at() {
-        Some(trigger) => format!("handoff at {}", short_tokens(trigger)),
-        None => "handoff at —".to_owned(),
+    let compaction = match panel.trigger_at() {
+        Some(trigger) => format!("compacts at {}", short_tokens(trigger)),
+        None => "compacts at —".to_owned(),
     };
     let (fill, size, share) = match context {
         Some((window, context)) => {
@@ -495,7 +495,7 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
             "—".to_owned(),
         ),
     };
-    // The bar: 17 cells toward the handoff point, the marker, and
+    // The bar: 17 cells toward the compaction point, the marker, and
     // the context size right-aligned (`docs/tui.md`, "The panel").
     out.push(Row {
         line: sides(fill, size, text),
@@ -505,7 +505,7 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
     });
     out.push(Row {
         line: sides(
-            vec![Span::styled(handoff, style(Role::Muted))],
+            vec![Span::styled(compaction, style(Role::Muted))],
             Span::styled(share, style(Role::Muted)),
             text,
         ),
@@ -700,7 +700,7 @@ fn reserved_row(label: &str, spot: Option<Spot>, text: usize) -> Row {
     }
 }
 
-/// How many of the bar's `cells` fill toward the handoff point:
+/// How many of the bar's `cells` fill toward the compaction point:
 /// `tokens` against the trigger, or the window with none. A zero goal
 /// never divides: empty, not a panic. At or past the goal every cell
 /// fills.
@@ -717,8 +717,8 @@ pub(super) fn bar_fill(tokens: u64, window: u64, trigger: Option<u64>, cells: us
         .min(cells)
 }
 
-/// The context bar's cells: `cells` `▆`, filled toward the handoff
-/// point in `info` over the rest in `rule`, then the handoff marker
+/// The context bar's cells: `cells` `▆`, filled toward the compaction
+/// point in `info` over the rest in `rule`, then the compaction marker
 /// when one exists (`docs/tui.md`, "The panel").
 pub(super) fn bar_spans(
     tokens: u64,
