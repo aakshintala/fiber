@@ -687,3 +687,11 @@ crates/tui/src/bubble.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro
 crates/tui/src/bubble_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/markdown.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/markdown_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/Cargo.toml	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+Cargo.lock	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/check	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/code-quality.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/code-quality/lints.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/dependencies.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/main.rs	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
