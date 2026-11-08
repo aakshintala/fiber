@@ -1096,9 +1096,8 @@ fn session_tree(ps: &str, root: u32) -> Result<Vec<String>, String> {
 }
 
 /// [`session_tree`] over a live `ps`, bounded by
-/// `fakes::MUST_SUCCEED_WITHIN`. A `ps` that never exits is killed and
-/// reported; every failure is a returned string, never a panic, so the
-/// timeout report still leads the panic.
+/// `fakes::MUST_SUCCEED_WITHIN`. Every failure is a returned string, never
+/// a panic, so the timeout report still leads the panic.
 fn list_session_tree(root: u32) -> Result<Vec<String>, String> {
     let mut command = std::process::Command::new("ps");
     command
@@ -1106,31 +1105,49 @@ fn list_session_tree(root: u32) -> Result<Vec<String>, String> {
             "-ax", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "stat=", "-o",
             "etime=", "-o", "command=",
         ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
         .env_clear()
         .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
-    let (child, watchdog) = spawn_watched(&mut command);
-    let ps_group = child.id();
+    let text = run_listing(
+        &mut command,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    )?;
+    session_tree(&text, root)
+}
+
+/// Runs `command` in a group of its own under a watchdog and returns its
+/// standard output, waiting for it through `wait`. A command that misses
+/// `wait` has its group killed; the reap and the watchdog's stand-down each
+/// get a fresh `fakes::MUST_SUCCEED_WITHIN` bound, since `wait` has none
+/// left, and the error says whether the reap finished.
+fn run_listing(
+    command: &mut std::process::Command,
+    wait: &fakes::Deadline,
+) -> Result<String, String> {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let (child, watchdog) = spawn_watched(command);
+    let group = child.id();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let deadline = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    let output = match deadline.recv(&finished) {
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap_or(()));
+    let output = match wait.recv(&finished) {
         Ok(output) => output.map_err(|error| format!("ps could not be reaped: {error}"))?,
         Err(_) => {
-            match fakes::kill_group(ps_group, "KILL") {
+            match fakes::kill_group(group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            watchdog.stand_down(deadline.cleanup_phase());
+            let reaped = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&finished)
+                .is_ok();
+            watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
             return Err(format!(
-                "ps did not exit within {}s",
-                fakes::MUST_SUCCEED_WITHIN.as_secs()
+                "ps did not exit before its deadline (reaped: {reaped})"
             ));
         }
     };
-    watchdog.stand_down(deadline.cleanup_phase());
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     if !output.status.success() {
         return Err(format!(
             "ps exited {}: {}",
@@ -1138,9 +1155,7 @@ fn list_session_tree(root: u32) -> Result<Vec<String>, String> {
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|error| format!("ps output is not text: {error}"))?;
-    session_tree(&text, root)
+    String::from_utf8(output.stdout).map_err(|error| format!("ps output is not text: {error}"))
 }
 
 /// How many lines the wrapper's `spawns` file under `root` holds, or
@@ -1402,23 +1417,10 @@ fn tree_pids(rows: &[String]) -> Vec<u32> {
 fn timeout_evidence_tree_lists_the_root_group_children_and_setsid_descendants() {
     let rows = session_tree(PS_FIXTURE, 4242).unwrap();
     let pids = tree_pids(&rows);
-    // The root, a `pgid == root` row, and a direct child in another
-    // group (the wrapper), then a grandchild listed before its parent.
-    assert!(pids.contains(&4242), "{rows:?}");
-    assert!(pids.contains(&4250), "{rows:?}");
-    assert!(pids.contains(&4300), "{rows:?}");
-    assert!(pids.contains(&4301), "{rows:?}");
-    // Input order is kept.
-    assert_eq!(pids, vec![4301, 4242, 4300, 4250]);
-}
-
-#[test]
-fn timeout_evidence_tree_leaves_out_unrelated_rows_and_reused_parents() {
-    let rows = session_tree(PS_FIXTURE, 4242).unwrap();
-    let pids = tree_pids(&rows);
-    assert!(!pids.contains(&1), "{rows:?}");
-    assert!(!pids.contains(&4400), "{rows:?}");
-    assert!(!pids.contains(&4399), "{rows:?}");
+    // The root, a `pgid == root` row, a direct child in another group
+    // (the wrapper) and its grandchild listed before it, in input order;
+    // the init row, the unrelated row and its parent are left out.
+    assert_eq!(pids, vec![4301, 4242, 4300, 4250], "{rows:?}");
 }
 
 #[test]
@@ -1469,17 +1471,40 @@ fn timeout_evidence_live_listing_shows_a_running_process() {
     let (mut child, watchdog) = spawn_watched(&mut command);
     let pid = child.id();
     let listing = list_session_tree(pid);
-    let cleanup = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase();
     match fakes::kill_group(pid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    child.wait().unwrap();
-    watchdog.stand_down(cleanup);
+    let (tx, done) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait()).unwrap_or(()));
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&done, "the sleep child to be reaped after its group kill")
+        .unwrap();
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let rows = listing.unwrap();
     assert!(
         rows.iter()
             .any(|row| row.starts_with(&format!("{pid} ")) && row.ends_with("sleep 120")),
         "{rows:?}"
+    );
+}
+
+#[test]
+fn timeout_evidence_a_listing_that_misses_its_deadline_is_killed_reaped_and_reported() {
+    let mut command = std::process::Command::new("sleep");
+    command.arg("120");
+    // A deadline already spent: the receive times out at once, with no
+    // real-clock hold.
+    let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+    let spent = fakes::Deadline::on(&**clock);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(support::WAITS);
+    assert_eq!(
+        run_listing(&mut command, &spent).unwrap_err(),
+        "ps did not exit before its deadline (reaped: true)"
     );
 }
 
