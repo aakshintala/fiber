@@ -1420,6 +1420,123 @@ fn push_child_wait_summary(summaries: &mut Vec<String>, line: &Value) {
     summaries.push(child_wait_summary(line));
 }
 
+/// How many durable lines the stall dump lists from before the wait.
+const STALL_READS_CAP: usize = 40;
+
+/// The failure text of a `Running::wait_line` that stalled: the headline,
+/// the last [`STALL_READS_CAP`] durable lines (those holding a `seq`) read
+/// before the wait, the root's stderr, the session log tails, then the
+/// lines the wait itself got, last so a long dump cannot push the rest past
+/// the CI output cap. It never panics.
+fn stall_message(
+    headline: &str,
+    earlier: &[Value],
+    stderr: &str,
+    logs: &str,
+    got: &[Value],
+) -> String {
+    let durable: Vec<String> = earlier
+        .iter()
+        .filter_map(|line| {
+            let seq = line.get("seq").and_then(Value::as_u64)?;
+            Some(truncate_bounded(
+                format!("{seq} {}", child_wait_summary(line)),
+                CHILD_WAIT_SUMMARY_LEN,
+            ))
+        })
+        .collect();
+    let reads = durable[durable.len().saturating_sub(STALL_READS_CAP)..].join("\n");
+    let stderr = if stderr.is_empty() {
+        "(no stderr captured yet)"
+    } else {
+        stderr
+    };
+    format!(
+        "{headline}\n\
+         read before this wait (durable lines, last {STALL_READS_CAP}):\n\
+         {reads}\n\
+         fiber stderr:\n\
+         {stderr}\n\
+         session log tails (events.jsonl, last 20 lines each):\n\
+         {logs}\n\
+         got {got:?}"
+    )
+}
+
+/// A durable line: the shape `job_completed` and the tool calls carry.
+fn durable_line(seq: usize, kind: &str, name: &str) -> Value {
+    json!({"seq": seq, "kind": kind, "payload": {"name": name}})
+}
+
+/// The lines of `message` between the reads header and the stderr header.
+fn stall_reads(message: &str) -> Vec<String> {
+    let after = message
+        .split_once("durable lines, last 40):\n")
+        .expect("the reads header")
+        .1;
+    let reads = after
+        .split_once("\nfiber stderr:")
+        .expect("the stderr header")
+        .0;
+    reads.lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn stall_message_puts_reads_stderr_and_logs_ahead_of_the_got_dump() {
+    let headline = "waited 10s with no line for the delegate end";
+    let earlier = [
+        json!({"seq": 21, "kind": "job_completed", "payload": {"job_id": "j_1", "status": "failed"}}),
+        json!({"kind": "session_status", "payload": {"state": "STATUS_SENTINEL", "step": "x"}}),
+    ];
+    let got: Vec<Value> = (0..2000)
+        .map(|n| json!({"kind": "session_status", "payload": {"state": format!("filler{n}")}}))
+        .collect();
+    let message = stall_message(headline, &earlier, "STDERR_SENTINEL", "LOG_SENTINEL", &got);
+    assert_eq!(message.lines().next(), Some(headline), "{message}");
+    let reads = message.find("21 job_completed j_1 failed").expect(&message);
+    let stderr = message.find("fiber stderr:").expect(&message);
+    assert!(reads < stderr, "reads precede stderr");
+    assert!(!stall_reads(&message).join("\n").contains("STATUS_SENTINEL"));
+    let got_at = message.find("got [").expect(&message);
+    for sentinel in ["STDERR_SENTINEL", "LOG_SENTINEL"] {
+        let at = message.find(sentinel).expect(&message);
+        assert!(
+            stderr <= at && at < got_at,
+            "{sentinel} precedes the got dump"
+        );
+    }
+    let empty = stall_message(headline, &[], "", "", &[]);
+    assert!(empty.contains("(no stderr captured yet)"), "{empty}");
+}
+
+#[test]
+fn stall_message_keeps_only_the_last_durable_reads() {
+    let lines = |count: usize| -> Vec<Value> {
+        (1..=count)
+            .map(|seq| durable_line(seq, "tool_call_requested", &format!("n{seq}")))
+            .collect()
+    };
+    // At the cap nothing drops.
+    let at_cap = stall_message("h", &lines(STALL_READS_CAP), "", "", &[]);
+    let reads = stall_reads(&at_cap);
+    assert_eq!(reads.len(), STALL_READS_CAP, "{at_cap}");
+    assert_eq!(reads[0], "1 tool_call_requested n1");
+    // One past the cap drops the oldest and keeps the newest.
+    let mut over = lines(STALL_READS_CAP + 1);
+    let last = STALL_READS_CAP + 1;
+    over[STALL_READS_CAP] = durable_line(last, "tool_call_requested", &"x".repeat(500));
+    let message = stall_message("h", &over, "", "", &[]);
+    let reads = stall_reads(&message);
+    assert_eq!(reads.len(), STALL_READS_CAP, "{message}");
+    assert_eq!(reads[0], "2 tool_call_requested n2", "{message}");
+    assert!(reads[STALL_READS_CAP - 1].starts_with(&format!("{last} tool_call_requested xxx")));
+    assert!(
+        reads
+            .iter()
+            .all(|entry| entry.len() <= CHILD_WAIT_SUMMARY_LEN)
+    );
+}
+
 #[test]
 fn nested_route_trace_keeps_only_route_fields_within_bounds() {
     let trace = Mutex::new(Vec::new());
