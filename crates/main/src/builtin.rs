@@ -29,6 +29,7 @@ type SessionTools = (
 
 /// `ask_user`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `handoff`, `name_session`, `read`, `session_list`, `session_message`, `session_search`, `shell`,
 /// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
+/// `reviewer_notes_save` joins them in name order between `read` and `session_list`, and
 /// `web_search` as `web_search` chose it: the hosted search of the session's
 /// model when it has one, else Fiber's own over the installed backend, else
 /// nothing (`docs/tools.md`, "Hosted by the provider" and "Fiber's own, over
@@ -206,6 +207,11 @@ pub(crate) fn builtin_timed(
         registered(tools::Handoff)?,
         registered(tools::NameSession)?,
         registered(files.read())?,
+        registered(tools::ReviewerNotesSave::new(
+            home.to_path_buf(),
+            config::ProjectKey::new(log::project_key(&worktree::project(workspace)))
+                .map_err(|error| failed(error.code(), error))?,
+        ))?,
         registered(tools::SessionList::new(
             Arc::clone(&sessions),
             delegates.session().clone(),

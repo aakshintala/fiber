@@ -185,8 +185,6 @@ codes! {
     NotStepBoundary = "not_step_boundary",
     /// A command arrived before `subscribe`.
     NotSubscribed = "not_subscribed",
-    /// `/reviewer-setup` ended with no change to either layer of the notes.
-    NotesUnchanged = "notes_unchanged",
     /// The job's keeper died before it wrote the job's end, or there was no keeper.
     Orphaned = "orphaned",
     /// A job's output file passed 5 GB.
@@ -215,6 +213,9 @@ codes! {
     RepositoryCodeSkipped = "repository_code_skipped",
     /// The reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one.
     ReviewerSelectionFailed = "reviewer_selection_failed",
+    /// The reviewer blocked a call while both layers of the notes are empty;
+    /// the notice names the `reviewer-setup` skill.
+    ReviewerSetup = "reviewer_setup",
     /// `/sandbox` reports the session sandbox switch.
     Sandbox = "sandbox",
     /// A delete names a session that forks or rewinds point at.

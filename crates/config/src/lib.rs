@@ -93,11 +93,12 @@ pub use startup_check::{
 pub use switches::{SwitchLayer, ToolOwner, ToolSwitch, switch_skill, switch_tool};
 pub use themes::{theme_names, theme_text};
 pub use write::{
-    FileOutcome, FileSaved, Layer, ListChange, ListEdit, NotesSaved, NotesWrite,
-    ReadOnlyEntryProblem, ReadOnlyFlags, Scope, atomic_error, clear_global_if_equals, edit_list,
-    get_global, insert_entry, overlaps, read_only_keys, remove_entry, remove_extension_settings,
-    replace_global, save_reviewer_notes, set, set_global_if_unset, set_repo_extension_setting,
-    settings_file, update_global_entries, validate_read_only_entry, version, write_atomic,
+    EntryLayer, EntryPreview, FileOutcome, FileSaved, Layer, ListChange, ListEdit, NotesSaved,
+    NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, Scope, atomic_error, clear_global_if_equals,
+    edit_list, get_global, insert_entry, overlaps, preview_read_only_changes, read_only_keys,
+    remove_entry, remove_extension_settings, replace_global, save_reviewer_notes, set,
+    set_global_if_unset, set_repo_extension_setting, settings_file, update_global_entries,
+    validate_read_only_entry, version, write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};

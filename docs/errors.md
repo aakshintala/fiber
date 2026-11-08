@@ -373,7 +373,6 @@ the lines that carry it.
 | `no_model` | exit, notice, driver command (`rewind`), hub command | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id; or a hub `configure` operation sets `model` to one no installed provider has | event |
 | `nonzero_exit` | tool call, job | a process exited nonzero | — |
 | `not_found` | extension call, tool call, hub command, driver command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients"), or `artifact_page` names no file (`docs/invocation.md`, "Driver commands") | — |
-| `notes_unchanged` | notice | `/reviewer-setup` reached its diff and the save would change neither layer's notes or read-only entries, so no file was written (`docs/tui.md`, "Rules") | event |
 | `orphaned` | job | the job's keeper died before it wrote the job's end, or the session had no keeper (`docs/tools.md`, "The keeper") | — |
 | `output_cap` | job | a job's output file passed 5 GB | — |
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run | — |
@@ -386,6 +385,7 @@ the lines that carry it.
 | `refused` | model call, turn | the provider declined on policy grounds | — |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") | event |
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one | event |
+| `reviewer_setup` | notice | the reviewer blocked a call while both layers of the reviewer notes are empty; the notice names the `reviewer-setup` skill (`docs/permissions.md`, "Setting up the notes") | event |
 | `sandbox` | notice | `/sandbox` reports the session sandbox switch (`docs/tui.md`, "Slash commands") | event |
 | `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") | — |
 | `session_held` | exit, hub command, notice, driver command (`rewind`, `change_workspace`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes"), or the terminal cannot attach: the session runs another Fiber build than this terminal, or its status did not parse | event |
@@ -439,6 +439,7 @@ code: its message gives the count and lists each item.
 | `protected_paths_restored` | event | a protected path changed while a confined call ran; startup recovery restored it, and the message names each path |
 | `repository_code_skipped` | event | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `reviewer_selection_failed` | event | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
+| `reviewer_setup` | event | the reviewer blocked a call while both layers of the reviewer notes are empty; the message names the `reviewer-setup` skill (`docs/permissions.md`, "Setting up the notes") |
 | `sandbox` | event | `/sandbox` reports the session sandbox switch (`docs/sandbox.md`, "The rule") |
 | `skill_invalid` | event | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | event | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |

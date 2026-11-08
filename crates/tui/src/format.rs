@@ -119,6 +119,8 @@ pub(crate) struct Kinds {
     /// `session_list`, `session_search`, `handoff` and `name_session`
     /// calls.
     pub(crate) sessions: u64,
+    /// `reviewer_notes_save` calls.
+    pub(crate) saved_notes: u64,
     /// Calls to any other tool.
     pub(crate) called: u64,
     /// Thinking blocks.
@@ -267,6 +269,13 @@ impl Kinds {
                 &mut out,
                 &mut first,
                 times("looked at sessions", self.sessions),
+            );
+        }
+        if self.saved_notes > 0 {
+            push(
+                &mut out,
+                &mut first,
+                times("saved reviewer notes", self.saved_notes),
             );
         }
         if self.called > 0 {
@@ -441,6 +450,8 @@ pub(crate) enum Kind {
     SessionMessage,
     /// `session_list`, `session_search`, `handoff` and `name_session`.
     Session,
+    /// `reviewer_notes_save`.
+    Notes,
     /// An MCP or extension tool, or `ask_user` with no questions. An
     /// extension that replaces a built-in name keeps that name's kind.
     Other,
@@ -467,6 +478,7 @@ impl Kind {
             Kind::Tools => "tools",
             Kind::DelegateMessage | Kind::SessionMessage => "message",
             Kind::Session => "session",
+            Kind::Notes => "notes",
             Kind::Other => "other",
         }
     }
@@ -486,6 +498,7 @@ pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
         "delegate_message" => Kind::DelegateMessage,
         "session_message" => Kind::SessionMessage,
         "session_list" | "session_search" | "handoff" | "name_session" => Kind::Session,
+        "reviewer_notes_save" => Kind::Notes,
         "shell" => match argument(arguments, "command")
             .and_then(|command| command.split_whitespace().next())
         {

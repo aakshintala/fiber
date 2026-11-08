@@ -738,7 +738,7 @@ fn the_size_notice_names_the_built_in_directory() {
 /// parses, its name is its directory's, the model may load it and its
 /// description is non-empty. A change to either text runs `loop` in CI
 /// (`docs/ci.md`, "Selection").
-const SHIPPED: [(&str, &str); 2] = [
+const SHIPPED: [(&str, &str); 3] = [
     (
         "cache-warming",
         include_str!("../../../docs/skills/cache-warming/SKILL.md"),
@@ -747,10 +747,14 @@ const SHIPPED: [(&str, &str); 2] = [
         "using-fiber",
         include_str!("../../../docs/skills/using-fiber/SKILL.md"),
     ),
+    (
+        "reviewer-setup",
+        include_str!("../../../docs/skills/reviewer-setup/SKILL.md"),
+    ),
 ];
 
 #[test]
-fn both_shipped_texts_parse_with_the_name_of_their_directory() {
+fn all_shipped_texts_parse_with_the_name_of_their_directory() {
     for (directory, text) in SHIPPED {
         let header = crate::skill_header::parse(text).unwrap();
         assert_eq!(&header.name, directory);

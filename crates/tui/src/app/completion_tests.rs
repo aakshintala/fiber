@@ -32,7 +32,7 @@ fn typing_filters_prefix_matches_first() {
     answer_commands(&mut app, &["tdd", "areview"]);
     type_text(&mut app, "/re");
     // Prefix matches first, each group in the `/` list's drawn order
-    // (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
+    // (`docs/tui.md`, "Slash commands"): resume, release-notes,
     // rewind, name by its `rename` alias, and reload; then the
     // contains matches, credential and the `areview` skill.
     assert_eq!(
@@ -40,7 +40,6 @@ fn typing_filters_prefix_matches_first() {
         [
             "/resume  Goes home, focused on the first exited row.  command",
             "/release-notes  Opens the running version's release notes.  command",
-            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
             "/rewind  Opens the rewind view.  command",
             "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
@@ -531,7 +530,7 @@ fn slash_completions_carry_their_window() {
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert_eq!(completions.total, 8);
+    assert_eq!(completions.total, 7);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
@@ -545,7 +544,6 @@ fn slash_completions_carry_their_window() {
         [
             "resume",
             "release-notes",
-            "reviewer-setup",
             "rewind",
             "name",
             "reload",
@@ -558,7 +556,6 @@ fn slash_completions_carry_their_window() {
         [
             "/resume  Goes home, focused on the first exited row.  command",
             "/release-notes  Opens the running version's release notes.  command",
-            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
             "/rewind  Opens the rewind view.  command",
             "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
