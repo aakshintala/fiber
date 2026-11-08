@@ -277,3 +277,9 @@ crates/tui/src/model_picker/install.rs	fiber-4402	plan	2026-11-08T05:56:25Z	Amog
 crates/tui/src/view_tests.rs	fiber-4402	plan	2026-11-08T05:56:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/home.rs	fiber-4402	plan	2026-11-08T05:56:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/model_picker.rs	fiber-4402	plan	2026-11-08T05:56:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/diag/src/diag_tests.rs	fiber-3961	plan	2026-11-08T05:59:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/diag/src/diag.rs	fiber-3961	plan	2026-11-08T05:59:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/model_picker_name.rs	fiber-3961	plan	2026-11-08T05:59:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app.rs	fiber-3961	plan	2026-11-08T05:59:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_tests.rs	fiber-3961	plan	2026-11-08T05:59:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/state.md	fiber-3961	plan	2026-11-08T05:59:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
