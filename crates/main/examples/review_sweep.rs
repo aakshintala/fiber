@@ -128,6 +128,7 @@ fn reviewer_provider(
         workspace: workspace.to_path_buf(),
         clock: Arc::clone(clock),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     };
     let mut lookup =
         |data: &config::ProviderData| -> Result<(String, routing::lua_providers::Access), Failure> {

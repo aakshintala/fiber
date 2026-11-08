@@ -233,6 +233,7 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "scoped_models",
             "thinking",
             "web_search.backend",
+            "providers.databricks.request_tags",
         ],
     ),
     (
