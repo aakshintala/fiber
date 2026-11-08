@@ -189,6 +189,10 @@ fn clear_open(app: &mut App) {
         .and_then(|home| home.chooser.picker.as_mut())
         .unwrap_or_else(|| panic!("the picker is open"));
     picker.typed = super::Typed::new();
+    // The root's ask goes with its listing: its tag would otherwise fold
+    // into the fresh typed row.
+    app.outbox
+        .settle_where(|waiting| matches!(waiting, crate::app::Waiting::Directories(_)));
 }
 
 /// The picker's recents.
@@ -1429,4 +1433,102 @@ fn a_closed_picker_leaves_a_stale_directories_tag_that_falls_through() {
         .is_empty()
     );
     assert!(app.notice().is_none());
+}
+
+/// The `Directories` tags out, as `(id, directory)` in send order.
+fn directory_tags(app: &App) -> Vec<(String, String)> {
+    app.outbox
+        .tags()
+        .filter_map(|(id, waiting)| {
+            if let crate::app::Waiting::Directories(dir) = waiting {
+                Some((id.to_owned(), dir.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn the_directories_tag_is_the_only_record() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a/");
+    assert_eq!(sent.len(), 2);
+    // `Typed` holds no id: the tags are the whole in-flight record.
+    assert_eq!(directory_tags(&app), sent);
+    // The tag settles out of band: its answer matches nothing, and the
+    // same directory is asked again when typed again.
+    let (id, dir) = sent[1].clone();
+    assert_eq!(dir, "/a/");
+    app.outbox.settled(&id);
+    answer(&mut app, &id, &["zz"], "/a/");
+    assert_eq!(completions(&app), Vec::<String>::new());
+    key(&mut app, Key::Backspace);
+    let again = type_path(&mut app, "/");
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].1, "/a/");
+    assert_ne!(again[0].0, id);
+}
+
+#[test]
+fn a_directory_in_flight_is_not_asked_twice() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a/");
+    assert_eq!(sent.len(), 2);
+    key(&mut app, Key::Backspace);
+    // `/a/` is still out: typing it back sends no second line.
+    assert!(type_path(&mut app, "/").is_empty());
+    assert_eq!(directory_tags(&app), sent);
+    // Once its tag is gone the directory is asked again.
+    app.outbox.settled(&sent[1].0);
+    key(&mut app, Key::Backspace);
+    assert_eq!(type_path(&mut app, "/").len(), 1);
+}
+
+#[test]
+fn a_disconnect_reasks_the_tagged_dirs_in_send_order() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a/b/");
+    assert_eq!(sent.len(), 3);
+    app.disconnected();
+    assert!(directory_tags(&app).is_empty());
+    let lines = commands(app.on_line(hello()));
+    let resent = sent_directories(&lines.iter().map(ToString::to_string).collect::<Vec<_>>());
+    assert_eq!(
+        resent
+            .iter()
+            .map(|(_, dir)| dir.as_str())
+            .collect::<Vec<_>>(),
+        ["/", "/a/", "/a/b/"]
+    );
+    assert_eq!(directory_tags(&app), resent);
+}
+
+#[test]
+fn a_stale_directories_tag_does_not_fold_into_a_reopened_picker() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    // The first opening asks the root's listing; closing the picker
+    // leaves that ask unanswered.
+    let first = directories_of(&app.home_click(Spot::Workspace));
+    assert_eq!(first.len(), 1);
+    assert_eq!(key(&mut app, Key::Esc), Effect::None);
+    assert!(!picker_open(&app));
+    let second = directories_of(&app.home_click(Spot::Workspace));
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].1, first[0].1);
+    assert_ne!(second[0].0, first[0].0);
+    // The closed picker's tag went with it: its answer for the same
+    // directory folds into nothing.
+    assert_eq!(app.outbox.waiting(&first[0].0), None);
+    let notice = app.notice().map(str::to_owned);
+    answer(&mut app, &first[0].0, &["stale"], "/w");
+    assert_eq!(completions(&app), Vec::<String>::new());
+    assert_eq!(app.notice(), notice.as_deref());
+    // The reopened picker's own ask still folds.
+    answer(&mut app, &second[0].0, &["fresh"], "/w");
+    assert_eq!(completions(&app), ["fresh".to_owned()]);
 }
