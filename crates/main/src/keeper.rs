@@ -629,7 +629,7 @@ pub(crate) fn takeover(
     clock: &Arc<dyn Clock>,
 ) -> io::Result<Handover> {
     negotiate(
-        UnixStream::connect(home.join("run").join(&id.0))?,
+        UnixStream::connect(config::run_dir(home).join(&id.0))?,
         id,
         clock,
     )

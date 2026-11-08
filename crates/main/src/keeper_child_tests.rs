@@ -661,17 +661,15 @@ fn hear(peer: &Peer, what: &str) -> Option<FromKeeper> {
 
 /// What a keeper does when the test says nothing: every wait on it ends.
 fn hearing_nothing(peer: &Peer) -> bool {
-    peer.frames
-        .recv_timeout_for_test(Duration::from_millis(200))
-        .is_none()
+    peer.frames.recv_timeout_for_test().is_none()
 }
 
 trait RecvForTest<T> {
-    fn recv_timeout_for_test(&self, within: Duration) -> Option<T>;
+    fn recv_timeout_for_test(&self) -> Option<T>;
 }
 impl<T> RecvForTest<T> for mpsc::Receiver<T> {
-    fn recv_timeout_for_test(&self, within: Duration) -> Option<T> {
-        Deadline::after(within).recv(self).ok()
+    fn recv_timeout_for_test(&self) -> Option<T> {
+        Deadline::after(Duration::from_millis(200)).recv(self).ok()
     }
 }
 
