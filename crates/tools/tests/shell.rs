@@ -38,9 +38,9 @@ use tools::Shell;
 /// follows the machine's load, not the test: at a load of 40 to 100 on 11
 /// cores 5 s was not enough. 20 s is the per-wait bound `crates/main/tests`
 /// use. A later startup marker (for example the second line proving `sleep`
-/// exec'd before the exit) keeps `CHILD_START`; other later lines come from
+/// exec'd before the exit) keeps `DEADLINE`; other later lines come from
 /// the running command and keep `fakes::MUST_SUCCEED_WITHIN`.
-const CHILD_START: Duration = Duration::from_secs(20);
+const DEADLINE: Duration = Duration::from_secs(20);
 
 /// One bound for a whole `print_steps` sequence.
 const STEPS: Duration = Duration::from_secs(15);
@@ -489,7 +489,7 @@ fn the_call_waits_until_the_group_is_empty() {
         hold = quote(&hold),
     );
     let running = start(dir.path().to_path_buf(), command, None, CancelToken::new());
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _child = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -521,7 +521,7 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
         Some(1000),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(group_alive(pgid));
@@ -560,7 +560,7 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -606,7 +606,7 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
         Some(1000),
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
@@ -638,7 +638,7 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     cancel.cancel();
@@ -675,7 +675,7 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let pids = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let holders = life.watch();
@@ -711,7 +711,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         None,
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let holder = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let holders = life.watch();
@@ -754,7 +754,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let escapee = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let holders = life.watch();
@@ -1007,10 +1007,25 @@ fn start_jobs(
     jobs: Arc<FakeJobs>,
     cancel: impl Cancel + Clone + 'static,
 ) -> JobRun {
+    start_with(dir, None, command, timeout_ms, background, jobs, cancel)
+}
+
+fn start_with(
+    dir: PathBuf,
+    artifacts: Option<PathBuf>,
+    command: String,
+    timeout_ms: Option<u64>,
+    background: bool,
+    jobs: Arc<FakeJobs>,
+    cancel: impl Cancel + Clone + 'static,
+) -> JobRun {
     let clock = FakeClock::new();
     let start = clock.origin();
-    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+    let mut shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
         .with_jobs(jobs.clone());
+    if let Some(artifacts) = artifacts {
+        shell = shell.with_artifacts(artifacts);
+    }
     let mut arguments = args(&command);
     if let Some(timeout_ms) = timeout_ms {
         arguments.insert("timeout_ms".into(), json!(timeout_ms));
@@ -1091,7 +1106,7 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1145,7 +1160,7 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1195,7 +1210,7 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let move_at = running.start + Duration::from_secs(30);
@@ -1265,7 +1280,7 @@ fn the_background_command_moves_a_running_call_before_thirty_seconds() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1340,7 +1355,7 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
@@ -1378,7 +1393,7 @@ fn a_run_in_background_call_is_not_registered_as_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1404,7 +1419,7 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1435,72 +1450,484 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
+/// A shell that starts `count` `sleep`s in its group, waits until `ps` shows
+/// them all (or exits 97 with a named message on stderr once `DEADLINE`
+/// passes), records its group then its readiness in `ready`, prints `done`,
+/// blocks on the `gate` FIFO, and runs `after`.
+fn leaves_sleepers(ready: &Path, gate: &Path, count: u32, after: &str) -> String {
+    format!(
+        "echo $$ > {ready}; i=0; while [ $i -lt {count} ]; do sleep 1000 & i=$((i+1)); done; \
+         end=$(( $(date +%s) + {limit} )); \
+         until [ \"$(ps -A -o pgid=,comm= | awk -v g=$$ '$1==g && $2 ~ /sleep/' | wc -l)\" -ge {count} ]; do \
+         if [ \"$(date +%s)\" -ge \"$end\" ]; then echo \"leaves_sleepers: {count} sleepers not listed by ps within {limit} s\" >&2; exit 97; fi; done; \
+         echo $$ >> {ready}; echo done; read -r _ < {gate}; {after}",
+        limit = DEADLINE.as_secs(),
+        ready = quote(ready),
+        gate = quote(gate),
+    )
+}
+
 #[test]
-fn a_shell_that_exits_with_members_moves_and_names_them() {
-    let dir = fakes::TempDir::new("fiber-shell-orphans");
+fn leaves_sleepers_exits_97_naming_the_sleepers_when_ps_never_lists_them() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::process::CommandExt as _;
+    let dir = fakes::TempDir::new("fiber-leaves-sleepers-unlisted");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // A `ps` that lists nothing, and a `date` whose second reading is past
+    // the bound, so the readiness timeout fires without waiting for it.
+    for (name, body) in [
+        ("ps", "exit 0\n"),
+        (
+            "date",
+            "if [ -e \"$0.seen\" ]; then echo 9999999999; else : > \"$0.seen\"; echo 0; fi\n",
+        ),
+    ] {
+        let tool = bin.join(name);
+        std::fs::write(&tool, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ready = dir.path().join("ready");
+    let gate = dir.path().join("gate");
+    let stderr = dir.path().join("stderr");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(leaves_sleepers(&ready, &gate, 1, "exit 0"))
+        .env("PATH", path)
+        .stderr(std::fs::File::create(&stderr).unwrap())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pgid = child.id();
+    let status = child.wait().unwrap();
+    assert!(kill_group(pgid, "KILL").unwrap());
+    assert_eq!(status.code(), Some(97));
+    let message = std::fs::read_to_string(&stderr).unwrap();
+    assert!(
+        message.contains("leaves_sleepers: 1 sleepers not listed by ps within 20 s"),
+        "{message}"
+    );
+}
+
+/// Lets the shell blocked on the `gate` FIFO go on. The open waits for the
+/// shell's reading end, so it runs off the test's thread.
+fn release_gate(gate: &Path) {
+    let gate = gate.to_path_buf();
+    thread::spawn(move || std::fs::write(&gate, "go\n"));
+}
+
+/// Waits for the shell's `done` to stream, the signal that the reader holds
+/// it, then lets the shell exit.
+fn release_after_done(run: &JobRun, gate: &Path) {
+    assert!(
+        run.recorder
+            .wait_for_text("done\n", fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "waited {:?} for `done` to stream",
+        fakes::MUST_SUCCEED_WITHIN
+    );
+    release_gate(gate);
+}
+
+/// The shell-exit call as a person's foreground call, with an artifacts
+/// directory under `dir`.
+struct Exited {
+    run: JobRun,
+    jobs: Arc<FakeJobs>,
+    pgid: u32,
+    watchdog: Watchdog,
+    output: contract::tool::Output,
+    artifacts: PathBuf,
+}
+
+fn shell_exits(
+    dir: &fakes::TempDir,
+    count: u32,
+    after: &str,
+    timeout_ms: Option<u64>,
+    with_artifacts: bool,
+) -> Exited {
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
-    let command = format!(
-        "echo $$ > {ready}; sleep 1000 & until ps -o comm= -p $! | grep -q sleep; do :; done; echo $$ >> {ready}; exit 3",
-        ready = quote(ready.path()),
-    );
-    let running = start_jobs(
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
+    let run = start_with(
         dir.path().to_path_buf(),
+        with_artifacts.then(|| artifacts.clone()),
+        leaves_sleepers(ready.path(), &gate, count, after),
+        timeout_ms,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&run.output)
+        .expect("the shell's own result once sleep was listed");
+    Exited {
+        run,
+        jobs,
+        pgid,
+        watchdog,
+        output,
+        artifacts,
+    }
+}
+
+impl Exited {
+    fn reap(self) {
+        assert!(kill_group(self.pgid, "KILL").unwrap());
+        self.watchdog
+            .stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    }
+}
+
+#[test]
+fn shell_exit_completes_inline_with_the_output_the_exit_code_and_one_trailing_line() {
+    let dir = fakes::TempDir::new("fiber-shell-exit-inline");
+    let exited = shell_exits(&dir, 1, "exit 0", None, true);
+    let body = text(&exited.output);
+    assert!(exited.output.error.is_none(), "{body}");
+    assert_eq!(
+        exited
+            .output
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(0)
+    );
+    let (head, line) = body.split_once("Exit code 0.\n").expect(&body);
+    assert_eq!(head, "done\n", "{body}");
+    assert!(
+        line.starts_with("1 process left running (first: sleep ("),
+        "{body}"
+    );
+    assert!(
+        line.contains("Output written after the call returns is in "),
+        "{body}"
+    );
+    assert!(line.contains("run_in_background"), "{body}");
+    assert_eq!(line.matches('\n').count(), 1, "{body}");
+    assert!(exited.output.jobs.is_empty());
+    assert!(exited.jobs.started().is_empty());
+    assert!(group_alive(exited.pgid));
+    exited.reap();
+}
+
+#[test]
+fn shell_exit_completes_inline_nonzero_is_the_normal_nonzero_result() {
+    let dir = fakes::TempDir::new("fiber-shell-exit-inline-nonzero");
+    let exited = shell_exits(&dir, 1, "exit 3", None, true);
+    let body = text(&exited.output);
+    assert_eq!(code(&exited.output), Some(ErrorCode::NonzeroExit), "{body}");
+    assert_eq!(
+        exited
+            .output
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(3)
+    );
+    let Some(Value::Object(details)) = &exited.output.details else {
+        panic!("details: {:?}", exited.output.details);
+    };
+    assert_eq!(details["exit_code"], json!(3));
+    let (head, line) = body.split_once("Exit code 3.\n").expect(&body);
+    assert_eq!(head, "done\n", "{body}");
+    assert!(line.starts_with("1 process left running"), "{body}");
+    assert!(exited.jobs.started().is_empty());
+    exited.reap();
+}
+
+#[test]
+fn shell_exit_completes_inline_names_three_of_ten_leftovers() {
+    let dir = fakes::TempDir::new("fiber-shell-exit-inline-ten");
+    let exited = shell_exits(&dir, 10, "exit 0", None, true);
+    let body = text(&exited.output);
+    let (_, line) = body.split_once("Exit code 0.\n").expect(&body);
+    assert!(
+        line.starts_with("10 processes left running (first: "),
+        "{body}"
+    );
+    let named = line.split("). Output already").next().unwrap();
+    assert_eq!(named.matches("sleep (").count(), 3, "{body}");
+    exited.reap();
+}
+
+#[test]
+fn leftover_processes_keep_running_past_the_timeout_with_no_job() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-timeout");
+    let exited = shell_exits(&dir, 1, "exit 0", Some(5_000), true);
+    // The drive is gone: nothing parks on the clock, so no timeout is
+    // armed for the leftovers.
+    assert!(
+        exited.run.clock.parked().is_empty(),
+        "something still waits on the clock: {:?}",
+        exited.run.clock.parked()
+    );
+    assert!(group_alive(exited.pgid));
+    assert!(exited.jobs.started().is_empty());
+    assert!(exited.output.jobs.is_empty());
+    exited.reap();
+}
+
+#[test]
+fn leftover_processes_are_stopped_at_session_shutdown() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-shutdown");
+    let exited = shell_exits(&dir, 1, "exit 0", None, true);
+    assert!(group_alive(exited.pgid));
+    support::group::kill_every_group();
+    assert!(
+        fakes::group_empties(exited.pgid, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "shutdown left the leftover group running"
+    );
+    exited
+        .watchdog
+        .stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-late");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let block = block_of(ready.path());
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
+    let command = format!(
+        "mkfifo {block}; ( read -r _ < {block}; echo LATE ) & echo $$ > {ready}; echo done; read -r _ < {gate}",
+        block = quote(&block),
+        ready = quote(ready.path()),
+        gate = quote(&gate),
+    );
+    let run = start_with(
+        dir.path().to_path_buf(),
+        Some(artifacts.clone()),
         command,
         None,
         false,
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
-    let _started = ready.wait(fakes::Deadline::after(CHILD_START));
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&running.output)
-        .expect("waited for the shell-exited receipt after sleep exec'd");
+        .recv(&run.output)
+        .expect("the shell's own result");
     let body = text(&output);
-    assert!(output.error.is_none(), "{body}");
-    assert!(output.process.is_none());
-    assert!(body.contains("exited with code 3"), "{body}");
-    assert!(body.contains("sleep ("), "{body}");
-    assert!(body.contains("moved to the background"), "{body}");
-    assert!(group_alive(pgid));
-    let timeout_at = running.start + Duration::from_millis(600_000);
-    let mark = running
-        .clock
-        .mark_parked(
-            timeout_at,
-            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        )
-        .expect("the moved job did not park at its timeout");
-    // A later park at the timeout means another group check found sleep
-    // alive and the job waits on.
-    assert!(
-        running.clock.await_parked_since(
-            &mark,
-            Some(timeout_at),
-            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        ),
-        "the job did not wait again while sleep was in the group"
+    assert!(body.starts_with("done\nExit code 0.\n"), "{body}");
+    assert!(!body.contains("LATE"), "{body}");
+    let path = body
+        .rsplit("is in ")
+        .next()
+        .and_then(|rest| rest.split(".txt").next())
+        .map(|stem| PathBuf::from(format!("{stem}.txt")))
+        .expect(&body);
+    assert!(path.starts_with(&artifacts), "{body}");
+    release_block(ready.path());
+    let seen = path.clone();
+    fakes::wait_until(
+        "the leftover's late output in the artifact",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || std::fs::read_to_string(&seen).is_ok_and(|text| text == "LATE\n"),
     );
+    assert!(jobs.started().is_empty());
+    assert!(fakes::group_empties(
+        pgid,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+/// The artifact path the closing line names.
+fn artifact_named(body: &str, artifacts: &Path) -> PathBuf {
+    let path = body
+        .rsplit("is in ")
+        .next()
+        .and_then(|rest| rest.split(".txt").next())
+        .map(|stem| PathBuf::from(format!("{stem}.txt")))
+        .expect(body);
+    assert!(path.starts_with(artifacts), "{body}");
+    path
+}
+
+/// Whether this process holds `path` open. `None` when `lsof` cannot run.
+fn holds_open(path: &Path) -> Option<bool> {
+    let listed = std::process::Command::new("lsof")
+        .args(["-t", "--"])
+        .arg(path)
+        .output()
+        .ok()?;
+    let me = std::process::id().to_string();
+    Some(
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .any(|pid| pid == me),
+    )
+}
+
+/// After the inline return, with the leftovers gone: the steward has unlisted
+/// the group and closed the artifact file.
+fn assert_steward_finished(pgid: u32, artifact: &Path) {
+    fakes::wait_until(
+        "the steward to unlist the emptied group",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || !support::group::live().contains(pgid),
+    );
+    if holds_open(artifact).is_some() {
+        let artifact = artifact.to_path_buf();
+        fakes::wait_until(
+            "the steward to close the artifact file",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || holds_open(&artifact) == Some(false),
+        );
+    }
+}
+
+#[test]
+fn the_steward_keeps_a_live_group_listed_then_unlists_it_and_closes_the_artifact() {
+    let dir = fakes::TempDir::new("fiber-shell-steward-live");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let block = block_of(ready.path());
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
+    // The leftover execs `sleep` rather than forking it: a KILL that lands
+    // while a fork is in flight can miss the child, which then keeps the
+    // group (and the pipe) alive.
+    let command = format!(
+        "mkfifo {block}; ( read -r _ < {block}; echo LATE; exec sleep 1000 ) & echo $$ > {ready}; echo done; read -r _ < {gate}",
+        block = quote(&block),
+        ready = quote(ready.path()),
+        gate = quote(&gate),
+    );
+    let run = start_with(
+        dir.path().to_path_buf(),
+        Some(artifacts.clone()),
+        command,
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&run.output)
+        .expect("the shell's own result");
+    let path = artifact_named(&text(&output), &artifacts);
+    release_block(ready.path());
+    let seen = path.clone();
+    fakes::wait_until(
+        "the leftover's late output in the artifact",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || std::fs::read_to_string(&seen).is_ok_and(|text| text == "LATE\n"),
+    );
+    // The leftover is alive: the steward has had the late chunk and still
+    // lists the group, with the file open.
+    assert!(group_alive(pgid));
     assert!(
-        jobs.ended(fakes::Deadline::after(Duration::ZERO)).is_none(),
-        "the job ended while sleep was still in the group"
+        support::group::live().contains(pgid),
+        "unlisted while alive"
     );
     assert!(kill_group(pgid, "KILL").unwrap());
-    let ended = jobs
-        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
-        .expect("the job to finish once the group was empty");
-    assert_eq!(ended.status, Outcome::Failed);
-    assert_eq!(
-        ended.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::NonzeroExit)
+    assert_steward_finished(pgid, &path);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "LATE\n");
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn the_steward_unlists_a_group_that_empties_after_the_pipe_closed() {
+    let dir = fakes::TempDir::new("fiber-shell-steward-eof");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
+    // The leftover lets go of the pipe, so the reader reaches the end while
+    // the group is still alive.
+    let command = format!(
+        "sleep 1000 >/dev/null 2>&1 & echo $$ > {ready}; echo done; read -r _ < {gate}",
+        ready = quote(ready.path()),
+        gate = quote(&gate),
     );
-    assert_eq!(
-        ended.process.as_ref().and_then(|process| process.exit_code),
-        Some(3)
+    let run = start_with(
+        dir.path().to_path_buf(),
+        Some(artifacts.clone()),
+        command,
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
     );
-    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&run.output)
+        .expect("the shell's own result");
+    let body = text(&output);
+    assert!(body.contains("left running"), "{body}");
+    let path = artifact_named(&body, &artifacts);
+    // The pipe is at its end and the steward has closed the file, while the
+    // leftover still lives: the group stays listed.
+    if holds_open(&path).is_some() {
+        let closing = path.clone();
+        fakes::wait_until(
+            "the steward to close the artifact file at the end of the pipe",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || holds_open(&closing) == Some(false),
+        );
+    }
+    assert!(group_alive(pgid));
+    assert!(
+        support::group::live().contains(pgid),
+        "unlisted while alive"
+    );
+    assert!(kill_group(pgid, "KILL").unwrap());
+    assert_steward_finished(pgid, &path);
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn leftover_that_writes_nothing_leaves_an_empty_named_artifact() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-empty");
+    let exited = shell_exits(&dir, 1, "exit 0", None, true);
+    let body = text(&exited.output);
+    let files: Vec<_> = std::fs::read_dir(&exited.artifacts)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), "");
+    assert!(body.contains(&files[0].display().to_string()), "{body}");
+    exited.reap();
+}
+
+#[test]
+fn leftover_without_an_artifacts_directory_says_the_output_is_not_saved() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-nodir");
+    let exited = shell_exits(&dir, 1, "exit 0", None, false);
+    let body = text(&exited.output);
+    assert!(body.contains("1 process left running"), "{body}");
+    assert!(body.contains("could not be saved"), "{body}");
+    assert!(!body.contains(".txt"), "{body}");
+    exited.reap();
 }
 
 #[test]
@@ -1516,7 +1943,7 @@ fn a_moved_job_times_out_from_the_commands_start() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1597,7 +2024,7 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         Arc::clone(&jobs),
         watched.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1680,7 +2107,7 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1724,7 +2151,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
         jobs,
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     // The background call had no `timeout_ms`, so the resumed foreground
@@ -1853,7 +2280,7 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1958,7 +2385,7 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
     assert!(
@@ -2005,7 +2432,7 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
     running.clock.advance_when_parked(
@@ -2061,7 +2488,7 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
         Some(5_000),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(running.clock.await_parked(
@@ -2133,7 +2560,7 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
@@ -2325,7 +2752,7 @@ fn a_monitor_moves_at_once_with_its_receipt() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2371,7 +2798,7 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2451,7 +2878,7 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2504,7 +2931,7 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2562,7 +2989,7 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2607,7 +3034,7 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2664,7 +3091,7 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2703,7 +3130,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
         Some(1_000),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -4151,7 +4578,7 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
         jobs.clone(),
         sandbox,
     );
-    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
@@ -4339,7 +4766,7 @@ fn background_without_timeout_runs_until_stopped() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    // CHILD_START's 20 s inline: budget-bounds resolves only direct
+    // DEADLINE's 20 s inline: budget-bounds resolves only direct
     // literals, and startup under load needs the full bound.
     let pgid = ready.wait(fakes::Deadline::after(Duration::from_secs(20)))[0];
     let watchdog = Watchdog::group(pgid);
