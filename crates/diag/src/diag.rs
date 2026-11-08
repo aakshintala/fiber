@@ -253,7 +253,12 @@ impl Diag {
 
     /// Writes one debug diagnostic event with structured data. At `info`,
     /// the event is filtered without serialization or file I/O.
-    pub fn debug_event<D: serde::Serialize>(&self, code: &str, message: &str, data: &D) {
+    pub fn debug_event<D: serde::Serialize>(
+        &self,
+        code: &'static str,
+        message: &'static str,
+        data: &D,
+    ) {
         if !self.debugging() {
             return;
         }
