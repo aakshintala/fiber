@@ -196,7 +196,6 @@ fn date_cache(home: &Path, name: &str, age: Duration, wall: SystemTime) {
 
 /// Sets every file and directory in an installed extension source tree
 /// to the same mtime, including the root directory.
-
 fn call(
     seam: &Seam,
     operation: &str,
