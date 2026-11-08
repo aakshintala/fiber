@@ -6,7 +6,7 @@ use std::time::Duration;
 use contract::events::RetryScheduled;
 use fakes::clock::FakeClock;
 
-use super::{Working, lay};
+use super::{Working, lay, lay_with_hint};
 use crate::motion::Motion;
 use crate::turn::PendingRetry;
 
@@ -257,4 +257,56 @@ fn the_glimmer_band_sweeps_then_rests() {
     reduced.set_reduced(true);
     reduced.set_now(origin, 0);
     assert_eq!(reduced.glimmer(7), None);
+}
+
+#[test]
+fn a_named_hint_replaces_the_esc_hint_and_keeps_the_rest() {
+    let started = 1_000_000;
+    let now = Some(started + 5_000);
+    let hint = "⌥I or click to interrupt";
+    let laid = lay_with_hint(&working(Some(started)), now, "⠋", 80, hint);
+    assert_eq!(laid.text, "  ⠋ Working 5s · ⌥I or click to interrupt");
+    // The target covers the hint's own cells, past " · ".
+    let head = "  ⠋ Working 5s · ".chars().count();
+    let end = laid.text.chars().count();
+    assert_eq!(laid.interrupt, Some(head as u16..end as u16));
+    assert_eq!(laid.word, Some(4..11));
+    assert_eq!(laid.spinner, Some(2));
+    // The default entry is the Esc hint through the same layout.
+    let esc = lay(&working(Some(started)), now, "⠋", 80);
+    let named = lay_with_hint(&working(Some(started)), now, "⠋", 80, "Esc to interrupt");
+    assert_eq!(esc.text, named.text);
+    assert_eq!(esc.interrupt, named.interrupt);
+}
+
+#[test]
+fn a_named_hint_sheds_whole_one_cell_short_of_its_width() {
+    let started = 1_000_000;
+    let now = Some(started + 5_000);
+    let hint = "⌥I or click to interrupt";
+    let full = "  ⠋ Working 5s · ⌥I or click to interrupt";
+    let width = full.chars().count() as u16;
+    let exact = lay_with_hint(&working(Some(started)), now, "⠋", width, hint);
+    assert_eq!(exact.text, full);
+    assert!(exact.interrupt.is_some());
+    let short = lay_with_hint(&working(Some(started)), now, "⠋", width - 1, hint);
+    assert_eq!(short.text, "  ⠋ Working 5s");
+    assert_eq!(short.interrupt, None);
+    let wide = lay_with_hint(&working(Some(started)), now, "⠋", width + 1, hint);
+    assert_eq!(wide.text, full);
+    assert_eq!(wide.interrupt, exact.interrupt);
+}
+
+#[test]
+fn the_retry_form_keeps_no_target_whatever_the_hint() {
+    let laid = lay_with_hint(
+        &retry(10_000, 1, 5_000, 3),
+        Some(10_000),
+        "⠋",
+        80,
+        "⌥I or click to interrupt",
+    );
+    assert!(laid.retrying);
+    assert_eq!(laid.interrupt, None);
+    assert!(!laid.text.contains("interrupt"));
 }

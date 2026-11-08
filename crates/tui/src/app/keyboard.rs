@@ -139,9 +139,17 @@ impl App {
     pub(crate) fn set_keys(&mut self, setup: KeysSetup) {
         let (keys, notices) = load(&setup.user);
         self.keyboard.keys = keys;
+        self.keys_changed();
         for notice in notices {
             self.notices.push(ErrorCode::ConfigInvalid, notice);
         }
+    }
+
+    /// A renderer wrapping the built-in working line holds a hint naming
+    /// the old key: the shown pages' cached lines go, so the next count
+    /// and paint draw the new one.
+    fn keys_changed(&mut self) {
+        self.screen.pages_mut().ext.cache.clear();
     }
 
     /// The effective bindings, what the key map shows.
@@ -488,6 +496,7 @@ impl App {
         match saved {
             Ok(()) => {
                 self.keyboard.keys = next;
+                self.keys_changed();
             }
             Err(message) => {
                 if let Some(screen) = self.keyboard.screen.as_mut() {

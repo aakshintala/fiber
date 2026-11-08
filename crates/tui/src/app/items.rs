@@ -233,7 +233,7 @@ impl App {
     /// delegate's, swapped onto the screen. A job's view and another
     /// harness's delegate show none, and the screen behind is the
     /// parent's.
-    pub(super) fn item_transcript(&self) -> bool {
+    pub(crate) fn item_transcript(&self) -> bool {
         self.items
             .open
             .as_ref()
