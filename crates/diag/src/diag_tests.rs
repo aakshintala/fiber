@@ -634,12 +634,23 @@ fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     assert!(timer.is_some(), "a debug guard is active");
     assert!(!home.path().join("logs").exists(), "no file before drop");
     drop(timer);
-    assert_eq!(
-        home.text("hub.log"),
-        "{\"ts\":1700000000007,\"level\":\"debug\",\"process\":\"hub\",\
-         \"code\":\"op_timing\",\"message\":\"An operation ended.\",\
-         \"data\":{\"op\":\"tool.run\",\"ms\":7,\"tool\":\"read\"}}\n"
-    );
+    let text = home.text("hub.log");
+    let head = "{\"ts\":1700000000007,\"level\":\"debug\",\"process\":\"hub\",\
+                \"code\":\"op_timing\",\"message\":\"An operation ended.\",\
+                \"data\":{\"op\":\"tool.run\",\"ms\":7,\"tool\":\"read\"";
+    // An `alloc-stats` build follows `tool` with the alloc keys, whose values
+    // this binary does not pin.
+    #[cfg(not(feature = "alloc-stats"))]
+    assert_eq!(text, format!("{head}}}}}\n"));
+    #[cfg(feature = "alloc-stats")]
+    {
+        let alloc = format!("{head},\"alloc_bytes\":");
+        assert!(text.starts_with(&alloc), "{text}");
+        assert!(text.ends_with("}}\n"), "{text}");
+        assert_eq!(text.lines().count(), 1, "{text}");
+        let parsed: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_timing_data(&parsed, "tool.run", Some("read"));
+    }
 }
 
 fn early_return(diag: &Diag, stop: bool) -> u32 {
@@ -1016,10 +1027,18 @@ fn op_timing_data_holds_only_op_ms_and_tool() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), cases.len(), "one line per guard");
     for (line, (_, tool, want)) in lines.iter().zip(&cases) {
-        // The raw bytes pin the key order: `op`, `ms`, then `tool`.
+        // The raw bytes pin the key order: `op`, `ms`, then `tool`. An
+        // `alloc-stats` build ends the data with the alloc keys, the first
+        // of which follows; the order within them is not pinned.
+        #[cfg(feature = "alloc-stats")]
+        let tail = ",\"alloc_bytes\":";
+        #[cfg(not(feature = "alloc-stats"))]
+        let tail = "}";
         let data = match tool {
-            Some(tool) => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"tool\":\"{tool}\"}}"),
-            None => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0}}"),
+            Some(tool) => {
+                format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"tool\":\"{tool}\"{tail}")
+            }
+            None => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0{tail}"),
         };
         assert!(line.contains(&data), "{line}");
         let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
