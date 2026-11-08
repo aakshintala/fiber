@@ -768,7 +768,7 @@ fn a_held_landing_keeps_the_second_copy_by_seq() {
     for line in &preview {
         app.on_line(line.clone());
     }
-    assert_eq!(app.attached_screen().pages().wrap_width(), 79);
+    assert_eq!(app.attached_screen().pages().wrap_width(), 77);
     // Following keeps a suffix resident: the absolute row adds the
     // rows trimmed above the resident window.
     let resident = app.attached_screen().pages().rows();
@@ -862,7 +862,7 @@ fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
     for line in &lines {
         app.on_line(line.clone());
     }
-    assert_eq!(app.attached_screen().pages().wrap_width(), 79);
+    assert_eq!(app.attached_screen().pages().wrap_width(), 77);
     let resident = app.attached_screen().pages().rows();
     let start = app.attached_screen().pages().index().total() - resident.len();
     let top = resident
@@ -898,10 +898,10 @@ fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
     app.set_size(60, 24);
     assert_eq!(
         app.attached_screen().pages().wrap_width(),
-        79,
+        77,
         "the resize is deferred"
     );
-    let mut fold = crate::window::Pages::new(79);
+    let mut fold = crate::window::Pages::new(77);
     for line in &lines {
         if let Line::Session(envelope) = line {
             fold.apply(envelope);
@@ -910,7 +910,7 @@ fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
     app.land(fold, true);
     assert!(!app.attached_screen().frozen());
     assert!(
-        app.attached_screen().pages().wrap_width() < 79,
+        app.attached_screen().pages().wrap_width() < 77,
         "the unfreeze applies the resize"
     );
     let area = Rect::new(0, 0, 60, 24);
@@ -968,7 +968,7 @@ fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
     };
     app.attached_screen_mut().set_frozen(true);
     app.set_size(60, 24);
-    let mut fold = crate::window::Pages::new(79);
+    let mut fold = crate::window::Pages::new(77);
     for line in &lines {
         if let Line::Session(envelope) = line {
             fold.apply(envelope);
@@ -1053,7 +1053,7 @@ fn held_landing_with_dropped_pages() -> (App, Vec<contract::Envelope>) {
     };
     app.attached_screen_mut().set_frozen(true);
     app.set_size(60, 24);
-    let mut fold = crate::window::Pages::new(79);
+    let mut fold = crate::window::Pages::new(77);
     for line in &lines {
         if let Line::Session(envelope) = line {
             fold.apply(envelope);

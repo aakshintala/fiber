@@ -185,8 +185,9 @@ fn clear_open(app: &mut App) {
     app.home_click(Spot::Workspace);
     let picker = app
         .home
+        .chooser
+        .picker
         .as_mut()
-        .and_then(|home| home.chooser.picker.as_mut())
         .unwrap_or_else(|| panic!("the picker is open"));
     picker.typed = super::Typed::new();
 }
@@ -1315,13 +1316,9 @@ fn no_workspace_never_reads_the_working_directory() {
             ..Default::default()
         });
         app.set_size(80, 24);
-        // White-box on purpose: the readers below prefer home once it
-        // is set, so only the field catches a construction that
-        // smuggles the working directory in. (`workspace()`,
-        // `home_workspace()` and the start args stay none by the same
-        // empty-means-none mapping `empty_values_carry_no_workspace`
-        // pins, so they assert nothing new here.)
-        assert_eq!(app.workspace, None);
+        // A remote launch carries no directory, so a construction that
+        // smuggled the working directory in would show here.
+        assert_eq!(app.home_workspace(), None);
         let area = ratatui::layout::Rect::new(0, 0, 80, 24);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         crate::view::render(&app, area, &mut buf, None);

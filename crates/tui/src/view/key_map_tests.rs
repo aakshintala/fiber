@@ -11,11 +11,26 @@ use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
 
 /// An attached app at `width` by `height`.
+/// An app attached with a conversation `width` by `height`: the screen is
+/// one column wider, for the grip.
 fn attached(width: u16, height: u16) -> App {
+    attached_screen(width + 1, height)
+}
+
+/// An app attached on a `width` by `height` screen.
+fn attached_screen(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app
+}
+
+/// The whole screen as text.
+fn whole_screen(app: &App, width: u16, height: u16) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
 }
 
 /// Opens the key map.
@@ -26,17 +41,22 @@ fn open(app: &mut App) {
 
 /// Renders `app` on a `width` by `height` screen as text.
 fn screen(app: &App, width: u16, height: u16) -> String {
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    crate::view::render(app, area, &mut buf, None);
-    crate::view::text(&buf)
+    crate::view::text(&buffer(app, width, height))
 }
 
 /// Renders `app` on a `width` by `height` screen, returning its buffer.
+/// The conversation column of the whole screen: the screen is one column
+/// wider than `width`, and the buffer returned starts past the grip.
 fn buffer(app: &App, width: u16, height: u16) -> Buffer {
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    crate::view::render(app, area, &mut buf, None);
+    let area = Rect::new(0, 0, width + 1, height);
+    let mut screen = Buffer::empty(area);
+    crate::view::render(app, area, &mut screen, None);
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+    for y in 0..height {
+        for x in 0..width {
+            buf[(x, y)] = screen[(x + 1, y)].clone();
+        }
+    }
     buf
 }
 
@@ -54,28 +74,28 @@ fn rows(buf: &Buffer) -> Vec<String> {
 
 #[test]
 fn key_map_160x48() {
-    let mut app = attached(160, 48);
+    let mut app = attached_screen(160, 48);
     open(&mut app);
-    insta::assert_snapshot!("key_map_160x48", screen(&app, 160, 48));
+    insta::assert_snapshot!("key_map_160x48", whole_screen(&app, 160, 48));
 }
 
 #[test]
 fn key_map_80x24() {
-    let mut app = attached(80, 24);
+    let mut app = attached_screen(80, 24);
     open(&mut app);
-    insta::assert_snapshot!("key_map_80x24", screen(&app, 80, 24));
+    insta::assert_snapshot!("key_map_80x24", whole_screen(&app, 80, 24));
 }
 
 #[test]
 fn key_map_narrow_scrolled() {
-    let mut app = attached(100, 40);
+    let mut app = attached_screen(100, 40);
     open(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..80 {
         app.on_key(Key::PageDown, now);
     }
     assert!(app.keymap_top().unwrap_or(0) > 0);
-    insta::assert_snapshot!("key_map_100x40_scrolled", screen(&app, 100, 40));
+    insta::assert_snapshot!("key_map_100x40_scrolled", whole_screen(&app, 100, 40));
 }
 
 #[test]
@@ -242,7 +262,7 @@ fn shrinking_keeps_the_focused_binding_whole() {
     // Narrower and shorter: the columns wrap each binding taller and
     // the body holds fewer, so the old scroll would leave the focus
     // below the window.
-    app.set_size(80, 30);
+    app.set_size(81, 30);
     let buf = buffer(&app, 80, 30);
     let shown = rows(&buf);
     // The focused binding's height in the drawn layout.

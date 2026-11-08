@@ -257,9 +257,7 @@ impl App {
             }
             Key::Backspace => {
                 self.backspace_picker();
-                if let Some(home) = self.home.as_mut() {
-                    home.refill_picker();
-                }
+                self.home.refill_picker();
                 return Some(self.picker_send());
             }
             Key::Tab => {
@@ -292,9 +290,7 @@ impl App {
     /// picker's root, asking the hub for its listing, with the recents
     /// below.
     pub(super) fn open_picker(&mut self) -> Effect {
-        let Some(home) = self.home.as_mut() else {
-            return Effect::None;
-        };
+        let home = &mut self.home;
         let typed = Typed::at(&home.picker_root());
         home.chooser.picker = Some(Picker {
             recents: home.picker_recents(),
@@ -316,7 +312,7 @@ impl App {
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
         let consumed = {
-            let home = self.home.as_mut()?;
+            let home = &mut self.home;
             let picker = home.chooser.picker.as_mut()?;
             if accepted {
                 picker.typed.answered(id, payload.get("result"))
@@ -340,13 +336,8 @@ impl App {
         if !self.outbox.is_up() {
             return Vec::new();
         }
-        if self.home.is_none() {
-            return Vec::new();
-        }
         self.read_chips();
-        let Some(home) = self.home.as_mut() else {
-            return Vec::new();
-        };
+        let home = &mut self.home;
         let Some(picker) = home.chooser.picker.as_mut() else {
             return Vec::new();
         };
@@ -374,18 +365,13 @@ impl App {
         if !self.chip_read_owed() {
             return;
         }
-        let owed = self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.chooser.chip_read == ChipRead::Owed);
+        let owed = self.home.chooser.chip_read == ChipRead::Owed;
         if !owed {
             return;
         }
         let Some(remote) = self.remote() else {
             // A local home owes no chip read: there is no hub to ask.
-            if let Some(home) = self.home.as_mut() {
-                home.chooser.chip_read = ChipRead::Answered;
-            }
+            self.home.chooser.chip_read = ChipRead::Answered;
             return;
         };
         let read = match self.workspace() {
@@ -410,9 +396,7 @@ impl App {
                     .as_deref()
                     .map(super::super::model_picker::canonical_thinking_key);
                 let overrides = self.launch_overrides.clone();
-                let Some(home) = self.home.as_mut() else {
-                    return;
-                };
+                let home = &mut self.home;
                 if chip.model.is_some() && !Self::override_names("model", &overrides) {
                     home.launch.model = chip.model;
                 }
@@ -429,9 +413,7 @@ impl App {
                 self.model_picker.adopt_scoped(chip.scoped);
             }
             Err(error) => {
-                if let Some(home) = self.home.as_mut() {
-                    home.chooser.chip_read = ChipRead::Failed;
-                }
+                self.home.chooser.chip_read = ChipRead::Failed;
                 self.push_notice(error.code.clone(), error.message);
             }
         }
@@ -449,33 +431,27 @@ impl App {
     /// waiting for its re-owe. The read itself runs only in state
     /// `Owed`; `Failed` waits for a new workspace or link.
     pub(in crate::app) fn chip_read_owed(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| matches!(home.chooser.chip_read, ChipRead::Owed | ChipRead::Failed))
+        matches!(
+            self.home.chooser.chip_read,
+            ChipRead::Owed | ChipRead::Failed
+        )
     }
 
     /// Whether the last chip read failed: the start pick stays owed
     /// until a new workspace or link reads the chips again.
     pub(in crate::app) fn chip_read_failed(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.chip_read == ChipRead::Failed)
+        self.home.chooser.chip_read == ChipRead::Failed
     }
 
     /// Owes the pick the picker opens for: the next outgoing pass
     /// reads it, opening on the answered catalogue.
     pub(crate) fn owe_start_pick(&mut self) {
-        if let Some(home) = self.home.as_mut() {
-            home.chooser.start_pick = true;
-        }
+        self.home.chooser.start_pick = true;
     }
 
     /// Takes the owed start pick, if one waits.
     pub(crate) fn take_start_pick(&mut self) -> bool {
-        self.home
-            .as_mut()
-            .map(|home| std::mem::replace(&mut home.chooser.start_pick, false))
-            .unwrap_or(false)
+        std::mem::replace(&mut self.home.chooser.start_pick, false)
     }
 
     /// Forgets the picker's in-flight `directories` ids: with a typed
@@ -486,12 +462,8 @@ impl App {
     pub(in crate::app) fn picker_disconnected(&mut self) {
         self.outbox
             .forget(&super::super::outbox::Waiting::Directories);
-        if let Some(home) = self.home.as_mut() {
-            home.chooser.chip_read = ChipRead::Owed;
-        }
-        if let Some(home) = self.home.as_mut()
-            && let Some(picker) = home.chooser.picker.as_mut()
-        {
+        self.home.chooser.chip_read = ChipRead::Owed;
+        if let Some(picker) = self.home.chooser.picker.as_mut() {
             if picker.typing() {
                 picker.typed.disconnected();
             } else {
@@ -503,9 +475,7 @@ impl App {
     /// Moves the picker's selection one row: through the completions,
     /// then the recents while typing, else clamped to the recents.
     fn move_picker(&mut self, down: bool) {
-        if let Some(home) = self.home.as_mut()
-            && let Some(picker) = home.chooser.picker.as_mut()
-        {
+        if let Some(picker) = self.home.chooser.picker.as_mut() {
             picker.untouched = false;
             if picker.typing() {
                 let recents = picker.recents.len();
@@ -526,9 +496,7 @@ impl App {
     /// Types `c` into the picker's path, opening its row on the first
     /// key: the text is append-only.
     fn type_picker(&mut self, c: char) {
-        if let Some(home) = self.home.as_mut()
-            && let Some(picker) = home.chooser.picker.as_mut()
-        {
+        if let Some(picker) = self.home.chooser.picker.as_mut() {
             picker.untouched = false;
             picker.typed.push(c);
         }
@@ -538,8 +506,7 @@ impl App {
     /// picker returns to the recents alone, keeping the listings for
     /// the opening. With no typed text it does nothing.
     fn backspace_picker(&mut self) {
-        if let Some(home) = self.home.as_mut()
-            && let Some(picker) = home.chooser.picker.as_mut()
+        if let Some(picker) = self.home.chooser.picker.as_mut()
             && picker.typing()
         {
             picker.untouched = false;
@@ -552,8 +519,7 @@ impl App {
     /// Puts the focused completion into the path with a trailing `/`.
     /// With a recent or nothing focused it changes nothing.
     fn tab_picker(&mut self) {
-        if let Some(home) = self.home.as_mut()
-            && let Some(picker) = home.chooser.picker.as_mut()
+        if let Some(picker) = self.home.chooser.picker.as_mut()
             && picker.typing()
         {
             picker.untouched = false;
@@ -577,12 +543,12 @@ impl App {
     /// does nothing. With the recents alone open, Enter chooses as it
     /// always did, whatever the link. Enter never starts a `start`.
     fn enter_picker(&mut self) -> Option<Effect> {
-        let typed_open = self.home.as_ref().is_some_and(|home| {
-            home.chooser
-                .picker
-                .as_ref()
-                .is_some_and(|picker| picker.typing())
-        });
+        let typed_open = self
+            .home
+            .chooser
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.typing());
         if typed_open && !self.outbox.is_up() {
             return Some(Effect::None);
         }
@@ -591,7 +557,7 @@ impl App {
             return Some(Effect::None);
         }
         let choice = {
-            let home = self.home.as_mut()?;
+            let home = &mut self.home;
             let picker = home.chooser.picker.as_mut()?;
             let typed = &mut picker.typed;
             if let Some(target) = typed.completion_target() {
@@ -624,13 +590,11 @@ impl App {
     /// new workspace, and with it down the next hello reads them.
     pub(in crate::app) fn choose_workspace(&mut self, workspace: String) {
         if workspace.is_empty() {
-            if let Some(home) = self.home.as_mut() {
-                home.chooser.chosen = None;
-                home.chooser.worktree = false;
-                home.chooser.picker = None;
-            }
-        } else if let Some(home) = self.home.as_mut() {
-            home.choose(workspace);
+            self.home.chooser.chosen = None;
+            self.home.chooser.worktree = false;
+            self.home.chooser.picker = None;
+        } else {
+            self.home.choose(workspace);
         }
         if self.outbox.is_up()
             && let Some(remote) = self.remote()
@@ -643,9 +607,7 @@ impl App {
             self.sync_project();
             return;
         }
-        if let Some(home) = self.home.as_mut() {
-            home.chooser.chip_read = ChipRead::Owed;
-        }
+        self.home.chooser.chip_read = ChipRead::Owed;
         self.sync_project();
     }
 
@@ -654,8 +616,9 @@ impl App {
     fn choose_picker(&mut self) {
         let choice = self
             .home
+            .chooser
+            .picker
             .as_ref()
-            .and_then(|home| home.chooser.picker.as_ref())
             .and_then(|picker| picker.recents.get(picker.selected).cloned());
         if let Some(workspace) = choice {
             self.choose_workspace(workspace);
@@ -664,10 +627,8 @@ impl App {
 
     /// Closes the picker, keeping the workspace as it was.
     fn close_picker(&mut self) {
-        if let Some(home) = self.home.as_mut()
-            && !home.no_workspace()
-        {
-            home.chooser.picker = None;
+        if !self.home.no_workspace() {
+            self.home.chooser.picker = None;
         }
     }
 
@@ -677,8 +638,9 @@ impl App {
     pub(super) fn pick(&mut self, at: usize) -> Effect {
         let choice = self
             .home
+            .chooser
+            .picker
             .as_ref()
-            .and_then(|home| home.chooser.picker.as_ref())
             .and_then(|picker| picker.recents.get(at).cloned());
         if let Some(workspace) = choice {
             self.choose_workspace(workspace);
@@ -688,9 +650,7 @@ impl App {
 
     /// Flips the new worktree switch.
     pub(super) fn toggle_worktree(&mut self) -> Effect {
-        if let Some(home) = self.home.as_mut() {
-            home.chooser.worktree = !home.chooser.worktree;
-        }
+        self.home.chooser.worktree = !self.home.chooser.worktree;
         Effect::None
     }
 
@@ -699,24 +659,20 @@ impl App {
     /// none. An empty value at each step is none, so `None` holds exactly
     /// when no non-empty row, pick, or launch directory names one.
     pub(in crate::app) fn home_workspace(&self) -> Option<PathBuf> {
-        if let Some(home) = &self.home {
-            if let Some(session) = self.session()
-                && let Some(row) = home.sessions.row(session)
-                && let Some(workspace) = non_empty(PathBuf::from(&row.workspace))
-            {
-                return Some(workspace);
-            }
-            if let Some(chosen) = home.chooser.chosen()
-                && let Some(workspace) = non_empty(PathBuf::from(chosen))
-            {
-                return Some(workspace);
-            }
-            if let Some(launch) = home.launch.location.workspace() {
-                return non_empty(launch.to_path_buf());
-            }
-            return None;
+        let home = &self.home;
+        if let Some(session) = self.session()
+            && let Some(row) = home.sessions.row(session)
+            && let Some(workspace) = non_empty(PathBuf::from(&row.workspace))
+        {
+            return Some(workspace);
         }
-        self.workspace.clone()
+        if let Some(chosen) = home.chooser.chosen()
+            && let Some(workspace) = non_empty(PathBuf::from(chosen))
+        {
+            return Some(workspace);
+        }
+        let launch = home.launch.location.workspace()?;
+        non_empty(launch.to_path_buf())
     }
 }
 

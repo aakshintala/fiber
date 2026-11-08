@@ -727,10 +727,7 @@ impl App {
     /// The card list the panel draws, in order; empty without home, so no
     /// card draws there.
     pub(crate) fn panel_cards(&self) -> &[String] {
-        self.home
-            .as_ref()
-            .map(|home| home.launch.panel_cards.as_slice())
-            .unwrap_or(&[])
+        self.home.launch.panel_cards.as_slice()
     }
 
     /// Folds one attached-session envelope into the panel's data, with the

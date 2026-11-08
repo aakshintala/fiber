@@ -100,6 +100,32 @@ pub(super) struct Home {
 }
 
 impl Home {
+    /// Home for `launch`: no rows, no prompts, the workspace chip focused.
+    pub(super) fn new(launch: Launch) -> Home {
+        // A remote home owes the offer its hub read: the receipts live
+        // on the hub machine, past the link the startup resolve cannot
+        // use. A local home resolves from its own seam at startup.
+        let import_owed = matches!(launch.location, crate::home::LaunchLocation::Remote { .. });
+        Home {
+            launch,
+            hub_other: None,
+            prompted: false,
+            import_offer: false,
+            import_owed,
+            sessions: Sessions::default(),
+            recent: Recent::default(),
+            subs: Subscriptions::default(),
+            focus_list: None,
+            list_scroll: Cell::new(0),
+            last_chip: Spot::Workspace,
+            blockers: Vec::new(),
+            chooser: Chooser::default(),
+            questions: Questions::default(),
+            left_after_attach: None,
+            came_from: None,
+        }
+    }
+
     /// The launch project that sections and row text compare against;
     /// a listed hub has none.
     pub(super) fn launch_project(&self) -> Option<&str> {
@@ -203,46 +229,28 @@ fn home_foot(
 }
 
 impl App {
-    /// Stores the launch description as home, keying prompt history by its
-    /// project. It applies the launch's scope, rail, reduced-motion and
-    /// image sizing, syncs the project, and opens the picker when there
-    /// is no workspace.
+    /// Stores the launch description as home and applies it.
     pub(crate) fn set_home(&mut self, launch: Launch) {
-        self.set_reduced_motion(launch.reduced_motion);
+        self.home = Home::new(launch);
+        self.apply_launch();
+    }
+
+    /// Applies home's launch: its reduced-motion, scope, project, rail and
+    /// image sizing, and opens the picker when there is no workspace.
+    /// `App::new` runs it for the seed and `set_home` for the real launch.
+    pub(super) fn apply_launch(&mut self) {
+        self.set_reduced_motion(self.home.launch.reduced_motion);
+        // The picker's scope starts from launch, then from what
+        // `/scoped-models` saves.
+        self.model_picker.scoped = self.home.launch.scoped_models.clone();
+        self.sync_project();
+        if self.home.no_workspace() {
+            self.open_picker();
+        }
         // A launch that saved the rail hidden starts with it hidden;
         // this is the launch's state, not a person-caused hide, so it
         // queues nothing.
-        let rail_hidden = launch.rail_hidden;
-        // The picker's scope starts from launch, then from what
-        // `/scoped-models` saves.
-        self.model_picker.scoped = launch.scoped_models.clone();
-        // A remote home owes the offer its hub read: the receipts live
-        // on the hub machine, past the link the startup resolve cannot
-        // use. A local home resolves from its own seam at startup.
-        let import_owed = matches!(launch.location, crate::home::LaunchLocation::Remote { .. });
-        self.home = Some(Home {
-            launch,
-            hub_other: None,
-            prompted: false,
-            import_offer: false,
-            import_owed,
-            sessions: Sessions::default(),
-            recent: Recent::default(),
-            subs: Subscriptions::default(),
-            focus_list: None,
-            list_scroll: Cell::new(0),
-            last_chip: Spot::Workspace,
-            blockers: Vec::new(),
-            chooser: Chooser::default(),
-            questions: Questions::default(),
-            left_after_attach: None,
-            came_from: None,
-        });
-        self.sync_project();
-        if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
-            self.open_picker();
-        }
-        if rail_hidden {
+        if self.home.launch.rail_hidden {
             self.chrome.hide_rail();
         }
         // The launch carries `tui.inline_images`: size the images now
@@ -258,38 +266,31 @@ impl App {
         self.launch_overrides = overrides;
     }
 
-    /// Whether home draws: home is set, no session is attached, and neither
-    /// the key map nor the approval panel covers the screen.
+    /// Whether home draws: no session is attached, and neither the key
+    /// map nor the approval panel covers the screen.
     pub(crate) fn on_home(&self) -> bool {
-        self.home.is_some()
-            && self.session().is_none()
-            && self.keymap_top().is_none()
-            && self.panel().is_none()
+        self.session().is_none() && self.keymap_top().is_none() && self.panel().is_none()
     }
 
     /// Whether the quit question is open, on home or not: while it is,
     /// every key goes to it first.
     pub(crate) fn quit_open(&self) -> bool {
-        self.home.as_ref().is_some_and(|home| {
-            matches!(
-                home.questions.prompt(),
-                Some(Prompt::Quit) | Some(Prompt::CloseAll { .. }) | Some(Prompt::Stop { .. })
-            )
-        })
+        matches!(
+            self.home.questions.prompt(),
+            Some(Prompt::Quit) | Some(Prompt::CloseAll { .. }) | Some(Prompt::Stop { .. })
+        )
     }
 
     /// Whether the clear question is open, on home or not: while it is,
     /// every key goes to it first.
     pub(crate) fn clear_open(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Clear { .. })))
+        matches!(self.home.questions.prompt(), Some(Prompt::Clear { .. }))
     }
 
     /// The clear question, while open: the old session's name, what it
     /// waits on, and whether Enter staged its `start`.
     pub(crate) fn clear_question(&self) -> Option<(String, String, bool)> {
-        match self.home.as_ref().and_then(|home| home.questions.prompt()) {
+        match self.home.questions.prompt() {
             Some(Prompt::Clear {
                 name, waiting, now, ..
             }) => Some((name.clone(), waiting.clone(), *now)),
@@ -300,19 +301,14 @@ impl App {
     /// The session list's scroll offset: what the frame's window
     /// starts at, after clamping it to the rows past the window.
     pub(crate) fn home_list_scroll(&self) -> usize {
-        self.home
-            .as_ref()
-            .map(|home| home.list_scroll.get())
-            .unwrap_or(0)
+        self.home.list_scroll.get()
     }
 
     /// Moves the session list's scroll offset, as the wheel over its
     /// rows asks. The next frame clamps it to the rows past its
     /// window, and pulls a focused row outside the window into view.
     pub(crate) fn set_home_list_scroll(&self, start: usize) {
-        if let Some(home) = self.home.as_ref() {
-            home.list_scroll.set(start);
-        }
+        self.home.list_scroll.set(start);
     }
 
     /// What home draws, or `None` unless [`App::on_home`] holds.
@@ -342,7 +338,10 @@ impl App {
     }
 
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
-        let home = self.home.as_ref().filter(|_| self.on_home())?;
+        if !self.on_home() {
+            return None;
+        }
+        let home = &self.home;
         // The workspace in use: the picked one, else the launch
         // directory. Clicking its chip opens the workspace picker. With
         // none the chip reads `[no workspace]`, so no segment shows.
@@ -625,9 +624,7 @@ impl App {
         self.resolve_import_offer();
         let mut asks = self.picker_asks();
         asks.extend(self.start_model_pick());
-        let Some(home) = self.home.as_mut() else {
-            return Vec::new();
-        };
+        let home = &mut self.home;
         let outbox = &mut self.outbox;
         let Some(mut out) = home.recent.first_asks(outbox) else {
             let mut out = home.subs.take_outbox();
@@ -664,7 +661,6 @@ impl App {
         line: &Line,
         answer: Option<&super::answer::Answer<'_>>,
     ) -> Option<Vec<String>> {
-        self.home.as_ref()?;
         match line {
             Line::Hub(hub) => {
                 let kind = hub.kind();
@@ -681,19 +677,17 @@ impl App {
                     // resume line. An exited row from before the attach
                     // sets no marker: the session is live and resuming.
                     let after_attach = self.session() == Some(&exited);
-                    if let Some(home) = self.home.as_mut() {
-                        home.sessions.left(&exited, how);
-                        if after_attach {
-                            home.left_after_attach = Some(exited.clone());
-                        }
+                    self.home.sessions.left(&exited, how);
+                    if after_attach {
+                        self.home.left_after_attach = Some(exited.clone());
                     }
                     // The project's count may have changed: ask again
                     // under the one-in-flight-plus-dirty bound, never
                     // adjusting the count here.
                     let project = self
                         .home
-                        .as_ref()
-                        .and_then(|home| home.sessions.row(&exited))
+                        .sessions
+                        .row(&exited)
                         .map(|row| row.project.clone());
                     let mut lines = project
                         .map(|project| self.scoped_first(&project))
@@ -748,9 +742,8 @@ impl App {
                             if start
                                 && let Some(message) =
                                     answer.payload.get("message").and_then(Value::as_str)
-                                && let Some(home) = self.home.as_mut()
                             {
-                                home.blockers = message.lines().map(str::to_owned).collect();
+                                self.home.blockers = message.lines().map(str::to_owned).collect();
                             }
                             return consumed.then(Vec::new);
                         }
@@ -847,10 +840,8 @@ impl App {
                     // then passes the unconsumed hub line to `on_hub`,
                     // which shows the rejection notice.
                     if !accepted && let Some((Kind::Start, _)) = self.outbox.pending.get(id) {
-                        if let Some(message) = hub.payload.get("message").and_then(Value::as_str)
-                            && let Some(home) = self.home.as_mut()
-                        {
-                            home.blockers = message.lines().map(str::to_owned).collect();
+                        if let Some(message) = hub.payload.get("message").and_then(Value::as_str) {
+                            self.home.blockers = message.lines().map(str::to_owned).collect();
                         }
                         return None;
                     }
@@ -869,14 +860,15 @@ impl App {
                     let session = envelope.session_id.clone();
                     let was_left = self
                         .home
-                        .as_ref()
-                        .and_then(|home| home.sessions.row(&session))
+                        .sessions
+                        .row(&session)
                         .is_some_and(|row| row.left.is_some());
                     // A status introducing a project queues one bounded
                     // scoped ask for it: the project holds no section
                     // yet. Later statuses for a known project queue
                     // nothing.
-                    let fresh = self.home.as_ref().and_then(|home| {
+                    let fresh = {
+                        let home = &self.home;
                         let project = envelope
                             .payload
                             .get("project")
@@ -889,21 +881,20 @@ impl App {
                                 .iter()
                                 .any(|section| section.project == project))
                         .then(|| project.to_owned())
-                    });
+                    };
                     let row = from_status(envelope);
-                    if let Some(home) = self.home.as_mut() {
-                        home.sessions.status(row);
-                        home.refill_picker();
-                        // A live status for the session supersedes an exit
-                        // that arrived after attach: it is live again.
-                        if home
-                            .sessions
-                            .row(&session)
-                            .is_some_and(|row| row.left.is_none())
-                            && home.left_after_attach.as_ref() == Some(&session)
-                        {
-                            home.left_after_attach = None;
-                        }
+                    self.home.sessions.status(row);
+                    self.home.refill_picker();
+                    // A live status for the session supersedes an exit
+                    // that arrived after attach: it is live again.
+                    if self
+                        .home
+                        .sessions
+                        .row(&session)
+                        .is_some_and(|row| row.left.is_none())
+                        && self.home.left_after_attach.as_ref() == Some(&session)
+                    {
+                        self.home.left_after_attach = None;
                     }
                     self.refresh_session_labels();
                     // The queued ask rides in home's outbox, drained by
@@ -911,15 +902,10 @@ impl App {
                     // project dirty instead. The status still reaches the
                     // conversation below.
                     if let Some(project) = fresh
-                        && self
-                            .home
-                            .as_ref()
-                            .is_some_and(|home| home.sessions.total_for(&project).is_none())
+                        && self.home.sessions.total_for(&project).is_none()
                     {
                         for line in self.scoped_first(&project) {
-                            if let Some(home) = self.home.as_mut() {
-                                home.subs.queue(line);
-                            }
+                            self.home.subs.queue(line);
                         }
                     }
                     self.note_feed(&session);
@@ -1082,9 +1068,7 @@ impl App {
     /// focusing that row, or the input box when no exited row shows.
     pub(super) fn resume_list(&mut self) -> Effect {
         let effect = self.leave();
-        if let Some(home) = self.home.as_mut() {
-            home.focus_list = Some(ListFocus::FirstExited);
-        }
+        self.home.focus_list = Some(ListFocus::FirstExited);
         effect
     }
 
@@ -1092,7 +1076,7 @@ impl App {
     /// asks for the first exited row; `OpenAt::List` asks for the first row.
     /// True when it ran, so the frame draws again with the focus shown.
     pub(super) fn home_drawn(&mut self, _targets: &[Target]) -> bool {
-        let Some(focus_list) = self.home.as_mut().and_then(|home| home.focus_list.take()) else {
+        let Some(focus_list) = self.home.focus_list.take() else {
             return false;
         };
         let stops = self.all_list_stops();
@@ -1100,7 +1084,7 @@ impl App {
             let Spot::Entry(key) = spot else {
                 return None;
             };
-            let row = self.home.as_ref()?.sessions.by_key(key)?;
+            let row = self.home.sessions.by_key(key)?;
             let should_focus = match focus_list {
                 ListFocus::FirstStop => true,
                 ListFocus::FirstExited => row.left.is_some(),
@@ -1115,9 +1099,7 @@ impl App {
     /// row's project when the row is an exited one hidden behind more, so
     /// the row is a list stop. An unknown key focuses nothing.
     pub(super) fn focus_row(&mut self, key: u64) {
-        let Some(home) = self.home.as_mut() else {
-            return;
-        };
+        let home = &mut self.home;
         let Some(row) = home.sessions.by_key(key) else {
             return;
         };
@@ -1137,27 +1119,21 @@ impl App {
             return true;
         }
         self.on_home()
-            && self.home.as_ref().is_some_and(|home| {
-                home.questions.prompt().is_some_and(|prompt| {
-                    !matches!(
-                        prompt,
-                        Prompt::Quit
-                            | Prompt::CloseAll { .. }
-                            | Prompt::Stop { .. }
-                            | Prompt::Clear { .. }
-                            | Prompt::HooksOffer(_)
-                    )
-                })
+            && self.home.questions.prompt().is_some_and(|prompt| {
+                !matches!(
+                    prompt,
+                    Prompt::Quit
+                        | Prompt::CloseAll { .. }
+                        | Prompt::Stop { .. }
+                        | Prompt::Clear { .. }
+                        | Prompt::HooksOffer(_)
+                )
             })
     }
 
     /// Whether home's workspace picker is open.
     pub(in crate::app) fn home_picker_open(&self) -> bool {
-        self.on_home()
-            && self
-                .home
-                .as_ref()
-                .is_some_and(|home| home.chooser.picker().is_some())
+        self.on_home() && self.home.chooser.picker().is_some()
     }
 
     /// A key for home's own screen, once no question or picker holds
@@ -1278,29 +1254,31 @@ impl App {
             Spot::More(key) => {
                 let project = self
                     .home
-                    .as_ref()
-                    .and_then(|home| home.sessions.by_key(key))
+                    .sessions
+                    .by_key(key)
                     .map(|row| row.project.clone());
-                if let Some(project) = project
-                    && let Some(home) = self.home.as_mut()
-                {
-                    home.sessions.expand(&project);
+                if let Some(project) = project {
+                    self.home.sessions.expand(&project);
                     self.focus = Some(TargetId::Home(Spot::Entry(key)));
                 }
                 // Opening also asks the project's next scoped page while
                 // its held total says more: the page rides past the
                 // project's last loaded row.
-                let next = self.home.as_ref().and_then(|home| {
-                    let project = home.sessions.by_key(key)?.project.clone();
-                    let total = home.sessions.total_for(&project)?;
-                    let section = home
-                        .sessions
-                        .sections(home.launch_project())
-                        .into_iter()
-                        .find(|section| section.project == project)?;
-                    (total > section.exited.len())
-                        .then(|| (project, section.exited.last().map(|row| row.id.0.clone())))
-                });
+                let home = &self.home;
+                let next = home
+                    .sessions
+                    .by_key(key)
+                    .map(|row| row.project.clone())
+                    .and_then(|project| {
+                        let total = home.sessions.total_for(&project)?;
+                        let section = home
+                            .sessions
+                            .sections(home.launch_project())
+                            .into_iter()
+                            .find(|section| section.project == project)?;
+                        (total > section.exited.len())
+                            .then(|| (project, section.exited.last().map(|row| row.id.0.clone())))
+                    });
                 if let Some((project, before)) = next {
                     let lines = self.scoped_page(&project, before.as_deref());
                     if !lines.is_empty() {
@@ -1319,8 +1297,8 @@ impl App {
             Spot::Start(key) => {
                 let workspace = self
                     .home
-                    .as_ref()
-                    .and_then(|home| home.sessions.by_key(key))
+                    .sessions
+                    .by_key(key)
                     .map(|row| row.workspace.clone())
                     .filter(|workspace| !workspace.is_empty());
                 if let Some(workspace) = workspace {
@@ -1351,18 +1329,10 @@ impl App {
         if !self.on_home() {
             return None;
         }
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.questions.prompt().is_some())
-        {
+        if self.home.questions.prompt().is_some() {
             return Some(Effect::None);
         }
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_some())
-        {
+        if self.home.chooser.picker().is_some() {
             return Some(Effect::None);
         }
         // A focused chip takes its edits ahead of the row's Delete:
@@ -1402,12 +1372,12 @@ impl App {
     pub(super) fn home_text(&self, spot: Spot) -> Option<String> {
         match spot {
             Spot::Entry(key) => {
-                let home = self.home.as_ref()?;
+                let home = &self.home;
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, home.launch_project()))
             }
             Spot::More(key) => {
-                let home = self.home.as_ref()?;
+                let home = &self.home;
                 let row = home.sessions.by_key(key)?;
                 let section = home
                     .sessions
@@ -1438,67 +1408,52 @@ impl App {
         }
     }
 
-    /// The `start` args: with home, the picked workspace, else the launch
-    /// workspace; without home, the launch directory when set. Bare `fiber`'s
+    /// The `start` args: the picked workspace, else the launch
+    /// workspace. Bare `fiber`'s
     /// `--model` and `-c` ride in `overrides`, normalized into the
     /// per-run layer (`docs/invocation.md`, "Sessions"). The new
     /// worktree switch adds `"worktree": true` only while it shows and
     /// is on. Sending one hides the placeholder and clears the blocker
     /// lines until the run ends.
     pub(super) fn start_args(&mut self) -> Value {
-        match &mut self.home {
-            Some(home) => {
-                home.prompted = true;
-                home.blockers = Vec::new();
-                // An empty pick or launch directory is none: no `workspace`
-                // key names a remote home, as the hub treats a missing key.
-                let workspace = home
-                    .chooser
-                    .chosen()
-                    .filter(|chosen| !chosen.is_empty())
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        home.launch
-                            .location
-                            .workspace()
-                            .filter(|workspace| !workspace.as_os_str().is_empty())
-                            .map(|workspace| workspace.display().to_string())
-                    });
-                let mut args = json!({});
-                if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
-                    object.insert("workspace".to_owned(), Value::String(workspace));
-                }
-                if let Some(object) = args.as_object_mut() {
-                    if !self.launch_overrides.is_empty() {
-                        object.insert(
-                            "overrides".to_owned(),
-                            Value::Array(
-                                self.launch_overrides
-                                    .iter()
-                                    .map(|override_text| Value::String(override_text.clone()))
-                                    .collect(),
-                            ),
-                        );
-                    }
-                    if home.chooser.worktree() && home.in_git() {
-                        object.insert("worktree".to_owned(), json!(true));
-                    }
-                }
-                args
+        let home = &mut self.home;
+        home.prompted = true;
+        home.blockers = Vec::new();
+        // An empty pick or launch directory is none: no `workspace`
+        // key names a remote home, as the hub treats a missing key.
+        let workspace = home
+            .chooser
+            .chosen()
+            .filter(|chosen| !chosen.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                home.launch
+                    .location
+                    .workspace()
+                    .filter(|workspace| !workspace.as_os_str().is_empty())
+                    .map(|workspace| workspace.display().to_string())
+            });
+        let mut args = json!({});
+        if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
+            object.insert("workspace".to_owned(), Value::String(workspace));
+        }
+        if let Some(object) = args.as_object_mut() {
+            if !self.launch_overrides.is_empty() {
+                object.insert(
+                    "overrides".to_owned(),
+                    Value::Array(
+                        self.launch_overrides
+                            .iter()
+                            .map(|override_text| Value::String(override_text.clone()))
+                            .collect(),
+                    ),
+                );
             }
-            None => {
-                let mut args = json!({});
-                if let (Some(workspace), Some(object)) =
-                    (self.workspace.clone(), args.as_object_mut())
-                {
-                    object.insert(
-                        "workspace".to_owned(),
-                        Value::String(workspace.display().to_string()),
-                    );
-                }
-                args
+            if home.chooser.worktree() && home.in_git() {
+                object.insert("worktree".to_owned(), json!(true));
             }
         }
+        args
     }
 }
 

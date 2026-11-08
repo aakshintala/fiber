@@ -76,7 +76,7 @@ impl App {
     /// row is not a live wait. A row that left with a stale waiting
     /// state still shows the line while the phase stays busy.
     pub(crate) fn working_line(&self) -> Option<Working> {
-        let home = self.home.as_ref()?;
+        let home = &self.home;
         let Phase::Attached {
             session,
             busy: true,
@@ -109,7 +109,7 @@ impl App {
     /// Home's row with `key`, live or exited; what the drawn home rows
     /// ask their spin for.
     pub(crate) fn row_by_key(&self, key: u64) -> Option<&crate::home::Row> {
-        self.home.as_ref()?.sessions.by_key(key)
+        self.home.sessions.by_key(key)
     }
 }
 

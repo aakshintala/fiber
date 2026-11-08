@@ -44,9 +44,7 @@ fn home_at(open_at: OpenAt) -> App {
 
 /// Whether the launch's open is spent: back to home.
 fn spent(app: &App) -> bool {
-    app.home
-        .as_ref()
-        .is_some_and(|home| home.launch.open_at == OpenAt::Home)
+    app.home.launch.open_at == OpenAt::Home
 }
 
 /// A hub `command_accepted` for `id` with `result`.
@@ -657,7 +655,7 @@ fn full_with_live_row(app: &mut App, session: &str) {
     app.on_line(session_accepted(session, ack));
     app.outbox.link = crate::app::Link::Up;
     assert!(
-        app.home.as_mut().unwrap().subs.take_outbox().is_empty(),
+        app.home.subs.take_outbox().is_empty(),
         "setup queues no lowering line"
     );
 }
@@ -670,7 +668,7 @@ fn reconcile_lowers_a_full_live_row_when_the_link_is_up() {
     // Past the gate: the id answers no open, so only the lowering
     // line can appear.
     app.subscribe_accepted(&id("s_aaaaaaaaaaaaaaaa"), "no-such-subscribe");
-    let queued = app.home.as_mut().unwrap().subs.take_outbox();
+    let queued = app.home.subs.take_outbox();
     assert_eq!(queued.len(), 1);
     let line: Value = serde_json::from_str(&queued[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "subscribe");
@@ -686,7 +684,7 @@ fn reconcile_queues_nothing_when_the_link_is_down() {
     app.outbox.link = crate::app::Link::Down;
     app.subscribe_accepted(&id("s_aaaaaaaaaaaaaaaa"), "no-such-subscribe");
     assert!(
-        app.home.as_mut().unwrap().subs.take_outbox().is_empty(),
+        app.home.subs.take_outbox().is_empty(),
         "a lost connection lowers nothing"
     );
 }
@@ -1008,7 +1006,7 @@ fn a_missing_workspace_refusal_names_the_path_with_no_rail_card() {
     assert!(app.on_home());
     let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
     assert_eq!(app.notice(), Some(ruled), "{message}");
-    let sessions = &app.home.as_ref().unwrap_or_else(|| panic!("home")).sessions;
+    let sessions = &app.home.sessions;
     let row = sessions
         .row(&id("s_aaaaaaaaaaaaaaaa"))
         .unwrap_or_else(|| panic!("the row stays: {message}"));
@@ -1062,8 +1060,6 @@ fn a_near_miss_io_failed_refusal_renders_verbatim() {
         assert_eq!(app.notice(), Some(message), "{code}: {message}");
         let row = app
             .home
-            .as_ref()
-            .unwrap_or_else(|| panic!("home"))
             .sessions
             .row(&id("s_aaaaaaaaaaaaaaaa"))
             .unwrap_or_else(|| panic!("the row stays: {code}: {message}"));

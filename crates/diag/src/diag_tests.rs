@@ -146,6 +146,14 @@ fn a_session_info_line_has_today_s_bytes_and_creates_logs_mode_0700() {
 
 #[test]
 fn at_info_debug_lines_write_nothing_and_create_nothing() {
+    let debug_home = Home::new("ld-info-debug-event-control");
+    debug_home.diag(Process::Tui, Level::Debug).debug_event(
+        "models_applied",
+        "Models were applied.",
+        &serde_json::json!({"catalogue_size":2}),
+    );
+    assert!(debug_home.text(&pid_file("tui")).contains("models_applied"));
+
     let home = Home::new("ld-info-quiet");
     for process in [
         Process::Hub,
@@ -160,8 +168,39 @@ fn at_info_debug_lines_write_nothing_and_create_nothing() {
         assert!(!diag.debugging());
         diag.http_request(&request());
         diag.resources();
+        diag.debug_event(
+            "models_applied",
+            "Models were applied.",
+            &serde_json::json!({"catalogue_size":2}),
+        );
     }
     assert!(!home.path().join("logs").exists());
+}
+
+#[test]
+fn debug_event_writes_structured_code_and_data() {
+    let home = Home::new("ld-debug-event");
+    let diag = home.diag(Process::Tui, Level::Debug);
+    diag.debug_event(
+        "models_read_done",
+        "Model lists were read.",
+        &serde_json::json!({"kind":"cached","lists":3}),
+    );
+    let lines = home.text(&pid_file("tui"));
+    let line: serde_json::Value = serde_json::from_str(lines.trim()).unwrap();
+    assert_eq!(line["level"], "debug");
+    assert_eq!(line["process"], "tui");
+    assert_eq!(line["code"], "models_read_done");
+    assert_eq!(line["message"], "Model lists were read.");
+    assert_eq!(line["data"], serde_json::json!({"kind":"cached","lists":3}));
+    assert_eq!(
+        line.as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["code", "data", "level", "message", "process", "ts"]
+    );
 }
 
 #[test]

@@ -258,6 +258,13 @@ request and writes no `http_request` line.
 
 What is recorded:
 
+- **At `debug`, model-list lifecycle stages:** `models_read_done` when a
+  `tui-models` read returns, `models_applied` when the event loop applies
+  its result, and `models_ask_started` when a queued read starts. Their
+  `data` holds only the ask `kind` (`cached` or `stale`), the successful
+  read's `lists` count, or the applied `catalogue_size`; a failed read has
+  no list count. They never hold provider names, model ids or configuration
+  values.
 - **Failures with no session to hold them:** a startup error such as
   `config_invalid`, a signal that arrives before `fiber_started`, a shutdown
   that reaches its kill point (`docs/invocation.md`, "Shutdown"), and a background

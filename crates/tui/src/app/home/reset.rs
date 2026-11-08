@@ -15,9 +15,7 @@ impl App {
     /// outbox for the next outgoing pass beside the sessions request.
     /// Rows stay for those answers.
     pub(in crate::app) fn home_reset(&mut self) {
-        let Some(home) = self.home.as_mut() else {
-            return;
-        };
+        let home = &mut self.home;
         home.subs.reset();
         self.outbox.forget(&crate::app::outbox::Waiting::Subscribe);
         // Every held total goes with the old connection, with the scoped

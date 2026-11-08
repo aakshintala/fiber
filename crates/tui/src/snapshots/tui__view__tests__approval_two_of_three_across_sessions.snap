@@ -4,13 +4,13 @@ expression: wide(&mut app).0
 ---
                                                                      you 00:00
                                                                                ┃
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ Approval 2 of 3 · s_bbbbbbbbbbbbbbbb                         Esc puts it aside
-▌ shell echo hi
-▌ runs a command · asked by the global rule echo hi
-▌
-▌ ▸ 1 Allow once
-▌   2 Deny  type to add feedback
-▌
-▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ Approval 2 of 3 · s_bbbbbbbbbbbbbbbb                        Esc puts it aside
+ ▌ shell echo hi
+⋮▌ runs a command · asked by the global rule echo hi
+⋮▌
+⋮▌ ▸ 1 Allow once
+ ▌   2 Deny  type to add feedback
+ ▌
+ ▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

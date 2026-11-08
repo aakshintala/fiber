@@ -478,15 +478,12 @@ fn reconnect_clears_connection_texts_but_not_the_search_text() {
     // on the reconnect alone.
     let mut app = App::new(std::path::PathBuf::from("/w"));
     app.set_size(40, 10);
-    assert!(
-        app.on_line(crate::app::Line::Hub(contract::HubLine {
-            kind: HubEventKind::HubHello,
-            ts: 0,
-            schema_version: contract::SCHEMA_VERSION,
-            payload: serde_json::Map::new(),
-        }))
-        .is_empty()
-    );
+    let _ = app.on_line(crate::app::Line::Hub(contract::HubLine {
+        kind: HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
     // No session to type into: the bar opens by hand.
     app.find.open = true;
     app.find.fetch = Some(fetch());

@@ -122,6 +122,7 @@ pub(crate) fn run_with(
     // so a line there never times setup work as a frame that never drew.
     // The attach setup span opens beside it, and every return that
     // discards the attached frame discards the attach spans with it.
+    let event_diag = Arc::clone(&diag);
     let mut timing = crate::timing::Timing::new(diag);
     let first_render = timing.first_render();
     let attached_frame = timing.attached_frame();
@@ -312,7 +313,7 @@ pub(crate) fn run_with(
     // answers. The ask bypasses the owed picker reads, so it counts as
     // owed, or its answer would clear a meanwhile taken read's mark.
     app.note_catalogue_read();
-    let mut model_reader = catalogue::Reader::new(models);
+    let mut model_reader = catalogue::Reader::new(models).with_diag(Arc::clone(&event_diag));
     model_reader.ask(catalogue::Refresh::Cached, &tx);
     // Without the reader no key reaches the loop: fail instead of
     // running deaf. The guard's drop restores the terminal.
@@ -339,6 +340,7 @@ pub(crate) fn run_with(
         on_attach,
         clock,
         timing,
+        diag: event_diag,
         attached_frame,
         summary_span: None,
         files_out: tx.clone(),
@@ -489,6 +491,8 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// The diagnostic writer the timed scopes share.
     timing: crate::timing::Timing,
+    /// The diagnostic writer for TUI lifecycle events.
+    diag: Arc<diag::diag::Diag>,
     /// The first draw with attached-session history, carried from
     /// `run_with`; discarded if the loop ends before that draw.
     attached_frame: Option<diag::diag::Timer>,
@@ -935,6 +939,11 @@ impl<B: Backend> Loop<B> {
             Input::Files { generation, result } => self.app.on_files_inner(generation, result),
             Input::Models(result) => {
                 self.app.on_models_inner(result);
+                self.diag.debug_event(
+                    "models_applied",
+                    "The model catalogue was applied.",
+                    &serde_json::json!({"catalogue_size":self.app.model_catalogue_len()}),
+                );
                 // The queued read, if one waits, starts on the loop's
                 // channel.
                 self.model_reader.done(&self.files_out);

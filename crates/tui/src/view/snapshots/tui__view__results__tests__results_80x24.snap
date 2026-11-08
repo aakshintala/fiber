@@ -2,40 +2,40 @@
 source: crates/tui/src/view/results_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
- Search  ⌕ needle                                                    Esc returns
-1 of 3 · ⌕ needle
+  Search  ⌕ needle                                                   Esc returns
+ 1 of 3 · ⌕ needle
 
                                                                           turn 1
-the first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxx
+ the first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxx
 
                                                                           turn 1
-first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
                                                                           turn 1
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx a last needle
+ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx a last needle
+⋮
+⋮
+⋮
 
 
 
 
-
-
-
-Enter jumps to the match
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ ›
-▌──────────────────────────────────────────────────────────────────────────────
-▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ Enter jumps to the match
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 ---
 ................................................................................
 ................................................................................
 ................................................................................
 ................................................................................
-..........HHHHHH................................................................
+...........HHHHHH...............................................................
 ................................................................................
-SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
-SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
 ................................................................................
 ................................................................................
 ..........................................................................HHHHHH

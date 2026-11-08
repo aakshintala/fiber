@@ -406,11 +406,7 @@ fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
 pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
-    if let Some(loader) = app
-        .home
-        .as_ref()
-        .and_then(|home| home.launch.extensions.clone())
-    {
+    if let Some(loader) = app.home.launch.extensions.clone() {
         let (renderer, notices) = loader.load();
         app.use_renderer(renderer);
         for (code, text) in notices {
@@ -835,11 +831,7 @@ impl App {
     /// home, else the launch directory, else none on a remote home.
     /// Never an empty path: every conversion filters empty values out.
     pub(crate) fn workspace(&self) -> Option<PathBuf> {
-        if self.home.is_some() {
-            self.home_workspace()
-        } else {
-            self.workspace.clone()
-        }
+        self.home_workspace()
     }
 
     /// The current search generation.
@@ -927,9 +919,7 @@ impl App {
         // Opening a session from home forgets where home came from,
         // so the back key and its hint go quiet everywhere the next
         // route home starts: a row open, a card switch, `/close`.
-        if let Some(home) = self.home.as_mut() {
-            home.came_from = None;
-        }
+        self.home.came_from = None;
         self.phase = Phase::Starting;
         self.clear_selection();
         // Home keeps no session's images: a late answer or viewer
@@ -1110,9 +1100,7 @@ impl App {
         }
         let has_image = self.draft.has_image();
         let text = self.draft.expand();
-        if matches!(self.phase, Phase::Starting)
-            && self.home.as_ref().is_some_and(|home| home.no_workspace())
-        {
+        if matches!(self.phase, Phase::Starting) && self.home.no_workspace() {
             return self.home_click(crate::home::Spot::Workspace);
         }
         // A command sent after the connection is lost goes nowhere, so the
@@ -1141,12 +1129,7 @@ impl App {
             (Phase::Starting, None) => {
                 // With no model on the chip and none chosen, Enter opens
                 // the picker and keeps the draft, sending nothing.
-                if self
-                    .home
-                    .as_ref()
-                    .is_some_and(|home| home.launch.model.is_none())
-                    && self.model_picker.start_model.is_none()
-                {
+                if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
                     return self.open_model_picker(crate::model_picker::Mode::Choose);
                 }
                 let mut args = self.start_args();

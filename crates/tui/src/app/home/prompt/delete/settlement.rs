@@ -23,10 +23,8 @@ impl App {
         let (target, sessions, captured_name) = self.delete_deleting_sets()?;
         if accepted {
             let project = self.delete_target_project(&target);
-            if let Some(home) = self.home.as_mut() {
-                for session in &sessions {
-                    home.sessions.remove(session);
-                }
+            for session in &sessions {
+                self.home.sessions.remove(session);
             }
             let lines = self.ask_recent_first(project.as_deref());
             self.delete_command_finish(false);
@@ -44,8 +42,8 @@ impl App {
                 Some((first, more)) => {
                     let name = self
                         .home
-                        .as_ref()
-                        .and_then(|home| home.sessions.row(&first))
+                        .sessions
+                        .row(&first)
                         .map(crate::home::title)
                         .unwrap_or(captured_name);
                     (name, more)
@@ -86,40 +84,31 @@ impl App {
     /// discovery silently. The exact ask is removed before generic row
     /// delete settlement can see it.
     pub(in crate::app::home::prompt) fn delete_command_disconnected(&mut self) {
-        let deleting =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Deleting {
-                        command, sessions, ..
-                    } => Some((command.clone(), sessions.clone())),
-                    State::Idle
-                    | State::Discovering { .. }
-                    | State::Asked { .. }
-                    | State::Stopping { .. } => None,
-                });
+        let deleting = match &self.home.questions.delete_command.state {
+            State::Deleting {
+                command, sessions, ..
+            } => Some((command.clone(), sessions.clone())),
+            State::Idle
+            | State::Discovering { .. }
+            | State::Asked { .. }
+            | State::Stopping { .. } => None,
+        };
         if let Some((command, _sessions)) = deleting {
             self.take_ask(&command);
             self.delete_command_delete_unknown();
             return;
         }
-        let discovering =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Discovering { command, .. } => Some(command.clone()),
-                    State::Idle
-                    | State::Asked { .. }
-                    | State::Stopping { .. }
-                    | State::Deleting { .. } => None,
-                });
-        if let Some(home) = self.home.as_mut()
-            && matches!(
-                home.questions.delete_command.state,
-                State::Discovering { .. }
-            )
-        {
-            home.questions.delete_command.state = State::Idle;
+        let discovering = match &self.home.questions.delete_command.state {
+            State::Discovering { command, .. } => Some(command.clone()),
+            State::Idle | State::Asked { .. } | State::Stopping { .. } | State::Deleting { .. } => {
+                None
+            }
+        };
+        if matches!(
+            self.home.questions.delete_command.state,
+            State::Discovering { .. }
+        ) {
+            self.home.questions.delete_command.state = State::Idle;
         }
         if let Some(command) = discovering {
             self.outbox.settled(&command);
@@ -130,28 +119,20 @@ impl App {
     /// drops. Waiting rows are not evidence of exit; already-left rows
     /// remain excluded from the process's resume lines.
     pub(in crate::app) fn delete_command_link_lost(&mut self) {
-        let waiting =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Stopping { waiting, name, .. } => Some((waiting.clone(), name.clone())),
-                    State::Idle
-                    | State::Discovering { .. }
-                    | State::Asked { .. }
-                    | State::Deleting { .. } => None,
-                });
+        let waiting = match &self.home.questions.delete_command.state {
+            State::Stopping { waiting, name, .. } => Some((waiting.clone(), name.clone())),
+            State::Idle
+            | State::Discovering { .. }
+            | State::Asked { .. }
+            | State::Deleting { .. } => None,
+        };
         let Some((waiting, fallback)) = waiting else {
             return;
         };
         self.outbox.forget(&crate::app::Waiting::DeleteStop);
         let display = waiting
             .first()
-            .and_then(|id| {
-                self.home
-                    .as_ref()
-                    .and_then(|home| home.sessions.row(id))
-                    .map(crate::home::title)
-            })
+            .and_then(|id| self.home.sessions.row(id).map(crate::home::title))
             .unwrap_or(fallback);
         let more = waiting.len().saturating_sub(1);
         let notice = if more == 0 {
@@ -170,19 +151,16 @@ impl App {
     /// Settles only this command's exact unsent delete ask, or an unsent
     /// close. An ambiguous delete write is never retried.
     pub(in crate::app::home::prompt) fn delete_command_unsent(&mut self, unsent: &[String]) {
-        let deletion =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Deleting {
-                        command, sessions, ..
-                    } if unsent.contains(command) => Some((command.clone(), sessions.clone())),
-                    State::Idle
-                    | State::Discovering { .. }
-                    | State::Asked { .. }
-                    | State::Stopping { .. }
-                    | State::Deleting { .. } => None,
-                });
+        let deletion = match &self.home.questions.delete_command.state {
+            State::Deleting {
+                command, sessions, ..
+            } if unsent.contains(command) => Some((command.clone(), sessions.clone())),
+            State::Idle
+            | State::Discovering { .. }
+            | State::Asked { .. }
+            | State::Stopping { .. }
+            | State::Deleting { .. } => None,
+        };
         if let Some((command, _sessions)) = deletion {
             self.take_ask(&command);
             self.delete_command_delete_unknown();
@@ -196,7 +174,7 @@ impl App {
 
     /// The stopping command's close command ids, while stops are out.
     fn delete_waiting_close_ids(&self) -> Option<Vec<String>> {
-        let home = self.home.as_ref()?;
+        let home = &self.home;
         match &home.questions.delete_command.state {
             State::Stopping { closes, .. } => Some(closes.keys().cloned().collect()),
             State::Idle
@@ -209,8 +187,8 @@ impl App {
     /// The target's project, for the `recent` refresh after its rows go.
     fn delete_target_project(&self, target: &SessionId) -> Option<String> {
         self.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(target))
+            .sessions
+            .row(target)
             .map(|row| row.project.clone())
     }
 

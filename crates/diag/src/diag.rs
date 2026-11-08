@@ -251,7 +251,21 @@ impl Diag {
         state.session = Some(session.clone());
     }
 
-    /// A second writer for `session` in the same `logs/` directory: the
+    /// Writes one debug diagnostic event with structured data. At `info`,
+    /// the event is filtered without serialization or file I/O.
+    pub fn debug_event<D: serde::Serialize>(
+        &self,
+        code: &'static str,
+        message: &'static str,
+        data: &D,
+    ) {
+        if !self.debugging() {
+            return;
+        }
+        self.write("debug", None, code, message, Some(data));
+    }
+
+    /// A second writer for `session` in the same `logs/` directory:
     /// same process, level, clock and sample reader, writing
     /// `<kind>-<id>.log` with `session_id` from its first line. The
     /// original keeps its own file and stays unattached. A clone carries

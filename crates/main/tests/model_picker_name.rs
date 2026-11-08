@@ -22,6 +22,45 @@ use support::pty::{Grid, Run};
 /// The installed provider file and any cached list, so a catalogue stall
 /// says whether the picker was waiting on models that are already on disk.
 /// A missing file and a cache read error are reported as themselves.
+fn tui_stage_diagnostics(setup: &Setup) -> String {
+    let codes = ["models_read_done", "models_applied", "models_ask_started"];
+    let logs = setup.home().join("logs");
+    let mut found = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(logs) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name.to_string_lossy().starts_with("tui-") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            for line in text.lines() {
+                if codes
+                    .iter()
+                    .any(|code| line.contains(&format!("\"code\":\"{code}\"")))
+                {
+                    found.push(line.to_owned());
+                }
+            }
+        }
+    }
+    let absent: Vec<_> = codes
+        .iter()
+        .filter(|code| {
+            !found
+                .iter()
+                .any(|line| line.contains(&format!("\"code\":\"{code}\"")))
+        })
+        .copied()
+        .collect();
+    format!(
+        "TUI stage lines: {}; absent codes: {:?}",
+        found.join("\n"),
+        absent
+    )
+}
+
 fn catalogue_on_disk(setup: &Setup) -> String {
     let home = setup.home();
     let provider = config::extensions_dir(&home)
@@ -65,7 +104,13 @@ fn wait_catalogue(
     what: &str,
     done: impl FnMut(&Grid) -> bool,
 ) -> Grid {
-    run.wait_screen_reporting(what, done, || catalogue_on_disk(setup))
+    run.wait_screen_reporting(what, done, || {
+        format!(
+            "{}; {}",
+            catalogue_on_disk(setup),
+            tui_stage_diagnostics(setup)
+        )
+    })
 }
 
 /// Installs a provider `fake` with models `alpha-1` (named
@@ -107,7 +152,7 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     .unwrap();
     support::write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 200}}),
+        &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 200}, "diagnostics": {"level": "debug"}}),
     );
 }
 

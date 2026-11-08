@@ -168,23 +168,17 @@ fn line_id(line: &Value) -> &str {
 
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
-    app.home
-        .as_ref()
-        .and_then(|home| home.sessions.total_for(project))
+    app.home.sessions.total_for(project)
 }
 
 /// Every listed row's line, drawn or not: what the feed and `recent` folded.
 fn listed(app: &App) -> Vec<String> {
     app.home
-        .as_ref()
-        .map(|home| {
-            home.sessions
-                .all()
-                .iter()
-                .map(|row| crate::home::line(row, home.launch_project()))
-                .collect()
-        })
-        .unwrap_or_default()
+        .sessions
+        .all()
+        .iter()
+        .map(|row| crate::home::line(row, app.home.launch_project()))
+        .collect()
 }
 
 /// The keys of the rows home draws, in order.
@@ -208,15 +202,15 @@ fn keys(app: &App) -> Vec<u64> {
 /// The row key of `session` on home.
 fn row_key(app: &App, session: &str) -> u64 {
     app.home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&SessionId(session.to_owned())))
+        .sessions
+        .row(&SessionId(session.to_owned()))
         .map(|row| row.key)
         .unwrap_or_else(|| panic!("row {session}"))
 }
 
 /// The drawn `More` row's key for `project`.
 fn more_key(app: &App, project: &str) -> Option<u64> {
-    let home = app.home.as_ref()?;
+    let home = &app.home;
     app.home_screen()?
         .list
         .into_iter()

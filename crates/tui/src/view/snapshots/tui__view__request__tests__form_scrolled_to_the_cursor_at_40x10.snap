@@ -2,13 +2,13 @@
 source: crates/tui/src/view/request_tests.rs
 expression: shown
 ---
-▌
-▌   1 ( ) one  a description long enough
-▌ to wrap at forty columns
-▌   2 ( ) two  a description long enough
-▌ to wrap at forty columns
-▌   3 ( ) three  a description long
-▌ enough to wrap at forty columns
-▌   4 ( ) four  a description long
-▌ enough to wrap at forty columns
-▌ ▸ 5 ✎ Type an answer, alone or with th
+ ▌
+ ▌   1 ( ) one  a description long
+ ▌ enough to wrap at forty columns
+ ▌   2 ( ) two  a description long
+⋮▌ enough to wrap at forty columns
+⋮▌   3 ( ) three  a description long
+⋮▌ enough to wrap at forty columns
+ ▌   4 ( ) four  a description long
+ ▌ enough to wrap at forty columns
+ ▌ ▸ 5 ✎ Type an answer, alone or with t

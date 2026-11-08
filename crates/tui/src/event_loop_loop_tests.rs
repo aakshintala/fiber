@@ -1692,7 +1692,7 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     // release: the copy waits on page 0, which the same step fetches,
     // and copies.
     let mut inputs = to_the_top();
-    inputs.push(Input::Bytes(b"\x1b[<0;1;1M\x1b[<32;60;3M".to_vec()));
+    inputs.push(Input::Bytes(b"\x1b[<0;3;1M\x1b[<32;60;3M".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[F".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[<0;60;3m".to_vec()));
     let _lp = run(lp, rx, &tx, inputs);
@@ -1797,6 +1797,9 @@ fn counting() -> (
     };
     app.on_line(Line::Hub(hello));
     app.attach(contract::SessionId(SESSION.to_owned()));
+    // The attach's layout lands before the counted batches, as the
+    // loop's first input would settle it.
+    app.settle();
     let flushes = std::rc::Rc::new(std::cell::Cell::new(0));
     let backend = CountingBackend {
         inner: TestBackend::new(60, 12),
@@ -2746,6 +2749,12 @@ fn quit() -> Input {
     Input::Bytes(vec![0x03, 0x03])
 }
 
+/// Ctrl+C twice, then Enter: with a turn running the second Ctrl+C asks
+/// to quit, and Enter leaves the work running and quits.
+fn quit_leaving_work() -> Input {
+    Input::Bytes(vec![0x03, 0x03, b'\r'])
+}
+
 /// A wide loop with the delegates card, attached, holding one running
 /// Fiber delegate: the first delegate spot's 0-based cell.
 fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
@@ -2859,6 +2868,8 @@ fn a_quit_in_its_own_batch_leaves_nothing_held() {
 fn a_hub_batch_holds_while_folding() {
     let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
     lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    // The attach's layout lands before the counted batch.
+    lp.app.settle();
     let mut seq = 0u64;
     let mut turn = |kind: &str, action: Option<&str>, payload: Value| {
         let envelope = line(kind, Some(seq), action, payload);
@@ -2879,7 +2890,8 @@ fn a_hub_batch_holds_while_folding() {
         json!({"text": "marker one"}),
     ))
     .unwrap_or_else(|err| panic!("send: {err}"));
-    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit_leaving_work())
+        .unwrap_or_else(|err| panic!("send: {err}"));
     drop(tx);
     let before = lp.app.pages().recounts;
     let (done, finished) = mpsc::channel();

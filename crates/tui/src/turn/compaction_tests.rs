@@ -162,14 +162,14 @@ fn the_closed_band_is_one_row_with_edges() {
     let right = "402k → … · 14:20 ";
     assert_eq!(band(&app), full_row(&app, left, right));
     // The band row is exactly the conversation's width.
-    assert_eq!(crate::format::width(&band(&app)), 79);
+    assert_eq!(crate::format::width(&band(&app)), 77);
     // Half-block edges wrap the band row only.
     let lines = texts(&app);
     let at = band_at(&app);
     assert!(lines[at - 1].chars().all(|c| c == '▄'), "{lines:?}");
-    assert_eq!(crate::format::width(&lines[at - 1]), 79);
+    assert_eq!(crate::format::width(&lines[at - 1]), 77);
     assert!(lines[at + 1].chars().all(|c| c == '▀'), "{lines:?}");
-    assert_eq!(crate::format::width(&lines[at + 1]), 79);
+    assert_eq!(crate::format::width(&lines[at + 1]), 77);
 }
 
 #[test]
@@ -394,8 +394,6 @@ fn a_call_that_reported_no_input_tokens_leaves_the_size_waiting() {
 #[test]
 fn a_failed_or_cancelled_compaction_leaves_the_context_unchanged() {
     let mut app = app();
-    // The compaction label leaves 80 columns too few for the whole band.
-    app.set_size(84, 24);
     start(&mut app);
     started_at(&mut app, "person", TEA);
     completed_at(
@@ -408,8 +406,8 @@ fn a_failed_or_cancelled_compaction_leaves_the_context_unchanged() {
         band(&app),
         full_row(
             &app,
-            " ⇄ compaction · you asked with /compact",
-            "failed · the context is unchanged · 14:20 "
+            " ⇄ compaction · you asked with /c…",
+            " failed · the context is unchanged · 14:20 "
         ),
     );
     usage(&mut app, "g_next", 29_000, json!({}));
@@ -425,8 +423,8 @@ fn a_failed_or_cancelled_compaction_leaves_the_context_unchanged() {
         lines[at],
         full_row(
             &app,
-            " ⇄ compaction · you asked with /compact",
-            "failed · the context is unchanged · 14:20 "
+            " ⇄ compaction · you asked with /c…",
+            " failed · the context is unchanged · 14:20 "
         ),
     );
     // The second band follows the first's lower edge: edge, content,
@@ -446,8 +444,6 @@ fn a_failed_or_cancelled_compaction_leaves_the_context_unchanged() {
 #[test]
 fn the_outcome_reads_in_attention() {
     let mut app = app();
-    // The compaction label leaves 80 columns too few for the whole band.
-    app.set_size(84, 24);
     start(&mut app);
     started_at(&mut app, "person", TEA);
     completed_at(
@@ -653,7 +649,7 @@ fn a_writing_band_marks_its_dot_where_it_lands() {
     let col = u16::try_from(col).expect("a column");
     assert_eq!(shown.spins, vec![(at, col)]);
     // The dot lands after the left part and the fill.
-    assert_eq!(col, 51);
+    assert_eq!(col, 49);
 }
 
 #[test]
@@ -796,10 +792,10 @@ fn the_nudge_is_one_dim_line_where_it_happened() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " ◔ Context at 268k, two thirds of the way to the 400k compaction. The model",
             " was told a compaction keeps the work going.",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     // Both pieces of the split nudge line stay dim.

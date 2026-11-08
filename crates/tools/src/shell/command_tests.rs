@@ -52,6 +52,25 @@ fn an_open_pipe_is_discarded_once_the_run_returns() {
 }
 
 #[test]
+fn a_job_with_a_spill_file_still_discards_what_a_held_pipe_delivers_after_finish() {
+    let dir = fakes::TempDir::new("fiber-shell-job-file-discard");
+    let path = dir.path().join("out.log");
+    let shared = Arc::new(Shared::default());
+    parked(Arc::clone(&shared)).attach_output(std::fs::File::create(&path).unwrap(), &path);
+    assert!(lock(&shared.inner).file.is_some());
+    finish(
+        &shared,
+        None,
+        false,
+        true,
+        false,
+        &Recorder::default(),
+        &mut Vec::new(),
+    );
+    assert!(lock(&shared.inner).discard);
+}
+
+#[test]
 fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
     let held = finish(
         &Shared::default(),
@@ -721,6 +740,65 @@ fn a_timeout_wins_over_every_move() {
             "{policy:?}"
         );
     }
+}
+
+#[test]
+fn a_reaped_foreground_shell_with_members_moves_before_a_due_timeout() {
+    // RULING-4238-1: a timeout that falls due while the group is listed
+    // cannot stop leftovers the shell's exit already ended the call over.
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            false,
+            Some(3),
+            false,
+            false
+        ),
+        Step::Move(MoveReason::ShellExited { code: 3 })
+    );
+    // An empty group, a cancel, and every other policy keep their order.
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            true,
+            Some(3),
+            false,
+            false
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            true,
+            false,
+            Some(3),
+            false,
+            false
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(MovePolicy::Stay, true, false, false, Some(3), false, false),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            false,
+            None,
+            false,
+            false
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
 }
 
 #[test]
@@ -1765,7 +1843,7 @@ fn a_members_listing_moves_at_once_and_is_saved_for_the_receipt() {
             progress.members
         );
     };
-    let mut got: Vec<&str> = names.split(", ").collect();
+    let mut got: Vec<&str> = names.iter().map(String::as_str).collect();
     got.sort_unstable();
     assert_eq!(got, ["my cmd (34)", "sleep (12)"]);
 }
