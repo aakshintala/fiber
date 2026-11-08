@@ -634,3 +634,6 @@ crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4261	plan	2026-11-08T2
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4261	plan	2026-11-08T21:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4434
 crates/main/tests/commands/release_pack.rs	fiber-3556	plan	2026-11-08T22:13:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-retry-filter	fiber-4447	plan	2026-11-08T22:18:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/bug-red	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-bug-red	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-bug-red-cargo	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
