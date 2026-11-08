@@ -1104,9 +1104,11 @@ fn refused_run_with_startup(
     std::thread::Builder::new()
         .name("timing-startup".to_owned())
         .spawn(move || {
+            let mut launch = launch_without_model();
+            launch.models = None;
             let code = super::run_with(
                 slave,
-                launch_without_model(),
+                launch,
                 Box::new(|| Err(std::io::Error::other("refused"))),
                 Box::new(|_| {}),
                 FakeClock::new(),
