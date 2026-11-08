@@ -271,3 +271,176 @@ fn the_last_run_override_wins_and_has_no_file() {
         SettingValue::Value(json!("medium"), Source::Run)
     );
 }
+
+/// `reset` over the setup's layers with `key` and `expected`.
+fn reset(
+    setup: &Setup,
+    layer: config::Layer,
+    key: &str,
+    expected: serde_json::Value,
+) -> Result<config::Reset, config::ConfigError> {
+    config::reset(
+        &setup.home(),
+        &setup.workspace(),
+        &common::key(),
+        layer,
+        key,
+        &expected,
+    )
+}
+
+fn file_text(file: &std::path::Path) -> String {
+    std::fs::read_to_string(file).unwrap()
+}
+
+#[test]
+fn a_reset_reveals_the_value_below_in_each_layer() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"handoff": {"tokens": 1}}"#);
+    setup.write(&setup.project(), r#"{"handoff": {"tokens": 2}}"#);
+    setup.write(&setup.repository(), r#"{"handoff": {"tokens": 3}}"#);
+    for (layer, file, was, then) in [
+        (Layer::Repository, setup.repository(), 3, 2),
+        (Layer::Project, setup.project(), 2, 1),
+    ] {
+        assert_eq!(
+            reset(&setup, layer, "handoff.tokens", json!(was)).unwrap(),
+            config::Reset::Removed(file.clone())
+        );
+        assert!(!file_text(&file).contains("tokens"));
+        let rows = setup.load(&[]).unwrap().settings();
+        assert_eq!(
+            row(&rows, "handoff.tokens").value,
+            SettingValue::Value(json!(then), then_source(&setup, then))
+        );
+    }
+    assert_eq!(
+        reset(&setup, Layer::Global, "handoff.tokens", json!(1)).unwrap(),
+        config::Reset::Removed(setup.global())
+    );
+    let rows = setup.load(&[]).unwrap().settings();
+    assert_eq!(
+        row(&rows, "handoff.tokens").value,
+        SettingValue::Value(json!(400_000), Source::Default)
+    );
+}
+
+fn then_source(setup: &Setup, then: i64) -> Source {
+    if then == 2 {
+        Source::Project(setup.project())
+    } else {
+        Source::Global(setup.global())
+    }
+}
+
+#[test]
+fn resetting_an_absent_override_writes_and_creates_nothing() {
+    let setup = Setup::new();
+    for layer in [Layer::Global, Layer::Project, Layer::Repository] {
+        let got = reset(&setup, layer, "handoff.tokens", json!(5)).unwrap();
+        let config::Reset::Absent(file) = got else {
+            panic!("an absent override is reported as absent, not {got:?}");
+        };
+        assert!(!file.exists(), "{} was created", file.display());
+    }
+    // A file that exists but lacks the key is left byte for byte.
+    setup.write(&setup.global(), "{\"model\":   \"a/b\"}\n");
+    assert_eq!(
+        reset(&setup, Layer::Global, "handoff.tokens", json!(5)).unwrap(),
+        config::Reset::Absent(setup.global())
+    );
+    assert_eq!(file_text(&setup.global()), "{\"model\":   \"a/b\"}\n");
+}
+
+#[test]
+fn the_expected_value_must_equal_the_stored_one() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"handoff": {"window_fraction": 0.5}}"#);
+    let before = file_text(&setup.global());
+    // Just below and just above: nothing is removed.
+    for other in [json!(0.499), json!(0.501)] {
+        assert_eq!(
+            reset(&setup, Layer::Global, "handoff.window_fraction", other).unwrap(),
+            config::Reset::Changed(setup.global())
+        );
+        assert_eq!(file_text(&setup.global()), before);
+    }
+    assert_eq!(
+        reset(&setup, Layer::Global, "handoff.window_fraction", json!(0.5)).unwrap(),
+        config::Reset::Removed(setup.global())
+    );
+}
+
+#[test]
+fn a_reset_keeps_unrelated_keys_and_a_quoted_path() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"model": "a/b", "mcp": {"servers": {"a.b": {"command": "x", "args": ["1"]}}}}"#,
+    );
+    let key = r#"mcp.servers."a.b".command"#;
+    assert_eq!(
+        reset(&setup, Layer::Global, key, json!("x")).unwrap(),
+        config::Reset::Removed(setup.global())
+    );
+    let kept: serde_json::Value = serde_json::from_str(&file_text(&setup.global())).unwrap();
+    assert_eq!(
+        kept,
+        json!({"model": "a/b", "mcp": {"servers": {"a.b": {"args": ["1"]}}}})
+    );
+}
+
+#[test]
+fn a_reset_refuses_what_a_set_refuses_and_touches_nothing() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"diagnostics": {"level": "debug"}}"#);
+    let before = file_text(&setup.global());
+    // Unknown key, a key the layer may not hold, a path that does not
+    // parse and an extension's own setting.
+    for (layer, key) in [
+        (Layer::Global, "no.such.key"),
+        (Layer::Repository, "hub.port"),
+        (Layer::Project, "diagnostics.level"),
+        (Layer::Repository, "diagnostics.level"),
+        (Layer::Repository, "reviewer.context"),
+        (Layer::Global, "handoff..tokens"),
+        (Layer::Global, "extensions.x.settings.y"),
+    ] {
+        assert!(
+            reset(&setup, layer, key, json!("debug")).is_err(),
+            "{key} in {layer:?}"
+        );
+    }
+    assert_eq!(file_text(&setup.global()), before);
+    assert!(!setup.project().exists());
+    assert!(!setup.repository().exists());
+    // A repository-only key is refused in the person's files.
+    assert!(reset(&setup, Layer::Global, "repository_extensions", json!([])).is_err());
+}
+
+#[test]
+fn a_reset_refuses_a_file_that_is_not_a_configuration_object() {
+    let setup = Setup::new();
+    for text in ["[]", "{not json", r#"{"handoff": {"tokens": "x"}}"#] {
+        setup.write(&setup.global(), text);
+        assert!(
+            reset(&setup, Layer::Global, "handoff.tokens", json!("x")).is_err(),
+            "{text}"
+        );
+        assert_eq!(file_text(&setup.global()), text);
+    }
+}
+
+#[test]
+fn a_reset_does_not_follow_a_repository_link() {
+    let setup = Setup::new();
+    let outside = setup.root().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("config.json"), r#"{"handoff": {"tokens": 4}}"#).unwrap();
+    std::os::unix::fs::symlink(&outside, setup.workspace().join(".fiber")).unwrap();
+    assert!(reset(&setup, Layer::Repository, "handoff.tokens", json!(4)).is_err());
+    assert_eq!(
+        file_text(&outside.join("config.json")),
+        r#"{"handoff": {"tokens": 4}}"#
+    );
+}
