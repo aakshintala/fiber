@@ -295,9 +295,34 @@ pub struct DirectoryAdded {
     pub inherited: bool,
 }
 
+/// `shell_command_started`: a command the person ran with `send` true,
+/// written before it starts (`docs/events.md`, "`shell_command_started`").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCommandStarted {
+    /// The driver command's id: the key its deltas and its end carry.
+    pub command_id: CommandId,
+    /// The command as typed.
+    pub command: String,
+}
+
+/// `shell_command_delta`: output a running driver command added since the
+/// last delta (`docs/events.md`, "`shell_command_delta`").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCommandDelta {
+    /// The driver command's id.
+    pub command_id: CommandId,
+    /// Output added since the last delta: at most the newest 64 KiB.
+    pub text: String,
+}
+
 /// `shell_command`: a command the person ran with `send` true.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellCommand {
+    /// The driver command's id, pairing the end with its
+    /// `shell_command_started`. Absent on a line written before the start
+    /// line existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<CommandId>,
     /// The command as typed.
     pub command: String,
     /// Its output, cut as a shell call's result is.

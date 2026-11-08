@@ -194,7 +194,8 @@ impl Loop {
             | Delivery::DelegateUsage { .. }
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
-            | Delivery::Shell(..) => false,
+            | Delivery::Shell(..)
+            | Delivery::ShellStarted(..) => false,
         })?;
         self.deferred.remove(at)
     }

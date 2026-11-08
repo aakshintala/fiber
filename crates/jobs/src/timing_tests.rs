@@ -501,6 +501,7 @@ fn expect_end(inbox: &mpsc::Receiver<Delivery>, deadline: Deadline, what: &str) 
         | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
         | Delivery::Shell(..)
+        | Delivery::ShellStarted(..)
         | Delivery::Cancelled) => panic!("expected a job end, got {other:?}"),
     }
 }

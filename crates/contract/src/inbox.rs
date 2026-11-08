@@ -200,8 +200,33 @@ pub enum Delivery {
     /// writes it as `shell_command` at the drain that takes it, then
     /// answers `Ok(None)` (`docs/invocation.md`, "Shell").
     Shell(crate::events::ShellCommand, Ack),
+    /// A driver `shell` with `send` true is about to start its command: the
+    /// loop writes `shell_command_started` at the drain that takes it,
+    /// sets the handshake to `Written` and answers `Ok(None)`, and only
+    /// then does the command start (`docs/events.md`,
+    /// "`shell_command_started`"). A handshake the worker abandoned writes
+    /// nothing and answers `cancelled`.
+    ShellStarted(
+        crate::events::ShellCommandStarted,
+        std::sync::Arc<std::sync::Mutex<Handshake>>,
+        Ack,
+    ),
     /// Proposes reviewer-note lines between turns, without conversation.
     ProposeNotes(crate::notes::NotesAsk, Ack),
+}
+
+/// Where a driver command's start line stands between the loop that writes
+/// it and the worker that waits to run the command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handshake {
+    /// Neither side has acted: the loop may write the line, or the worker
+    /// may give up.
+    Pending,
+    /// The loop wrote the line: the command starts.
+    Written,
+    /// The worker gave up before the line was written: the loop writes
+    /// nothing and the command never starts.
+    Abandoned,
 }
 
 /// News that a background job ended, sent by the session's jobs registry.

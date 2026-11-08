@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::process::ExitStatus;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use contract::JobId;
 use contract::clock::{Clock, Wake};

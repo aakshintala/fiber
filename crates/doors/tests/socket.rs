@@ -237,7 +237,9 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
                 contract::commands::RewindArgs::AtEnd => "rewind at_end".to_owned(),
             }
         }
-        Delivery::Cancelled | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
+        Delivery::Cancelled | Delivery::Shell(..) | Delivery::ShellStarted(..) => {
+            panic!("a wake arrives as a delivery")
+        }
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Interaction(_)
@@ -1710,6 +1712,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
             let accepted_lines = until(&sender, |line| command_id(line) == Some("c_m1"));
@@ -1757,6 +1760,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
             let rejected_lines = until(&sender, |line| command_id(line) == Some("c_m2"));
@@ -1856,6 +1860,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
             let rejected = until(&sender, |line| command_id(line) == Some("c_cred"));
@@ -1988,6 +1993,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::ChangeWorkspace(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -2046,6 +2052,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::ChangeWorkspace(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -6331,7 +6338,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
                 | Delivery::Model(..)
-                | Delivery::Shell(..)
+                | Delivery::Shell(..) | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
             }
             let accepted = response(&client, "c_1");
@@ -6387,7 +6394,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
                 | Delivery::Model(..)
-                | Delivery::Shell(..)
+                | Delivery::Shell(..) | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
             }
             let accepted = response(&client, "c_2");
@@ -6617,7 +6624,8 @@ fn ro_evidence(socket: &Path, inbox: &Receiver<Delivery>) -> Vec<contract::notes
         | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
         | Delivery::Cancelled
-        | Delivery::Shell(..) => panic!("propose_notes arrives as itself"),
+        | Delivery::Shell(..)
+        | Delivery::ShellStarted(..) => panic!("propose_notes arrives as itself"),
     };
     let accepted = response(&client, "c_1");
     assert_eq!(kind(&accepted), "command_accepted");

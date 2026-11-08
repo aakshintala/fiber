@@ -856,15 +856,19 @@ fn sync_dir(dir: &Path, fsyncs: &mut u64) -> Result<(), Error> {
 
 /// Whether appending `event` ends with an fsync. `docs/events.md`,
 /// "Writing": "Fsync the record of a side effect after it happens and before
-/// causing the next one", except `assistant_message_started` and
-/// `tool_call_started`, fsynced before their effect. A side effect costs
-/// money or touches the world: a model call, a tool call, or a process run
-/// outside one. Every other durable line is made durable by the next fsync.
+/// causing the next one", except `assistant_message_started`,
+/// `tool_call_started` and `shell_command_started`, fsynced before their
+/// effect. A side effect costs money or touches the world: a model call, a
+/// tool call, or a process run outside one. Every other durable line is made
+/// durable by the next fsync.
 /// Every kind is listed, so a new one does not compile until it is placed.
 fn fsyncs(event: &Event, in_action: bool) -> bool {
     match event {
-        // Before the model request is sent, and before the tool runs.
-        Event::AssistantMessageStarted(_) | Event::ToolCallStarted(_) => true,
+        // Before the model request is sent, before the tool runs, and
+        // before the person's command starts.
+        Event::AssistantMessageStarted(_)
+        | Event::ToolCallStarted(_)
+        | Event::ShellCommandStarted(_) => true,
         // A model call and a tool call, once they have happened; a command
         // the person ran, and a program an extension ran.
         Event::AssistantMessageCompleted(_)
@@ -939,6 +943,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::ToolCallArgumentsDelta(_)
         | Event::ReasoningDelta(_)
         | Event::ToolCallDelta(_)
+        | Event::ShellCommandDelta(_)
         | Event::RetryScheduled(_)
         | Event::Notice(_)
         | Event::ExtensionUi(_)

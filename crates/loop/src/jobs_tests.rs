@@ -4333,6 +4333,7 @@ fn a_notice_while_idle_writes_what_its_claim_took_ahead_first() {
 fn shell(command: &str, output: &str) -> Delivery {
     Delivery::Shell(
         ShellCommand {
+            command_id: None,
             command: command.into(),
             output: output.into(),
             artifact: None,

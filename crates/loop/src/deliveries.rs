@@ -70,6 +70,8 @@ impl Starts {
             | Event::SteeringApplied(_)
             | Event::SteeringQueue(_)
             | Event::ShellCommand(_)
+            | Event::ShellCommandStarted(_)
+            | Event::ShellCommandDelta(_)
             | Event::DirectoryAdded(_)
             | Event::SessionNamed(_)
             | Event::Clients(_)

@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::GenerationId;
@@ -13,8 +13,9 @@ use contract::events::UsageRecorded;
 use contract::events::{
     Answer, CallStatus, Control, EventKind, ExtensionExec, ExtensionLog, Interaction,
     InteractionRequested, InteractionResolved, NamedBy, ResolvedBy, ShellCommand,
+    ShellCommandStarted,
 };
-use contract::inbox::{Ack, Delivery};
+use contract::inbox::{Ack, Delivery, Handshake};
 use contract::shapes::Process;
 use contract::shapes::Tokens;
 use contract::shapes::Worktree;
@@ -68,6 +69,23 @@ fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
 
 /// [`started`] with `worktree` on `session_started`.
 fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    let (looped, log, watched, home, _inbox, _provider) = world(worktree, Vec::new());
+    (looped, log, watched, home)
+}
+
+/// A started loop with its inbox still held by the test and `script` as
+/// its provider's replies.
+fn world(
+    worktree: Option<Worktree>,
+    script: Vec<fakes::Scripted>,
+) -> (
+    Loop,
+    Arc<Log>,
+    log::Watcher,
+    fakes::TempDir,
+    mpsc::Sender<Delivery>,
+    Arc<fakes::ScriptedProvider>,
+) {
     let home = fakes::TempDir::new("fiber-exec-inbox");
     let workspace = home.path().join("workspace");
     let credentials = home.path().join("credentials");
@@ -76,11 +94,12 @@ fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fa
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let log =
         Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
-    let (_inbox, rx) = mpsc::channel::<Delivery>();
+    let (inbox, rx) = mpsc::channel::<Delivery>();
+    let provider = Arc::new(fakes::ScriptedProvider::new(script));
     let looped = Loop::start(
         crate::Session {
             log: Arc::clone(&log),
-            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            provider: Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
             model: Model {
                 reference: "fake/model".into(),
                 cost: None,
@@ -109,7 +128,7 @@ fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fa
     )
     .unwrap();
     let watched = log.watch();
-    (looped, log, watched, home)
+    (looped, log, watched, home, inbox, provider)
 }
 
 struct CommandTool(&'static str);
@@ -816,6 +835,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Shell(..)
+            | Delivery::ShellStarted(..)
             | Delivery::Cancelled => "other",
         })
         .collect()
@@ -1130,6 +1150,7 @@ fn shell_delivery(
     (
         Delivery::Shell(
             ShellCommand {
+                command_id: None,
                 command: command.into(),
                 output: output.into(),
                 artifact: None,
@@ -1238,6 +1259,221 @@ fn three_sent_shells_are_written_in_inbox_order() {
         .map(|line| line.payload["command"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(commands, ["a", "b", "c"]);
+}
+
+fn started_delivery(
+    id: &str,
+    command: &str,
+    state: Handshake,
+) -> (
+    Delivery,
+    Arc<Mutex<Handshake>>,
+    mpsc::Receiver<contract::inbox::Answer>,
+) {
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    let handshake = Arc::new(Mutex::new(state));
+    (
+        Delivery::ShellStarted(
+            ShellCommandStarted {
+                command_id: contract::CommandId(id.into()),
+                command: command.into(),
+            },
+            Arc::clone(&handshake),
+            ack,
+        ),
+        handshake,
+        rx,
+    )
+}
+
+#[test]
+fn a_sent_shell_start_idle_is_written_fsynced_then_acked_and_starts_no_turn() {
+    let (mut looped, log, mut watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    let (delivery, handshake, rx) = started_delivery("c_bang", "sleep 5", Handshake::Pending);
+    let before = log.fsyncs();
+    looped.admit_idle(delivery, &mut input).unwrap();
+    assert_eq!(
+        log.fsyncs() - before,
+        1,
+        "the start is fsynced before its command starts"
+    );
+    assert!(input.pieces.is_empty(), "a start starts no turn idle");
+    assert!(input.prompts.is_empty(), "a start answers at its take");
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a start is accepted with no answer"
+    );
+    assert_eq!(*handshake.lock().unwrap(), Handshake::Written);
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("shell_command_started arrives in time")
+        .expect("the log outlives the drain")
+        .expect("the log ended before shell_command_started");
+    assert_eq!(line.kind(), EventKind::ShellCommandStarted);
+    assert!(line.seq.is_some(), "the start is durable and numbered");
+    assert_eq!(line.payload["command_id"], "c_bang");
+    assert_eq!(line.payload["command"], "sleep 5");
+    assert!(line.turn_id.is_none(), "a start carries no turn");
+    assert!(line.action_id.is_none(), "a start carries no action");
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::ShellCommandStarted]
+    );
+    assert!(
+        looped.conversation.is_empty(),
+        "the take renders nothing into the conversation"
+    );
+}
+
+#[test]
+fn a_sent_shell_start_before_its_end_is_written_before_it_mid_turn() {
+    let (mut looped, _log, _watched, home) = started();
+    let turn = TurnId("t_test".into());
+    let (started_at, _handshake, started_rx) =
+        started_delivery("c_bang", "sleep 5", Handshake::Pending);
+    let (mut ended_at, ended_rx) = shell_delivery("sleep 5", "");
+    if let Delivery::Shell(line, _) = &mut ended_at {
+        line.command_id = Some(contract::CommandId("c_bang".into()));
+    }
+    looped.admit_running(started_at, &turn).unwrap();
+    looped.admit_running(ended_at, &turn).unwrap();
+    assert!(matches!(answered(&started_rx), Ok(None)));
+    assert!(matches!(answered(&ended_rx), Ok(None)));
+    assert_eq!(
+        saved_kinds(&home),
+        [
+            EventKind::SessionStarted,
+            EventKind::ShellCommandStarted,
+            EventKind::ShellCommand
+        ]
+    );
+}
+
+#[test]
+fn a_sent_shell_start_the_worker_abandoned_writes_nothing_and_answers_cancelled() {
+    let (mut looped, log, _watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    let (delivery, handshake, rx) = started_delivery("c_bang", "sleep 5", Handshake::Abandoned);
+    let before = log.fsyncs();
+    looped.admit_idle(delivery, &mut input).unwrap();
+    match answered(&rx) {
+        Err(rejection) => assert_eq!(rejection.code, ErrorCode::Cancelled),
+        Ok(_) => panic!("an abandoned start is refused"),
+    }
+    assert_eq!(*handshake.lock().unwrap(), Handshake::Abandoned);
+    assert_eq!(log.fsyncs(), before, "nothing was written");
+    assert_eq!(saved_kinds(&home), [EventKind::SessionStarted]);
+}
+
+/// A `!` whose command could not start ends with its error as the output
+/// and neither an exit code nor a signal: one `shell_command` line that
+/// joins the next turn's input and reaches the model.
+fn a_spawn_failure_end_joins_the_next_turn(message: &str) {
+    let (looped, _log, _watched, home, inbox, provider) =
+        world(None, vec![fakes::Scripted::text("Done.")]);
+    let output = format!("invalid_arguments: {message}");
+    let (started_at, _handshake, started_rx) =
+        started_delivery("c_bang", "no-such", Handshake::Pending);
+    let (mut ended_at, ended_rx) = shell_delivery("no-such", &output);
+    if let Delivery::Shell(line, _) = &mut ended_at {
+        line.command_id = Some(contract::CommandId("c_bang".into()));
+        line.process = Process {
+            exit_code: None,
+            signal: None,
+            timed_out: false,
+        };
+    }
+    inbox.send(started_at).unwrap();
+    inbox.send(ended_at).unwrap();
+    inbox
+        .send(Delivery::Prompt(
+            contract::inbox::Message {
+                content: vec![contract::shapes::ContentPart::Text { text: "go".into() }],
+                sender: contract::shapes::Sender {
+                    origin: contract::shapes::Origin::Driver,
+                    command_id: None,
+                },
+            },
+            ignore(),
+        ))
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn();
+        let _sent = done.send((looped, outcome));
+    });
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
+    outcome.unwrap();
+    drop(looped);
+    assert!(matches!(answered(&started_rx), Ok(None)));
+    assert!(matches!(answered(&ended_rx), Ok(None)));
+    let lines = log::read(&home.path().join("s_test")).unwrap();
+    let ends: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line.kind() == EventKind::ShellCommand && line.payload["command_id"] == "c_bang"
+        })
+        .collect();
+    assert_eq!(ends.len(), 1, "exactly one end line: {ends:?}");
+    assert_eq!(ends[0].payload["output"], output.as_str());
+    let process = ends[0].payload["process"].as_object().unwrap();
+    assert!(
+        !process.contains_key("exit_code"),
+        "no exit code: {process:?}"
+    );
+    assert!(!process.contains_key("signal"), "no signal: {process:?}");
+    let started: contract::events::TurnStarted = serde_json::from_value(serde_json::Value::Object(
+        lines
+            .iter()
+            .find(|line| line.kind() == EventKind::TurnStarted)
+            .unwrap()
+            .payload
+            .clone(),
+    ))
+    .unwrap();
+    let seq = ends[0].seq.unwrap();
+    let joined: Vec<_> = started
+        .input
+        .iter()
+        .filter(|item| matches!(item, contract::events::InputItem::ShellCommand { .. }))
+        .collect();
+    assert_eq!(joined.len(), 1, "the end joins the turn once: {started:?}");
+    assert!(
+        matches!(joined[0], contract::events::InputItem::ShellCommand { seq: held } if *held == seq),
+        "the end joins by its seq: {joined:?}"
+    );
+    assert_eq!(
+        started.input.len(),
+        2,
+        "the start joins nothing: {started:?}"
+    );
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0]
+            .conversation
+            .iter()
+            .any(|input| format!("{input:?}").contains(&output)),
+        "the model reads the failure: {:?}",
+        requests[0].conversation
+    );
+}
+
+#[test]
+fn a_spawn_failure_end_joins_the_next_turn_for_a_local_start() {
+    a_spawn_failure_end_joins_the_next_turn("No such file or directory (os error 2)");
+}
+
+#[test]
+fn a_spawn_failure_end_joins_the_next_turn_for_a_refused_host_start() {
+    a_spawn_failure_end_joins_the_next_turn("the host refused to start the command");
 }
 
 #[test]

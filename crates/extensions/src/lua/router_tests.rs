@@ -62,6 +62,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Interaction(_)
         | Delivery::Resolved(..)
         | Delivery::Shell(..)
+        | Delivery::ShellStarted(..)
         | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_)

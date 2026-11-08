@@ -79,6 +79,7 @@ impl Running {
                     process,
                 })) => {
                     let line = ShellCommand {
+                        command_id: None,
                         command: self.command,
                         output,
                         artifact,

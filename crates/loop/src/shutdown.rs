@@ -129,6 +129,7 @@ impl Loop {
             | Delivery::ExtensionUsage(_)
             | Delivery::DelegateUsage { .. }
             | Delivery::Shell(..)
+            | Delivery::ShellStarted(..)
             | Delivery::Reply(..)
             | Delivery::Prompt(..)
             | Delivery::InnerCall(_)) => self.settle_one(delivery),
@@ -263,6 +264,11 @@ impl Loop {
             // Written and accepted at the settle, as at any drain: it
             // starts no turn.
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
+            // Its start line is written at the settle too, and its
+            // command may then start.
+            Delivery::ShellStarted(line, handshake, ack) => {
+                self.take_shell_started(line, handshake, ack)?
+            }
             Delivery::Prompt(_, ack)
             | Delivery::ProposeNotes(_, ack)
             | Delivery::Steer(_, ack)

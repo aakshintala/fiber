@@ -50,8 +50,9 @@ pub use offer::{
 pub use session::{
     Clients, ContextAdded, ContextFill, DirectoryAdded, FiberExited, FiberStarted, FinalMessage,
     InputItem, Moved, NamedBy, Parent, QueuedMessage, Rewind, Rewound, SessionNamed,
-    SessionStarted, SessionState, SessionStatus, ShellCommand, SteeringApplied, SteeringQueue,
-    TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource, Waiting, WaitingKind,
+    SessionStarted, SessionState, SessionStatus, ShellCommand, ShellCommandDelta,
+    ShellCommandStarted, SteeringApplied, SteeringQueue, TurnCompleted, TurnOutcome, TurnStarted,
+    Variables, VariablesSource, Waiting, WaitingKind,
 };
 
 use crate::{CommandId, Envelope, RequestId, SessionId};
@@ -312,6 +313,8 @@ kinds! {
     SteeringApplied(SteeringApplied) = "steering_applied", Durable;
     SteeringQueue(SteeringQueue) = "steering_queue", Ephemeral;
     ShellCommand(ShellCommand) = "shell_command", Durable;
+    ShellCommandStarted(ShellCommandStarted) = "shell_command_started", Durable;
+    ShellCommandDelta(ShellCommandDelta) = "shell_command_delta", Ephemeral;
     DirectoryAdded(DirectoryAdded) = "directory_added", Durable;
     SessionNamed(SessionNamed) = "session_named", Durable;
     Clients(Clients) = "clients", Ephemeral;

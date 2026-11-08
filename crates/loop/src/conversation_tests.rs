@@ -4525,6 +4525,7 @@ fn sent_message_turn(text: &str) -> Event {
 
 fn sent_shell(command: &str, output: &str, process: contract::shapes::Process) -> Event {
     Event::ShellCommand(contract::events::ShellCommand {
+        command_id: None,
         command: command.into(),
         output: output.into(),
         artifact: None,

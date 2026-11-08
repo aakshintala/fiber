@@ -557,6 +557,8 @@ impl Fold {
             | Event::SteeringApplied(_)
             | Event::SteeringQueue(_)
             | Event::ShellCommand(_)
+            | Event::ShellCommandStarted(_)
+            | Event::ShellCommandDelta(_)
             | Event::Clients(_)
             | Event::SessionStatus(_)
             | Event::ContextAdded(_)
@@ -1054,6 +1056,8 @@ impl Observer {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients

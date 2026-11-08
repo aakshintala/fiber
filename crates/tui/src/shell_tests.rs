@@ -130,6 +130,7 @@ fn an_error_row_shows_what_arrived_verbatim() {
 #[test]
 fn a_shell_command_line_is_a_sent_row() {
     let line = ShellCommand {
+        command_id: None,
         command: "echo hi".to_owned(),
         output: "hi\n".to_owned(),
         artifact: None,
