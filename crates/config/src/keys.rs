@@ -1,7 +1,10 @@
 //! Every key in `docs/configuration.md`, "Keys": its type, whether a
 //! repository may set it, and its built-in default. Checking a layer against
 //! this table is where unknown keys become notices and wrong types become
-//! errors.
+//! errors. The one exception is `providers.databricks.request_tags`, whose
+//! layers pass this check unjudged: its value is validated once, after the
+//! layers merge, and an invalid effective value is a notice
+//! (`docs/configuration.md`, "A provider's data").
 
 use std::time::Duration;
 
@@ -43,6 +46,11 @@ pub(crate) enum Kind {
     RepositoryExtensions,
     /// A duration string such as `"24h"`: `model_lists.refresh_after`.
     Duration,
+    /// Request tags: any layer value is admitted here because the merged
+    /// object is what must be an object of strings, and an invalid one is a
+    /// nonfatal notice rather than a wrong-type error
+    /// (`Config::databricks_request_tags`). No other kind defers.
+    RequestTags,
 }
 
 impl Kind {
@@ -96,6 +104,7 @@ impl Kind {
             Self::Duration => value
                 .as_str()
                 .is_some_and(|text| parse_duration(text).is_some()),
+            Self::RequestTags => true,
         }
     }
 
@@ -119,6 +128,7 @@ impl Kind {
                 "a list of objects, each with a string `path` and an optional true or false `required`".into()
             }
             Self::Duration => "a duration such as \"7d\"".into(),
+            Self::RequestTags => "an object of string values".into(),
         }
     }
 }
@@ -249,7 +259,7 @@ const fn entry_replaced(path: &'static str, kind: Kind) -> Key {
 
 use Kind::{
     Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Number, OneOf,
-    RepositoryExtensions, Role, Str, StrList, StrOrStrList,
+    RepositoryExtensions, RequestTags, Role, Str, StrList, StrOrStrList,
 };
 
 const YES: bool = true;
@@ -326,6 +336,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("providers.*.credential", Str, NO, None),
     key("providers.*.reviewer_model", Str, NO, None),
     entry_replaced("providers.*.credentials.*", Credential),
+    key("providers.databricks.request_tags", RequestTags, NO, None),
     key(
         "tui.panel.cards",
         StrList,
