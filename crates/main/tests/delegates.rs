@@ -10631,3 +10631,151 @@ fn killing_the_parent_backfills_unseen_usage() {
         "the resume reports exactly the appended lines"
     );
 }
+
+/// The ids of the delegates `workspace`'s sessions started, from every
+/// `delegate_started` line in their logs.
+fn started_delegates(setup: &support::Setup) -> Vec<String> {
+    let sessions = sessions_in(&setup.home(), &setup.workspace());
+    let Ok(entries) = fs::read_dir(&sessions) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        for line in read_lines(&entry.path().join("events.jsonl")) {
+            if line["kind"] == "delegate_started" {
+                ids.push(
+                    line["payload"]["delegate_session_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    ids
+}
+
+/// The delegate `id`'s event log.
+fn delegate_log(setup: &support::Setup, id: &str) -> PathBuf {
+    sessions_in(&setup.home(), &setup.workspace())
+        .join(id)
+        .join("events.jsonl")
+}
+
+/// Whether the log at `path` holds a line of `kind` that mentions
+/// `needle`: how a test knows a message reached the delegate's turn.
+fn log_has(path: &Path, kind: &str, needle: &str) -> bool {
+    read_lines(path)
+        .iter()
+        .any(|line| line["kind"] == kind && line.to_string().contains(needle))
+}
+
+/// Opens the delegate row that holds `row` from the typed `/delegates`
+/// view and waits for its live view's breadcrumb.
+fn open_delegate_view(run: &mut Run, row: &str, breadcrumb: &str) {
+    run.write(b"/delegates\r");
+    run.wait_screen("the delegates list", delegates_list_header);
+    focus_row(run, row);
+    run.write(b"\r");
+    run.wait_screen("the delegate's view", |grid| {
+        grid.contents.contains(breadcrumb)
+    });
+}
+
+/// The index of a row that draws a labelled rule whose label holds
+/// `label`, with `text` on a row below it and no other rule between.
+fn rule_over_text(grid: &Grid, label: &str, text: &str) -> Option<usize> {
+    // settled: only a `wait_screen` predicate calls this, so the wait is the check.
+    let rows = &grid.rows;
+    let rule = rows
+        .iter()
+        .position(|row| row.contains(label) && row.contains(" · ") && row.contains('─'))?;
+    let below = rows
+        .iter()
+        .skip(rule + 1)
+        .position(|row| row.contains(text))?;
+    rows[rule + 1..rule + 1 + below]
+        .iter()
+        .all(|row| !row.contains('─'))
+        .then_some(rule)
+}
+
+/// `docs/delegates.md`, "Talking to a delegate", and `docs/tui.md`,
+/// "Turns": a parent's `delegate_message` to a running delegate joins
+/// the delegate's turn and draws in the delegate's card as a `steer` rule
+/// over its text. The delegate's second model call is held while its view
+/// opens, so the card is folded from the live stream, not a replay.
+#[test]
+fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(answering(
+        support::stream(&[spawn_call("fiber:pb/m")]),
+        text_reply("allow"),
+        "call_message",
+        |job| {
+            support::stream(&[function_call(
+                "call_message",
+                "delegate_message",
+                &json!({"id": job, "message": MARK}),
+            )])
+        },
+        support::hello(),
+    ))
+    .unwrap();
+    let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+    child.hold();
+    // The message call (the parent's third request, after the spawn and its
+    // verdict) is held until the delegate's first model call is in flight:
+    // a steer queued before the delegate's first step drains with that
+    // step's request, and the delegate would make no second call.
+    parent.hold_from(3, fakes::deadline::BUDGET);
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    // The hub exits a second after its last client leaves, so the run's
+    // wait sees it go.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "hub": {"idle_exit_ms": 1000}}),
+    );
+
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(support::TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &env);
+    run.ready();
+    run.write(b"scan the tree\r");
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the delegate's first step is in flight"
+    );
+    assert!(
+        parent.await_requests(3, setup.deadline),
+        "the parent's message call is requested"
+    );
+    parent.release();
+    // The parent's turn ends once the message call is answered, and the
+    // answer comes after the steer is queued in the delegate's inbox.
+    run.wait_screen("the finished parent turn", |grid| {
+        grid.contents.contains("completed ·")
+    });
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "the delegate's second model call after the steer"
+    );
+    let delegate = started_delegates(&setup).remove(0);
+    let log = delegate_log(&setup, &delegate);
+    fakes::wait_until("the steering_applied line", setup.deadline, move || {
+        log_has(&log, "steering_applied", MARK)
+    });
+    open_delegate_view(&mut run, "◆ scan", "› ◆ scan");
+    run.wait_screen(
+        "the steer rule over its text, no Fiber rule beside it",
+        |grid| rule_over_text(grid, "steer", MARK).is_some() && !grid.contents.contains("Fiber ·"),
+    );
+    child.release();
+    quit(run);
+}
