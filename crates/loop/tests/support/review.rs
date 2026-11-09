@@ -1329,18 +1329,22 @@ struct EmitCtx<'a> {
     added_folders: &'a [String],
 }
 
-/// Emits one session directory's label-input lines: one line per replayable
-/// call carrying the full `reviewed[]` snapshot plus tool, arguments,
-/// declared effects, workspace, added folders and source. A reviewed call
-/// without its start or its denial carrying its declared effects is
-/// unreplayable and excluded, while the denial-carries-effects case stays
-/// replayable through `started_from` and is kept. Drop checks run on the
-/// raw entry before placeholder substitution.
-fn emit_sampled(
+/// Folds one session directory's chain through the reviewer's renderer and
+/// emits one label-input line per replayable call: the emission both the
+/// sampler and the synthetic converter share. A reviewed call without its
+/// start or its denial carrying its declared effects is unreplayable and
+/// excluded, while the denial-carries-effects case stays replayable through
+/// `started_from` and is kept. With a synthetic `counter` the line takes
+/// the synthetic identity (`{session}-{n}` with a synthetic source triple)
+/// and skips the drop classes, for the committed fixtures that carry no
+/// owner data; without one it takes the sampled identity and drops raw
+/// entries the closed classes match before placeholder substitution.
+fn fold_and_emit(
     dir: &Path,
     ctx: &ScrubCtx,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
+    mut synthetic: Option<&mut u64>,
 ) -> Result<(), String> {
     let (workspace, chain) = load_chain(dir)?;
     let index = Driver::index_chain(&chain)?;
@@ -1394,7 +1398,15 @@ fn emit_sampled(
                 reviewed: &reviewed,
                 added_folders: &added_folders,
             };
-            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped, None)?;
+            emit_sampled_call(
+                &emit,
+                envelope,
+                &action,
+                &call,
+                lines,
+                dropped,
+                synthetic.as_deref_mut(),
+            )?;
         }
     }
     Ok(())
@@ -1504,7 +1516,7 @@ pub(crate) fn run_sampled(
         for workspace in segment_workspaces(dir)? {
             Allowlist::check_chain(std::slice::from_ref(&workspace))?;
         }
-        emit_sampled(dir, &ctx, &mut entries, &mut dropped)?;
+        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None)?;
     }
     for path in &opts.import_claude {
         let path = Path::new(path);
@@ -1611,21 +1623,18 @@ fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// Converts the committed synthetic fixture dirs to unlabelled
-/// synthetic-kind lines: the same `load_chain` plus `render_reviewed` fold
-/// plus `emit_sampled_call` reuse as `emit_sampled`, except nothing passes
-/// the project allowlist and no entry meets a drop class — the fixtures
-/// carry no owner data, so their controls stay the block side. The scrub
-/// context is empty (`_opts` takes the parsed flags for symmetry with
-/// `run_sampled`; the converter reads no flag): fixture workspaces are
-/// already `/synthetic/...` paths and `$HOME` placeholders, so the
-/// workspace lands verbatim. Each dir's lines take the synthetic identity
-/// (`{session}-{n}` with a 1-based emission index in file order, which is
-/// turn order); labels stay null for the recipe to fill. No cap, no
-/// truncation; a reviewed call without its start stays unreplayable and is
-/// excluded.
+/// synthetic-kind lines: the shared `fold_and_emit` fold with a synthetic
+/// counter, except nothing passes the project allowlist and no entry meets
+/// a drop class — the fixtures carry no owner data, so their controls stay
+/// the block side. The scrub context is empty (the converter reads no
+/// flag): fixture workspaces are already `/synthetic/...` paths and
+/// `$HOME` placeholders, so the workspace lands verbatim. Each dir's lines
+/// take the synthetic identity (`{session}-{n}` with a 1-based emission
+/// index in file order, which is turn order); labels stay null for the
+/// recipe to fill. No cap, no truncation; a reviewed call without its start
+/// stays unreplayable and is excluded.
 pub(crate) fn run_synthetic(
     dirs: &[String],
-    _opts: &SampleOpts,
     output: impl Write + Send + 'static,
 ) -> Result<SampleReport, String> {
     let ctx = ScrubCtx {
@@ -1638,70 +1647,8 @@ pub(crate) fn run_synthetic(
     let mut out = output;
     for dir in dirs {
         let dir = check_synthetic_dir(Path::new(dir))?;
-        let (workspace, chain) = load_chain(&dir)?;
-        let index = Driver::index_chain(&chain)?;
-        let session = dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let mut reviewed: Vec<Reviewed> = Vec::new();
-        let mut asks = PendingAsks::default();
-        let mut added_folders: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut summary = false;
         let mut seq = 0u64;
-        for (position, item) in chain.iter().enumerate() {
-            let envelope = &item.envelope;
-            let event = Event::from_envelope(envelope).map_err(|error| {
-                format!(
-                    "review: {} {}: a {} payload that does not parse: {error}",
-                    item.dir.display(),
-                    describe(envelope, position),
-                    envelope.kind().name(),
-                )
-            })?;
-            let Some(event) = event else {
-                continue;
-            };
-            if r#loop::summary_skips(&mut summary, &event) {
-                continue;
-            }
-            if let Event::DirectoryAdded(added) = &event {
-                added_folders.push(added.path.clone());
-            }
-            render_reviewed(
-                &mut reviewed,
-                &event,
-                envelope.action_id.as_ref(),
-                envelope.seq,
-                &mut asks,
-            );
-            if let Event::ToolCallRequested(call) = event
-                && call.ran_by.is_none()
-                && call.provider_item.is_none()
-                && let Some(action) = envelope.action_id.clone()
-                && seen.insert(action.0.clone())
-            {
-                let emit = EmitCtx {
-                    dir: &dir,
-                    session: &session,
-                    workspace: &workspace,
-                    ctx: &ctx,
-                    index: &index,
-                    reviewed: &reviewed,
-                    added_folders: &added_folders,
-                };
-                emit_sampled_call(
-                    &emit,
-                    envelope,
-                    &action,
-                    &call,
-                    &mut entries,
-                    &mut dropped,
-                    Some(&mut seq),
-                )?;
-            }
-        }
+        fold_and_emit(&dir, &ctx, &mut entries, &mut dropped, Some(&mut seq))?;
     }
     for line in &entries {
         writeln!(out, "{line}")

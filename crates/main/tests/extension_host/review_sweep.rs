@@ -197,6 +197,21 @@ fn rejects_a_bad_runs_count_naming_the_flag() {
 }
 
 #[test]
+fn the_call_cap_holds_the_planned_sweep() {
+    check_call_cap(2, 24, 3).unwrap();
+    check_call_cap(1, 17, 10).unwrap();
+}
+
+#[test]
+fn the_call_cap_rejects_a_sweep_above_170_naming_runs() {
+    let error = check_call_cap(2, 24, 4).unwrap_err();
+    assert!(error.contains("--runs"), "{error}");
+    assert!(error.contains("--models"), "{error}");
+    assert!(error.contains("192"), "{error}");
+    assert!(error.contains("170"), "{error}");
+}
+
+#[test]
 fn parses_a_lone_check() {
     let mode = parse_args(&[
         "review_sweep".to_owned(),
@@ -720,6 +735,9 @@ fn sweep_on(
     (tallies, outcomes, scripted.requests())
 }
 
+/// RULING-477-1 on #477 requires the per-entry `allow 2/3` line beside the
+/// pooled model row: one entry's repetitions aggregate while every run
+/// still counts in the denominators and rates.
 #[test]
 fn a_three_run_sweep_aggregates_per_entry_and_pools_runs() {
     let entry = synthetic_entry("a_01", Some(Label::Pass));
@@ -747,6 +765,9 @@ fn a_three_run_sweep_aggregates_per_entry_and_pools_runs() {
     assert_eq!((report.cached_input, report.uncached_input), (0, 40));
 }
 
+/// R7 on #477 sends each entry's repetitions back to back so later runs
+/// reuse the prompt cache: the sweep drives one entry's runs in turn
+/// before the next entry, and the test pins that drive order.
 #[test]
 fn sweep_drives_each_entry_back_to_back() {
     let first = synthetic_entry("e_1", Some(Label::Pass));

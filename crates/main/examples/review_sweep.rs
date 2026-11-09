@@ -2,8 +2,10 @@
 //! evals"): runs the committed labelled set `--runs` times per `--models`
 //! reviewer model (3 by default, back to back for cache reuse) through the
 //! public `routing::reviewer` seam and prints the per-entry and per-model
-//! miss/false-block tables. `--check` only parses and counts a file. Live
-//! calls are opt-in by running this example; no test can enable one.
+//! miss/false-block tables. A sweep planning more than the 170-call cap is
+//! rejected before it drives anything. `--check` only parses and counts a
+//! file. Live calls are opt-in by running this example; no test can enable
+//! one.
 
 #![allow(
     clippy::print_stdout,
@@ -42,6 +44,7 @@ fn run(argv: &[String]) -> Result<(), String> {
         }
         sweep::Mode::Sweep { models, set, runs } => {
             let entries = sweep::read_set_file(&set)?;
+            sweep::check_call_cap(models.len(), entries.len(), runs)?;
             let home = config::fiber_home_path_from_env().map_err(|error| error.to_string())?;
             let workspace = std::env::current_dir()
                 .map_err(|error| format!("the current directory: {error}"))?;

@@ -78,11 +78,7 @@ fn main() -> ExitCode {
             eprintln!("review: --synthetic takes no session directory");
             return ExitCode::from(2);
         }
-        return match support::review::run_synthetic(
-            &sample_opts.synthetic,
-            &sample_opts,
-            std::io::stdout(),
-        ) {
+        return match support::review::run_synthetic(&sample_opts.synthetic, std::io::stdout()) {
             Ok(report) => sampled(report),
             Err(problem) => {
                 eprintln!("{problem}");

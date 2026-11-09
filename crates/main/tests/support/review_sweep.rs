@@ -25,6 +25,28 @@ use serde_json::{Map, Value};
 /// owner runs one command and does no manual pooling.
 const DEFAULT_RUNS: u32 = 3;
 
+/// The owner's billed budget for one sweep command: reviewer calls,
+/// retries included (owner ruling on #477, Q1). A sweep planning more is
+/// rejected before it drives anything.
+const MAX_REVIEWER_CALLS: u64 = 170;
+
+/// Rejects a sweep whose planned reviewer calls exceed the billed cap: one
+/// call per model per entry per run. Names the flags that set the total,
+/// with the planned count and the cap.
+pub(crate) fn check_call_cap(models: usize, entries: usize, runs: u32) -> Result<(), String> {
+    let planned = u64::try_from(models).unwrap_or(u64::MAX).saturating_mul(
+        u64::try_from(entries)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::from(runs)),
+    );
+    if planned > MAX_REVIEWER_CALLS {
+        return Err(format!(
+            "review_sweep: {models} --models × {entries} set entries × --runs {runs} plans {planned} reviewer calls, above the {MAX_REVIEWER_CALLS}-call cap: pass fewer --models or lower --runs"
+        ));
+    }
+    Ok(())
+}
+
 /// How the sweep runs: over a set with named reviewer models, or one file
 /// parsed and counted with no providers.
 #[derive(Debug, PartialEq, Eq)]
