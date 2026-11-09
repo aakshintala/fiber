@@ -2903,3 +2903,14 @@ fn a_session_hello_carries_its_session_id_and_reason() {
         hello
     );
 }
+
+#[test]
+fn the_sandbox_preamble_reason_round_trips_as_sandbox() {
+    let reason = context::PreambleReason::Sandbox;
+    let value = serde_json::to_value(&reason).unwrap();
+    assert_eq!(value, serde_json::json!("sandbox"));
+    assert_eq!(
+        serde_json::from_value::<context::PreambleReason>(value).unwrap(),
+        reason
+    );
+}

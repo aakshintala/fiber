@@ -11,7 +11,7 @@ use contract::events::EventKind;
 use contract::inbox::{Ack, Delivery};
 use log::Log;
 
-use super::{ApplySandbox, Availability, Cause, SANDBOX_OFF, SANDBOX_ON};
+use super::{Applied, ApplySandbox, Availability, Cause, SANDBOX_OFF, SANDBOX_ON};
 use crate::inbox::TurnInput;
 use crate::{Loop, Model};
 use fakes::{Deadline, NoRules};
@@ -69,7 +69,10 @@ fn available() -> (ApplySandbox, Arc<std::sync::Mutex<Vec<bool>>>) {
         let seen = Arc::clone(&seen);
         move |enabled| {
             seen.lock().unwrap().push(enabled);
-            Availability::Available
+            Applied {
+                availability: Availability::Available,
+                changed: true,
+            }
         }
     });
     (apply, seen)
@@ -147,9 +150,12 @@ fn an_unreported_unavailability_writes_its_notice_and_accepts() {
     };
     looped.sandbox_apply = Some(Arc::new(move |enabled| {
         assert!(enabled);
-        Availability::Unavailable {
-            cause: Cause::AbiBelow2,
-            notice: Some(notice.clone()),
+        Applied {
+            availability: Availability::Unavailable {
+                cause: Cause::AbiBelow2,
+                notice: Some(notice.clone()),
+            },
+            changed: true,
         }
     }));
     let answer = admit(&mut looped, true);
@@ -166,9 +172,12 @@ fn an_unreported_unavailability_writes_its_notice_and_accepts() {
 #[test]
 fn an_already_reported_unavailability_writes_nothing_and_accepts() {
     let (mut looped, _log, mut watched, _home) = started();
-    looped.sandbox_apply = Some(Arc::new(|_| Availability::Unavailable {
-        cause: Cause::AbiBelow2,
-        notice: None,
+    looped.sandbox_apply = Some(Arc::new(|_| Applied {
+        availability: Availability::Unavailable {
+            cause: Cause::AbiBelow2,
+            notice: None,
+        },
+        changed: false,
     }));
     let answer = admit(&mut looped, true);
     assert!(
@@ -222,4 +231,390 @@ fn every_cause_names_itself() {
     ] {
         assert_eq!(format!("{cause:?}"), name);
     }
+}
+
+/// A shell-like tool whose definition reflects a shared enabled flag: the
+/// sentence appears only when the flag is on, mirroring the real shell's
+/// availability-qualified sentence. The flag is the shared handle the seam
+/// must not hold across `definition()`.
+struct ToggleShell {
+    enabled: Arc<std::sync::Mutex<bool>>,
+}
+
+impl ToggleShell {
+    fn description(enabled: bool) -> String {
+        let mut text =
+            "Runs a command in a new process session. `command` is the command.".to_owned();
+        if enabled {
+            text.push_str(
+                " When the session sandbox is on and available, the call runs confined \
+                 with no sockets and writes limited to the workspace, temp and granted paths; \
+                 a call with `unconfined: true` or `detach` set runs outside the sandbox \
+                 and is reviewed as with the sandbox off.",
+            );
+        }
+        text
+    }
+}
+
+impl contract::tool::Tool for ToggleShell {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        let enabled = *self.enabled.lock().unwrap();
+        contract::provider::ToolDefinition {
+            name: "shell".to_owned(),
+            description: Self::description(enabled),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        panic!("effects not used in sandbox seam tests")
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("run not used in sandbox seam tests")
+    }
+}
+
+/// A loop with a registered `shell` tool backed by `enabled`: the seam's
+/// refresh target. The toggle closure flips the same flag the tool reads.
+fn started_with_shell(
+    enabled: Arc<std::sync::Mutex<bool>>,
+) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    let home = fakes::TempDir::new("fiber-loop-sandbox-seam");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(home.path().join("credentials")).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
+    let (_inbox, rx) = mpsc::channel::<Delivery>();
+    let shell: Arc<dyn contract::tool::Tool> = Arc::new(ToggleShell {
+        enabled: Arc::clone(&enabled),
+    });
+    let looped = Loop::start(
+        crate::Session {
+            log: Arc::clone(&log),
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![("builtin".to_owned(), shell)],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(NoRules),
+            },
+        },
+        None,
+    )
+    .unwrap();
+    let watched = log.watch();
+    (looped, log, watched, home)
+}
+
+fn flipping_apply(
+    enabled: Arc<std::sync::Mutex<bool>>,
+) -> (ApplySandbox, Arc<std::sync::Mutex<Vec<bool>>>) {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let apply: ApplySandbox = Arc::new({
+        let seen = Arc::clone(&seen);
+        let enabled = Arc::clone(&enabled);
+        move |next| {
+            seen.lock().unwrap().push(next);
+            let mut guard = enabled.lock().unwrap();
+            let previous = *guard;
+            *guard = next;
+            let changed = previous != next;
+            drop(guard);
+            Applied {
+                availability: Availability::Available,
+                changed,
+            }
+        }
+    });
+    (apply, seen)
+}
+
+fn log_lines(looped: &Loop) -> Vec<contract::Envelope> {
+    log::read(looped.log.dir()).unwrap()
+}
+
+fn preamble_reasons(looped: &Loop) -> Vec<String> {
+    log_lines(looped)
+        .into_iter()
+        .filter(|line| line.kind() == EventKind::PreambleBuilt)
+        .map(|line| {
+            line.payload["reason"]
+                .as_str()
+                .expect("preamble_built carries a reason")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn registered_description(looped: &Loop) -> String {
+    looped
+        .tools
+        .get("shell")
+        .expect("shell stays registered")
+        .2
+        .description
+        .clone()
+}
+
+#[test]
+fn a_flip_refreshes_the_registered_shell_bytes_with_reason_sandbox_notice_first() {
+    let enabled = Arc::new(std::sync::Mutex::new(false));
+    let (mut looped, _log, mut watched, _home) = started_with_shell(Arc::clone(&enabled));
+    let (apply, _) = flipping_apply(Arc::clone(&enabled));
+    looped.sandbox_apply = Some(apply);
+    // Hold a warming request so the seam must drop it.
+    looped.warming.set_cap(Some(1));
+    let request = contract::provider::ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: contract::events::CacheLifetime::FiveMinutes,
+        cache_key: String::new(),
+        conversation: Vec::new().into(),
+        previous_end: None,
+        sent_tools: None,
+        max_output_tokens: None,
+        media: Default::default(),
+    };
+    let now = looped.log.clock().now();
+    looped.warming.record(&request, now);
+    assert!(looped.warming.held().is_some(), "warming holds a request");
+    let answer = admit(&mut looped, true);
+    assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    // The reply arrives first on the watcher: notice-before-build, since the
+    // seam rebuilds after the notice append. A swapped order would deliver
+    // the build first and fail the kind check below.
+    assert!(
+        replied(&mut watched) == SANDBOX_ON,
+        "the reply arrives first"
+    );
+    // The seam rebuilt with the sandbox reason after the notice.
+    assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+    assert_eq!(
+        looped.preamble_reason,
+        contract::events::PreambleReason::Sandbox
+    );
+    // Registered bytes equal the live definition with the sentence.
+    let live = ToggleShell::description(true);
+    assert_eq!(registered_description(&looped), live);
+    // Warming dropped the held request.
+    assert!(looped.warming.held().is_none(), "the seam stops warming");
+    // The durable build carries the sandbox reason; the ephemeral notice is
+    // watcher-only, so its order is pinned by the reply arriving first above.
+    let lines = log_lines(&looped);
+    assert!(
+        lines.iter().any(|line| {
+            line.kind() == EventKind::PreambleBuilt && line.payload["reason"] == "sandbox"
+        }),
+        "the sandbox build is logged"
+    );
+    // Sent bytes carry the fresh shell description.
+    let built = lines
+        .iter()
+        .find(|line| line.kind() == EventKind::PreambleBuilt)
+        .expect("a build is logged");
+    let tools = built.payload["tools"].as_array().expect("tools are sent");
+    let shell = tools
+        .iter()
+        .find(|tool| tool["name"] == "shell")
+        .expect("the shell is sent");
+    assert_eq!(
+        shell["definition"]["description"],
+        serde_json::Value::String(live)
+    );
+}
+
+#[test]
+fn a_flip_off_refreshes_the_registered_shell_bytes_back() {
+    let enabled = Arc::new(std::sync::Mutex::new(true));
+    let (mut looped, _log, mut watched, _home) = started_with_shell(Arc::clone(&enabled));
+    let (apply, _) = flipping_apply(Arc::clone(&enabled));
+    looped.sandbox_apply = Some(apply);
+    let answer = admit(&mut looped, false);
+    assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    assert_eq!(replied(&mut watched), SANDBOX_OFF);
+    assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+    assert_eq!(
+        registered_description(&looped),
+        ToggleShell::description(false)
+    );
+}
+
+#[test]
+fn a_repeated_available_toggle_replies_with_no_rebuild() {
+    let enabled = Arc::new(std::sync::Mutex::new(true));
+    let (mut looped, _log, mut watched, _home) = started_with_shell(Arc::clone(&enabled));
+    // A no-op toggle: the value does not flip, so the seam is skipped.
+    let apply: ApplySandbox = Arc::new({
+        let enabled = Arc::clone(&enabled);
+        move |next| {
+            let guard = enabled.lock().unwrap();
+            let changed = *guard != next;
+            drop(guard);
+            Applied {
+                availability: Availability::Available,
+                changed,
+            }
+        }
+    });
+    looped.sandbox_apply = Some(apply);
+    let builds_before = preamble_reasons(&looped).len();
+    let answer = admit(&mut looped, true);
+    assert!(matches!(answer, Ok(None)), "the no-op accepts: {answer:?}");
+    assert_eq!(replied(&mut watched), SANDBOX_ON, "a no-op still replies");
+    assert_eq!(
+        preamble_reasons(&looped).len(),
+        builds_before,
+        "a no-op builds nothing"
+    );
+}
+
+#[test]
+fn a_repeated_unavailable_on_says_its_line_at_most_once() {
+    let (mut looped, _log, mut watched, _home) = started();
+    let notice = contract::events::Notice {
+        code: contract::ErrorCode::ToolError,
+        message: "sandbox unavailable: Landlock ABI is below 2".to_owned(),
+        extension: None,
+    };
+    let reported = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // First enable flips on and reports once; the second is a no-op that
+    // still consults the latch, so no second line appears.
+    for first in [true, false] {
+        let notice = notice.clone();
+        let reported = Arc::clone(&reported);
+        let enabled = Arc::new(std::sync::Mutex::new(!first));
+        looped.sandbox_apply = Some(Arc::new(move |next| {
+            let changed = {
+                let mut guard = enabled.lock().unwrap();
+                let previous = *guard;
+                *guard = next;
+                previous != next
+            };
+            let already = reported.swap(true, std::sync::atomic::Ordering::SeqCst);
+            Applied {
+                availability: Availability::Unavailable {
+                    cause: Cause::AbiBelow2,
+                    notice: (!already).then(|| notice.clone()),
+                },
+                changed,
+            }
+        }));
+        let answer = admit(&mut looped, true);
+        assert!(matches!(answer, Ok(None)), "the toggle accepts: {answer:?}");
+        if first {
+            assert_eq!(
+                replied(&mut watched),
+                "sandbox unavailable: Landlock ABI is below 2"
+            );
+            // Drain the flip's rebuild so the second toggle's silence is
+            // observable: the first toggle still takes the seam.
+            let build = watched
+                .recv_timeout(DEADLINE)
+                .expect("the rebuild follows the notice")
+                .expect("the log outlives the drain")
+                .expect("the log ended before the build");
+            assert_eq!(build.kind(), EventKind::PreambleBuilt);
+            assert_eq!(build.payload["reason"], "sandbox");
+        } else {
+            assert!(
+                watched.try_recv().unwrap().is_none(),
+                "the second line never appears"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_interleaved_flip_between_snapshot_and_publish_publishes_fresh_bytes() {
+    let enabled = Arc::new(std::sync::Mutex::new(false));
+    let (mut looped, _log, _watched, _home) = started_with_shell(Arc::clone(&enabled));
+    let (apply, _) = flipping_apply(Arc::clone(&enabled));
+    looped.sandbox_apply = Some(apply);
+    // Park a pause that flips the flag to the opposite value from a second
+    // thread between the snapshot and the publish: the toggle already set
+    // the flag to true before the snapshot, so setting it back to false
+    // forces a real mismatch and the seam must publish the fresh bytes.
+    crate::turn::pause_sandbox_between_snapshot_and_publish(Box::new({
+        let enabled = Arc::clone(&enabled);
+        move || {
+            let flipped = std::thread::spawn({
+                let enabled = Arc::clone(&enabled);
+                move || {
+                    *enabled.lock().unwrap() = false;
+                }
+            });
+            flipped.join().unwrap();
+        }
+    }));
+    let answer = admit(&mut looped, true);
+    assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    // The publish carries the post-interleave bytes, not the snapshot.
+    assert_eq!(
+        registered_description(&looped),
+        ToggleShell::description(false),
+        "the publish is fresh after the interleave"
+    );
+    assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+}
+
+#[test]
+fn an_in_flight_declaration_keeps_its_value_across_the_toggle() {
+    let enabled = Arc::new(std::sync::Mutex::new(false));
+    let (mut looped, _log, _watched, _home) = started_with_shell(Arc::clone(&enabled));
+    // A call declared before the toggle keeps its earlier declaration: the
+    // seam refreshes the registry for the next step but never rewrites an
+    // in-flight decision.
+    let before = looped
+        .tools
+        .get("shell")
+        .expect("shell is registered")
+        .2
+        .description
+        .clone();
+    assert!(!before.contains("confined"), "the old bytes read off");
+    let (apply, _) = flipping_apply(Arc::clone(&enabled));
+    looped.sandbox_apply = Some(apply);
+    let answer = admit(&mut looped, true);
+    assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    assert!(
+        !before.contains("confined"),
+        "the in-flight value never changes"
+    );
+    assert!(
+        registered_description(&looped).contains("confined"),
+        "the next step observes the refreshed bytes"
+    );
 }

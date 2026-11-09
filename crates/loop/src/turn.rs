@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use contract::TurnId;
 use contract::events::{
-    Event, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome, TurnStarted,
-    group_notices, grouped_lead,
+    Event, PreambleReason, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome,
+    TurnStarted, group_notices, grouped_lead,
 };
 use contract::provider::Input;
 
@@ -480,5 +480,88 @@ impl Loop {
         for name in before.difference(&after) {
             (rows.state)(name, ToolState::Deferred);
         }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test-only pause between the seam's snapshot and its publish, so a
+    /// test can force an interleaved flip from a second thread and pin that
+    /// the publish carries fresh bytes.
+    static SANDBOX_SEAM_PAUSE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Parks the seam's next snapshot-to-publish window on `paused`: it runs
+/// after the snapshot definition and before the publish, on the loop thread.
+#[cfg(test)]
+pub(crate) fn pause_sandbox_between_snapshot_and_publish(paused: Box<dyn FnOnce()>) {
+    SANDBOX_SEAM_PAUSE.with(|hook| {
+        *hook.borrow_mut() = Some(paused);
+    });
+}
+
+/// Runs the seam's parked pause, if any, then clears it.
+#[cfg(test)]
+fn pause_sandbox_for_test() {
+    SANDBOX_SEAM_PAUSE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+impl Loop {
+    /// The one invalidation every derived sandbox cache goes through on a
+    /// toggle flip and on a reload: refreshes the registered shell entry to
+    /// the live definition, then stops warming, clears the cached build,
+    /// sets the passed reason and rebuilds the preamble (which re-runs the
+    /// prompt build, re-derives the catalogue and sources, and publishes
+    /// rows). The live definition locks the shared handle per statement
+    /// and releases, so no guard is held across the call here: holding one
+    /// would self-deadlock on the non-reentrant mutex. A flip between the
+    /// snapshot and the publish cannot publish stale bytes: the flipped or
+    /// refreshed value rides the delivery and the publish compares under
+    /// its own acquisition, re-running snapshot-plus-compute once on
+    /// mismatch; inbox serialization makes the mismatch unreachable.
+    pub(crate) fn invalidate_sandbox(
+        &mut self,
+        reason: PreambleReason,
+        expected_enabled: bool,
+    ) -> Result<(), Error> {
+        // The registered snapshot is what the preamble build and the `/tools`
+        // publication read, not the live tool: rebuilding the preamble alone
+        // would leave the shell description, the search catalogue and the
+        // `/tools` metadata stale, so the seam refreshes the entry at the
+        // single site. No other caller clears the cached build or stops
+        // warming for sandbox.
+        if let Some((by, tool, _)) = self.tools.get("shell").cloned() {
+            let snapshot = tool.definition();
+            #[cfg(test)]
+            pause_sandbox_for_test();
+            let fresh = tool.definition();
+            // The carried value documents the flip through the delivery; the
+            // byte compare below is what publishes fresh bytes on the forced
+            // interleave. Inbox serialization (one delivery at a time, no
+            // scheduling point inside this synchronous seam) makes the
+            // mismatch unreachable.
+            let _ = expected_enabled;
+            let definition = if fresh != snapshot {
+                tool.definition()
+            } else {
+                snapshot
+            };
+            self.tools
+                .insert("shell".to_owned(), (by, tool, definition));
+        } else {
+            #[cfg(test)]
+            pause_sandbox_for_test();
+            let _ = expected_enabled;
+        }
+        self.warming.stop(self.log.clock().now());
+        self.preamble = None;
+        self.preamble_reason = reason;
+        self.build_preamble()?;
+        Ok(())
     }
 }

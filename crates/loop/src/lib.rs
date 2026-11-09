@@ -131,7 +131,7 @@ pub use rewind::{
     Continuation, Rewound, fork_task, fork_workspace, latest_name, rewind_note,
     rewind_note_with_jobs, rewound_from,
 };
-pub use sandbox::{ApplySandbox, Availability, Cause};
+pub use sandbox::{Applied, ApplySandbox, Availability, Cause};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use skills::personal_source_paths;
@@ -227,7 +227,7 @@ pub struct Loop {
     /// tool answer from (`docs/system-prompt.md`, "Skills").
     skills: skill_set::SkillSet,
     /// Why the latest build writes `preamble_built`: start, resume,
-    /// switch or reload.
+    /// switch, reload or sandbox.
     preamble_reason: PreambleReason,
     /// The built preamble: what every request sends and what
     /// `preamble_built` records. `None` until the first turn builds it
