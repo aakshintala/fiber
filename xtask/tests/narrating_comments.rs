@@ -166,7 +166,7 @@ fn a_rename_does_not_reintroduce_old_comments_but_new_edits_are_checked() {
 #[test]
 fn quoted_non_ascii_rust_path_is_checked() {
     let dir = setup();
-    dir.write("café.rs", "// now uses the cache\n");
+    dir.write("café.rs", concat!("/", "/ now uses the cache\n"));
     common::git(&dir, &["add", "café.rs"]);
     let (code, output) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
     assert_eq!(code, Some(1), "{output}");
