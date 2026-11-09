@@ -125,6 +125,7 @@ pub use configure::{
     RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
     ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
+pub use configure::{SettingControl, SettingPresentation};
 pub use contract::feedback::{FeedbackDone, WriteFeedback};
 
 pub use home::{Launch, LaunchLocation};

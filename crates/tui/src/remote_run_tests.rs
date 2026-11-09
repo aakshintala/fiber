@@ -75,6 +75,7 @@ fn answer(line: &Value, global_answered: &mut bool) -> Option<Value> {
         "directories" => serde_json::json!({"directories": [], "path": "/"}),
         "settings" => serde_json::json!({"rows": [
             {"key": "scoped_models", "shown": "value",
+             "label": "Scoped models", "description": "d", "control": {"kind": "string_list"},
              "value": "[\"acme/m1\",\"acme/m2\"]", "layer": "global",
              "file": GLOBAL, "scope": "global_only"},
         ]}),

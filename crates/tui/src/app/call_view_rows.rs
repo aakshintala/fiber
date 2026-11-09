@@ -247,6 +247,7 @@ pub(in crate::app) fn build_frame(
 ) -> Frame {
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: title.to_owned(),
         command: command.to_owned(),
         rows: rows

@@ -194,6 +194,7 @@ impl Picker {
         };
         Frame {
             joins: Vec::new(),
+            chrome: None,
             title: "Credentials".to_owned(),
             command: "/credential".to_owned(),
             rows,
