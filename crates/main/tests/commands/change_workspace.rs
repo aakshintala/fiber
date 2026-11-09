@@ -1071,13 +1071,16 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
             }
         }
     });
-    let started = first_line(setup.deadline, &lines);
+    let started = first_line(setup.deadline, &lines, None);
     assert_eq!(started["kind"], "session_started");
     assert_eq!(started["payload"]["forked_from"]["session_id"], old);
     // The retry boots fully before the log is read: startup prints its
     // lines in order, so the third is the loaded set.
-    assert_eq!(first_line(setup.deadline, &lines)["kind"], "fiber_started");
-    let loaded_line = first_line(setup.deadline, &lines);
+    assert_eq!(
+        first_line(setup.deadline, &lines, None)["kind"],
+        "fiber_started"
+    );
+    let loaded_line = first_line(setup.deadline, &lines, None);
     assert_eq!(loaded_line["kind"], "extensions_loaded");
     // The fixed package loads on the retry.
     assert!(

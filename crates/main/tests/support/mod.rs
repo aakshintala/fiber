@@ -2064,15 +2064,23 @@ pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The first stdout line, waited for under the test's [`Deadline`].
+/// The first stdout line, waited for under the test's [`Deadline`]. With a
+/// [`Diag`], expiry panics with the #3325 dump; without one it panics with
+/// the receive error rendered into the wait text.
 #[track_caller]
-pub(crate) fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
-    serde_json::from_str(
-        &deadline
-            .recv(stdout)
-            .expect("waited until the deadline for fiber_started"),
-    )
-    .unwrap()
+pub(crate) fn first_line(
+    deadline: Deadline,
+    stdout: &mpsc::Receiver<String>,
+    diag: Option<&Diag>,
+) -> Value {
+    let line = match (deadline.recv(stdout), diag) {
+        (Ok(line), _) => line,
+        (Err(mpsc::RecvTimeoutError::Timeout), Some(diag)) => {
+            panic!("{}", diag.report("fiber_started", &[]))
+        }
+        (Err(error), _) => panic!("waited until the deadline for fiber_started: {error:?}"),
+    };
+    serde_json::from_str(&line).unwrap()
 }
 
 /// The event kinds of a turn answered by [`hello`].
