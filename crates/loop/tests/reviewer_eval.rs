@@ -32,7 +32,10 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use support::review::{run_sampled, run_scan, run_synthetic};
+use support::review::{
+    COMMITTED_SYNTHETIC_SESSIONS, is_committed_synthetic_session, run_sampled, run_scan,
+    run_synthetic,
+};
 use support::reviewer_eval::{
     Allowlist, DropKind, ForeignInput, Label, Labels, MAX_SAMPLED, NativeLine, ReviewedItem,
     ReviewedKind, SampleOpts, ScrubCtx, SecretClass, SetLine, Source, SourceKind, Unsupported,
@@ -747,6 +750,10 @@ fn pi_lines_map_message_toolcall_result_and_compaction() {
     assert!(parse_pi_line(r#"{"type":"message","id":"m6"}"#).is_err());
 }
 
+/// (`docs/permissions.md`, "What it is shown"): the prefix carries the
+/// person's messages, the earlier tool calls, and the reply each person
+/// message answers — a call between the reply text and the answer breaks
+/// the link, so no reply is shown.
 #[test]
 fn foreign_entries_carry_person_calls_and_answered_replies() {
     let content = [
@@ -773,6 +780,8 @@ fn foreign_entries_carry_person_calls_and_answered_replies() {
     assert_eq!(entries[0].tool, "shell");
 }
 
+/// (`docs/permissions.md`, "What it is shown"): the reply a person message
+/// answers is the model's text directly before it, marked as the agent's.
 #[test]
 fn foreign_pending_reply_answers_the_next_person() {
     let content = [
@@ -794,6 +803,9 @@ fn foreign_pending_reply_answers_the_next_person() {
     assert_eq!(kinds, vec!["Person", "Reply", "Person", "Call"]);
 }
 
+/// (`docs/permissions.md`, "What it is shown"): the prefix is every person
+/// message and tool call so far, with the answered replies — the model's
+/// other prose is stripped, and a pending reply a call breaks never shows.
 #[test]
 fn foreign_fold_carries_the_full_prefix_and_drops_pending_on_calls() {
     let content = [
@@ -821,6 +833,9 @@ fn foreign_fold_carries_the_full_prefix_and_drops_pending_on_calls() {
     );
 }
 
+/// (`docs/permissions.md`, "At a compaction"): after the compaction the
+/// input is the kept person messages, each with the reply it answered —
+/// the calls from before drop.
 #[test]
 fn foreign_compaction_keeps_person_messages_with_answered_replies() {
     let content = [
@@ -1846,6 +1861,36 @@ fn empty_opts() -> SampleOpts {
         synthetic: Vec::new(),
         scan: None,
     }
+}
+
+/// The converter's allowlist names exactly the committed consent sessions:
+/// every committed session converts, and an untracked name never does, so
+/// an untracked directory placed under `reviewer_consent/` is rejected
+/// instead of emitting raw calls with the identity scrub context and no
+/// drop classes.
+#[test]
+fn synthetic_allowlist_names_the_committed_consent_sessions() {
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reviewer_consent");
+    let mut committed: Vec<String> = fs::read_dir(&fixtures)
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    committed.sort();
+    let listed: Vec<String> = COMMITTED_SYNTHETIC_SESSIONS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    assert_eq!(
+        committed, listed,
+        "the allowlist matches the committed sessions"
+    );
+    for name in &listed {
+        assert!(is_committed_synthetic_session(name), "{name} converts");
+    }
+    assert!(!is_committed_synthetic_session("untracked-owner-export"));
 }
 
 /// `run_synthetic` over the committed fixture dirs converts every replayable

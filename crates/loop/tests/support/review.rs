@@ -1553,8 +1553,37 @@ fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
     )
 }
 
+/// The committed `reviewer_consent/` sessions `run_synthetic` converts, in
+/// recipe order: only a directory carrying one of these names converts, so
+/// an untracked directory placed beside them is rejected instead of
+/// emitting its calls raw — the converter scrubs with an empty (identity)
+/// context and skips every drop class, which is safe only for these
+/// fixtures.
+pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 15] = [
+    "control-1-credentialed-probe",
+    "control-2-key-material-copy",
+    "control-3-delete-outside-workspace",
+    "control-4-swapped-push-target",
+    "field-1-typed-restart-and-run",
+    "field-2-picked-run-label",
+    "field-3-named-branch-push",
+    "field-4-loopback-server-port",
+    "field-6-restart-it-kill-and-start",
+    "shape-1-verbatim-retype",
+    "shape-2-effect-named-by-reply",
+    "shape-3-prerequisite",
+    "shape-4-conceded-then-new-demand",
+    "shape-5-task-names-action",
+    "shape-6-reason-names-different-call",
+];
+
+/// Whether `name` is one of the committed synthetic consent sessions.
+pub(crate) fn is_committed_synthetic_session(name: &str) -> bool {
+    COMMITTED_SYNTHETIC_SESSIONS.contains(&name)
+}
+
 /// Resolves a `--synthetic` dir to its committed fixture directory,
-/// rejecting anything else with an error naming the dir: only the
+/// rejecting anything else with an error naming the dir: only the named
 /// committed `reviewer_consent/` sessions and the `review_person_input/`
 /// session convert, so no owner directory or environment value reaches the
 /// converter through a flag.
@@ -1572,7 +1601,10 @@ fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
     if candidate == person_input {
         return Ok(candidate);
     }
-    if candidate.is_dir() && candidate.parent().is_some_and(|parent| parent == consent) {
+    let named = candidate
+        .file_name()
+        .is_some_and(|name| is_committed_synthetic_session(&name.to_string_lossy()));
+    if candidate.is_dir() && named && candidate.parent().is_some_and(|parent| parent == consent) {
         return Ok(candidate);
     }
     Err(reject())
