@@ -8594,7 +8594,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // child, so each row still spins.
     run.write(b"/delegates\r");
     let grid = run.wait_screen("the running delegates", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("◆ scan one")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan one")
+            && !grid.contents.contains("✓ scan one")
     });
     // The shorter viewport hides the third delegate below the fold: walk
     // focus down until the viewport follows it into view to prove it
@@ -8602,7 +8604,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // navigation start for the six Downs below.
     let mut prev = grid.contents;
     let mut downs = 0;
-    while downs < 6 && !prev.contains("◆ scan three") {
+    while downs < 6 && !prev.contains("scan three") {
         run.write(b"\x1b[B");
         downs += 1;
         prev = run
@@ -8612,7 +8614,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             .contents;
     }
     let grid = run.wait_screen("the third running delegate", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("◆ scan three")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan three")
+            && !grid.contents.contains("✓ scan three")
     });
     let mut prev = grid.contents;
     for _ in 0..downs {
@@ -8624,7 +8628,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             .contents;
     }
     let grid = run.wait_screen("the first delegate back on top", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("◆ scan one")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan one")
+            && !grid.contents.contains("✓ scan one")
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -8646,7 +8652,11 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             && grid.contents.contains("scan four")
             && !grid.contents.contains("scan one")
     });
-    assert!(grid.contents.contains("◆ scan four"), "{}", grid.contents);
+    assert!(
+        grid.contents.contains("scan four") && !grid.contents.contains("✓ scan four"),
+        "{}",
+        grid.contents
+    );
     // Enter opens the fourth delegate's live view.
     run.write(b"\r");
     run.wait_screen("the fourth delegate's view", |grid| {
@@ -8691,9 +8701,11 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     });
     let grid = run.wait_screen("the partial delegates list", |grid| {
         delegates_list_header(grid)
-            && (grid.contents.contains("◆ scan three") || grid.contents.contains("◆ scan four"))
-            && !grid.contents.contains("◆ scan one")
-            && !grid.contents.contains("◆ scan two")
+            && ((grid.contents.contains("scan three") && !grid.contents.contains("✓ scan three"))
+                || (grid.contents.contains("scan four")
+                    && !grid.contents.contains("✓ scan four")))
+            && !(grid.contents.contains("scan one") && !grid.contents.contains("✓ scan one"))
+            && !(grid.contents.contains("scan two") && !grid.contents.contains("✓ scan two"))
             && grid.contents.contains("✓ scan")
     });
     // An unfinished late scan stays first while the finished rows sit
@@ -8701,7 +8713,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // replay. Rows match by containment: a clipped viewport marks its
     // first column with an overflow glyph, so the marker is not always
     // first.
-    let running = grid.rows.iter().position(|row| row.contains("◆ scan"));
+    let running = grid
+        .rows
+        .iter()
+        .position(|row| row.contains("scan") && !row.contains("✓"));
     let finished = grid.rows.iter().position(|row| row.contains("✓ scan"));
     let (Some(running), Some(finished)) = (running, finished) else {
         panic!("a running scan above finished ones in\n{}", grid.contents);
@@ -8739,7 +8754,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             && grid.contents.contains("✓ scan two")
             && grid.contents.contains("✓ scan three")
             && grid.contents.contains("✓ scan four")
-            && !grid.contents.contains("◆ scan")
+            && !grid
+                .rows
+                .iter()
+                .any(|row| row.contains("scan") && !row.contains("✓"))
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -11060,7 +11078,7 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
     fakes::wait_until("the steering_applied line", setup.deadline, move || {
         log_has(&log, "steering_applied", MARK)
     });
-    open_delegate_view(&mut run, "◆ scan", "› ◆ scan");
+    open_delegate_view(&mut run, "scan", "› ◆ scan");
     run.wait_screen(
         "the steer rule over its text, no Fiber rule beside it",
         |grid| rule_over_text(grid, "steer", MARK).is_some() && !grid.contents.contains("Fiber ·"),
