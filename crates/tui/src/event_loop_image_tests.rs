@@ -652,6 +652,8 @@ fn a_queued_conversion_without_an_executable_fails_without_a_child() {
 #[test]
 fn detection_replies_land_without_a_frame_wait() {
     let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
+    // Attached, so no home logo repaints on the protocol the reply names.
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
     let (_, rx) = mpsc::channel();
     assert!(!lp.app.iterm());
     assert!(!lp.app.sixel());

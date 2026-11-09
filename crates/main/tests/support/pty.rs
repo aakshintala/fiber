@@ -1130,7 +1130,8 @@ impl Run {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", setup.root.path())
             .env("FIBER_HOME", setup.home())
-            .env("TERM", "xterm-256color");
+            .env("TERM", "xterm-256color")
+            .env("FIBER_TEST_FAKE_KEY", "sk-test");
         for (key, value) in env {
             command.env(key, value);
         }

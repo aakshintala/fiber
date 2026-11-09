@@ -540,7 +540,7 @@ impl App {
                     Some(Sized {
                         total: context.tokens,
                         window: self.panel_state.window_for(session)?,
-                        trigger: self.panel_state.handoff(),
+                        trigger: self.panel_state.compaction(),
                     })
                 });
                 Some(context_view::frame(
@@ -556,14 +556,11 @@ impl App {
                     session: self.session(),
                     status: self.panel_state.status(),
                     credential: self.panel_state.credential(),
-                    hub: self
-                        .home
-                        .as_ref()
-                        .and_then(|home| match &home.launch.location {
-                            crate::LaunchLocation::Local { .. } => None,
-                            crate::LaunchLocation::Remote { hub } => Some(hub.as_str()),
-                        }),
-                    version: self.home.as_ref().map(|home| home.launch.version.as_str()),
+                    hub: match &self.home.launch.location {
+                        crate::LaunchLocation::Local { .. } => None,
+                        crate::LaunchLocation::Remote { hub } => Some(hub.as_str()),
+                    },
+                    version: Some(self.home.launch.version.as_str()),
                 },
                 *list,
             )),
@@ -586,7 +583,7 @@ impl App {
                 ))
             }
             Open::ReleaseNotes(list) => {
-                let home = self.home.as_ref()?;
+                let home = &self.home;
                 // Width zero means a metrics call, not a draw: wrap at
                 // the width the draw uses.
                 let width = if width == 0 {
@@ -908,22 +905,23 @@ impl App {
                     Some(super::Waiting::ClearStart) => return Vec::new(),
                     Some(super::Waiting::ClearClose) => return Vec::new(),
                     Some(super::Waiting::History) => return Vec::new(),
-                    Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                    Some(super::Waiting::ImageFetch { .. })
+                    | Some(super::Waiting::ImageDisplay { .. }) => {
                         return Vec::new();
                     }
                     Some(super::Waiting::Sessions) => return Vec::new(),
                     Some(super::Waiting::Abandoned) => return Vec::new(),
                     Some(
-                        super::Waiting::Directories
-                        | super::Waiting::Subscribe
+                        super::Waiting::Directories(..)
+                        | super::Waiting::Subscribe { .. }
                         | super::Waiting::Stop
                         | super::Waiting::Delete
                         | super::Waiting::OfferImport
-                        | super::Waiting::DeleteDiscovery
-                        | super::Waiting::DeleteStop
-                        | super::Waiting::DeleteFinal
+                        | super::Waiting::DeleteDiscovery(..)
+                        | super::Waiting::DeleteStop { .. }
+                        | super::Waiting::DeleteFinal(..)
                         | super::Waiting::Feed
-                        | super::Waiting::Recent
+                        | super::Waiting::Recent(..)
                         | super::Waiting::Close,
                     ) => return Vec::new(),
                     Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
@@ -940,6 +938,15 @@ impl App {
                         self.outbox.settled(accepted.command_id.0.as_str());
                         return self.call_view_answered(&accepted);
                     }
+                    Some(
+                        super::Waiting::Find
+                        | super::Waiting::Commands
+                        | super::Waiting::Model
+                        | super::Waiting::Reply
+                        | super::Waiting::OfferFile
+                        | super::Waiting::Steer
+                        | super::Waiting::Shell,
+                    ) => return Vec::new(),
                     Some(
                         super::Waiting::Branch
                         | super::Waiting::Quota
@@ -980,22 +987,23 @@ impl App {
                     Some(super::Waiting::ClearStart) => return Vec::new(),
                     Some(super::Waiting::ClearClose) => return Vec::new(),
                     Some(super::Waiting::History) => return Vec::new(),
-                    Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                    Some(super::Waiting::ImageFetch { .. })
+                    | Some(super::Waiting::ImageDisplay { .. }) => {
                         return Vec::new();
                     }
                     Some(super::Waiting::Sessions) => return Vec::new(),
                     Some(super::Waiting::Abandoned) => return Vec::new(),
                     Some(
-                        super::Waiting::Directories
-                        | super::Waiting::Subscribe
+                        super::Waiting::Directories(..)
+                        | super::Waiting::Subscribe { .. }
                         | super::Waiting::Stop
                         | super::Waiting::Delete
                         | super::Waiting::OfferImport
-                        | super::Waiting::DeleteDiscovery
-                        | super::Waiting::DeleteStop
-                        | super::Waiting::DeleteFinal
+                        | super::Waiting::DeleteDiscovery(..)
+                        | super::Waiting::DeleteStop { .. }
+                        | super::Waiting::DeleteFinal(..)
                         | super::Waiting::Feed
-                        | super::Waiting::Recent
+                        | super::Waiting::Recent(..)
                         | super::Waiting::Close,
                     ) => return Vec::new(),
                     Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
@@ -1022,6 +1030,15 @@ impl App {
                         self.call_view_refused(&rejected);
                         return Vec::new();
                     }
+                    Some(
+                        super::Waiting::Find
+                        | super::Waiting::Commands
+                        | super::Waiting::Model
+                        | super::Waiting::Reply
+                        | super::Waiting::OfferFile
+                        | super::Waiting::Steer
+                        | super::Waiting::Shell,
+                    ) => return Vec::new(),
                     Some(
                         super::Waiting::Branch
                         | super::Waiting::Quota
@@ -1118,9 +1135,9 @@ impl App {
     /// The local launch workspace, when the terminal has one: the
     /// root the Changed files paths read against.
     fn workspace_root(&self) -> Option<&std::path::Path> {
-        match self.home.as_ref().map(|home| &home.launch.location) {
-            Some(crate::LaunchLocation::Local { workspace, .. }) => Some(workspace),
-            _ => None,
+        match &self.home.launch.location {
+            crate::LaunchLocation::Local { workspace, .. } => Some(workspace),
+            crate::LaunchLocation::Remote { .. } => None,
         }
     }
 

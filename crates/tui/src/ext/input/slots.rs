@@ -110,12 +110,12 @@ pub struct Answers<'a> {
     pub flat: bool,
 }
 
-/// A handoff's band without its note: what the band row reads. The
+/// A compaction's band without its note: what the band row reads. The
 /// context sizes ride [`TurnBandState::Done`], so only a done band
 /// carries them.
 #[derive(Debug, Clone)]
-pub struct HandoffBand<'a> {
-    /// What the handoff runs at.
+pub struct CompactionBand<'a> {
+    /// What the compaction runs at.
     pub trigger: &'a str,
     /// The band's timestamp.
     pub ts: u64,
@@ -157,12 +157,20 @@ pub struct Notice<'a> {
 pub struct LedgerRow<'a> {
     /// The tool's name.
     pub name: &'a str,
-    /// The call's arguments.
+    /// The call's arguments: the ones that ran, when a `before_tool` hook
+    /// rewrote them.
     pub arguments: &'a Value,
+    /// With a rewrite, the extensions whose hooks rewrote the arguments,
+    /// in the order they ran; absent when none took attribution.
+    pub changed_by: Option<&'a [String]>,
     /// What the call is doing, or how it ended.
     pub state: CallState<'a, LedgerResult<'a>, ()>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
+    /// The recipient's description, for a `delegate_message`, or name, for a
+    /// `session_message`, as the terminal held it when the call folded; `None`
+    /// when it held none or the call is no message call.
+    pub recipient: Option<&'a str>,
     /// The screen reader drops every style from the returned spans.
     pub flat: bool,
 }
@@ -184,8 +192,10 @@ impl<'a> LedgerRow<'a> {
         slot.hash(&mut key);
         self.name.hash(&mut key);
         hash_value(self.arguments, &mut key);
+        self.changed_by.hash(&mut key);
         hash_call_state(&self.state, hash_ledger_result, |_: &(), _key| {}, &mut key);
         self.answer.hash(&mut key);
+        self.recipient.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
     }
@@ -318,7 +328,7 @@ impl Answers<'_> {
     }
 }
 
-impl HandoffBand<'_> {
+impl CompactionBand<'_> {
     /// The cache key over the slot and every field.
     pub(crate) fn key(&self, slot: &str) -> u64 {
         let mut key = DefaultHasher::new();

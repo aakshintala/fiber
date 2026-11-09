@@ -23,8 +23,8 @@ pub use action::{
     TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
 };
 pub use context::{
-    CacheLifetime, ContextNudged, DateChanged, Environment, ExtensionSectionSent, Git,
-    HandoffCompleted, HandoffStarted, HandoffTrigger, InstructionFile, InstructionFileSent,
+    CacheLifetime, CompactionCompleted, CompactionStarted, CompactionTrigger, ContextNudged,
+    DateChanged, Environment, ExtensionSectionSent, Git, InstructionFile, InstructionFileSent,
     InstructionReason, InstructionSent, KeptMessage, ModelChanged, ModelSettings, Note, Notice,
     OpeningMessage, Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, QuotaRearmed,
     RetryScheduled, ReviewerKept, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource,
@@ -223,8 +223,8 @@ pub enum SessionReason {
     Fork,
     /// A rewind.
     Rewind,
-    /// A handoff.
-    Handoff,
+    /// A compaction.
+    Compaction,
 }
 
 impl TryFrom<ExtensionReason> for SessionReason {
@@ -239,7 +239,7 @@ impl TryFrom<ExtensionReason> for SessionReason {
             ExtensionReason::Resume => Ok(Self::Resume),
             ExtensionReason::Fork => Ok(Self::Fork),
             ExtensionReason::Rewind => Ok(Self::Rewind),
-            ExtensionReason::Handoff => Ok(Self::Handoff),
+            ExtensionReason::Compaction => Ok(Self::Compaction),
             ExtensionReason::Call => Err(reason),
         }
     }
@@ -268,8 +268,8 @@ pub enum ExtensionReason {
     Fork,
     /// A rewind.
     Rewind,
-    /// A handoff.
-    Handoff,
+    /// A compaction.
+    Compaction,
     /// A provider call outside a session.
     Call,
 }
@@ -349,8 +349,8 @@ kinds! {
     InstructionFile(InstructionFile) = "instruction_file", Durable;
     DateChanged(DateChanged) = "date_changed", Durable;
     SkillsChanged(SkillsChanged) = "skills_changed", Durable;
-    HandoffStarted(HandoffStarted) = "handoff_started", Durable;
-    HandoffCompleted(HandoffCompleted) = "handoff_completed", Durable;
+    CompactionStarted(CompactionStarted) = "compaction_started", Durable;
+    CompactionCompleted(CompactionCompleted) = "compaction_completed", Durable;
     SkillsResent(SkillsResent) = "skills_resent", Durable;
     ContextNudged(ContextNudged) = "context_nudged", Durable;
     ReviewerKept(ReviewerKept) = "reviewer_kept", Durable;

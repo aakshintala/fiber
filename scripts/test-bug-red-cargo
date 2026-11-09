@@ -11,6 +11,11 @@ if [ "${1-}" = xtask ] && [ "${2-}" = docs-only ]; then
   fi
   exit 1
 fi
+if [ "${1-}" = run ]; then
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+  [ "$#" -gt 0 ] && shift
+  if [ "${1-}" = bug-filter ]; then set -- xtask "$@"; fi
+fi
 if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
   shift 2
   if [ "$#" -gt 0 ]; then
@@ -20,7 +25,10 @@ if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
     joined=""
     for f in "$@"; do
       case "$f" in
-        */tests/*)
+        */tests/*|tests/*)
+          if [ "$f" = tests/a.rs ] && [ ! -f "$f" ]; then
+            continue
+          fi
           if [ -z "$joined" ]; then
             joined="$f"
           else

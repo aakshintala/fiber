@@ -45,14 +45,15 @@ pub(crate) struct CallView {
     call: usize,
     /// The action naming the call, to match its completion line.
     action: String,
-    /// The call's tool name and arguments, to rebuild its rows when the
-    /// result arrives after the view opened on a running call.
-    name: String,
-    arguments: serde_json::Value,
     /// The capitalised kind word, drawn bold on the top row.
     title: String,
     /// The call's target, drawn dim on the top row.
     command: String,
+    /// The call the rows come from, to lay them out again when the
+    /// width changes.
+    source: opened::Call,
+    /// The width `prefix`, `plain` and `closing` were laid out at.
+    width: u16,
     /// The headline and shell command rows, drawn before the output.
     prefix: Vec<opened::Body>,
     /// The shell or search closing row, drawn after the output.
@@ -95,21 +96,15 @@ impl CallView {
     /// and numbering from the per-kind renderer, the uncapped rows for
     /// a result with no artifact, and the paging inputs from its
     /// result. A call with no result yet shows its empty rows.
-    fn open(
-        call: CallSnapshot,
-        action: String,
-        name: String,
-        arguments: serde_json::Value,
-        session: SessionId,
-    ) -> Self {
+    fn open(call: CallSnapshot, session: SessionId, width: u16) -> Self {
         let pager = Pager::new(call.artifact.is_some());
         Self {
             call: call.id,
-            action,
-            name,
-            arguments,
+            action: call.source.action.clone(),
             title: call.title,
             command: call.command,
+            source: call.source,
+            width,
             prefix: call.prefix,
             closing: call.closing,
             numbering: call.numbering,
@@ -132,18 +127,19 @@ impl CallView {
     /// Refreshes the snapshot from the call's completion: a view opened
     /// on a running call shows its empty rows until the result arrives,
     /// so the completion rebuilds the uncapped rows and paging inputs
-    /// from the same per-kind renderer. True when the view's call
-    /// completed, so the caller pumps the new artifact fetch.
-    fn refresh_from_completed(&mut self, done: &ToolCallCompleted, width: u16) -> bool {
+    /// from the same per-kind renderer.
+    fn refresh_from_completed(&mut self, done: &ToolCallCompleted, width: u16) {
         let fresh = opened::snapshot_completed(
             self.call,
-            &self.name.clone(),
-            &self.arguments.clone(),
-            &self.action.clone(),
+            &self.source.name,
+            &self.source.arguments,
+            &self.action,
             done,
             width,
         );
         let was_paged = self.paged();
+        self.source = fresh.source;
+        self.width = width;
         self.plain = fresh.plain;
         self.prefix = fresh.prefix;
         self.closing = fresh.closing;
@@ -154,12 +150,25 @@ impl CallView {
         if !was_paged && self.paged() && self.pager.fill_next.is_none() {
             self.pager.fill_next = Some(0);
         }
-        true
     }
 
     /// Whether the result pages an artifact.
     fn paged(&self) -> bool {
         self.artifact.is_some()
+    }
+
+    /// Lays the call's width-dependent rows (`prefix` and `plain`) out
+    /// again at `width` from the call it keeps, so a message wraps where
+    /// the view is drawn now; `closing` takes no width. Paging,
+    /// follow, search and the notice stay; the selection and the first
+    /// row shown move only when the new row count leaves them past the
+    /// last row.
+    fn rebuild(&mut self, width: u16) {
+        self.plain = opened::uncapped(&self.source, width);
+        self.prefix = opened::prefix(&self.source, width);
+        self.width = width;
+        let rows = self.rows().len();
+        self.list.clamp(rows);
     }
 }
 
@@ -408,10 +417,8 @@ impl App {
         let Some(call) = self.find_call(id) else {
             return Effect::None;
         };
-        let Some((action, name, arguments)) = self.find_call_parts(id) else {
-            return Effect::None;
-        };
-        let mut view = CallView::open(call, action, name, arguments, session);
+        let width = self.column_width();
+        let mut view = CallView::open(call, session, width);
         if !self.connected() {
             view.notice = Some("The call's output could not load: not connected.".to_owned());
         }
@@ -431,27 +438,6 @@ impl App {
             .flat_map(|turn| turn.groups())
             .flat_map(|group| group.calls());
         opened::snapshot(calls, id, self.column_width())
-    }
-
-    /// The call `id` names on the attached screen: its action, tool
-    /// name and arguments, to rebuild the view when the result arrives
-    /// after the view opened on a running call.
-    fn find_call_parts(&self, id: usize) -> Option<(String, String, serde_json::Value)> {
-        self.screen
-            .pages()
-            .newest_first()
-            .flatten()
-            .flat_map(|turns| turns.iter())
-            .flat_map(|turn| turn.groups())
-            .flat_map(|group| group.calls())
-            .find(|call| call.id == id)
-            .map(|call| {
-                (
-                    call.action.clone(),
-                    call.name.clone(),
-                    call.arguments.clone(),
-                )
-            })
     }
 
     /// Refreshes the open view when its call completes: a view opened
@@ -474,6 +460,22 @@ impl App {
         view.refresh_from_completed(done, width);
         self.refresh_call_view_matches();
         self.call_view_pump().into_iter().collect()
+    }
+
+    /// Lays the open call view's rows out again when the column width
+    /// changed since they were built, then rebuilds its matches for the
+    /// new rows. Compares the view's own width, not the screen's wrap
+    /// result, which a frozen conversation reports unchanged.
+    pub(in crate::app) fn rewrap_call_view(&mut self) {
+        let width = self.column_width();
+        let Some(view) = self.call_view_mut() else {
+            return;
+        };
+        if view.width == width {
+            return;
+        }
+        view.rebuild(width);
+        self.refresh_call_view_matches();
     }
 
     /// Whether the call `id` names is open inline.

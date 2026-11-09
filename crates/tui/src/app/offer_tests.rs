@@ -23,7 +23,7 @@ fn attached() -> App {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
     app.attach(contract::SessionId(S_A.to_owned()));
     app
 }
@@ -264,6 +264,25 @@ fn reconnect_closes_source_and_replay_shows_the_offer_list() {
     assert!(resent.contains(&lines[0]));
     assert!(!app.offer.source_open());
     assert!(!app.offer_open());
+    // The hub takes the resubscription at `summary`, then at `full`, and
+    // replays the session.
+    let subscribe: Value = serde_json::from_str(&resent[0]).unwrap();
+    assert_eq!(subscribe["command"], "subscribe");
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": subscribe["id"], "result": {}}),
+        None,
+    ));
+    // The reopened session is gated until the `full` raise is accepted.
+    let raise: Value = serde_json::from_str(&app.take_raise().expect("the raise is due")).unwrap();
+    assert_eq!(raise["command"], "subscribe");
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": raise["id"], "result": {}}),
+        None,
+    ));
     app.on_line(session_line(S_A, "repository_code_offered", json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]}), None));
     assert!(app.offer_open());
     assert!(!app.offer.source_open());
@@ -751,8 +770,10 @@ fn wheel_over_offer_wins_over_open_results() {
     let content_height = u16::try_from(app.conversation_area_height())
         .unwrap_or(u16::MAX)
         .min(height);
+    // The grip's column is no part of the conversation.
+    let column = app.conversation_area().x;
     let (col, row) = (0..content_height)
-        .flat_map(|row| (0..width).map(move |col| (col, row)))
+        .flat_map(|row| (column..width).map(move |col| (col, row)))
         .find(|&(col, row)| {
             !search.is_some_and(|slab| slab.contains(ratatui::layout::Position::new(col, row)))
                 && !completion
@@ -908,4 +929,184 @@ fn wheel_over_panel_with_offer_open_keeps_the_panel() {
         app.panel_state().delegate_scroll() > 0,
         "the panel scrolled instead"
     );
+}
+
+#[test]
+fn offer_file_answer_reaches_its_handler() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::OfferFile)
+    );
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": id, "result": {"text": "first source"}}),
+        None,
+    ));
+    // The answer folds into the source view: its text shows.
+    assert!(source_text(&app).contains("first source"));
+}
+
+#[test]
+fn offer_file_tag_is_gone_after_answer() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": id, "result": {"text": "first source"}}),
+        None,
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn an_offer_file_answer_its_handler_declines_keeps_its_tag() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    // An accept whose result is not offered-file text declines the
+    // source view: the answer folds nowhere, and the wait stands for
+    // the late real answer.
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": id, "result": {"commands": []}}),
+        None,
+    ));
+    assert!(source_text(&app).contains("Loading…"));
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::OfferFile)
+    );
+}
+
+#[test]
+fn offer_file_after_refusal() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        S_A,
+        "command_rejected",
+        json!({"command_id": id, "code": "stale_request", "message": "Read refused."}),
+        None,
+    ));
+    // The refusal shows in the source view, and the wait settles with
+    // the retired ask.
+    assert!(source_text(&app).contains("Read refused."));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn an_offer_file_duplicate_command_keeps_its_tag() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        S_A,
+        "command_rejected",
+        json!({"command_id": id, "code": "duplicate_command", "message": "Already held."}),
+        None,
+    ));
+    // A resent copy the session already holds keeps the ask, and the
+    // tag with it, with no notice.
+    assert!(source_text(&app).contains("Loading…"));
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::OfferFile)
+    );
+    assert!(app.notice().is_none());
+}
+
+#[test]
+fn stepping_the_offered_file_retires_the_old_tag() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let old = first["id"].as_str().unwrap_or_default().to_owned();
+    let next = sent(app.on_edit(Edit::Right));
+    assert_eq!(next.len(), 1);
+    let young = next[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_ne!(young, old);
+    // Stepping retires the old ask before the new one registers.
+    assert_eq!(app.outbox.waiting(&old), None);
+    assert_eq!(
+        app.outbox.waiting(&young),
+        Some(crate::app::Waiting::OfferFile)
+    );
+}
+
+#[test]
+fn esc_with_an_offered_file_open_settles_its_tag() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    press(&mut app, Key::Esc);
+    assert_eq!(app.outbox.waiting(&id), None);
+    // The offer stays open; only its source view closed.
+    assert!(app.offer_open());
+    assert!(!source_text(&app).contains("Loading…"));
+}
+
+#[test]
+fn closing_the_source_view_settles_its_tag() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    app.on_click(crate::mouse::TargetId::Offer(crate::offer::Spot::Close));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.offer_open());
+    assert!(!source_text(&app).contains("Loading…"));
+}
+
+#[test]
+fn send_offer_success_settles_the_captured_file_ask() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let asked = first["id"].as_str().unwrap_or_default().to_owned();
+    let effect = app.on_click(crate::mouse::TargetId::Offer(crate::offer::Spot::Send));
+    let Effect::Send(lines) = effect else {
+        panic!("Send answers, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1);
+    let reply: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(reply["command"], "reply");
+    // Answering drops the source view: its retired ask settles before
+    // the reply registers.
+    assert_eq!(app.outbox.waiting(&asked), None);
+    let id = reply["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(crate::app::Waiting::Reply));
+}
+
+#[test]
+fn fold_replacing_the_held_offer_settles_a_dropped_ask() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let asked = first["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        S_A,
+        "repository_code_offered",
+        json!({"request_id": "r_2", "items": [{"kind": "hook", "name": "other",
+            "hash": "h", "required": false, "summary": "hook",
+            "files": ["tools/other.sh"]}]}),
+        None,
+    ));
+    // The replacement drops the source view with its ask.
+    assert_eq!(app.outbox.waiting(&asked), None);
+    assert!(app.offer_open());
+}
+
+#[test]
+fn reset_session_on_its_true_path_settles_the_captured_ask() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let asked = first["id"].as_str().unwrap_or_default().to_owned();
+    app.reset_session();
+    assert_eq!(app.outbox.waiting(&asked), None);
+    assert!(!app.offer_open());
 }

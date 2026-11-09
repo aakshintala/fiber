@@ -231,12 +231,13 @@ follow-up can drop pull-request CI and keep the post-merge run.
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
 issue for the test's file, or comments on the open one
-(`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
-is keyed by its first test-module segment, as in `Flaky tests:
-main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
-main`, while a unit-test binary is keyed per file, as in
-`Flaky tests: extensions::host::exec`, and a single-file integration binary
-keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
+(`docs/testing.md`, "Flaky tests"). An area binary in `crates/main/tests/<area>/`
+is keyed by its first test-module segment, the file the test lives in, as in
+`Flaky tests: main::reviewer_setup` for
+`main::extension_host reviewer_setup::the_setup_saves`; a root-level test in
+an area binary falls back to `Flaky tests: main::<area>`, while a unit-test
+binary is keyed per file, as in `Flaky tests: extensions::host::exec`, and a
+single-file integration binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
@@ -341,6 +342,7 @@ On Linux x86_64 alone:
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
 - no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after` or `.within`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names only each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check); it reports each site by file path, then line
 - a raised `WAITS`, `BUDGET` or `CLEANUP` bound, and a `Deadline::after` in a test that is 60 s or more or that the check cannot read, fail (`cargo xtask budget-bounds --base "$base"`, `xtask/src/budget_bounds.rs`); only lines changed against the merge base are scanned, as Rust tokens, so comments never count and unchanged lines never fail. A bound the check cannot read — a shared name outside its known list, or a computed `Duration` — fails closed: the long names (`WAITS`, `BUDGET`, `CLEANUP`, `MAX`) fail while the short ones (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `ZERO`) pass unruled, and anything else fails as not shown below 60 s; the check reports `Deadline::after({spelling}) is 60 s or more`, or `Deadline::after({spelling}) (readable: WAIT, DEADLINE, MUST_SUCCEED_WITHIN, Duration::ZERO) is not shown below 60 s`. A site is cleared by `// ruling: #N` on the source line holding the `after` ident, as in `crates/main/tests/support/mod.rs` (`Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075`); the doubled bound is the relation (`docs/testing.md`, "Waits and timeouts") asks for
+- `narrating-comments --base "$base"` (`xtask/src/narrating_comments.rs`); checks added comment lines in Rust, shell, Python, TOML and YAML sources, plus files under `scripts/`, using the stateless line rules in [`docs/code-quality/lints.md`](code-quality/lints.md)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time but a

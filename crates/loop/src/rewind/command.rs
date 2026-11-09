@@ -228,7 +228,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::ProposeNotes(_, ack)
         | Delivery::Steer(_, ack)
         | Delivery::SteerDrop(_, ack)
-        | Delivery::Handoff(_, _, ack)
+        | Delivery::Compaction(_, _, ack)
         | Delivery::Model(_, ack)
         | Delivery::Reload(ack)
         | Delivery::McpReconnect(_, ack)

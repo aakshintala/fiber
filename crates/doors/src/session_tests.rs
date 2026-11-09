@@ -2329,10 +2329,10 @@ impl contract::hook::Hooks for InboxHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -4516,6 +4516,147 @@ fn ask_returns_the_first_prompts_rejection_as_its_failure() {
 }
 
 #[test]
+fn delegate_admission_closes_on_completion_and_refuses_later_messages() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    let attended = opened.session.attended();
+    opened
+        .session
+        .run_delegate(
+            &opened.log,
+            "delegated prompt".into(),
+            Arc::new(|| false),
+            move |inbox| {
+                let Delivery::Prompt(_, prompt_ack) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the initial prompt is delivered")
+                else {
+                    panic!("the delegate starts with its prompt only");
+                };
+                prompt_ack.0(Ok(None));
+                let client = Client::connect(&socket).unwrap();
+                client.send(&subscribe_line("c_sub", "full")).unwrap();
+                let _subscribed = support::response(&client, "c_sub");
+                assert!(!(attended)(), "a delegate one-turn run is unattended");
+
+                client
+                    .send(r#"{"id":"c_before","command":"message","args":{"from_session_id":"s_sender","text":"before"}}"#)
+                    .unwrap();
+                let Delivery::Message(_, message_ack) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the running delegate admits a message")
+                else {
+                    panic!("the session message reaches the inbox");
+                };
+                message_ack.0(Ok(None));
+                let before = support::response(&client, "c_before");
+                assert_eq!(support::kind(&before), "command_accepted", "{before}");
+
+                opened_log_append_completion(&log);
+                client
+                    .send(r#"{"id":"c_after","command":"message","args":{"from_session_id":"s_sender","text":"after"}}"#)
+                    .unwrap();
+                let after = support::response(&client, "c_after");
+                assert_eq!(support::kind(&after), "command_rejected", "{after}");
+                assert_eq!(support::rejection(&after), ("closing", "The session is closing and takes no session message."));
+                let Delivery::Close(close_ack) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("completion queues ordinary close")
+                else {
+                    panic!("the completion closes the delegate");
+                };
+                close_ack.0(Ok(None));
+                opened_log_append_completion(&log);
+                assert!(inbox.try_recv().is_err(), "a later completion queues no second close");
+                assert!(inbox.try_recv().is_err(), "the refused message never enters the inbox");
+                Ok(())
+            },
+        )
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn delegate_admission_preserves_initial_prompt_rejection_and_runner_error() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let failure = opened
+        .session
+        .run_delegate(
+            &opened.log,
+            "delegated prompt".into(),
+            Arc::new(|| false),
+            |inbox| {
+                let Delivery::Prompt(_, prompt_ack) =
+                    Deadline::after(DEADLINE).recv(&inbox).unwrap()
+                else {
+                    panic!("the delegate starts with its prompt");
+                };
+                prompt_ack.0(Err(contract::inbox::Rejection {
+                    code: ErrorCode::InvalidArguments,
+                    message: "bad prompt".into(),
+                }));
+                let Delivery::Close(close_ack) = Deadline::after(DEADLINE).recv(&inbox).unwrap()
+                else {
+                    panic!("rejecting the initial prompt closes the delegate");
+                };
+                close_ack.0(Ok(None));
+                Err(crate::failure(ErrorCode::Busy, "runner failed"))
+            },
+        )
+        .expect_err("runner failure takes precedence over prompt rejection");
+    assert_eq!(failure.code, ErrorCode::Busy);
+    assert_eq!(failure.message, "runner failed");
+    close_within(opened.session, opened.log);
+
+    reset();
+    let opened = Opened::open(Vec::new());
+    let failure = opened
+        .session
+        .run_delegate(
+            &opened.log,
+            "delegated prompt".into(),
+            Arc::new(|| false),
+            |inbox| {
+                let Delivery::Prompt(_, prompt_ack) =
+                    Deadline::after(DEADLINE).recv(&inbox).unwrap()
+                else {
+                    panic!("the delegate starts with its prompt");
+                };
+                prompt_ack.0(Err(contract::inbox::Rejection {
+                    code: ErrorCode::InvalidArguments,
+                    message: "bad prompt".into(),
+                }));
+                let Delivery::Close(close_ack) = Deadline::after(DEADLINE).recv(&inbox).unwrap()
+                else {
+                    panic!("a rejected initial prompt closes the delegate");
+                };
+                close_ack.0(Ok(None));
+                Ok(())
+            },
+        )
+        .expect_err("the initial prompt rejection is returned");
+    assert_eq!(failure.code, ErrorCode::InvalidArguments);
+    assert_eq!(failure.message, "bad prompt");
+    close_within(opened.session, opened.log);
+}
+
+fn opened_log_append_completion(log: &Arc<Log>) {
+    log.append(
+        &Event::TurnCompleted(contract::events::TurnCompleted {
+            outcome: contract::events::TurnOutcome::Completed,
+            error: None,
+            questions: None,
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
 fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
     reset();
     let opened = Opened::open(Vec::new());
@@ -6615,6 +6756,11 @@ fn close_ends_the_writers_while_another_handle_keeps_the_log() {
     reset();
     let opened = Opened::open(Vec::new());
     let client = subscribed_client(&opened);
+    // The subscribe ack is written through the pre-writer halves before
+    // `spawn_writer` runs, so it is no proof the writer exists. The
+    // `clients` line only the writer streams is: wait for it before
+    // closing, so `wait_writers` sees a writer that has begun.
+    let _ = support::until(&client, |line| line["kind"] == "clients");
     // A resumed process keeps its own `Arc<Log>` until it exits.
     let keep = Arc::clone(&opened.log);
     keep.append(&exited(), None, None).unwrap();

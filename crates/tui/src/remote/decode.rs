@@ -3,11 +3,13 @@
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, Layer, LoginKind, LoginTarget,
     LogoutRow, NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow,
-    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    RulesSection, Saved, SettingControl, SettingPresentation, SettingRow, Shown, SkillsDisabled,
+    Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 use contract::HubEventKind;
+use contract::settings::SettingsTab;
 use contract::{ErrorCode, HubLine};
+use serde::Deserialize;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -115,9 +117,53 @@ pub(super) fn settings(value: &Value) -> Option<Vec<SettingRow>> {
                 file: optional!(row, "file")?,
                 value,
                 scope,
+                presentation: SettingPresentation {
+                    tab: optional!(row, "tab")?
+                        .map(|tag: String| SettingsTab::from_tag(&tag))
+                        .map(|tab| tab.ok_or(()))
+                        .transpose()
+                        .ok()?,
+                    label: read!(row, "label")?,
+                    description: read!(row, "description")?,
+                },
+                control: control(row.get("control")?)?,
             })
         })
         .collect()
+}
+
+/// The wire form of a row's control: a known `kind`, with ordered
+/// `choices` for `fixed` and for no other kind. Serde checks the tag, so
+/// no tag text is compared here. The unit kinds are empty struct variants
+/// because serde lets a unit variant of a tagged enum carry extra fields.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WireControl {
+    Boolean {},
+    Number {},
+    Text {},
+    Model {},
+    Theme {},
+    StringList {},
+    RepositoryExtensions {},
+    Json {},
+    Fixed { choices: Vec<String> },
+}
+
+/// A row's control. Anything unknown or malformed fails the whole reply.
+fn control(value: &Value) -> Option<SettingControl> {
+    Some(match WireControl::deserialize(value).ok()? {
+        WireControl::Boolean {} => SettingControl::Boolean,
+        WireControl::Number {} => SettingControl::Number,
+        WireControl::Text {} => SettingControl::Text,
+        WireControl::Model {} => SettingControl::Model,
+        WireControl::Theme {} => SettingControl::Theme,
+        WireControl::StringList {} => SettingControl::StringList,
+        WireControl::RepositoryExtensions {} => SettingControl::RepositoryExtensions,
+        WireControl::Json {} => SettingControl::Json,
+        WireControl::Fixed { choices } if choices.is_empty() => return None,
+        WireControl::Fixed { choices } => SettingControl::Fixed(choices),
+    })
 }
 
 fn section(value: &Value) -> Option<RulesSection> {

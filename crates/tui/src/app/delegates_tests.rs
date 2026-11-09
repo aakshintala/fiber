@@ -215,10 +215,11 @@ fn a_stored_offset_past_the_end_clamps_before_moving() {
     assert_eq!(app.panel_state().delegate_scroll(), 3);
     complete(&mut app, "j_5");
     complete(&mut app, "j_6");
-    // Finished delegates stay on the card: six held still clamp at
-    // three, so up moves to two.
-    wheel(&mut app, true, row);
+    // Finished delegates stay on the card: the four running rows and
+    // closed fold clamp the stored offset from three to two.
     assert_eq!(app.panel_state().delegate_scroll(), 2);
+    wheel(&mut app, true, row);
+    assert_eq!(app.panel_state().delegate_scroll(), 1);
 }
 
 /// The default card list, with the Delegates card.
@@ -806,11 +807,7 @@ fn no_subscribe_with_the_link_down() {
 fn no_subscribe_without_the_delegates_card() {
     let mut app = home();
     opened(&mut app);
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .launch
-        .panel_cards = vec!["session".to_owned()];
+    app.home.launch.panel_cards = vec!["session".to_owned()];
     start_delegate(&mut app, "j_1", DELEGATE);
     let out = parent_status(&mut app);
     assert!(subscribes(&out).is_empty());

@@ -30,7 +30,7 @@ use worktree::project;
 /// One budget for the whole wait: setup, the code under test and the
 /// assertions run on one thread under one deadline (`docs/testing.md`,
 /// "Waits and timeouts").
-const BUDGET: Duration = Duration::from_secs(40);
+const DEADLINE: Duration = Duration::from_secs(40);
 
 /// A re-run child's own bound: it fires before the parent's wait, so the
 /// two no longer contradict.
@@ -179,9 +179,9 @@ fn warn_line(home: &Path, id: &str) -> serde_json::Value {
 
 #[test]
 fn delegate_creation_holds_before_add_and_child_adoption_overlaps() {
-    fakes::within("delegate lock handoff", Deadline::after(BUDGET), || {
-        let home = fakes::TempDir::new("delegate-handoff-home");
-        let repo = repo("delegate-handoff-repo");
+    fakes::within("delegate lock transfer", Deadline::after(DEADLINE), || {
+        let home = fakes::TempDir::new("delegate-transfer-home");
+        let repo = repo("delegate-transfer-repo");
         let id = SessionId("s_0123456789abcdef".into());
         let path = worktree_path(home.path(), &key_of(repo.path()), &id.0);
         let (created, parent) =
@@ -214,7 +214,7 @@ fn delegate_creation_holds_before_add_and_child_adoption_overlaps() {
 
 #[test]
 fn delegate_end_removes_only_clean_unadvanced_unshared_worktrees() {
-    fakes::within("delegate end matrix", Deadline::after(BUDGET), || {
+    fakes::within("delegate end matrix", Deadline::after(DEADLINE), || {
         for mode in ["clean", "dirty", "advanced", "shared", "report"] {
             let home = fakes::TempDir::new("delegate-end-home");
             let repo = repo("delegate-end-repo");
@@ -251,7 +251,7 @@ fn delegate_end_removes_only_clean_unadvanced_unshared_worktrees() {
 
 #[test]
 fn delegate_end_reports_a_missing_worktree_clean_and_keeps_a_non_worktree() {
-    fakes::within("delegate end absent", Deadline::after(BUDGET), || {
+    fakes::within("delegate end absent", Deadline::after(DEADLINE), || {
         let home = fakes::TempDir::new("delegate-end-absent-home");
         let repo = repo("delegate-end-absent-repo");
         let id = SessionId("s_0123456789abcdef".into());
@@ -294,36 +294,40 @@ fn delegate_end_reports_a_missing_worktree_clean_and_keeps_a_non_worktree() {
 
 #[test]
 fn delegate_creation_preserves_repository_and_git_failure_kinds() {
-    fakes::within("delegate creation errors", Deadline::after(BUDGET), || {
-        let home = fakes::TempDir::new("delegate-create-home");
-        let plain = fakes::TempDir::new("delegate-nonrepo");
-        let id = SessionId("s_0123456789abcdef".into());
-        assert!(matches!(
-            super::create_delegate_worktree(plain.path(), home.path(), &id, &direct),
-            Err(super::DelegateCreateError::NotARepository { .. })
-        ));
-        let repo = repo("delegate-create-repo");
-        let result = super::create_delegate_worktree(repo.path(), home.path(), &id, &|_| {
-            Err(io::Error::other("private output"))
-        });
-        let Err(super::DelegateCreateError::Failed { message }) = result else {
-            panic!("typed git failure");
-        };
-        assert!(!message.contains("private output"));
-        let path = worktree_path(home.path(), &key_of(repo.path()), &id.0);
-        assert!(!path.exists());
-        assert!(
-            super::try_hold_removal(&path).unwrap().is_some(),
-            "failed creation releases its share"
-        );
-    });
+    fakes::within(
+        "delegate creation errors",
+        Deadline::after(DEADLINE),
+        || {
+            let home = fakes::TempDir::new("delegate-create-home");
+            let plain = fakes::TempDir::new("delegate-nonrepo");
+            let id = SessionId("s_0123456789abcdef".into());
+            assert!(matches!(
+                super::create_delegate_worktree(plain.path(), home.path(), &id, &direct),
+                Err(super::DelegateCreateError::NotARepository { .. })
+            ));
+            let repo = repo("delegate-create-repo");
+            let result = super::create_delegate_worktree(repo.path(), home.path(), &id, &|_| {
+                Err(io::Error::other("private output"))
+            });
+            let Err(super::DelegateCreateError::Failed { message }) = result else {
+                panic!("typed git failure");
+            };
+            assert!(!message.contains("private output"));
+            let path = worktree_path(home.path(), &key_of(repo.path()), &id.0);
+            assert!(!path.exists());
+            assert!(
+                super::try_hold_removal(&path).unwrap().is_some(),
+                "failed creation releases its share"
+            );
+        },
+    );
 }
 
 #[test]
 fn isolate_makes_the_worktree_under_the_projects_worktrees() {
     fakes::within(
         "isolate_makes_the_worktree_under_the_projects_worktrees",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-isolate-home");
             let repo = repo("doors-isolate-repo");
@@ -357,7 +361,7 @@ fn isolate_makes_the_worktree_under_the_projects_worktrees() {
 fn isolate_from_a_subdirectory_uses_the_repository_s_project_and_root() {
     fakes::within(
         "isolate_from_a_subdirectory_uses_the_repository_s_project_and_root",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-isolate-sub-home");
             let repo = repo("doors-isolate-sub");
@@ -381,7 +385,7 @@ fn isolate_from_a_subdirectory_uses_the_repository_s_project_and_root() {
 fn isolate_outside_a_repository_is_usage_and_creates_nothing() {
     fakes::within(
         "isolate_outside_a_repository_is_usage_and_creates_nothing",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-isolate-plain-home");
             let plain = fakes::TempDir::new("doors-isolate-plain");
@@ -416,7 +420,7 @@ fn isolate_outside_a_repository_is_usage_and_creates_nothing() {
 fn isolate_onto_an_existing_path_is_io_failed_and_leaves_it() {
     fakes::within(
         "isolate_onto_an_existing_path_is_io_failed_and_leaves_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-isolate-taken-home");
             let repo = repo("doors-isolate-taken");
@@ -453,7 +457,7 @@ fn isolate_onto_an_existing_path_is_io_failed_and_leaves_it() {
 fn isolate_with_an_interrupted_add_is_io_failed_and_creates_nothing() {
     fakes::within(
         "isolate_with_an_interrupted_add_is_io_failed_and_creates_nothing",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-isolate-interrupted-home");
             let repo = repo("doors-isolate-interrupted");
@@ -549,7 +553,7 @@ fn isolate_without_git_on_path_is_usage() {
 fn a_fresh_worktree_is_removed_at_the_end() {
     fakes::within(
         "a_fresh_worktree_is_removed_at_the_end",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-fresh-home");
             let repo = repo("doors-end-fresh");
@@ -568,7 +572,7 @@ fn a_fresh_worktree_is_removed_at_the_end() {
 fn an_untracked_file_keeps_it() {
     fakes::within(
         "an_untracked_file_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-untracked-home");
             let repo = repo("doors-end-untracked");
@@ -589,7 +593,7 @@ fn an_untracked_file_keeps_it() {
 fn a_modified_tracked_file_keeps_it() {
     fakes::within(
         "a_modified_tracked_file_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-modified-home");
             let repo = repo("doors-end-modified");
@@ -608,7 +612,7 @@ fn a_modified_tracked_file_keeps_it() {
 fn a_commit_beyond_the_base_keeps_it() {
     fakes::within(
         "a_commit_beyond_the_base_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-commit-home");
             let repo = repo("doors-end-commit");
@@ -629,7 +633,7 @@ fn a_commit_beyond_the_base_keeps_it() {
 fn a_commit_also_on_another_branch_still_keeps_it() {
     fakes::within(
         "a_commit_also_on_another_branch_still_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-merged-home");
             let repo = repo("doors-end-merged");
@@ -652,7 +656,7 @@ fn a_commit_also_on_another_branch_still_keeps_it() {
 fn an_ignored_only_worktree_is_removed() {
     fakes::within(
         "an_ignored_only_worktree_is_removed",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-ignored-home");
             let repo = repo("doors-end-ignored");
@@ -674,7 +678,7 @@ fn an_ignored_only_worktree_is_removed() {
 fn a_switched_branch_keeps_it() {
     fakes::within(
         "a_switched_branch_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-switched-home");
             let repo = repo("doors-end-switched");
@@ -693,24 +697,28 @@ fn a_switched_branch_keeps_it() {
 
 #[test]
 fn a_detached_head_keeps_it() {
-    fakes::within("a_detached_head_keeps_it", Deadline::after(BUDGET), || {
-        let home = fakes::TempDir::new("doors-end-detached-home");
-        let repo = repo("doors-end-detached");
-        let id = "s_0123456789abcdef";
-        let isolation = isolate_now(repo.path(), home.path(), id);
-        let path = isolation.path().to_path_buf();
-        git(&path, &["switch", "--quiet", "--detach", "HEAD"]);
-        isolation.end();
-        assert!(exists(&path));
-        assert!(!home.path().join("logs").exists(), "no diagnostic line");
-    });
+    fakes::within(
+        "a_detached_head_keeps_it",
+        Deadline::after(DEADLINE),
+        || {
+            let home = fakes::TempDir::new("doors-end-detached-home");
+            let repo = repo("doors-end-detached");
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            git(&path, &["switch", "--quiet", "--detach", "HEAD"]);
+            isolation.end();
+            assert!(exists(&path));
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
+        },
+    );
 }
 
 #[test]
 fn a_deleted_worktree_directory_is_failed_and_logged() {
     fakes::within(
         "a_deleted_worktree_directory_is_failed_and_logged",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-deleted-home");
             let repo = repo("doors-end-deleted");
@@ -736,7 +744,7 @@ fn a_deleted_worktree_directory_is_failed_and_logged() {
 fn a_locked_worktree_is_failed_logged_and_kept() {
     fakes::within(
         "a_locked_worktree_is_failed_logged_and_kept",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-locked-home");
             let repo = repo("doors-end-locked");
@@ -764,7 +772,7 @@ fn a_locked_worktree_is_failed_logged_and_kept() {
 fn a_branch_that_cannot_be_deleted_is_failed_and_logged() {
     fakes::within(
         "a_branch_that_cannot_be_deleted_is_failed_and_logged",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-branchlock-home");
             let repo = repo("doors-end-branchlock");
@@ -791,7 +799,7 @@ fn a_branch_that_cannot_be_deleted_is_failed_and_logged() {
 fn a_session_a_resume_holds_keeps_its_worktree() {
     fakes::within(
         "a_session_a_resume_holds_keeps_its_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-held-home");
             let repo = repo("doors-end-held");
@@ -820,7 +828,7 @@ fn a_session_a_resume_holds_keeps_its_worktree() {
 fn another_running_session_in_the_worktree_keeps_it() {
     fakes::within(
         "another_running_session_in_the_worktree_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-other-home");
             let repo = repo("doors-end-other");
@@ -845,7 +853,7 @@ fn another_running_session_in_the_worktree_keeps_it() {
 fn a_session_elsewhere_does_not_block() {
     fakes::within(
         "a_session_elsewhere_does_not_block",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-elsewhere-home");
             let repo = repo("doors-end-elsewhere");
@@ -873,10 +881,10 @@ fn a_session_elsewhere_does_not_block() {
 fn a_session_started_after_the_first_scan_keeps_it() {
     fakes::within(
         "a_session_started_after_the_first_scan_keeps_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             // Starts before setup and expires before `within`'s outer guard, so a hang names this wait.
-            let wait = fakes::Deadline::after(BUDGET / 2);
+            let wait = fakes::Deadline::after(Duration::from_secs(20));
             let home = fakes::TempDir::new("doors-end-late-home");
             let repo = repo("doors-end-late");
             let key = key_of(repo.path());
@@ -907,10 +915,10 @@ fn a_session_started_after_the_first_scan_keeps_it() {
 fn end_holds_every_users_lock_while_it_removes() {
     fakes::within(
         "end_holds_every_users_lock_while_it_removes",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             // Starts before setup and expires before `within`'s outer guard, so a hang names this wait.
-            let wait = fakes::Deadline::after(BUDGET / 2);
+            let wait = fakes::Deadline::after(Duration::from_secs(20));
             let home = fakes::TempDir::new("doors-end-locks-home");
             let repo = repo("doors-end-locks");
             let key = key_of(repo.path());
@@ -948,7 +956,7 @@ fn end_holds_every_users_lock_while_it_removes() {
 fn a_never_prompted_creator_without_a_directory_still_removes_the_worktree() {
     fakes::within(
         "a_never_prompted_creator_without_a_directory_still_removes_the_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-nodir-home");
             let repo = repo("doors-end-nodir");
@@ -1048,7 +1056,7 @@ fn isolate_ignores_a_hostile_git_environment_end_to_end() {
 fn no_message_or_log_line_carries_git_stderr() {
     fakes::within(
         "no_message_or_log_line_carries_git_stderr",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-stderr-home");
             let failing = repo("doors-stderr-failing");
@@ -1145,7 +1153,7 @@ fn exited() -> Event {
 fn a_rewound_creator_keeps_a_clean_worktree() {
     fakes::within(
         "a_rewound_creator_keeps_a_clean_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-rewound-home");
             let repo = repo("doors-end-rewound");
@@ -1173,7 +1181,7 @@ fn a_rewound_creator_keeps_a_clean_worktree() {
 fn a_moved_creator_keeps_a_clean_worktree() {
     fakes::within(
         "a_moved_creator_keeps_a_clean_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-moved-home");
             let repo = repo("doors-end-moved");
@@ -1201,7 +1209,7 @@ fn a_moved_creator_keeps_a_clean_worktree() {
 fn a_moved_creator_keeps_the_worktree_in_every_state() {
     fakes::within(
         "a moved creator keeps its worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             for mode in ["clean", "dirty", "advanced", "broken"] {
                 let home = fakes::TempDir::new("doors-end-moved-state-home");
@@ -1243,7 +1251,7 @@ fn a_moved_creator_keeps_the_worktree_in_every_state() {
 fn another_session_ending_moved_does_not_keep_it() {
     fakes::within(
         "another_session_ending_moved_does_not_keep_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-other-mv-home");
             let repo = repo("doors-end-other-mv");
@@ -1274,7 +1282,7 @@ fn another_session_ending_moved_does_not_keep_it() {
 fn a_creator_ending_otherwise_is_removed_as_before() {
     fakes::within(
         "a_creator_ending_otherwise_is_removed_as_before",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-exited-home");
             let repo = repo("doors-end-exited");
@@ -1298,7 +1306,7 @@ fn a_creator_ending_otherwise_is_removed_as_before() {
 fn another_session_ending_rewound_does_not_keep_it() {
     fakes::within(
         "another_session_ending_rewound_does_not_keep_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-other-rw-home");
             let repo = repo("doors-end-other-rw");
@@ -1328,7 +1336,7 @@ fn another_session_ending_rewound_does_not_keep_it() {
 fn a_continued_session_keeps_a_clean_worktree_after_it_exits() {
     fakes::within(
         "a_continued_session_keeps_a_clean_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-continues-home");
             let repo = repo("doors-end-continues");
@@ -1366,7 +1374,7 @@ fn a_continued_session_keeps_a_clean_worktree_after_it_exits() {
 fn a_session_merely_under_the_path_does_not_keep_it() {
     fakes::within(
         "a_session_merely_under_the_path_does_not_keep_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-continues-under-home");
             let repo = repo("doors-end-continues-under");
@@ -1403,7 +1411,7 @@ fn a_session_merely_under_the_path_does_not_keep_it() {
 fn the_creators_own_row_does_not_keep_it() {
     fakes::within(
         "the_creators_own_row_does_not_keep_it",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-continues-own-home");
             let repo = repo("doors-end-continues-own");
@@ -1430,7 +1438,7 @@ fn the_creators_own_row_does_not_keep_it() {
 fn a_rewound_creator_keeps_a_broken_worktree_without_a_diagnostic_line() {
     fakes::within(
         "a_rewound_creator_keeps_a_broken_worktree_without_a_diagnostic_line",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-broken-home");
             let repo = repo("doors-end-broken");
@@ -1473,7 +1481,7 @@ fn lock_of(path: &Path) -> PathBuf {
 fn recreate_makes_a_removed_worktree_again_at_the_new_head() {
     fakes::within(
         "recreate_makes_a_removed_worktree_again_at_the_new_head",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-recreate-home");
             let repo = repo("doors-recreate");
@@ -1523,7 +1531,7 @@ fn recreate_makes_a_removed_worktree_again_at_the_new_head() {
 fn a_recreated_worktree_with_a_commit_beyond_its_base_is_kept() {
     fakes::within(
         "a_recreated_worktree_with_a_commit_beyond_its_base_is_kept",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-recreate-kept-home");
             let repo = repo("doors-recreate-kept");
@@ -1564,7 +1572,7 @@ fn a_recreated_worktree_with_a_commit_beyond_its_base_is_kept() {
 fn recreate_with_a_missing_repository_makes_nothing() {
     fakes::within(
         "recreate_with_a_missing_repository_makes_nothing",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-recreate-norepo");
             let repository = home.path().join("no-such-repo");
@@ -1603,7 +1611,7 @@ fn recreate_with_a_missing_repository_makes_nothing() {
 fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
     fakes::within(
         "recreate_with_an_existing_branch_keeps_it_where_it_was",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-recreate-branch");
             let repo = repo("doors-recreate-branch");
@@ -1647,11 +1655,11 @@ fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
 fn two_concurrent_recreations_share_the_one_worktree() {
     fakes::within(
         "two_concurrent_recreations_share_the_one_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             use std::sync::atomic::{AtomicBool, Ordering};
 
-            let wait = fakes::Deadline::after(BUDGET / 2);
+            let wait = fakes::Deadline::after(Duration::from_secs(20));
             let home = fakes::TempDir::new("doors-recreate-race-home");
             let repo = repo("doors-recreate-race");
             let common = repo.path().join(".git");
@@ -1750,7 +1758,7 @@ fn two_concurrent_recreations_share_the_one_worktree() {
 fn a_share_before_the_end_keeps_the_worktree() {
     fakes::within(
         "a_share_before_the_end_keeps_the_worktree",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-shared-home");
             let repo = repo("doors-end-shared");
@@ -1775,7 +1783,7 @@ fn a_share_before_the_end_keeps_the_worktree() {
 fn an_end_whose_lock_path_is_a_directory_keeps_and_logs() {
     fakes::within(
         "an_end_whose_lock_path_is_a_directory_keeps_and_logs",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-end-lockdir-home");
             let repo = repo("doors-end-lockdir");
@@ -1803,9 +1811,9 @@ fn an_end_whose_lock_path_is_a_directory_keeps_and_logs() {
 fn a_share_parked_behind_the_end_locks_the_new_file() {
     fakes::within(
         "a_share_parked_behind_the_end_locks_the_new_file",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
-            let wait = fakes::Deadline::after(BUDGET / 2);
+            let wait = fakes::Deadline::after(Duration::from_secs(20));
             let home = fakes::TempDir::new("doors-end-handshake-home");
             let repo = repo("doors-end-handshake");
             let id = "s_0123456789abcdef";
@@ -1846,7 +1854,7 @@ fn a_share_parked_behind_the_end_locks_the_new_file() {
 fn a_downgrade_failure_after_a_successful_add_keeps_nothing() {
     fakes::within(
         "a_downgrade_failure_after_a_successful_add_keeps_nothing",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         || {
             let home = fakes::TempDir::new("doors-recreate-downgrade");
             let repo = repo("doors-recreate-downgrade");
@@ -1939,7 +1947,7 @@ fn recreate_error_debug_names_the_isolation_state() {
 
     fakes::within(
         "recreate_error_debug_names_the_isolation_state",
-        Deadline::after(BUDGET),
+        Deadline::after(DEADLINE),
         move || {
             let home = fakes::TempDir::new("doors-debug-home");
             let repo = repo("doors-debug-repo");

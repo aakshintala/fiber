@@ -74,27 +74,140 @@ fn click(app: &mut App, col: u16, row: u16) -> Effect {
 const TWO_BLOCKS: &str = "```rust\nlet a = 1;\n```\n\ntext\n\n```sh\necho b\n```";
 
 #[test]
-fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
-    let mut app = with_reply(30, 20, TWO_BLOCKS);
-    let first = row_of(&app, 30, 20, "rust").expect("first header");
-    let second = row_of(&app, 30, 20, "sh  ").expect("second header");
+fn selecting_a_markdown_prompt_copies_its_rendered_text() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let (width, height) = (60, 12);
+    let mut app = attached(width, height);
+    app.on_line(turn_started("**bold**"));
+    let row = row_of(&app, width, height, "bold").expect("rendered prompt");
+    let col = crate::view::text(&{
+        let area = ratatui::layout::Rect::new(0, 0, width, height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        buf
+    })
+    .lines()
+    .find_map(|line| {
+        line.find("bold")
+            .map(|at| u16::try_from(at).expect("column"))
+    })
+    .expect("bold column");
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut report = |kind, col| {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), col);
+    let _ = report(MouseKind::Drag(Button::Left), col.saturating_add(3));
     assert_eq!(
-        click(&mut app, 26, first),
+        report(MouseKind::Release, col.saturating_add(3)),
+        Effect::Copy("bold".to_owned())
+    );
+
+    let mut fenced = attached(width, height);
+    fenced.on_line(turn_started("```rust\nlet x = 1;\n```"));
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&fenced, area, &mut buf, None);
+    let code_row = crate::view::text(&buf)
+        .lines()
+        .position(|line| line.contains("let x = 1;"))
+        .expect("rendered code row");
+    assert!(!targets.iter().any(|target| {
+        matches!(target.id, crate::mouse::TargetId::Line(_))
+            && usize::from(target.rect.y) == code_row
+    }));
+    let mut rows = crate::rows::Rows::default();
+    crate::bubble::rows("```rust\nlet x = 1;\n```", width, &mut rows);
+    let (drawn, metadata) = rows.into_parts();
+    assert!(
+        drawn
+            .iter()
+            .any(|(line, _)| line.to_string().contains("let x = 1;"))
+    );
+    assert!(metadata.iter().any(|mark| mark.decoration));
+    let screen = crate::view::text(&buf);
+    let screen_rows: Vec<_> = screen.lines().collect();
+    let top = screen_rows[..code_row]
+        .iter()
+        .rposition(|line| line.contains('▄'))
+        .expect("code slab's top edge");
+    let top_col =
+        u16::try_from(screen_rows[top].find('▄').expect("top edge cell")).expect("top edge column");
+    let bottom = code_row.saturating_add(1).saturating_add(
+        screen_rows[code_row.saturating_add(1)..]
+            .iter()
+            .position(|line| line.contains('▀'))
+            .expect("code slab's bottom edge"),
+    );
+    let bottom_col = u16::try_from(screen_rows[bottom].rfind('▀').expect("bottom edge cell"))
+        .expect("bottom edge column");
+    assert!(top < code_row && code_row < bottom);
+    let mut fenced_pointer = Pointer::default();
+    let mut fenced_report = |kind, col, row| {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&fenced, area, &mut buf, None);
+        fenced.on_mouse(
+            &Mouse { kind, col, row },
+            &targets,
+            &mut fenced_pointer,
+            true,
+            now,
+        )
+    };
+    let top_row = u16::try_from(top).expect("top edge row");
+    let bottom_row = u16::try_from(bottom).expect("bottom edge row");
+    let _ = fenced_report(MouseKind::Press(Button::Left), top_col, top_row);
+    let _ = fenced_report(MouseKind::Drag(Button::Left), bottom_col, bottom_row);
+    assert_eq!(
+        fenced_report(MouseKind::Release, bottom_col, bottom_row),
+        Effect::Copy("let x = 1;".to_owned())
+    );
+
+    let mut linked = attached(width, height);
+    linked.set_opener(true);
+    linked.on_line(turn_started("[site](https://example.com)"));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&linked, area, &mut buf, None);
+    let link = linked
+        .visible_links(linked.conversation_area())
+        .into_iter()
+        .find(|link| link.url == "https://example.com")
+        .expect("prompt Markdown link");
+    let rect = link.rects.first().expect("link cells");
+    let id = crate::mouse::hit(&targets, rect.x, rect.y).expect("link target");
+    assert_eq!(
+        linked.on_click(id),
+        Effect::OpenLink("https://example.com".to_owned())
+    );
+}
+
+#[test]
+fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
+    let mut app = with_reply(40, 20, TWO_BLOCKS);
+    let first = row_of(&app, 40, 20, "rust").expect("first header");
+    let second = row_of(&app, 40, 20, "sh  ").expect("second header");
+    assert_eq!(
+        click(&mut app, 36, first),
         Effect::Copy("let a = 1;".to_owned())
     );
     assert!(app.copied());
     assert_eq!(
-        click(&mut app, 27, second),
+        click(&mut app, 37, second),
         Effect::Copy("echo b".to_owned())
     );
     // The cells left of `copy` and the rows around it copy nothing, and a
     // click clears "Copied".
-    for (col, row) in [(14, first), (0, first), (26, first + 1), (26, first - 1)] {
-        click(&mut app, 27, second);
+    for (col, row) in [(24, first), (2, first), (36, first + 1), (36, first - 1)] {
+        click(&mut app, 37, second);
         assert_eq!(click(&mut app, col, row), Effect::None, "{col},{row}");
         assert!(!app.copied());
     }
-    click(&mut app, 27, second);
+    click(&mut app, 37, second);
     app.on_click(crate::mouse::TargetId::NewBelow);
     assert!(!app.copied());
 }
@@ -102,13 +215,13 @@ fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
 #[test]
 fn any_key_clears_copied() {
     let now = fakes::clock::FakeClock::new().now();
-    let mut app = with_reply(30, 20, TWO_BLOCKS);
-    let first = row_of(&app, 30, 20, "rust").expect("first header");
-    click(&mut app, 27, first);
+    let mut app = with_reply(40, 20, TWO_BLOCKS);
+    let first = row_of(&app, 40, 20, "rust").expect("first header");
+    click(&mut app, 37, first);
     assert!(app.copied());
     app.on_key(Key::Char('x'), now);
     assert!(!app.copied());
-    click(&mut app, 27, first);
+    click(&mut app, 37, first);
     app.on_key(Key::CtrlC, now);
     assert!(!app.copied());
 }
@@ -118,18 +231,18 @@ fn a_click_maps_through_the_rows_while_scrolled_up() {
     let now = fakes::clock::FakeClock::new().now();
     let block = "```rust\nlet a = 1;\n```\n\n";
     let lines: String = (1..=12).map(|n| format!("line {n}\n\n")).collect();
-    let mut app = with_reply(30, 8, &format!("{block}{lines}"));
-    assert_eq!(row_of(&app, 30, 8, "rust"), None);
+    let mut app = with_reply(40, 10, &format!("{block}{lines}"));
+    assert_eq!(row_of(&app, 40, 10, "rust"), None);
     // Scroll up until the header shows; the click follows the drawn row.
-    while row_of(&app, 30, 8, "rust").is_none() {
+    while row_of(&app, 40, 10, "rust").is_none() {
         app.on_key(Key::PageUp, now);
     }
-    let header = row_of(&app, 30, 8, "rust").expect("header");
+    let header = row_of(&app, 40, 10, "rust").expect("header");
     assert_eq!(
-        click(&mut app, 27, header),
+        click(&mut app, 37, header),
         Effect::Copy("let a = 1;".to_owned())
     );
-    assert_eq!(click(&mut app, 27, header + 1), Effect::None);
+    assert_eq!(click(&mut app, 37, header + 1), Effect::None);
 }
 
 #[test]
@@ -137,7 +250,7 @@ fn the_overlay_row_hides_a_copy_target_under_it() {
     let now = fakes::clock::FakeClock::new().now();
     let filler: String = (1..=12).map(|n| format!("line {n}\n\n")).collect();
     let code = "1\n2\n3\n4";
-    let mut app = with_reply(30, 10, &format!("{filler}```rust\n{code}\n```"));
+    let mut app = with_reply(40, 10, &format!("{filler}```rust\n{code}\n```"));
     // Five conversation rows: one PageUp moves the top up four. Nudge
     // back down so the code header sits on the bottom conversation
     // row, where the overlay draws.
@@ -145,97 +258,97 @@ fn the_overlay_row_hides_a_copy_target_under_it() {
     app.on_key(Key::PageUp, now);
     let top = app.top().expect("scrolled up");
     app.jump(top.saturating_sub(2));
-    assert_eq!(row_of(&app, 30, 10, "rust"), Some(4));
-    assert_eq!(click(&mut app, 27, 4), Effect::Copy(code.to_owned()));
+    assert_eq!(row_of(&app, 40, 10, "rust"), Some(4));
+    assert_eq!(click(&mut app, 37, 4), Effect::Copy(code.to_owned()));
     app.on_line(turn_started("more"));
     assert!(app.has_new());
     // The overlay covers the header's row, so the same cells copy
     // nothing now.
-    assert_eq!(row_of(&app, 30, 10, "New messages"), Some(4));
-    assert_eq!(click(&mut app, 27, 4), Effect::None);
+    assert_eq!(row_of(&app, 40, 10, "New messages"), Some(4));
+    assert_eq!(click(&mut app, 37, 4), Effect::None);
 }
 
 #[test]
 fn a_click_below_the_conversation_or_on_a_plain_line_copies_nothing() {
-    let mut app = with_reply(30, 12, TWO_BLOCKS);
+    let mut app = with_reply(40, 12, TWO_BLOCKS);
     // The plain line between the two code blocks has no target, and
     // neither does the input box.
-    let plain = row_of(&app, 30, 12, "text").expect("plain line");
-    assert_eq!(click(&mut app, 27, plain), Effect::None);
-    assert_eq!(click(&mut app, 27, 10), Effect::None);
-    assert_eq!(click(&mut app, 27, 200), Effect::None);
+    let plain = row_of(&app, 40, 12, "text").expect("plain line");
+    assert_eq!(click(&mut app, 37, plain), Effect::None);
+    assert_eq!(click(&mut app, 37, 10), Effect::None);
+    assert_eq!(click(&mut app, 37, 200), Effect::None);
 }
 
 #[test]
 fn a_resize_moves_the_copy_target_with_the_new_width() {
-    let mut app = with_reply(30, 12, TWO_BLOCKS);
-    app.set_size(20, 20);
-    // At 20 columns the header ellipsizes its language name, so the
-    // label names the row.
-    let first = row_of(&app, 20, 20, "click to copy").expect("first header");
-    assert_eq!(click(&mut app, 26, first), Effect::None);
+    let mut app = with_reply(60, 12, TWO_BLOCKS);
+    app.set_size(40, 20);
+    // At 40 columns the label sits at the new right edge; the cell it
+    // held at 60 is off the screen.
+    let first = row_of(&app, 40, 20, "copy").expect("first header");
+    assert_eq!(click(&mut app, 56, first), Effect::None);
     assert_eq!(
-        click(&mut app, 16, first),
+        click(&mut app, 37, first),
         Effect::Copy("let a = 1;".to_owned())
     );
 }
 
 #[test]
 fn a_click_maps_past_a_prompt_that_wraps() {
-    let mut app = attached(30, 14);
+    let mut app = attached(40, 14);
     app.on_line(turn_started(&"w".repeat(70)));
     app.on_line(session_line(
         "assistant_message_delta",
         serde_json::json!({ "text": "```rust\nlet a = 1;\n```" }),
         Some("a_1"),
     ));
-    let header = row_of(&app, 30, 14, "rust").expect("header");
+    let header = row_of(&app, 40, 14, "rust").expect("header");
     assert_eq!(header, 5);
     assert_eq!(
-        click(&mut app, 27, header),
+        click(&mut app, 37, header),
         Effect::Copy("let a = 1;".to_owned())
     );
-    assert_eq!(click(&mut app, 27, header - 1), Effect::None);
-    assert_eq!(click(&mut app, 27, header + 1), Effect::None);
+    assert_eq!(click(&mut app, 37, header - 1), Effect::None);
+    assert_eq!(click(&mut app, 37, header + 1), Effect::None);
 }
 
 #[test]
 fn a_click_on_the_blank_rows_above_a_short_conversation_copies_nothing() {
-    let mut app = with_reply(30, 16, "```rust\nlet a = 1;\n```");
-    let header = row_of(&app, 30, 16, "rust").expect("header");
-    assert!(row_of(&app, 30, 16, " hi").is_some_and(|prompt| prompt > 0));
-    assert_eq!(click(&mut app, 27, 0), Effect::None);
+    let mut app = with_reply(40, 16, "```rust\nlet a = 1;\n```");
+    let header = row_of(&app, 40, 16, "rust").expect("header");
+    assert!(row_of(&app, 40, 16, " hi").is_some_and(|prompt| prompt > 0));
+    assert_eq!(click(&mut app, 37, 0), Effect::None);
     assert_eq!(
-        click(&mut app, 27, header),
+        click(&mut app, 37, header),
         Effect::Copy("let a = 1;".to_owned())
     );
 }
 
 #[test]
 fn a_click_copies_from_the_reply_it_lands_on() {
-    let mut app = with_reply(30, 14, "```rust\nlet a = 1;\n```");
+    let mut app = with_reply(40, 14, "```rust\nlet a = 1;\n```");
     app.on_line(session_line(
         "assistant_message_delta",
         serde_json::json!({ "text": "```sh\necho b\n```" }),
         Some("a_2"),
     ));
-    let second = row_of(&app, 30, 14, "sh  ").expect("second reply's header");
+    let second = row_of(&app, 40, 14, "sh  ").expect("second reply's header");
     assert_eq!(
-        click(&mut app, 27, second),
+        click(&mut app, 37, second),
         Effect::Copy("echo b".to_owned())
     );
 }
 
 #[test]
 fn a_copy_target_in_a_quote_is_on_its_drawn_copy_cells() {
-    let mut app = with_reply(30, 12, "> ```rust\n> let a = 1;\n> ```");
-    let header = row_of(&app, 30, 12, "copy").expect("header");
+    let mut app = with_reply(40, 12, "> ```rust\n> let a = 1;\n> ```");
+    let header = row_of(&app, 40, 12, "copy").expect("header");
     assert_eq!(
-        click(&mut app, 26, header),
+        click(&mut app, 36, header),
         Effect::Copy("let a = 1;".to_owned())
     );
-    assert_eq!(click(&mut app, 14, header), Effect::None);
-    assert_eq!(click(&mut app, 0, header), Effect::None);
+    assert_eq!(click(&mut app, 24, header), Effect::None);
+    assert_eq!(click(&mut app, 2, header), Effect::None);
 }
 
 #[test]
@@ -269,7 +382,13 @@ fn the_copy_cells_are_the_drawn_label_inside_the_padding() {
         .find(|line| line.contains("click to copy"))
         .expect("the drawn label");
     let start = row.find("click to copy").expect("the label's start");
-    let start = u16::try_from(start).expect("a column");
-    assert_eq!(cols, start..start.saturating_add(13));
-    assert_eq!(cols, 45..58);
+    let start = u16::try_from(crate::format::width(&row[..start])).expect("a column");
+    // The cells are relative to the conversation's left edge, past the
+    // grip and the gutter.
+    let origin = app.conversation_area().x;
+    assert_eq!(
+        cols.start + origin..cols.end + origin,
+        start..start.saturating_add(13)
+    );
+    assert_eq!(cols, 43..56);
 }

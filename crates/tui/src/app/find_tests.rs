@@ -52,7 +52,7 @@ fn hello() -> Line {
 pub(super) fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app
 }
@@ -2754,7 +2754,7 @@ fn attaching_another_session_resets_the_search() {
     assert!(app.find_bar().is_some());
     assert!(app.find.total() > 0);
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     assert!(
         app.find_bar().is_none(),
         "the new session starts with no search"
@@ -3410,4 +3410,85 @@ fn unscanned_positions_keep_the_search_text_with_no_fetch() {
         Some(search_text().as_str()),
         "unscanned positions keep the text with no fetch"
     );
+}
+
+#[test]
+fn find_answer_reaches_its_handler() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, from, to) = command(&fetch);
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Find));
+    app.on_line(hub_answer(&id, &log, from, to));
+    // The answer folds into the scan: the dropped page reads whole and
+    // the search counts its match.
+    assert!(!app.find.fetching(), "the fetch is answered");
+    assert!(!app.outbox.is_kept(&id));
+    assert_eq!(count(&app), "1 of 1");
+    let current = app.find.current().cloned().expect("a current match");
+    assert_eq!(current.anchor.page, 0);
+}
+
+#[test]
+fn find_tag_is_gone_after_answer() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, from, to) = command(&fetch);
+    app.on_line(hub_answer(&id, &log, from, to));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn find_lost_forgets_the_find_tag() {
+    let (mut app, _, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    app.find_lost();
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.find.fetching(), "no fetch on the wire");
+}
+
+#[test]
+fn close_find_after_reset_session_forgets_the_find_tag_and_ignores_its_late_answer() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, from, to) = command(&fetch);
+    app.reset_session();
+    assert_eq!(app.outbox.waiting(&id), None);
+    // The late answer finds no fetch and folds nothing: the dropped
+    // page stays dropped.
+    app.on_line(hub_answer(&id, &log, from, to));
+    assert!(app.pages().part(0).is_none());
+    assert!(!app.find.fetching(), "no fetch on the wire");
+}
+
+#[test]
+fn a_lost_find_line_keeps_its_tag() {
+    let (mut app, _, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    // The fetch has no pending entry to pop: failing its lost line is
+    // a no-op, and its wait survives until the find's own exits
+    // (`find_lost`, `close_find`, or its answer) retire it.
+    app.fail(&id);
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Find));
+    assert!(app.find.fetching(), "the fetch still waits");
+}
+
+#[test]
+fn a_changed_generation_answer_still_pumps_and_settles() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    // A query change while the fetch is in flight sends nothing new.
+    assert_eq!(
+        app.on_key(Key::Char('s'), now()),
+        Effect::FindPause {
+            generation: 7,
+            after: FIND_PAUSE,
+        }
+    );
+    assert!(app.find_due(7).is_empty());
+    let (_, from, to) = command(&fetch);
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    // The stale answer pumps for the current generation instead of
+    // folding, and its wait settles with it.
+    assert_eq!(outgoing.len(), 1);
+    let (next, _, _) = command(&outgoing[0]);
+    assert_ne!(next, id);
+    assert_eq!(app.outbox.waiting(&id), None);
 }

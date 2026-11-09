@@ -289,11 +289,56 @@ impl Setup {
 
     /// As [`Setup::new`], rooted under `parent` for a short socket path.
     pub(crate) fn new_under(parent: &Path) -> Self {
+        let setup = Self::new_without_provider_under(parent);
+        setup.install_test_provider();
+        setup
+    }
+
+    /// A home with no provider credentials or configured model, for tests
+    /// that exercise first-run behavior.
+    pub(crate) fn without_provider() -> Self {
+        Self::new_without_provider_under(&std::env::temp_dir())
+    }
+
+    fn new_without_provider_under(parent: &Path) -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::under(parent, "fh");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { root, deadline }
+    }
+
+    fn install_test_provider(&self) {
+        let extension = self.home().join("extensions/fake");
+        write_json(
+            &extension.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": ["http://127.0.0.1:1/v1"]}}),
+        );
+        write_json(
+            &extension.join("providers/fake.json"),
+            &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": [{"id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 100000}]}),
+        );
+        // Updates revisit the recorded source, which must outlive the installed copy.
+        let source = self.root.path().join("test-provider");
+        fs::create_dir_all(source.join("providers")).unwrap();
+        fs::copy(
+            extension.join("extension.json"),
+            source.join("extension.json"),
+        )
+        .unwrap();
+        fs::copy(
+            extension.join("providers/fake.json"),
+            source.join("providers/fake.json"),
+        )
+        .unwrap();
+        write_json(
+            &extension.join(".fiber.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "requested": true, "source": {"path": source}}),
+        );
+        write_json(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m"}),
+        );
     }
 
     pub(crate) fn home(&self) -> PathBuf {
@@ -2014,7 +2059,7 @@ pub(crate) fn assert_one_continued_log(lines: &[Value], started: usize) {
 
 /// A `session_status` line: ephemeral, and written by an observer thread, so
 /// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
+/// `tests/hub_daemon/socket.rs` reads it.
 pub(crate) fn is_status(line: &str) -> bool {
     line.contains(r#""kind":"session_status""#)
 }
@@ -2029,15 +2074,23 @@ pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The first stdout line, waited for under the test's [`Deadline`].
+/// The first stdout line, waited for under the test's [`Deadline`]. With a
+/// [`Diag`], expiry panics with the #3325 dump; without one it panics with
+/// the receive error rendered into the wait text.
 #[track_caller]
-pub(crate) fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
-    serde_json::from_str(
-        &deadline
-            .recv(stdout)
-            .expect("waited until the deadline for fiber_started"),
-    )
-    .unwrap()
+pub(crate) fn first_line(
+    deadline: Deadline,
+    stdout: &mpsc::Receiver<String>,
+    diag: Option<&Diag>,
+) -> Value {
+    let line = match (deadline.recv(stdout), diag) {
+        (Ok(line), _) => line,
+        (Err(mpsc::RecvTimeoutError::Timeout), Some(diag)) => {
+            panic!("{}", diag.report("fiber_started", &[]))
+        }
+        (Err(error), _) => panic!("waited until the deadline for fiber_started: {error:?}"),
+    };
+    serde_json::from_str(&line).unwrap()
 }
 
 /// The event kinds of a turn answered by [`hello`].
@@ -2060,7 +2113,7 @@ pub(crate) const HELLO_KINDS: [&str; 15] = [
 ];
 
 /// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
-/// for byte (as in `tests/tools.rs`).
+/// for byte (as in `tests/tool_calls/tools.rs`).
 pub(crate) const PIXEL: [u8; 69] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
@@ -2493,12 +2546,12 @@ pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
 /// order, whatever order `main` pushes them in.
 pub(crate) const TOOL_NAMES: [&str; 18] = [
     "ask_user",
+    "compact",
     "delegate_fork",
     "delegate_message",
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "handoff",
     "jobs",
     "name_session",
     "read",

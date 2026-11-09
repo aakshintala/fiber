@@ -1,0 +1,1334 @@
+//! Binary-level tests of a command sent into a session's exit window
+//! (`docs/invocation.md`, "Lifecycle" and "What the hub speaks"): the
+//! built `fiber` runs `hub serve`, and a session is held between
+//! `fiber_exited` and its shutdown by an `import` whose receipt is a FIFO
+//! the test holds (`docs/testing.md`, "Waits and timeouts"). The hub
+//! answers every command the session left unanswered.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use fakes::ProviderServer;
+use serde_json::{Value, json};
+use support::pty::Run as PtyRun;
+use support::{
+    HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, subscribe_as, until,
+    until_after, until_replayed,
+};
+
+/// A session that has run one turn and exited, and a hub that resumes it.
+struct World {
+    guard: Option<SessionGuard>,
+    setup: Setup,
+    id: String,
+    hub: Arc<Mutex<Option<HubProc>>>,
+    // Held so the provider outlives the test.
+    _server: ProviderServer,
+}
+
+impl World {
+    /// Runs `fiber ask one` to an exit, with the provider answering `turns`
+    /// requests.
+    fn new(turns: usize) -> Self {
+        let setup = Setup::new();
+        let server = ProviderServer::start((0..turns).map(|_| support::hello())).unwrap();
+        setup.provider(&server);
+        let mut ask = setup.fiber(&["ask", "one"]);
+        ask.current_dir(setup.workspace());
+        let output = run_to_exit(setup.deadline, "`fiber ask` to exit", ask);
+        assert!(output.status.success(), "{output:?}");
+        let first = String::from_utf8(output.stdout).unwrap();
+        let first: Value = serde_json::from_str(first.lines().next().unwrap()).unwrap();
+        let id = first["session_id"].as_str().unwrap().to_owned();
+        let workspace = setup.workspace().to_string_lossy().into_owned();
+        let guard = SessionGuard::arm(setup.deadline, &workspace);
+        Self {
+            setup,
+            id,
+            hub: Arc::new(Mutex::new(None)),
+            guard: Some(guard),
+            _server: server,
+        }
+    }
+
+    fn client(&self) -> Socket {
+        connect_hub(&self.setup, &self.hub).0.pumped()
+    }
+
+    /// The path of the receipt `import` reads first.
+    fn receipt(&self) -> PathBuf {
+        self.setup.home().join("import-codex.json")
+    }
+
+    /// Makes the receipt a FIFO: an `import` holds its reader there.
+    fn hold_imports(&self) {
+        fakes::fifo(self.receipt());
+    }
+
+    /// Waits for an `import` to open the receipt, which holds its reader
+    /// inside the command, and returns the write end that releases it.
+    fn await_import(&self) -> File {
+        let path = self.receipt();
+        bounded(
+            self.setup.deadline,
+            "an import to open its receipt",
+            move || OpenOptions::new().write(true).open(path).unwrap(),
+        )
+    }
+
+    /// Waits until the session removes its socket from `run/`: the signal
+    /// that its readers are stopped, so releasing the FIFO lands after
+    /// the close removed the socket.
+    fn await_socket_absent(&self) {
+        let socket = self.setup.home().join("run").join(&self.id);
+        while socket.exists() {
+            if self.setup.deadline.left().is_zero() {
+                panic!("waited until the deadline for the session to remove its socket");
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// Releases the held `import`: the receipt it reads is complete, so it
+    /// answers with the stored report and writes nothing.
+    fn release(writer: File) {
+        let mut writer = writer;
+        writer
+            .write_all(
+                json!({"source": "codex", "imported_at": 0})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+    }
+
+    /// The pids of the session processes running in the workspace now.
+    fn session_pids(&self) -> Vec<u32> {
+        // The session's command line carries the physical path; on macOS the
+        // temp directory is reached through the `/var` symlink.
+        let workspace = self
+            .setup
+            .workspace()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        fakes::matching(
+            &format!("--workspace={workspace}"),
+            self.setup.deadline.left() / 2,
+        )
+        .unwrap()
+    }
+
+    /// Waits for `pids` to exit. Not every process in the workspace: the
+    /// run a re-route resumes stays up.
+    fn await_exit(&self, pids: &[u32]) {
+        assert!(
+            fakes::pids_exit(pids, self.setup.deadline),
+            "waited until the deadline for the session process {pids:?} to exit"
+        );
+    }
+
+    /// The session's diagnostic log, one parsed line each; empty when the
+    /// session wrote none.
+    fn diagnostics(&self) -> Vec<Value> {
+        let path = self
+            .setup
+            .home()
+            .join("logs")
+            .join(format!("session-{}.log", self.id));
+        fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// The durable lines of the session's log.
+    fn log(&self) -> Vec<Value> {
+        let text =
+            fs::read_to_string(support::session_dir(&self.setup, &self.id).join("events.jsonl"))
+                .unwrap();
+        support::complete_lines(&text)
+    }
+
+    fn has_durable_log(&self) -> bool {
+        let path = support::session_dir(&self.setup, &self.id).join("events.jsonl");
+        let Ok(text) = fs::read_to_string(path) else {
+            return false;
+        };
+        support::complete_lines(&text)
+            .first()
+            .is_some_and(|line| line["kind"] == "session_started")
+    }
+
+    /// The `sessions` answer waits for the hub's initial scan and shows
+    /// whether it has registered this live or exited session.
+    fn session_is_listed(&self, client: &Socket) -> bool {
+        client.send(
+            &json!({"id": "c_finish_sessions", "command": "sessions", "args": {}}).to_string(),
+        );
+        let answer = support::recv_answer(client, "c_finish_sessions", "the sessions answer");
+        assert_eq!(answer["kind"], "command_accepted", "{answer}");
+        let listed = |entries: &Value| {
+            entries
+                .as_array()
+                .is_some_and(|entries| entries.iter().any(|entry| entry["session_id"] == self.id))
+        };
+        listed(&answer["payload"]["result"]["live"])
+            || listed(&answer["payload"]["result"]["exited"])
+    }
+
+    /// Closes the session through the hub and waits for the exit the close
+    /// caused, before the hub goes away: a session the hub started outlives
+    /// the hub, and an idle session never hears a close the dead hub never
+    /// relayed. The subscribe fold replays earlier exits, so only an exit
+    /// after the close's answer belongs to this close; waiting for any exit
+    /// can return on a replayed one while the session still runs.
+    fn close_and_wait_exit(&self, missing_log_is_expected: bool) {
+        let last = self.client();
+        let listed = self.session_is_listed(&last);
+        let had_durable_log = self.has_durable_log();
+        let readiness = if had_durable_log && listed {
+            "the hub listed the durable session"
+        } else if had_durable_log {
+            "the hub omitted a durable session from its listing"
+        } else {
+            "the test reached finish without a durable session log"
+        };
+        assert!(
+            missing_log_is_expected || (listed && had_durable_log),
+            "finish readiness: {readiness}; listed={listed}, durable_log={had_durable_log}"
+        );
+        last.send(&command(
+            "c_finish_sub",
+            &self.id,
+            "subscribe",
+            &json!({"level": "full"}),
+        ));
+        let ack = support::recv_answer(&last, "c_finish_sub", "the subscribe acknowledgement");
+        if ack["kind"] == "command_rejected" && ack["payload"]["code"] == "session_not_found" {
+            let side = if listed && had_durable_log {
+                "the hub rejected a listed session with a durable log"
+            } else if had_durable_log {
+                "the hub did not list the durable session before finish"
+            } else {
+                "the test sent finish before a durable log was available"
+            };
+            assert!(
+                missing_log_is_expected && !had_durable_log,
+                "{side}; c_finish_sub was refused session_not_found: {ack}; hub.log tail:\n{}",
+                support::hub_log_tail(&self.setup.hub_log())
+            );
+            return;
+        }
+        assert_eq!(ack["kind"], "command_accepted", "{ack}");
+        // The acknowledgement bounds the exit wait below: the fold's
+        // replayed exits stay behind the close's answer, and only a live
+        // exit ends it (`docs/invocation.md`, "What each command does").
+        let last_seq = ack["payload"]["result"]["last_seq"].as_u64();
+        let since = support::Subscribed {
+            ack,
+            last_seq,
+            session: Some(self.id.clone()),
+        };
+        last.send(&close_as("c_finish", &self.id));
+        // Both signals are collected as a set: no doc orders the close
+        // acknowledgement against `fiber_exited` (`docs/testing.md`,
+        // "Event streams"), so the wait ends when both have arrived,
+        // whichever comes first. One `until_after` bounds the whole wait
+        // (`docs/testing.md`, "Waits and timeouts"), and the replay bound
+        // in `since` keeps the fold's replayed exits from ending it.
+        let mut saw_ack = false;
+        let mut saw_exited = false;
+        let both = until_after(
+            &last,
+            &since,
+            "the close acknowledgement and the close-caused exit",
+            |line| {
+                if is_answer(line, "c_finish") {
+                    saw_ack = true;
+                }
+                if line["kind"] == "fiber_exited" {
+                    saw_exited = true;
+                }
+                saw_ack && saw_exited
+            },
+        );
+        let ack = answers(&both, "c_finish")
+            .pop()
+            .expect("the close acknowledgement arrives");
+        assert_eq!(ack["kind"], "command_accepted", "{ack}");
+        assert!(
+            both.iter().any(|line| line["kind"] == "fiber_exited"),
+            "the close-caused exit arrives: {both:?}"
+        );
+    }
+
+    fn finish(self) {
+        self.finish_with_missing_log(false);
+    }
+
+    fn finish_after_session_removal(self) {
+        self.finish_with_missing_log(true);
+    }
+
+    fn finish_with_missing_log(mut self, missing_log_is_expected: bool) {
+        if self.guard.is_some() {
+            self.close_and_wait_exit(missing_log_is_expected);
+        }
+        let hub = self.hub.lock().unwrap().take();
+        if let Some(hub) = hub {
+            hub.kill_and_wait();
+        }
+        if let Some(guard) = self.guard.take() {
+            guard.wait_gone();
+        }
+    }
+
+    /// `finish`, keeping a wait failure's message and appending what the
+    /// logs say about the session's exit: a lingering process means the
+    /// session never reached its exit, so the next sighting needs the
+    /// session log's started/exited lines and the hub log's tail. Only the
+    /// close wait and the workspace-exit wait run inside the catch: the hub
+    /// kill runs between them, outside it, so its own failure stays its own.
+    fn finish_with_exit_diagnostics(mut self) {
+        let diagnostics = exit_wait_diagnostics(&self);
+        if self.guard.is_some() {
+            let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.close_and_wait_exit(false);
+            }));
+            if let Err(payload) = closed {
+                panic!("{}", with_exit_diagnostics(payload, &diagnostics));
+            }
+        }
+        let hub = self.hub.lock().unwrap().take();
+        if let Some(hub) = hub {
+            hub.kill_and_wait();
+        }
+        if let Some(guard) = self.guard.take() {
+            let waited =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| guard.wait_gone()));
+            if let Err(payload) = waited {
+                panic!("{}", with_exit_diagnostics(payload, &diagnostics));
+            }
+        }
+    }
+}
+
+impl Drop for World {
+    /// A test that ends early, by a failed assertion, leaves no session
+    /// behind: the hub is killed first, so it starts no more, and then the
+    /// guard (dropped after this, as the next field) kills the sessions in
+    /// the workspace. A test that reached `finish` has taken both.
+    fn drop(&mut self) {
+        let hub = self.hub.lock().ok().and_then(|mut hub| hub.take());
+        if let Some(hub) = hub {
+            // A panic here, while a test's own panic unwinds, would abort.
+            let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                hub.kill_and_wait();
+            }));
+            drop(killed);
+        }
+    }
+}
+
+fn command(id: &str, session: &str, command: &str, args: &Value) -> String {
+    json!({"id": id, "session_id": session, "command": command, "args": args}).to_string()
+}
+
+fn import(id: &str, session: &str) -> String {
+    command(id, session, "import", &json!({"source": "codex"}))
+}
+
+fn prompt(id: &str, session: &str, text: &str) -> String {
+    command(
+        id,
+        session,
+        "prompt",
+        &json!({"content": [{"type": "text", "text": text}]}),
+    )
+}
+
+fn close(session: &str) -> String {
+    close_as("c_close", session)
+}
+
+/// A close with the test's own id: the session saw `c_close` from an
+/// earlier connection, so the final close answers under an id no earlier
+/// answer can match.
+fn close_as(id: &str, session: &str) -> String {
+    json!({"id": id, "session_id": session, "command": "close"}).to_string()
+}
+
+fn is_answer(line: &Value, id: &str) -> bool {
+    matches!(
+        line["kind"].as_str(),
+        Some("command_accepted" | "command_rejected")
+    ) && line["payload"]["command_id"] == id
+}
+
+/// The lines that answer command `id`.
+fn answers<'a>(lines: &'a [Value], id: &str) -> Vec<&'a Value> {
+    lines.iter().filter(|line| is_answer(line, id)).collect()
+}
+
+fn position(lines: &[Value], id: &str) -> usize {
+    lines
+        .iter()
+        .position(|line| is_answer(line, id))
+        .unwrap_or_else(|| panic!("no answer for {id}; got {lines:?}"))
+}
+
+/// One short line per socket line for failure output: the kind plus
+/// `payload.command_id`, `payload.code`, and `seq` where present. Large
+/// env/prompt payloads are what truncated the original `{lines:?}` dump, so
+/// the summary carries only what the next sighting's triage needs.
+fn summarize_lines(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let mut summary = line["kind"].as_str().unwrap_or("?").to_owned();
+            if let Some(command_id) = line["payload"]["command_id"].as_str() {
+                summary.push_str(&format!(" command_id={command_id}"));
+            }
+            if let Some(code) = line["payload"]["code"].as_str() {
+                summary.push_str(&format!(" code={code}"));
+            }
+            if let Some(seq) = line["seq"].as_u64() {
+                summary.push_str(&format!(" seq={seq}"));
+            }
+            summary
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn line_summary_keeps_what_the_next_sighting_needs() {
+    let lines = vec![
+        json!({"kind": "command_rejected", "payload": {"command_id": "c_p", "code": "closing"}}),
+        json!({"kind": "command_rejected", "payload": {"command_id": "c_p", "code": "indeterminate"}}),
+        json!({"kind": "fiber_exited"}),
+        json!({"kind": "command_accepted", "payload": {"command_id": "c_after"}, "seq": 7}),
+        json!({"payload": {"command_id": "c_x"}}),
+    ];
+    assert_eq!(
+        summarize_lines(&lines),
+        "command_rejected command_id=c_p code=closing\n\
+         command_rejected command_id=c_p code=indeterminate\n\
+         fiber_exited\n\
+         command_accepted command_id=c_after seq=7\n\
+         ? command_id=c_x"
+    );
+    assert_eq!(
+        summarize_lines(&lines).lines().count(),
+        lines.len(),
+        "one summary line per socket line"
+    );
+}
+
+/// The session log's `fiber_started` and `fiber_exited` lines, one summary
+/// line each: the started lines say which runs existed, the exited lines
+/// say which reached their exit, and nothing else shapes that question.
+fn summarize_exit_lines(lines: &[Value]) -> String {
+    summarize_lines(
+        &lines
+            .iter()
+            .filter(|line| line["kind"] == "fiber_started" || line["kind"] == "fiber_exited")
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The context a workspace-exit wait failure carries: the session log's
+/// started/exited lines plus the hub log's tail. A missing or corrupt log
+/// contributes nothing, so building the context never hides the wait
+/// failure it annotates.
+fn exit_wait_diagnostics(world: &World) -> String {
+    let path = support::session_dir(&world.setup, &world.id).join("events.jsonl");
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    format!(
+        "session log started/exited lines:\n{}\nhub.log tail (last {} lines):\n{}",
+        summarize_exit_lines(&lines),
+        support::HUB_LOG_TAIL,
+        support::hub_log_tail(&world.setup.hub_log())
+    )
+}
+
+/// A caught `wait_gone` failure's message with the exit diagnostics
+/// appended: the hook prints a panic once, at its site, so a resumed payload
+/// would show the original message only, and the combined message must be
+/// raised as a new panic. A panic without a message still carries the
+/// diagnostics, so the wait failure is never silent about what the logs say.
+fn with_exit_diagnostics(payload: Box<dyn std::any::Any + Send>, diagnostics: &str) -> String {
+    match payload.downcast::<String>() {
+        Ok(failure) => format!("{failure}\n{diagnostics}"),
+        Err(_) => format!("<no message with the workspace-exit wait failure>\n{diagnostics}"),
+    }
+}
+
+#[test]
+fn exit_summary_keeps_only_started_and_exited_lines() {
+    let lines = vec![
+        json!({"kind": "fiber_started", "seq": 1}),
+        json!({"kind": "turn_started", "seq": 2}),
+        json!({"kind": "fiber_exited", "seq": 3}),
+        json!({"kind": "rewound", "seq": 4}),
+    ];
+    let summary = summarize_exit_lines(&lines);
+    for kept in ["fiber_started", "fiber_exited"] {
+        assert!(
+            summary.lines().any(|line| line.starts_with(kept)),
+            "the summary keeps {kept}: {summary}"
+        );
+    }
+    for dropped in ["turn_started", "rewound"] {
+        assert!(
+            !summary.contains(dropped),
+            "the summary drops {dropped}: {summary}"
+        );
+    }
+    assert_eq!(summarize_exit_lines(&[]), "");
+}
+
+#[test]
+fn exit_diagnostics_keep_the_failure_message_and_append_the_context() {
+    let payload =
+        std::panic::catch_unwind(|| panic!("{}", "waited for the lingering process")).unwrap_err();
+    let message = with_exit_diagnostics(payload, "session log started/exited lines:\n...");
+    assert!(
+        message.contains("waited for the lingering process"),
+        "the failure message survives: {message}"
+    );
+    assert!(
+        message.contains("session log started/exited lines:"),
+        "the diagnostics follow it: {message}"
+    );
+}
+
+#[test]
+fn exit_diagnostics_carry_the_context_without_a_failure_message() {
+    let payload = std::panic::catch_unwind(|| std::panic::panic_any(42_u32)).unwrap_err();
+    let message = with_exit_diagnostics(payload, "session log started/exited lines:\n...");
+    assert!(
+        message.contains("session log started/exited lines:"),
+        "the diagnostics survive: {message}"
+    );
+}
+
+#[test]
+fn finish_with_exit_diagnostics_without_a_hub_or_a_guard_is_silent() {
+    let setup = Setup::new();
+    let server = ProviderServer::start((0..0).map(|_| support::hello())).unwrap();
+    let world = World {
+        setup,
+        id: "no such session".to_owned(),
+        hub: Arc::new(Mutex::new(None)),
+        guard: None,
+        _server: server,
+    };
+    world.finish_with_exit_diagnostics();
+}
+
+#[test]
+fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    let first_sub = subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+
+    let second = world.client();
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
+    // The prompt runs its turn on the free connection before the close, so
+    // no command straddles the quiesce reader stop: a line the reader reads
+    // after the close is answered `closing` at once, on a path with no
+    // ordering against the relayed answers, which no deterministic test can
+    // park on (`docs/invocation.md`, "Lifecycle").
+    second.send(&prompt("c_p", &id, "two"));
+    let prompted = support::recv_answer(&second, "c_p", "the prompt's answer");
+    assert_eq!(prompted["kind"], "command_accepted", "{prompted}");
+    second.send(&close(&id));
+    // The loop accepts the close before it quiesces: releasing now lets
+    // the held import finish inside the quiesce grace, so the held run
+    // answers it before `fiber_exited`.
+    let closing = support::recv_answer(&second, "c_close", "the closing command");
+    World::release(writer);
+    // Every answer reaches its own connection exactly once
+    // (`docs/invocation.md`, "What the hub speaks", "Commands keep their
+    // order": every line a session reads gets exactly one answer on its
+    // connection before the session shuts it).
+    let mut second_lines = vec![prompted, closing];
+    second_lines.extend(until_after(&second, &second_sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    }));
+    // One answer for each command the session read (`docs/invocation.md`,
+    // "What the hub speaks", "Commands keep their order").
+    assert_eq!(answers(&second_lines, "c_p").len(), 1, "{second_lines:?}");
+    assert_eq!(
+        answers(&second_lines, "c_close").len(),
+        1,
+        "{second_lines:?}"
+    );
+    world.await_socket_absent();
+    world.await_exit(&held);
+
+    // `c_after` resumes the session, which is why three runs started.
+    // The released answer streams before the exit line: both reach the
+    // command's own connection in the order the session wrote them.
+    let mut lines = until(&first, "c_q's answer", |line| is_answer(line, "c_q"));
+    lines.extend(until_after(&first, &first_sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    }));
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    lines.extend(until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    }));
+    // One answer for the released command (`docs/invocation.md`, "What the
+    // hub speaks", "Commands keep their order": every line a session reads
+    // gets exactly one answer on its connection).
+    assert_eq!(answers(&lines, "c_q").len(), 1, "{lines:?}");
+    assert_eq!(answers(&lines, "c_q")[0]["kind"], "command_accepted");
+    // The replay carries the setup run's own exit before the answer, so
+    // the exit the assertion pins is the first one after it.
+    let answered_at = position(&lines, "c_q");
+    let exited_at = lines
+        .iter()
+        .enumerate()
+        .find(|(at, line)| *at > answered_at && line["kind"] == "fiber_exited")
+        .map(|(at, _)| at)
+        .expect("fiber_exited streams after the released answer");
+    // The session's answers come back in the order it sent them: the
+    // released command is answered before `fiber_exited`
+    // (`docs/invocation.md`, "What the hub speaks", "Commands keep their
+    // order": a command the session answers when it ends is acknowledged
+    // then, so the order holds for acknowledgements as the session sends
+    // them).
+    assert!(
+        answered_at < exited_at,
+        "the released command is answered before fiber_exited: {lines:?}"
+    );
+    let log = world.log();
+    let started: Vec<_> = log
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(
+        started.len(),
+        3,
+        "the ask, the held run and the run c_after resumed"
+    );
+    assert_eq!(started[2]["payload"]["resumed"], true);
+    drop((first, second));
+    world.finish();
+}
+
+#[test]
+fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_runs_it() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    first.send(&prompt("c_p", &id, "two"));
+
+    // Crash the session mid-dispatch: the log ends in `turn_completed`,
+    // neither `fiber_exited` nor `rewound`.
+    let pids = world.session_pids();
+    assert_eq!(pids.len(), 1, "one session process, not {pids:?}");
+    assert!(fakes::kill_pid(pids[0], "KILL").unwrap());
+    drop(writer);
+
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    let lines = until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    for held in ["c_q", "c_p"] {
+        let held_answers = answers(&lines, held);
+        assert_eq!(held_answers.len(), 1, "one answer for {held}: {lines:?}");
+        assert_eq!(held_answers[0]["kind"], "command_rejected", "{lines:?}");
+        assert_eq!(
+            held_answers[0]["payload"]["code"], "indeterminate",
+            "{lines:?}"
+        );
+        assert!(
+            position(&lines, held) < position(&lines, "c_after"),
+            "the rejection comes before c_after's acknowledgement: {lines:?}"
+        );
+    }
+    assert!(
+        answers(&lines, "c_p")
+            .iter()
+            .all(|line| line["kind"] != "command_accepted"),
+        "the crashed prompt never runs: {lines:?}"
+    );
+    let log = world.log();
+    let turns = log
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .count();
+    assert_eq!(turns, 1, "the crashed prompt runs no turn: {log:?}");
+    drop(first);
+    world.finish_with_exit_diagnostics();
+}
+
+/// The log's `fiber_started` lines: one for each process that ran.
+fn started(log: &[Value]) -> usize {
+    log.iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .count()
+}
+
+fn turns(log: &[Value]) -> usize {
+    log.iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .count()
+}
+
+#[test]
+fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() {
+    let world = World::new(3);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+    // Neither is read: the session's reader is inside `c_q`.
+    first.send(&import("c_q2", &id));
+    first.send(&prompt("c_p", &id, "two"));
+
+    let second = world.client();
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    until_after(&second, &second_sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    world.await_socket_absent();
+    World::release(writer);
+    world.await_exit(&held);
+
+    // The re-route resumes a second run, whose reader blocks in `c_q2`.
+    let writer = world.await_import();
+    let resumed = world.session_pids();
+    assert_eq!(resumed.len(), 1, "one resumed run: {resumed:?}");
+    let third = world.client();
+    subscribe_as(&third, "c_sub3", &id);
+    third.send(&close(&id));
+    // The loop accepts the close before it quiesces: releasing now lets
+    // the held import finish inside the quiesce grace, so the resumed run
+    // answers it before `fiber_exited`.
+    support::recv_answer(&third, "c_close", "the closing command");
+    World::release(writer);
+    world.await_socket_absent();
+    world.await_exit(&resumed);
+
+    // Nothing after the last answer: `c_after` resumes a third run.
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    let lines = until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    assert_eq!(answers(&lines, "c_q").len(), 1, "{lines:?}");
+    let prompted = answers(&lines, "c_p");
+    assert_eq!(
+        prompted.len(),
+        1,
+        "exactly one answer for the prompt: {lines:?}"
+    );
+    assert_eq!(
+        prompted[0]["kind"],
+        "command_rejected",
+        "prompted[0] = {}\nlines:\n{}",
+        prompted[0],
+        summarize_lines(&lines)
+    );
+    assert_eq!(
+        prompted[0]["payload"]["code"],
+        "closing",
+        "prompted[0] = {}\nlines:\n{}",
+        prompted[0],
+        summarize_lines(&lines)
+    );
+    assert!(
+        position(&lines, "c_q") < position(&lines, "c_q2")
+            && position(&lines, "c_q2") < position(&lines, "c_p"),
+        "answers keep the order the commands were sent in: {lines:?}"
+    );
+    let log = world.log();
+    assert_eq!(turns(&log), 1, "the prompt never ran: {log:?}");
+    assert_eq!(
+        started(&log),
+        4,
+        "the ask, the held run, the re-routed run, and c_after's run"
+    );
+    drop((first, second, third));
+    world.finish();
+}
+
+#[test]
+fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+    first.send(&prompt("c_p", &id, "two"));
+    drop(first);
+
+    let second = world.client();
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    until_after(&second, &second_sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    world.await_socket_absent();
+    World::release(writer);
+    world.await_exit(&held);
+
+    // A later subscribe resumes the session: it finds no turn waiting.
+    let third = world.client();
+    let third_sub = subscribe_as(&third, "c_sub3", &id);
+    third.send(&close(&id));
+    // Read the close's answer: it proves the session heard this close
+    // before `finish` sends its own, so the two never race.
+    let closing = support::recv_answer(&third, "c_close", "the closing command");
+    assert_eq!(closing["kind"], "command_accepted", "{closing}");
+    until_after(&third, &third_sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    let log = world.log();
+    assert_eq!(turns(&log), 1, "the dropped prompt ran no turn: {log:?}");
+    assert_eq!(
+        started(&log),
+        3,
+        "the ask, the held run and the run the later subscribe resumed"
+    );
+    drop((second, third));
+    world.finish();
+}
+
+#[test]
+fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_rerouted() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+
+    let second = world.client();
+    subscribe_as(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    // Never released: the grace passes with the command still running.
+    let lines = until(&first, "the cut answer for c_q", |line| {
+        is_answer(line, "c_q")
+    });
+    let cut = answers(&lines, "c_q");
+    assert_eq!(cut.len(), 1, "{lines:?}");
+    assert_eq!(cut[0]["kind"], "command_rejected", "{lines:?}");
+    assert_eq!(cut[0]["payload"]["code"], "indeterminate", "{lines:?}");
+    // The reader is still inside the command, and the process ends anyway.
+    world.await_exit(&held);
+    drop(writer);
+
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    let after = until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    assert!(
+        answers(&after, "c_q").is_empty(),
+        "no second answer for the command before c_after's: {after:?}"
+    );
+    let written = world.diagnostics();
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert_eq!(written[0]["level"], "warn", "{written:?}");
+    assert_eq!(written[0]["code"], "timeout", "{written:?}");
+    let log = world.log();
+    assert_eq!(
+        started(&log),
+        3,
+        "the ask, the held run and the run c_after resumed: {log:?}"
+    );
+    drop((first, second));
+    world.finish();
+}
+
+#[test]
+fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists() {
+    // A hub subscribe naming an exited session resumes it; only a
+    // vanished log is refused `session_not_found` (`docs/invocation.md`,
+    // "Driver commands", `subscribe`). The close below exits the session
+    // while its import is still held, so the subscribe lands in the
+    // post-close exit/retirement window: the log is present and ends in
+    // `fiber_exited`, and the answer must resume, not refuse.
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+    assert!(!held.is_empty(), "the held run is a session process");
+
+    let second = world.client();
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    // Both signals are collected as a set: no doc orders the close
+    // acknowledgement against `fiber_exited` (`docs/testing.md`,
+    // "Event streams"), so the wait ends when both have arrived,
+    // whichever comes first. The fold may replay the ask run's own exit
+    // before the close is answered; the socket-absent, process-exit and
+    // log checks below prove the close-caused teardown happened.
+    let mut saw_ack = false;
+    let mut saw_exited = false;
+    let both = until_after(
+        &second,
+        &second_sub,
+        "the close acknowledgement and the close-caused exit",
+        |line| {
+            if is_answer(line, "c_close") {
+                saw_ack = true;
+            }
+            if line["kind"] == "fiber_exited" {
+                saw_exited = true;
+            }
+            saw_ack && saw_exited
+        },
+    );
+    let ack = answers(&both, "c_close")
+        .pop()
+        .expect("the close acknowledgement arrives");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert!(
+        both.iter().any(|line| line["kind"] == "fiber_exited"),
+        "the close-caused exit arrives: {both:?}"
+    );
+    world.await_socket_absent();
+    world.await_exit(&held);
+
+    // The held import never finishes, so the close grace cuts it: the
+    // cut answer proves the command was answered and will never be
+    // re-routed (`docs/invocation.md`, "What the hub speaks").
+    let cut = support::recv_answer(&first, "c_q", "the cut answer for the held import");
+    assert_eq!(cut["kind"], "command_rejected", "{cut:?}");
+    assert_eq!(cut["payload"]["code"], "indeterminate", "{cut:?}");
+
+    // The durable log is present and ends in the exit: the only log a
+    // subscribe may refuse as `session_not_found` is a vanished one, so
+    // this read lays the refusal's alibi before the subscribe is sent.
+    let text = fs::read_to_string(support::session_dir(&world.setup, &id).join("events.jsonl"))
+        .expect("the exited session's log is present for the window subscribe");
+    let log = support::complete_lines(&text);
+    let last = log
+        .last()
+        .expect("the exited session's log holds the close-caused exit");
+    assert_eq!(
+        last["kind"], "fiber_exited",
+        "the log ends in the close-caused exit: {log:?}"
+    );
+
+    // One full subscribe in the retirement window, while the unreleased
+    // import still holds the teardown: the cut left nothing to re-route,
+    // and the log exists, so the hub resumes. A `session_not_found` here
+    // is the product race, not an already-exited session.
+    let third = world.client();
+    third.send(&command(
+        "c_window_sub",
+        &id,
+        "subscribe",
+        &json!({"level": "full"}),
+    ));
+    let ack = support::recv_answer(&third, "c_window_sub", "the window subscribe's answer");
+    assert_eq!(
+        ack["kind"],
+        "command_accepted",
+        "a full subscribe with the log present resumes the session: {ack} (hub log tail:\n{})",
+        support::hub_log_tail(&world.setup.hub_log())
+    );
+
+    // Deterministic teardown: the cut proved no reader will ever park
+    // in the receipt, so the writer is dropped unanswered, and the run
+    // the window subscribe resumed idles. The shared finish then
+    // subscribes onto the running session and closes it, instead of
+    // racing a resume.
+    drop(writer);
+    drop((first, second, third));
+    world.finish();
+}
+
+#[test]
+fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
+    // The probe's close exits the session. After collecting its
+    // acknowledgement and exit, the test waits for the socket and process
+    // to go away, removes the session directory, then finishes. With no
+    // durable log, the hub cannot resume the session and must not receive a
+    // second close.
+    //
+    // Waiting for the process to exit alone leaves the log resumable. This
+    // removal establishes the distinct case where `session_not_found` is
+    // expected (`docs/invocation.md`, "Lifecycle").
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    // Resume past the ask run's exit so the session idles: the probe's
+    // close then causes a fresh exit of its own.
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    let running = world.session_pids();
+    assert!(!running.is_empty(), "the resumed run is a session process");
+    let probe = world.client();
+    let probe_sub = subscribe_as(&probe, "c_probe_sub", &id);
+    probe.send(&close(&id));
+    // Both signals are collected as a set: no doc orders the close
+    // acknowledgement against `fiber_exited` (`docs/testing.md`,
+    // "Event streams"), so the wait ends when both have arrived,
+    // whichever comes first. The exit signal may be the fold's replay of
+    // the ask run's exit; `await_socket_absent` and `await_exit` below
+    // prove the close-caused teardown happened.
+    let mut saw_ack = false;
+    let mut saw_exited = false;
+    let both = until_after(
+        &probe,
+        &probe_sub,
+        "the close acknowledgement and the close-caused exit",
+        |line| {
+            if is_answer(line, "c_close") {
+                saw_ack = true;
+            }
+            if line["kind"] == "fiber_exited" {
+                saw_exited = true;
+            }
+            saw_ack && saw_exited
+        },
+    );
+    let ack = answers(&both, "c_close")
+        .pop()
+        .expect("the close acknowledgement arrives");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert!(
+        both.iter().any(|line| line["kind"] == "fiber_exited"),
+        "the close-caused exit arrives: {both:?}"
+    );
+    world.await_socket_absent();
+    world.await_exit(&running);
+    fs::remove_dir_all(support::session_dir(&world.setup, &id))
+        .expect("the retired session's directory removes");
+    drop(probe);
+    drop(first);
+    world.finish_after_session_removal();
+}
+
+#[test]
+fn a_finish_without_a_close_leaves_no_session_running() {
+    // The session runs idle with the ask run's exit already in its log: a
+    // fresh subscribe replays that exit while the session lives, so an exit
+    // on the stream does not mean the session is gone. No close is sent by
+    // the probe; `finish` must close the live session before the hub goes
+    // away.
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    // Resume the session so it runs idle past the ask run's exit.
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    let running = world.session_pids();
+    assert!(!running.is_empty(), "the resumed session is still running");
+    let probe = world.client();
+    let probe_sub = subscribe_as(&probe, "c_probe_sub", &id);
+    until_replayed(
+        &probe,
+        &probe_sub,
+        "the replayed exit while the session is live",
+        |line| line["kind"] == "fiber_exited" && world.session_pids() == running,
+    );
+    assert_eq!(
+        world.session_pids(),
+        running,
+        "the replayed exit does not mean the live session is gone"
+    );
+    drop(probe);
+    drop(first);
+    world.finish();
+}
+
+#[test]
+fn a_test_that_ends_early_leaves_no_session_running() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe_as(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let running = world.session_pids();
+    assert!(!running.is_empty(), "the held run is a session process");
+    let deadline = world.setup.deadline;
+    // Dropped as a failed assertion would drop it, with the import held.
+    drop(world);
+    assert!(
+        fakes::pids_exit(&running, deadline),
+        "waited until the deadline for the session process {running:?} to exit after the drop"
+    );
+    drop((first, writer));
+}
+
+/// Reads the sole session directory created by this terminal's workspace.
+fn sole_session_directory(setup: &Setup) -> PathBuf {
+    let projects = setup.home().join("projects");
+    let sessions = fs::read_dir(&projects)
+        .unwrap_or_else(|error| panic!("session discovery: reading {projects:?}: {error}"))
+        .flat_map(|project| {
+            let path = project.unwrap().path().join("sessions");
+            fs::read_dir(path)
+                .into_iter()
+                .flatten()
+                .map(|entry| entry.unwrap().path())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "session discovery: one session directory"
+    );
+    let path = sessions.into_iter().next().unwrap();
+    let id = path.file_name().unwrap().to_string_lossy();
+    let canonical = support::session_dir(setup, &id);
+    assert_eq!(
+        path, canonical,
+        "session discovery uses the canonical helper"
+    );
+    canonical
+}
+
+#[test]
+fn a_resumed_multi_window_session_pages_up_to_its_first_reply() {
+    let setup = Setup::new();
+    let markers: Vec<_> = (0..41).map(|turn| format!("seed-{turn:02}")).collect();
+    let steps: Vec<_> = markers
+        .iter()
+        .map(|marker| {
+            json!({"text": format!("{marker}\n{}", (0..7).map(|line| format!("{marker}-body-{line}")).collect::<Vec<_>>().join("\n"))})
+        })
+        .collect();
+    support::write_json(&setup.workspace().join("s.json"), &json!({"steps": steps}));
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "session": {"idle_exit_ms": 2000}, "hub": {"idle_exit_ms": 200}}),
+    );
+    let mut run = PtyRun::spawn(&setup, 160, 48, &[], &[]);
+    run.ready();
+
+    for (turn, marker) in markers.iter().enumerate() {
+        let from = run.output().len();
+        run.write(format!("prompt-{turn:02}\r").as_bytes());
+        run.wait_screen_leading(
+            "seeded reply on the alternate screen",
+            |grid| grid.alternate_screen && grid.contents.contains(marker),
+            || format!("stage=seed turn={turn}; hub trace:\n{}", setup.hub_log()),
+        );
+        run.turn_finished(from);
+    }
+
+    let session_dir = sole_session_directory(&setup);
+    let events = session_dir.join("events.jsonl");
+    let events_for_wait = events.clone();
+    fakes::wait_until(
+        "stage=idle exit after 41 turns",
+        setup.deadline,
+        move || {
+            fs::read_to_string(&events_for_wait).is_ok_and(|text| {
+                let lines = support::complete_lines(&text);
+                lines
+                    .iter()
+                    .filter(|line| line["kind"] == "turn_completed")
+                    .count()
+                    == 41
+                    && lines.iter().any(|line| line["kind"] == "fiber_exited")
+            })
+        },
+    );
+    let id = session_dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let socket = setup.session_socket(&id);
+    support::wait_for_path_gone(setup.deadline, &socket, "stage=idle exit socket removal");
+    support::wait_for_lock_released(setup.deadline, &session_dir, "stage=idle exit log unlock");
+    let before = fs::read(&events).expect("stage=idle exit: completed log bytes remain");
+    let before_text = String::from_utf8_lossy(&before);
+    let before_lines = support::complete_lines(&before_text);
+    // docs/invocation.md ("Driver commands", `history`): an answer holds at
+    // most 256 lines, so a longer log is what forces the paging.
+    assert!(
+        before_lines.len() > 256,
+        "stage=history seed log exceeds 256 lines: {}",
+        before_lines.len()
+    );
+    for marker in &markers {
+        assert!(
+            before_text.contains(marker),
+            "stage=history seed log contains {marker}"
+        );
+    }
+    assert!(
+        before_lines
+            .iter()
+            .any(|line| line["kind"] == "fiber_exited"),
+        "stage=idle exit durable event: {before_text}"
+    );
+
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"text": "resumed-answer\\nresumed-body"}]}),
+    );
+    // The resumed run must outlive the paging below.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "session": {"idle_exit_ms": 90000}, "hub": {"idle_exit_ms": 200}}),
+    );
+    let from = run.output().len();
+    run.write(b"after-exit\r");
+    run.wait_screen_leading(
+        "stage=resumed answer on the alternate screen",
+        |grid| grid.alternate_screen && grid.contents.contains("resumed-answer"),
+        || {
+            format!(
+                "session trace:\n{}\nhub trace:\n{}",
+                fs::read_to_string(&events).unwrap_or_default(),
+                setup.hub_log()
+            )
+        },
+    );
+    run.turn_finished(from);
+    let events_for_wait = events.clone();
+    fakes::wait_until(
+        "stage=resumed prompt turn completes",
+        setup.deadline,
+        move || {
+            fs::read_to_string(&events_for_wait).is_ok_and(|text| {
+                let lines = support::complete_lines(&text);
+                lines.iter().any(|line| {
+                    line["kind"] == "turn_started" && line.to_string().contains("after-exit")
+                }) && lines
+                    .iter()
+                    .filter(|line| line["kind"] == "turn_completed")
+                    .count()
+                    == 42
+                    && lines.iter().any(|line| {
+                        line["kind"] == "fiber_started" && line["payload"]["resumed"] == true
+                    })
+            })
+        },
+    );
+    let after = fs::read(&events).expect("stage=resumed log remains");
+    assert!(
+        after.starts_with(&before),
+        "stage=resume preserves the exact pre-exit log prefix"
+    );
+    let log_text = String::from_utf8_lossy(&after);
+    assert!(
+        log_text.contains("after-exit"),
+        "stage=resumed prompt is durable: {log_text}"
+    );
+
+    let mut seen = std::collections::BTreeSet::new();
+    let tail = run.wait_screen("stage=history resumed tail", |grid| {
+        grid.alternate_screen
+            && grid.contents.contains("resumed-answer")
+            && grid.contents.contains(&markers[40])
+    });
+    for marker in &markers {
+        // settled: `tail` is the grid the wait above returned.
+        if tail.contents.contains(marker) {
+            seen.insert(marker.clone());
+        }
+    }
+    // Eight controlled reply rows per turn, one page is 47 rows, plus slack for cards/headings.
+    let page_cap = (41_usize * 9).div_ceil(47) + 4;
+    for page in 0..page_cap {
+        if seen.contains(&markers[0]) {
+            break;
+        }
+        run.write(b"\x1b[5~");
+        let grid = run.wait_screen_leading(
+            "stage=history PageUp reveals an earlier seeded reply",
+            |grid| {
+                grid.alternate_screen
+                    && markers
+                        .iter()
+                        .any(|marker| !seen.contains(marker) && grid.contents.contains(marker))
+            },
+            || {
+                format!(
+                    "page={page}; session trace:\n{}\nhub trace:\n{}",
+                    fs::read_to_string(&events).unwrap_or_default(),
+                    setup.hub_log()
+                )
+            },
+        );
+        for marker in &markers {
+            // settled: `grid` is the grid the wait above returned.
+            if grid.contents.contains(marker) {
+                seen.insert(marker.clone());
+            }
+        }
+    }
+    assert_eq!(
+        seen,
+        markers.iter().cloned().collect(),
+        "stage=history every seeded reply remains reachable"
+    );
+    run.write(b"\x1b[F");
+    run.wait_screen("stage=history returned to resumed tail", |grid| {
+        grid.alternate_screen && grid.contents.contains("resumed-answer")
+    });
+
+    run.write(b"\x03\x03\r");
+    run.wait_screen(
+        "stage=quit restored primary screen and visible cursor",
+        |grid| !grid.alternate_screen && !grid.hide_cursor,
+    );
+    let exited = run.wait();
+    assert_eq!(
+        exited.status.code(),
+        Some(0),
+        "stage=quit terminal exit code; output: {}",
+        String::from_utf8_lossy(&exited.terminal)
+    );
+}

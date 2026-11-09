@@ -1,0 +1,365 @@
+//! A steering message draws its queue row while it waits and its card
+//! rule once it lands (`docs/tui.md`, "Steering" and "Turns"): the real
+//! binary on a pseudo-terminal, a prompt starting a turn on a held fake
+//! reply, Enter sending a steer mid-turn, the queue row on the grid while
+//! the reply stays held, then the `steer · HH:MM` rule in the turn's card
+//! after the release lets the turn land.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a live test prints its outcome"
+)]
+
+use crate::support;
+
+use std::fs;
+
+use fakes::ProviderServer;
+use serde_json::json;
+use support::pty::{Colour, Grid, Run};
+use support::{TRUECOLOUR, function_call, hello, stream, write_json};
+
+/// `attention` in the dark theme.
+const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
+/// `rule` in the dark theme.
+const RULE: Colour = Colour::Rgb(58, 58, 74);
+
+/// Installs a provider `fake` with model `m` on `openai-responses` at the
+/// fake server, makes `fake/m` the configured model, and idles the hub
+/// out a second after its last client leaves, so no hub lingers.
+fn provider(setup: &support::Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    let model = json!({"id": "m", "protocol": "openai-responses",
+        "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [model]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+    );
+}
+
+/// Spawns `fiber` on a 120 by 32 terminal through the shared driver, with
+/// truecolour after the fake key in the child's environment, so the grid
+/// cells carry the theme's true colours.
+fn terminal(setup: &support::Setup) -> Run {
+    let mut env = vec![("FIBER_TEST_FAKE_KEY", "sk-test")];
+    env.extend(TRUECOLOUR);
+    Run::spawn(setup, 120, 32, &[], &env)
+}
+
+/// A reply that calls the shell with `echo hi`.
+fn calls_echo_hi() -> fakes::Response {
+    stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])
+}
+
+/// Whether the grid shows the queued steer: the queue row's mark beside
+/// the steered text.
+fn queue_row(grid: &Grid) -> bool {
+    grid.rows
+        .iter()
+        .any(|row| row.contains("↳") && row.contains("use x"))
+}
+
+/// The first row holding `needle`, or a panic naming it.
+fn row_with(grid: &Grid, needle: &str) -> u16 {
+    u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} in\n{}", grid.contents)),
+    )
+    .unwrap_or(u16::MAX)
+}
+
+/// The column where `needle` starts on `y`, matching the cells one by
+/// one, so a wide cell before it changes nothing.
+fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
+    let (cols, _) = grid.size();
+    let want: Vec<char> = needle.chars().collect();
+    for x in 0..cols {
+        let mut ok = !want.is_empty();
+        for (dx, want) in want.iter().enumerate() {
+            let xi = x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX));
+            if xi >= cols || grid.cell(xi, y).symbol != want.to_string() {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return x;
+        }
+    }
+    panic!("{needle:?} on row {y}")
+}
+
+#[test]
+fn a_steer_draws_its_queue_row_then_its_card_rule() {
+    let setup = support::Setup::new();
+    // The first reply runs a short shell call the standing rule allows
+    // without asking. The reply is held until the test sees the steer on
+    // the grid, so the steer is queued before the first step ends: the
+    // hold forces the order, and the steer lands at the step boundary,
+    // inside the turn.
+    let server = ProviderServer::start([calls_echo_hi(), hello()]).unwrap();
+    server.hold();
+    provider(&setup, &server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = terminal(&setup);
+    // The first frame draws the input line; its title proves the input
+    // reader runs before the prompt goes out.
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    // The loop pushes kitty's flags only after it processes the harness's
+    // reply, so this also keeps the responder's pty write ahead of input.
+    run.wait_bytes(0, support::pty::KITTY_PUSH, "kitty keyboard flags pushed");
+    let from = run.output().len();
+    run.write(b"go\r");
+    // The first request in flight on the held reply proves the turn runs.
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first request to reach the server"
+    );
+    // The working line proves the turn is busy, so Enter steers.
+    run.wait_screen("the running turn", |grid| {
+        grid.contents.contains("Esc to interrupt")
+    });
+    // Enter during the turn sends the steer; the draft clears.
+    run.write(b"use x\r");
+    // The held reply leaves on every path: the explicit release below
+    // frees it once the poll ends, and the guard frees it if the poll
+    // fails first, so a failure never strands the held reply. Releasing
+    // twice is harmless.
+    struct ReleaseHold<'a> {
+        server: &'a ProviderServer,
+    }
+    impl Drop for ReleaseHold<'_> {
+        fn drop(&mut self) {
+            self.server.release();
+        }
+    }
+    let _hold = ReleaseHold { server: &server };
+    // The queue row while the steer waits: one wait under its own bound
+    // (`docs/testing.md`, "Waits and timeouts"), so a missing row fails
+    // naming the wait instead of hanging a poll.
+    run.wait_screen("the steering queue row", queue_row);
+    server.release();
+    // The release lets the turn land: the step boundary applies the steer
+    // and the second request answers.
+    run.turn_finished(from);
+    // debt: this wait predicate repeats the row lookup and the `"steer"` / `"use x"` cell searches that the asserts below and `col_at` also do, because a helper's grid reads sit outside the wait span and the screen ratchet bills them as bare reads (steer_drawn.rs would rise from 11 to 18 with no ruling to raise it).
+    // Upgrade trigger: the ratchet counts reads inside a registered wait helper's body (WAIT_HELPERS in xtask/src/screen_ratchet.rs gains a helper that takes the predicate), after which this predicate becomes one `fn rule_drawn(grid: &Grid) -> bool` on `Option`-returning `row_with`/`col_at`.
+    // The card rule where the steer landed: the label bold in attention,
+    // the dim separator, the dashes in rule to the edge, and the steered
+    // text bold directly under it. The time is never read: only the
+    // separator's dim span between the label and the dashes.
+    let grid = run.wait_screen("the steer card rule", |grid| {
+        let (cols, _) = grid.size();
+        let Some(pos) = grid.rows.iter().position(|row| row.contains("steer")) else {
+            return false;
+        };
+        let Ok(y) = u16::try_from(pos) else {
+            return false;
+        };
+        let want = ['s', 't', 'e', 'e', 'r'];
+        let mut at = None;
+        let mut x = 0u16;
+        while x < cols {
+            let mut ok = true;
+            for (dx, glyph) in want.iter().enumerate() {
+                let Some(xi) = x.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                    ok = false;
+                    break;
+                };
+                if xi >= cols || grid.cell(xi, y).symbol != glyph.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                at = Some(x);
+                break;
+            }
+            let Some(next) = x.checked_add(1) else {
+                break;
+            };
+            x = next;
+        }
+        let Some(x) = at else {
+            return false;
+        };
+        for dx in 0..5u16 {
+            let Some(xi) = x.checked_add(dx) else {
+                return false;
+            };
+            if xi >= cols {
+                return false;
+            }
+            let cell = grid.cell(xi, y);
+            if cell.fg != ATTENTION || !cell.bold {
+                return false;
+            }
+        }
+        let mut dashes = x.saturating_add(5);
+        while dashes < cols && grid.cell(dashes, y).symbol != "─" {
+            dashes = dashes.saturating_add(1);
+        }
+        if dashes >= cols {
+            return false;
+        }
+        let mut dx = 5u16;
+        while x.saturating_add(dx) < dashes {
+            let Some(xi) = x.checked_add(dx) else {
+                return false;
+            };
+            if !grid.cell(xi, y).dim {
+                return false;
+            }
+            let Some(next) = dx.checked_add(1) else {
+                return false;
+            };
+            dx = next;
+        }
+        let mut dash = dashes;
+        while dash < cols {
+            let cell = grid.cell(dash, y);
+            if cell.symbol != "─" {
+                break;
+            }
+            if cell.fg != RULE {
+                return false;
+            }
+            let Some(next) = dash.checked_add(1) else {
+                return false;
+            };
+            dash = next;
+        }
+        let Some(below) = y.checked_add(1) else {
+            return false;
+        };
+        let Some(tpos) = grid.rows.iter().position(|row| row.contains("use x")) else {
+            return false;
+        };
+        let Ok(text) = u16::try_from(tpos) else {
+            return false;
+        };
+        if text != below {
+            return false;
+        }
+        let want_text = ['u', 's', 'e', ' ', 'x'];
+        let mut found = None;
+        let mut tx = 0u16;
+        while tx < cols {
+            let mut ok = true;
+            for (dx, glyph) in want_text.iter().enumerate() {
+                let Some(xi) = tx.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                    ok = false;
+                    break;
+                };
+                if xi >= cols || grid.cell(xi, below).symbol != glyph.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                found = Some(tx);
+                break;
+            }
+            let Some(next) = tx.checked_add(1) else {
+                break;
+            };
+            tx = next;
+        }
+        let Some(tx) = found else {
+            return false;
+        };
+        for dx in 0..5u16 {
+            let Some(xi) = tx.checked_add(dx) else {
+                return false;
+            };
+            if xi >= cols {
+                return false;
+            }
+            if !grid.cell(xi, below).bold {
+                return false;
+            }
+        }
+        true
+    });
+    let y = row_with(&grid, "steer");
+    let x = col_at(&grid, y, "steer");
+    for dx in 0..5u16 {
+        let cell = grid.cell(x + dx, y);
+        assert_eq!(cell.fg, ATTENTION, "rule label col {dx}");
+        assert!(cell.bold, "rule label col {dx}");
+    }
+    let (cols, _) = grid.size();
+    let mut dashes = x + 5;
+    while dashes < cols && grid.cell(dashes, y).symbol != "─" {
+        dashes += 1;
+    }
+    assert!(
+        dashes < cols,
+        "the rule's dashes on row {y} in\n{}",
+        grid.contents
+    );
+    for dx in 5..(dashes - x) {
+        assert!(grid.cell(x + dx, y).dim, "rule separator col {dx}");
+    }
+    // The rule fills the card's width past one space, not the terminal:
+    // every dash carries the rule tint, and nothing but spaces follows.
+    let mut dx = dashes;
+    while dx < cols && grid.cell(dx, y).symbol == "\u{2500}" {
+        assert_eq!(grid.cell(dx, y).fg, RULE, "rule dash col {dx}");
+        dx += 1;
+    }
+    let text = row_with(&grid, "use x");
+    assert_eq!(text, y + 1, "the steered text under its rule");
+    let tx = col_at(&grid, text, "use x");
+    for dx in 0..5u16 {
+        assert!(grid.cell(tx + dx, text).bold, "steered text col {dx}");
+    }
+    // Quit: the terminal is restored, with one resume line per live
+    // session on the primary screen ("On exit").
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}

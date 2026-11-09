@@ -140,7 +140,7 @@ local provider_functions = { models = true, quota = true, credential = true, sig
 
 local hook_points = {
   session_start = true, before_message = true, turn_start = true, before_tool = true,
-  before_model_call = true, after_tool = true, turn_end = true, before_handoff = true,
+  before_model_call = true, after_tool = true, turn_end = true, before_compaction = true,
 }
 local refusing = { before_message = true, before_tool = true, before_model_call = true }
 local phases = { sanitize = true, transform = true, check = true }

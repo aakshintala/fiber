@@ -131,12 +131,20 @@ pub struct TurnCallResult<'a> {
 pub struct TurnCall<'a> {
     /// The tool's name.
     pub name: &'a str,
-    /// The call's arguments.
+    /// The call's arguments: the ones that ran, when a `before_tool` hook
+    /// rewrote them.
     pub arguments: &'a Value,
+    /// With a rewrite, the extensions whose hooks rewrote the arguments,
+    /// in the order they ran; absent when none took attribution.
+    pub changed_by: Option<&'a [String]>,
     /// What the call is doing, or how it ended.
     pub state: CallState<'a, TurnCallResult<'a>, &'a str>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
+    /// The recipient's description, for a `delegate_message`, or name, for a
+    /// `session_message`, as the terminal held it when the call folded; `None`
+    /// when it held none or the call is no message call.
+    pub recipient: Option<&'a str>,
     /// Whether the call is open.
     pub open: bool,
     /// Whether a `permission_requested` for it is open.
@@ -245,11 +253,11 @@ pub struct TurnOrphan<'a> {
     pub message: &'a str,
 }
 
-/// A handoff's band: what the band row reads. The context sizes ride
+/// A compaction's band: what the band row reads. The context sizes ride
 /// [`TurnBandState::Done`], so only a done band carries them.
 #[derive(Debug, Clone)]
 pub struct TurnBand<'a> {
-    /// What the handoff runs at.
+    /// What the compaction runs at.
     pub trigger: &'a str,
     /// The band's timestamp.
     pub ts: u64,
@@ -257,13 +265,13 @@ pub struct TurnBand<'a> {
     pub state: TurnBandState,
 }
 
-/// What a handoff's band is doing, or how it ended. The context sizes
+/// What a compaction's band is doing, or how it ended. The context sizes
 /// ride the done state, so a state without them cannot carry them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnBandState {
     /// The note is being written.
     Writing,
-    /// The handoff completed, with the context sizes.
+    /// The compaction completed, with the context sizes.
     Done(TurnSizes),
     /// It failed or was cancelled: the context is unchanged.
     Unchanged {
@@ -272,7 +280,7 @@ pub enum TurnBandState {
     },
 }
 
-/// A completed handoff's context sizes.
+/// A completed compaction's context sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TurnSizes {
     /// The context size before.
@@ -353,7 +361,7 @@ pub enum TurnEntry<'a> {
     Group(TurnGroup<'a>),
     /// A line that came while the turn ran.
     Aside(TurnAside<'a>),
-    /// A handoff's band: what follows is the second card.
+    /// A compaction's band: what follows is the second card.
     Band(TurnBand<'a>),
     /// The person's answers to a question form.
     Answers(TurnAnswers<'a>),
@@ -527,6 +535,7 @@ impl<'a> TurnCall<'a> {
     pub(crate) fn hash_key(&self, key: &mut DefaultHasher) {
         self.name.hash(key);
         hash_value(self.arguments, key);
+        self.changed_by.hash(key);
         hash_call_state(
             &self.state,
             hash_turn_call_result,
@@ -534,6 +543,7 @@ impl<'a> TurnCall<'a> {
             key,
         );
         self.answer.hash(key);
+        self.recipient.hash(key);
         self.open.hash(key);
         self.asking.hash(key);
     }

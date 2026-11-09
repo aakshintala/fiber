@@ -2,6 +2,7 @@
 
 use super::{Input, Loop, Screen, hub::Connection};
 use crate::app::App;
+use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Event;
 use crate::link::Line;
 use crate::pty_watch::{watch, watched};
@@ -19,7 +20,7 @@ use std::time::Duration;
 
 /// The launch description `run` tests start from: `/w`, outside git.
 pub(super) fn launch() -> super::Launch {
-    super::Launch {
+    let mut launch = super::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -35,7 +36,62 @@ pub(super) fn launch() -> super::Launch {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    }
+    };
+    launch.models = Some(test_catalogue());
+    launch.configure = Some(Arc::new(crate::configure_fake::Fake::new(Vec::new())));
+    launch
+}
+
+/// A no-provider, no-model launch for first-run tests.
+pub(super) fn launch_without_model() -> super::Launch {
+    let mut launch = launch();
+    launch.model = None;
+    launch.models = Some(Arc::new(|_| Ok(Catalogue::default())));
+    launch
+}
+
+fn test_catalogue() -> crate::ReadModels {
+    Arc::new(|_| {
+        Ok(Catalogue {
+            models: vec![ModelEntry {
+                reference: "p/m".to_owned(),
+                provider: "p".to_owned(),
+                id: "m".to_owned(),
+                name: None,
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+                price: None,
+            }],
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn launch_starts_with_configured_test_catalogue() {
+    let launch = launch();
+    assert_eq!(launch.model.as_deref(), Some("p/m"));
+    let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
+    assert!(
+        catalogue
+            .models
+            .iter()
+            .any(|model| model.reference == "p/m"),
+        "test catalogue contains p/m: {catalogue:?}"
+    );
+    assert!(catalogue.logged_out.is_empty());
+    assert!(launch.configure.is_some());
+}
+
+#[test]
+fn launch_without_model_has_no_provider_or_catalogue() {
+    let launch = launch_without_model();
+    assert!(launch.model.is_none());
+    let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
+    assert!(catalogue.models.is_empty());
+    assert!(catalogue.logged_out.is_empty());
 }
 
 /// One named wall-clock deadline for every blocking wait.
@@ -135,6 +191,17 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
     let attached = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&attached);
     let mut app = App::new(PathBuf::from("/w"));
+    // A home with a model chosen, so Enter sends a `start` instead of
+    // opening the model picker.
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
     app.set_size(width, height);
     let screen = Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = Loop::for_test(app, screen);
@@ -185,6 +252,7 @@ impl<B: Backend> Loop<B> {
             on_attach: Box::new(|_| {}),
             clock,
             timing: crate::timing::Timing::info(),
+            diag: crate::timing::info_diag(),
             attached_frame: None,
             summary_span: None,
             files_out,
@@ -268,6 +336,88 @@ pub(super) fn command(
     let line = line.unwrap_or_else(|err| panic!("{what}: {err}"));
     let value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{what}: {err}: {line:?}"));
     (reader, value)
+}
+
+/// [`command`], past the startup reads (`feed`, `recent`, `directories`)
+/// that home sends on `hub_hello`, ahead of whatever the test sent.
+#[track_caller]
+pub(super) fn command_past_reads(
+    mut reader: BufReader<UnixStream>,
+    what: &str,
+) -> (BufReader<UnixStream>, serde_json::Value) {
+    loop {
+        let (back, value) = command(reader, what);
+        if !matches!(
+            value["command"].as_str(),
+            Some("feed" | "recent" | "directories")
+        ) {
+            return (back, value);
+        }
+        reader = back;
+    }
+}
+
+#[test]
+fn models_diagnostic_records_post_apply_catalogue_size() {
+    let home = fakes::TempDir::new("tui-models-applied");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.diag = diag;
+    lp.handle_inner(Input::Models(Err("failed read".to_owned())));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["code"], "models_applied");
+    // docs/state.md, “Diagnostic logs”: the applied catalogue size is its
+    // current length; the failed read leaves this controlled catalogue empty.
+    assert_eq!(line["data"], serde_json::json!({"catalogue_size":0}));
+}
+
+#[test]
+fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
+    let home = fakes::TempDir::new("tui-models-applied-nonempty");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.diag = diag;
+    lp.handle_inner(Input::Models(Ok(Catalogue {
+        models: vec![ModelEntry {
+            reference: "p/m".to_owned(),
+            provider: "p".to_owned(),
+            id: "m".to_owned(),
+            name: None,
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+            price: None,
+        }],
+        ..Catalogue::default()
+    })));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["code"], "models_applied");
+    // docs/state.md, “Diagnostic logs”: models_applied records catalogue_size;
+    // this controlled input applies exactly one model.
+    assert_eq!(line["data"], serde_json::json!({"catalogue_size":1}));
 }
 
 #[test]
@@ -397,7 +547,7 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
             Input::Connected(ours, hello()),
         ],
     );
-    let (reader, start) = command(reader, "the start command");
+    let (reader, start) = command_past_reads(reader, "the start command");
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/w");
     assert!(start["args"].get("content").is_none());
@@ -416,13 +566,13 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
-    let (reader, subscribe) = command(reader, "the subscribe command");
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "full");
-    let (reader, asked) = command(reader, "the commands command");
+    let (reader, asked) = command_past_reads(reader, "the commands command");
     assert_eq!(asked["command"], "commands");
-    let (_, prompt) = command(reader, "the first prompt");
+    let (_, prompt) = command_past_reads(reader, "the first prompt");
     assert_eq!(prompt["command"], "prompt");
     assert_eq!(prompt["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(prompt["args"]["content"][0]["text"], "hi");
@@ -474,12 +624,19 @@ fn a_failed_write_hangs_up_and_returns_the_draft() {
     let reader = reader_of(&ours);
     ours.shutdown(std::net::Shutdown::Write)
         .unwrap_or_else(|err| panic!("shutdown: {err}"));
-    feed(&mut lp, vec![Input::Connected(ours, hello())]);
-    assert!(lp.hub.has_stream());
-    feed(&mut lp, vec![Input::Bytes(b"hi\r".to_vec())]);
+    // Enter before the hub connects: the `start` goes out with the
+    // hello's reads, and the write that fails hangs the stream up.
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"hi\r".to_vec()),
+            Input::Connected(ours, hello()),
+        ],
+    );
     assert!(!lp.hub.has_stream());
     sees_the_end(reader, "the reader to see the hang-up");
     assert_eq!(lp.app.notice(), Some("Connection lost."));
+    assert_eq!(lp.app.input().expand(), "hi");
     assert_eq!(lp.app.draft(), "hi");
     // Enter on a lost connection keeps the draft.
     feed(
@@ -545,16 +702,19 @@ fn resize_redraws_at_the_new_size() {
     )
     .unwrap_or_else(|err| panic!("winsize: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(pair.slave));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![Input::Bytes(b"hi".to_vec()), Input::Resize]);
     // The input line draws one row above the new last row, under its top
     // edge; the test backend keeps its 60x12 buffer, cleared by the
     // resize.
     let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(6).copied(), Some("▌ › hi█"));
+    // The first column is the grip's.
+    assert_eq!(rows.get(6).copied(), Some("⋮▌ › hi█"), "{rows:?}");
     assert!(
         rows.get(9)
-            .is_some_and(|row| row.chars().all(|ch| ch == '▀')),
+            .is_some_and(|row| row.chars().skip(1).all(|ch| ch == '▀')),
         "{rows:?}"
     );
     assert!(rows.iter().skip(10).all(|row| row.is_empty()));
@@ -958,7 +1118,7 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
             Input::Bytes(b"hi\r".to_vec()),
         ],
     );
-    let (reader, start) = command(reader, "the start command");
+    let (reader, start) = command_past_reads(reader, "the start command");
     let accepted = contract::HubLine {
         kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
@@ -969,10 +1129,10 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
             .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
-    let (reader, _) = command(reader, "the subscribe command");
-    let (reader, asked) = command(reader, "the commands command");
+    let (reader, _) = command_past_reads(reader, "the subscribe command");
+    let (reader, asked) = command_past_reads(reader, "the commands command");
     assert_eq!(asked["command"], "commands");
-    let (mut reader, _) = command(reader, "the first prompt");
+    let (mut reader, _) = command_past_reads(reader, "the first prompt");
     feed(
         &mut lp,
         ["r_1", "r_2", "r_3", "r_4"]
@@ -996,7 +1156,7 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
         serde_json::json!({"request_id": "r_4", "decision": "deny", "feedback": "no"}),
     ];
     for args in expected {
-        let (next, reply) = command(reader, "a reply");
+        let (next, reply) = command_past_reads(reader, "a reply");
         reader = next;
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -1017,7 +1177,7 @@ fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
             Input::Bytes(b"hi\r".to_vec()),
         ],
     );
-    let (reader, start) = command(reader, "the start command");
+    let (reader, start) = command_past_reads(reader, "the start command");
     let accepted = contract::HubLine {
         kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
@@ -1029,10 +1189,10 @@ fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
         .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
-    let (reader, _) = command(reader, "the subscribe command");
-    let (reader, commands) = command(reader, "the commands command");
+    let (reader, _) = command_past_reads(reader, "the subscribe command");
+    let (reader, commands) = command_past_reads(reader, "the commands command");
     assert_eq!(commands["command"], "commands");
-    let (reader, prompt) = command(reader, "the first prompt");
+    let (reader, prompt) = command_past_reads(reader, "the first prompt");
     assert_eq!(prompt["command"], "prompt");
     (lp, reader)
 }
@@ -1077,7 +1237,7 @@ fn each_one_question_kind_goes_to_the_hub_as_a_reply() {
         serde_json::json!({"request_id": "r_t", "text": "hi"}),
     ];
     for args in expected {
-        let (next, reply) = command(reader, "a one-question reply");
+        let (next, reply) = command_past_reads(reader, "a one-question reply");
         reader = next;
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -1112,7 +1272,7 @@ fn esc_on_each_one_question_kind_declines_to_the_hub() {
         (0..4).map(|_| Input::Bytes(b"\x1b".to_vec())).collect(),
     );
     for request_id in ["r_c", "r_s", "r_m", "r_t"] {
-        let (next, reply) = command(reader, "a declined one-question reply");
+        let (next, reply) = command_past_reads(reader, "a declined one-question reply");
         reader = next;
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -1211,7 +1371,7 @@ fn command_after_decline(
         );
         // The turn asks `commands` again: answer with no rows so the
         // decline's reply stays next on the socket.
-        let (next, asked) = command(reader, "the turn's commands");
+        let (next, asked) = command_past_reads(reader, "the turn's commands");
         reader = next;
         assert_eq!(asked["command"], "commands");
         feed(
@@ -1234,7 +1394,7 @@ fn command_after_decline(
     }
     feed(&mut lp, vec![one_question(payload)]);
     feed(&mut lp, vec![Input::Bytes(keys.to_vec())]);
-    let (reader, reply) = command(reader, "the declined reply");
+    let (reader, reply) = command_past_reads(reader, "the declined reply");
     assert_eq!(reply["command"], "reply");
     assert_eq!(
         reply["args"],
@@ -1242,7 +1402,7 @@ fn command_after_decline(
     );
     feed(&mut lp, vec![session_accepted(&reply["id"])]);
     feed(&mut lp, vec![Input::Bytes(b"next\r".to_vec())]);
-    let (_, after) = command(reader, "the command after the decline");
+    let (_, after) = command_past_reads(reader, "the command after the decline");
     after
 }
 
@@ -1272,10 +1432,12 @@ fn a_decline_of_a_question_no_tool_call_raised_sends_no_cancel() {
 #[test]
 fn the_screen_shows_the_cursor_at_the_draft() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
     let backend = lp.screen.backend_mut();
     assert!(backend.cursor_visible());
-    backend.assert_cursor_position((5, 8));
+    backend.assert_cursor_position((6, 8));
 }
 
 #[test]
@@ -2731,7 +2893,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     let origin = clock.origin();
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.clock = clock.clone();
-    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app.on_line(Line::Hub(hello()));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     for envelope in search_session() {
@@ -2840,7 +3002,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
 #[test]
 fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app.on_line(Line::Hub(hello()));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let log = search_session();
@@ -3185,8 +3347,7 @@ fn with_no_model_the_picker_opens_at_start() {
         }
         Ok(one_model())
     });
-    let mut launch = launch();
-    launch.model = None;
+    let mut launch = launch_without_model();
     launch.models = Some(read);
     launch.configure = Some(seam.clone() as std::sync::Arc<dyn crate::Configure>);
     let (done, finished) = mpsc::channel();
@@ -3490,4 +3651,47 @@ fn attached_frame_is_discarded_without_a_stream() {
         .join(format!("tui-{}.log", std::process::id()));
     // docs/state.md:432-435: an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
+}
+
+/// Typing `/feedback` plus Enter hands the writer the screen's ring:
+/// the snapshot the worker receives equals the ring as of the
+/// `Effect::Feedback` handling, with the typed description.
+#[test]
+fn feedback_hands_the_screen_ring_to_the_writer() {
+    use contract::feedback::FrameShape;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let done = crate::FeedbackDone {
+        path: PathBuf::from("/w/fiber-feedback-7.md"),
+        link: "https://example.test/new?title=x".to_owned(),
+    };
+    let (tx, rx) = mpsc::channel();
+    let writer: crate::WriteFeedback = Arc::new(
+        move |description: &str, session: Option<&contract::SessionId>, shapes: &[FrameShape]| {
+            tx.send((description.to_owned(), session.cloned(), shapes.to_vec()))
+                .unwrap_or_else(|err| panic!("record shapes: {err}"));
+            Ok(done.clone())
+        },
+    );
+    lp.app.set_feedback(Some(writer));
+    lp.screen
+        .draw(&mut lp.app, None)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    let want = lp.screen.frame_shapes();
+    assert!(!want.is_empty(), "the draw captured a frame");
+    let mut events: Vec<crate::keys::Event> = "/feedback hi"
+        .chars()
+        .map(|ch| crate::keys::Event::Key(crate::keys::Key::Char(ch)))
+        .collect();
+    events.push(crate::keys::Event::Key(crate::keys::Key::Enter));
+    assert_eq!(lp.handle_events_inner(events), None);
+    let (description, session, shapes) =
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "feedback shapes");
+    assert_eq!(description, "hi");
+    assert_eq!(
+        session,
+        Some(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+    );
+    assert_eq!(shapes, want);
 }

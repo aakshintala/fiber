@@ -626,11 +626,11 @@ fn serve_one(
                     // takes it does.
                     Some(_) => write_accepted(&mut writer, &text),
                     // Anything else is held until EOF.
-                    None => hold(&mut read),
+                    None => hold(Some(received), index, &mut read),
                 }
             }
             // Nothing sent yet: hold until EOF.
-            Err(_) => hold(&mut read),
+            Err(_) => hold(Some(received), index, &mut read),
         }
     }
 }
@@ -655,14 +655,22 @@ fn not_subscribed() -> Handshake {
     }
 }
 
-fn hold(read: &mut BufReader<UnixStream>) {
+fn hold(record: Option<&Received>, index: usize, read: &mut BufReader<UnixStream>) {
     if read.get_mut().set_read_timeout(None).is_err() {
         return;
     }
     loop {
         match support::framing::read_line(&mut *read, support::framing::MAX_LINE) {
             Ok(None) | Err(_) => return,
-            Ok(Some(_)) => {}
+            // The live path keeps each line's trailing line feed, so a
+            // fragment read here is recorded the same way: bytes the fake
+            // already read count however the session ended.
+            Ok(Some(mut buf)) => {
+                if let Some(received) = record {
+                    buf.push(b'\n');
+                    received.push(index, String::from_utf8_lossy(&buf).into_owned());
+                }
+            }
         }
     }
 }
@@ -883,6 +891,10 @@ impl FakeSession {
     }
 }
 
+#[cfg(test)]
+#[path = "fake_tests.rs"]
+mod tests;
+
 fn session_accept(
     listener: &UnixListener,
     shared: &Arc<(Mutex<SessionState>, std::sync::Condvar)>,
@@ -931,7 +943,8 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
                 state.subscribed += 1;
                 cv.notify_all();
             }
-            hold(&mut read);
+            // A feed probe keeps no record of what the hub sent.
+            hold(None, 0, &mut read);
         }
     }
 }

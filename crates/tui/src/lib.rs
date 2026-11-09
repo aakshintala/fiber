@@ -125,13 +125,18 @@ pub use configure::{
     RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
     ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
-pub use contract::feedback::{FeedbackDone, WriteFeedback};
+pub use configure::{SettingControl, SettingPresentation};
+pub use contract::feedback::{
+    FeedbackDone, FrameShape, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue, WriteFeedback,
+};
 
 pub use home::{Launch, LaunchLocation};
 
 pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
+
+pub use settings_view::{SCREEN_ROWS, ScreenRow};
 
 pub use keyset::{KeysSetup, canonical_key, check_action, person_bound_keys};
 

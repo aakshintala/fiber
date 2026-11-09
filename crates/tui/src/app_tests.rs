@@ -26,9 +26,20 @@ impl App {
     }
 }
 
-/// Creates an app in `/w`.
+/// Creates an app in `/w` whose home has a model chosen, so Enter sends a
+/// `start` instead of opening the model picker.
 fn app() -> App {
-    App::new(PathBuf::from("/w"))
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
 }
 
 /// Connects the app to the hub.
@@ -39,7 +50,7 @@ fn connect(app: &mut App) {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
 }
 
 /// Types `text` and presses Enter, returning the effect.
@@ -294,10 +305,19 @@ fn enter_before_connect_holds_start_until_hub_hello() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
+    // The held `start` goes first, then home's startup reads.
     let lines = app.on_line(Line::Hub(hello));
-    assert_eq!(lines.len(), 1);
+    let commands: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            parse(line)["command"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(commands, ["start", "feed", "recent"]);
     let value = parse(&lines[0]);
-    assert_eq!(value["command"], "start");
     assert!(value["args"].get("content").is_none());
 }
 
@@ -320,7 +340,11 @@ fn a_failed_connect_returns_a_held_start_to_the_draft() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    assert!(
+        app.on_line(Line::Hub(hello))
+            .iter()
+            .all(|line| parse(line)["command"] != "start")
+    );
     // Back to no session: the next Enter sends `start` again.
     let line = one_line(app.on_key(Key::Enter, now));
     assert_eq!(parse(&line)["command"], "start");
@@ -676,12 +700,12 @@ fn turn_started_sets_busy_and_completed_clears_it() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " steer · 00:00 ───────────────────────────────────────────────────────────────",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            " steer · 00:00 ─────────────────────────────────────────────────────────────",
             " more",
             "",
             " ▣ completed",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "",
             "▄▄▄▄▄▄▄",
             " next ▐",
@@ -702,10 +726,10 @@ fn failed_turn_says_why_before_it_closes() {
     assert_eq!(
         texts(&app)[6..],
         [
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " ✗ boom · io_failed",
             " ▣ failed",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -761,11 +785,11 @@ fn each_action_streams_its_own_reply() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " one more",
             "",
             " two",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -782,7 +806,7 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(63))));
+    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(61))));
     assert!(texts(&app).contains(&" use x".to_owned()));
 }
 
@@ -807,6 +831,7 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::CtrlC, now);
     assert_eq!(app.conversation_height(), 6);
@@ -1511,6 +1536,7 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     assert_eq!(app.input_height(), 1);
     assert_eq!(app.conversation_height(), 7);
     for _ in 0..2 {
@@ -1752,6 +1778,57 @@ fn a_rejected_bang_command_returns_to_an_empty_draft() {
     assert_eq!(app.draft(), "!!ls");
 }
 
+#[test]
+fn shell_answer_reaches_its_handler() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!git status", now)));
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Shell));
+    let result = serde_json::json!({"output": "clean\n",
+        "process": {"exit_code": 0, "timed_out": false}});
+    app.on_line(accepted(&id, Some(result)));
+    // The accept folds the run's output into the conversation.
+    assert_eq!(
+        texts(&app),
+        vec!["! git status", "only you see this", "clean", "exit 0"]
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn shell_tag_is_gone_after_answer() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!ls", now)));
+    let result = serde_json::json!({"output": "clean\n",
+        "process": {"exit_code": 0, "timed_out": false}});
+    app.on_line(accepted(&id, Some(result)));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn shell_after_refusal() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!ls", now)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "no"}),
+        None,
+    ));
+    // The refusal names its error, puts the draft back, and settles
+    // the run's wait with its entry.
+    assert_eq!(app.notice(), Some("no"));
+    assert_eq!(app.draft(), "!ls");
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
 /// The box's top-edge row and first draft row in a whole rendered
 /// screen, found from the rule between the draft and the chrome.
 fn shell_box_rows(shown: &str) -> (String, String) {
@@ -1774,7 +1851,10 @@ fn shell_box_rows(shown: &str) -> (String, String) {
         .lines()
         .nth(rule - 1)
         .expect("a first draft row")
-        .to_owned();
+        .chars()
+        // Past the grip's column.
+        .skip(1)
+        .collect();
     (edge, draft)
 }
 
@@ -2163,12 +2243,12 @@ where
 
 use contract::ErrorCode;
 use contract::events::{
-    AssistantMessageCompleted, CommandAccepted, CommandRejected, ContextNudged, DelegateFinished,
-    DelegateStarted, ExtensionUi, FiberExited, FiberStarted, HandoffCompleted, HandoffStarted,
-    InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted, McpServerFailed,
-    McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt, ReasoningCompleted,
-    RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus, ShellCommand,
-    SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    AssistantMessageCompleted, CommandAccepted, CommandRejected, CompactionCompleted,
+    CompactionStarted, ContextNudged, DelegateFinished, DelegateStarted, ExtensionUi, FiberExited,
+    FiberStarted, InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted,
+    McpServerFailed, McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt,
+    ReasoningCompleted, RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus,
+    ShellCommand, SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnCompleted, TurnStarted,
     UsageRecorded,
 };
@@ -2324,9 +2404,9 @@ fn read_ref_matches_the_clone_for_mcp_and_extension_ui() {
 }
 
 #[test]
-fn read_ref_matches_the_clone_for_handoff_and_context() {
-    read_parity::<HandoffStarted>(serde_json::json!({"trigger": "auto"}));
-    read_parity::<HandoffCompleted>(
+fn read_ref_matches_the_clone_for_compaction_and_context() {
+    read_parity::<CompactionStarted>(serde_json::json!({"trigger": "auto"}));
+    read_parity::<CompactionCompleted>(
         serde_json::json!({"outcome": "completed", "tokens_before": 1000}),
     );
     read_parity::<ContextNudged>(serde_json::json!({"tokens": 1, "trigger_at": 2}));
@@ -2334,7 +2414,7 @@ fn read_ref_matches_the_clone_for_handoff_and_context() {
         serde_json::json!({"content": [{"type": "text", "text": "go"}], "source": "driver"}),
     );
     // A trigger outside the enum never decodes.
-    read_none::<HandoffStarted>(serde_json::json!({"trigger": "manual"}));
+    read_none::<CompactionStarted>(serde_json::json!({"trigger": "manual"}));
     read_none::<ContextNudged>(serde_json::json!({"tokens": 1}));
 }
 

@@ -128,14 +128,14 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
-            &["handoff", "enabled"],
+            &["compaction", "enabled"],
             json!(false),
             json!("no"),
             BOOL,
             true,
         ),
         (
-            &["handoff", "window_fraction"],
+            &["compaction", "window_fraction"],
             json!(0.5),
             json!("half"),
             NUMBER,
@@ -156,7 +156,7 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
-            &["models", "a/b", "handoff", "enabled"],
+            &["models", "a/b", "compaction", "enabled"],
             json!(false),
             json!(1),
             BOOL,
@@ -359,12 +359,15 @@ fn a_repository_that_sets_a_person_only_key_with_the_wrong_type_is_only_ignored(
 #[test]
 fn an_object_key_holding_another_type_is_config_invalid() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"handoff": 5}"#);
+    setup.write(&setup.global(), r#"{"compaction": 5}"#);
     let e = setup.load(&[]).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         e.to_string(),
-        format!("{}: `handoff` must be an object.", setup.global().display())
+        format!(
+            "{}: `compaction` must be an object.",
+            setup.global().display()
+        )
     );
 }
 
@@ -555,7 +558,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         json!({
             "cache": {"lifetime": "1h", "warm_cap": 2, "warm_idle": false, "diagnostics": false},
             "diagnostics": {"level": "info"},
-            "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
+            "compaction": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
             "model_lists": {"refresh_after": "24h"},
             "quota": {"notice_at": 80},
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
@@ -579,7 +582,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         })
     );
     assert_eq!(
-        config.get("handoff.tokens", None),
+        config.get("compaction.tokens", None),
         Some((json!(400000), Source::Default))
     );
 }

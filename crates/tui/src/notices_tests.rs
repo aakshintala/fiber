@@ -384,6 +384,7 @@ fn a_history_refusal_keeps_its_code() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(100, 24);
     app.set_project("key".to_owned());
+    app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(Line::Hub(contract::HubLine {
         kind: HubEventKind::HubHello,
         ts: 0,

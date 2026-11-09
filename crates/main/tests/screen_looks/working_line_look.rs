@@ -1,0 +1,657 @@
+//! Binary-level tests of the working line, the steering queue and the
+//! input box (`docs/tui.md`, "The working line", "Steering", "The input
+//! box"): the real binary on a sized pty in truecolour, with a scripted
+//! provider whose sleep call holds the turn open on approval while the
+//! journey queues steering messages, selects one, and fills the input box.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::path::Path;
+
+use support::hold::Hold;
+use support::pty::{Colour, Grid, Run};
+use support::{Setup, TRUECOLOUR};
+
+/// The dark theme's attention, info and surface in truecolour.
+const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
+const INFO: Colour = Colour::Rgb(125, 211, 252);
+const SURFACE: Colour = Colour::Rgb(26, 26, 34);
+
+/// The working line's spinner frames (`docs/tui.md`, "The working line").
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Escape, Alt+X and Alt+A as the kitty keyboard protocol encodes them;
+/// Alt+Up keeps its xterm form (`crates/tui/src/keys.rs`).
+const ESC: &[u8] = b"\x1b[27u";
+const ALT_UP: &[u8] = b"\x1b[1;3A";
+const ALT_X: &[u8] = b"\x1b[120;3u";
+const ALT_A: &[u8] = b"\x1b[97;3u";
+
+// Backspaces far past any draft below: extras on an empty draft are
+// no-ops.
+fn clear_draft(run: &mut Run) {
+    run.write(&vec![b"\x1b[127u".as_slice(); 200].concat());
+}
+
+/// A scripted provider whose turn calls `shell` with `command`, then says
+/// done: the call asks approval, and answering it runs the command.
+/// Steers sent while the approval waits queue visibly; answering it runs
+/// the tool with the input box back (`docs/tui.md`, "Steering").
+fn shell_script(setup: &Setup, command: &str) {
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &serde_json::json!({"steps": [
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
+            {"text": ["done."]},
+            {"text": ["done."]},
+        ]}),
+    );
+}
+
+/// A shell command that blocks on the hold FIFO until the test writes
+/// the release line. `read` is not on the shell's built-in read-only
+/// list, so the call raises the approval the tests wait on; the holder
+/// parks in its read, so the tool runs exactly as long as the test says,
+/// and the watchdog reaps the holder if the test dies.
+fn hold_command(hold: &Path) -> String {
+    format!("read -r _ < '{}'", hold.display())
+}
+
+/// The turn's shell call, held on the shared helper's FIFO.
+fn held_tool(setup: &Setup) -> Hold {
+    let hold = setup.workspace().join("hold");
+    shell_script(setup, &hold_command(&hold));
+    Hold::park(setup, &hold_command(&hold))
+}
+
+/// Answers the approval on screen and waits for the held tool to run
+/// with the approval panel gone: the box the windows read is the running
+/// turn's.
+fn run_held_tool(run: &mut Run) {
+    run.wait_screen("the approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("Allow once"))
+    });
+    run.write(b"\r");
+    run.wait_screen("the tool running", |grid| {
+        !grid.rows.iter().any(|row| row.contains("Allow once")) && session_box(grid).is_some()
+    });
+}
+
+/// Puts the approval aside so the session box shows behind its badge, then
+/// waits for the box.
+fn aside_approval(run: &mut Run) {
+    run.wait_screen("the approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("Allow once"))
+    });
+    run.write(ESC);
+    run.wait_screen("the box behind the badge", |grid| {
+        session_box(grid).is_some()
+    });
+}
+
+/// Reopens the approval and answers it, which lets the turn run on.
+fn answer_approval(run: &mut Run) {
+    run.write(ALT_A);
+    run.wait_screen("the reopened approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("Allow once"))
+    });
+    run.write(b"\r");
+}
+
+/// The isolated config with the scripted model, `tui.reduced_motion`
+/// as asked (`docs/configuration.md`), and the rail hidden: one session,
+/// so the look pinned is the working line's own.
+fn config(setup: &Setup, reduced_motion: bool) {
+    support::write_json(
+        &setup.home().join("config.json"),
+        &serde_json::json!({
+            "model": "scripted/s.json",
+            "hub": {"idle_exit_ms": 200},
+            // Notes that are not empty: the reviewer-setup notice, which
+            // takes the next key, does not follow the first escalation.
+            "reviewer": {"context": "### Source control\n- acme is ours\n"},
+            "tui": {"reduced_motion": reduced_motion, "rail": {"shown": false}},
+        }),
+    );
+}
+
+/// The first row containing `needle`.
+fn find_row(rows: &[String], needle: &str) -> Option<usize> {
+    rows.iter().position(|row| row.contains(needle))
+}
+
+/// A row index as a cell coordinate: the screens are fixed sizes.
+fn at(y: usize) -> u16 {
+    u16::try_from(y).expect("a screen row")
+}
+
+/// The cells a row's text takes: every glyph on screen is one cell.
+fn width(row: &str) -> u16 {
+    u16::try_from(row.chars().count()).unwrap_or(u16::MAX)
+}
+
+/// The column of `ch` in `row`, counting cells.
+fn col_of(row: &str, ch: char) -> Option<u16> {
+    let mut col = 0u16;
+    for cell in row.chars() {
+        if cell == ch {
+            return Some(col);
+        }
+        col = col.saturating_add(1);
+    }
+    None
+}
+
+/// The cells before `needle`'s first occurrence in `row`: its column,
+/// since every glyph on screen is one cell.
+fn cells_before(row: &str, needle: &str) -> u16 {
+    let at = row
+        .find(needle)
+        .unwrap_or_else(|| panic!("no {needle:?} in {row:?}"));
+    u16::try_from(row[..at].chars().count()).unwrap_or(u16::MAX)
+}
+
+/// Whether the cell is blank.
+fn is_blank(grid: &Grid, x: u16, y: u16) -> bool {
+    grid.cell(x, y).symbol.as_str() == " "
+}
+
+/// The working line's row: its word's column, its spinner's column and
+/// symbol, and the attention columns inside its word.
+struct Working {
+    row: u16,
+    word: u16,
+    spinner: (u16, String),
+    band: Vec<u16>,
+}
+
+/// The working line on `grid`, if its word shows with a glimmer band.
+fn working(grid: &Grid) -> Option<Working> {
+    let row = at(find_row(&grid.rows, "Working")?);
+    let word = col_of(&grid.rows[row as usize], 'W')?;
+    let spinner_col = word.saturating_sub(2);
+    let spinner = grid.cell(spinner_col, row).symbol.clone();
+    let mut band = Vec::new();
+    for x in word..word.saturating_add(7) {
+        if grid.cell(x, row).fg == ATTENTION {
+            band.push(x);
+        }
+    }
+    if band.is_empty() {
+        None
+    } else {
+        Some(Working {
+            row,
+            word,
+            spinner: (spinner_col, spinner),
+            band,
+        })
+    }
+}
+
+/// The input row: the stripe's row holding the prompt. The stripe now
+/// runs down the slab past the rule and the status row, so the last
+/// striped row alone would land on the status row.
+fn input_row(grid: &Grid) -> Option<u16> {
+    (0..grid.rows.len())
+        .rev()
+        .find(|y| grid.rows[*y].contains("▌ ›"))
+        .map(at)
+}
+
+/// A text row holding `needle` whose box edges both show: a frame may
+/// arrive with the row but before its edges.
+fn boxed_row(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
+    let y = find_row(&grid.rows, needle)?;
+    let x = col_of(&grid.rows[y], needle.chars().next()?)?;
+    box_around(&grid.rows, at(y), x)?;
+    Some((at(y), x))
+}
+
+/// The session box's row once its edges both show.
+fn session_box(grid: &Grid) -> Option<(u16, u16)> {
+    let y = input_row(grid)?;
+    let x = col_of(&grid.rows[y as usize], '▌')?;
+    box_around(&grid.rows, y, x)?;
+    Some((y, x))
+}
+
+/// The box around text row `y`: the nearest ▄ run above and ▀ run
+/// below through column `x`, with their extents. Runs elsewhere on the
+/// same rows, such as the panel's cards, do not count.
+fn box_around(text: &[String], y: u16, x: u16) -> Option<(u16, u16, u16, u16)> {
+    let run = |row: &str, glyph: char| {
+        let cells: Vec<char> = row.chars().collect();
+        if cells.get(x as usize) != Some(&glyph) {
+            return None;
+        }
+        let mut left = x;
+        while left > 0 && cells.get(left as usize - 1) == Some(&glyph) {
+            left -= 1;
+        }
+        let mut right = x;
+        while cells.get(right as usize + 1) == Some(&glyph) {
+            right += 1;
+        }
+        Some((left, right))
+    };
+    let mut top = y;
+    while top > 0 && run(&text[top as usize - 1], '▄').is_none() {
+        top -= 1;
+    }
+    if top == 0 {
+        return None;
+    }
+    top -= 1;
+    let (left, _) = run(&text[top as usize], '▄')?;
+    let mut bottom = y;
+    while (bottom as usize) + 1 < text.len() && run(&text[bottom as usize + 1], '▀').is_none() {
+        bottom += 1;
+    }
+    if (bottom as usize) + 1 >= text.len() {
+        return None;
+    }
+    bottom += 1;
+    let (_, right) = run(&text[bottom as usize], '▀')?;
+    Some((top, bottom, left, right))
+}
+
+/// The box's fill: every text row between its edges is surface background
+/// edge to edge, and both edge runs are the surface colour over the
+/// surrounding background (`docs/tui.md`, "The input box", "Look").
+fn assert_fill(grid: &Grid, y: u16, x: u16, what: &str) {
+    let (top, bottom, left, right) = box_around(&grid.rows, y, x).expect(what);
+    for edge in [top, bottom] {
+        for x in left..=right {
+            let cell = grid.cell(x, edge);
+            assert_eq!(cell.fg, SURFACE, "{what} edge ({x}, {edge})");
+            assert_eq!(cell.bg, Colour::Default, "{what} edge ({x}, {edge})");
+        }
+    }
+    for row in top + 1..bottom {
+        for x in left..=right {
+            let cell = grid.cell(x, row);
+            assert_eq!(cell.bg, SURFACE, "{what} fill ({x}, {row})");
+        }
+    }
+}
+
+/// Quits an idle run with an empty draft, as look.rs does.
+fn quit(mut run: Run) {
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// The working line's glimmer, the steering queue and the input box at
+/// 160x48: two frames prove the band shifts its attention cells, the
+/// spinner stays in attention, the elapsed time and tail stay dim, the
+/// queue selects with its stripe and hint, and the box fills for empty,
+/// one-word and wrapping drafts on home and in a session.
+#[test]
+fn the_working_line_glimmers_and_the_queue_selects() {
+    let setup = Setup::new();
+    let mut hold = held_tool(&setup);
+    config(&setup, false);
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+
+    // Home with an empty draft: the box fills edge to edge.
+    let mut grid = run.wait_screen("home with its box", |grid| {
+        boxed_row(grid, "? for shortcuts").is_some()
+    });
+    let (home_row, home_x) = boxed_row(&grid, "? for shortcuts").expect("the placeholder row");
+    assert_fill(&grid, home_row, home_x, "home empty");
+
+    // Home with one word, then a wrapping draft: the fill follows.
+    run.write(b"kq");
+    grid = run.wait_screen("home with one word", |grid| {
+        boxed_row(grid, "› kq").is_some()
+    });
+    let (one_row, one_x) = boxed_row(&grid, "› kq").expect("one word");
+    assert_fill(&grid, one_row, one_x, "home one word");
+    run.write(b"w".repeat(150).as_slice());
+    grid = run.wait_screen("home wrapping", |grid| {
+        boxed_row(grid, "› kq").is_some()
+            && grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
+    });
+    let (wrap, wrap_x) = boxed_row(&grid, "› kq").expect("the wrapping draft");
+    assert_fill(&grid, wrap, wrap_x, "home wrapping");
+
+    // The prompt starts the turn; the draft is empty again.
+    let from = run.output().len();
+    run.write(b"\r");
+    // The empty session box is asserted in
+    // `the_empty_session_box_fills_while_the_turn_streams`: the sleep
+    // call's approval can arrive before any frame shows the empty box.
+
+    // The call asks approval: Esc puts it aside behind its badge, and
+    // the input box comes back with the turn still waiting. Steers typed
+    // now queue visibly while the approval waits. The queue's marks tell
+    // its rows from the draft they were typed in.
+    aside_approval(&mut run);
+    run.write(b"first\r");
+    run.write(b"second\r");
+    grid = run.wait_screen("both queued rows", |grid| {
+        grid.rows.iter().any(|row| row.contains("↳ first"))
+            && grid.rows.iter().any(|row| row.contains("↳ second"))
+    });
+    // The card: the title bold in attention with the dim count
+    // right-aligned, each entry's mark in attention with full-colour
+    // text and a dim ✕ at the text's right edge, and the key hint with
+    // bold keys (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
+    // The card spans the conversation column, so every column is read
+    // off the grid: the panel takes the screen's right side here.
+    let title = find_row(&grid.rows, "Steering").expect("the title");
+    let stripe = col_of(&grid.rows[title], '▌').expect("the stripe");
+    let figure = "2 queued · joins at the next step"; // docs/tui.md, "Steering": N queued.
+    assert!(
+        // docs/tui.md, "Steering": N queued.
+        grid.rows[title].contains(figure),
+        "the count on {}",
+        grid.rows[title]
+    );
+    for x in stripe + 2..stripe + 2 + width("Steering") {
+        assert_eq!(grid.cell(x, at(title)).fg, ATTENTION, "title {x}");
+        assert!(grid.cell(x, at(title)).bold, "title {x}");
+    }
+    let start = cells_before(&grid.rows[title], figure);
+    for x in start..start + width(figure) {
+        assert!(grid.cell(x, at(title)).dim, "count {x}");
+    }
+    let hint = find_row(&grid.rows, "click a row to edit").expect("the hint");
+    assert!(
+        grid.rows[hint].contains("⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop"),
+        "the hint on {}",
+        grid.rows[hint]
+    );
+    for y in title..=hint {
+        assert_eq!(grid.cell(stripe, at(y)).symbol.as_str(), "▌", "stripe {y}");
+        assert_eq!(grid.cell(stripe, at(y)).fg, ATTENTION, "stripe {y}");
+    }
+    for needle in ["↳ first", "↳ second"] {
+        let y = find_row(&grid.rows, needle).expect(needle);
+        assert!(grid.rows[y].contains('✕'), "{needle}");
+        let mark = col_of(&grid.rows[y], '↳').expect("the mark");
+        assert_eq!(grid.cell(mark, at(y)).symbol.as_str(), "↳", "{needle}");
+        for x in [mark, mark + 1] {
+            assert_eq!(grid.cell(x, at(y)).fg, ATTENTION, "{needle} mark {x}");
+        }
+        let text = grid.cell(mark + 2, at(y));
+        assert_eq!(text.fg, Colour::Default, "{needle} text");
+        assert!(!text.dim, "{needle} text");
+        let cross = cells_before(&grid.rows[y], "✕");
+        assert!(grid.cell(cross, at(y)).dim, "{needle} cross");
+    }
+    for key in ["⌥↑", "⌥↓", "⌥X"] {
+        let col = cells_before(&grid.rows[hint], key);
+        assert!(grid.cell(col, at(hint)).bold, "hint {key}");
+        assert!(grid.cell(col + 1, at(hint)).bold, "hint {key}");
+    }
+    assert!(
+        grid.cell(cells_before(&grid.rows[hint], "edit"), at(hint))
+            .dim,
+        "hint label"
+    );
+
+    // Reopening the approval and answering it starts the held command:
+    // the panel goes for good with the turn still running, until the test
+    // writes the release line.
+    answer_approval(&mut run);
+    run.wait_screen("the tool running", |grid| {
+        !grid.rows.iter().any(|row| row.contains("Allow once")) && working(grid).is_some()
+    });
+
+    // Frame A: the band shows on the running tool's line.
+    grid = run.wait_screen("the glimmer band", |grid| working(grid).is_some());
+    let first = working(&grid).expect("frame A");
+    assert!(
+        SPINNER.contains(&first.spinner.1.as_str()),
+        "{}",
+        first.spinner.1
+    );
+    assert_eq!(grid.cell(first.spinner.0, first.row).fg, ATTENTION);
+    // Frame B: the band shifted.
+    grid = run.wait_screen("the shifted band", |grid| {
+        working(grid).is_some_and(|frame| frame.band != first.band)
+    });
+    let frame = working(&grid).expect("frame B");
+    assert!(
+        SPINNER.contains(&frame.spinner.1.as_str()),
+        "{}",
+        frame.spinner.1
+    );
+    assert_eq!(grid.cell(frame.spinner.0, frame.row).fg, ATTENTION);
+    // The band is at most three attention cells with a bold centre; the
+    // rest of the word, the elapsed time and the tail stay dim.
+    assert!((1..=3).contains(&frame.band.len()), "{:?}", frame.band);
+    for pair in frame.band.windows(2) {
+        assert_eq!(pair[0] + 1, pair[1], "{:?}", frame.band);
+    }
+    let centre = frame.band[frame.band.len() / 2];
+    for x in frame.word..frame.word + 7 {
+        let cell = grid.cell(x, frame.row);
+        if x == centre {
+            assert_eq!(cell.fg, ATTENTION, "centre {x}");
+            assert!(cell.bold, "centre {x}");
+        } else if frame.band.contains(&x) {
+            assert_eq!(cell.fg, ATTENTION, "side {x}");
+            assert!(!cell.bold, "side {x}");
+        } else {
+            assert!(cell.dim, "word {x}");
+        }
+    }
+    // The line ends with the tail: past it sits whatever shares the row,
+    // such as the panel, which the tail asserts leave alone.
+    let tail_end = grid.rows[frame.row as usize]
+        .find("interrupt")
+        .map(|at| grid.rows[frame.row as usize][..at].chars().count() + 9)
+        .expect("the tail");
+    for x in frame.word + 7..u16::try_from(tail_end).unwrap_or(u16::MAX) {
+        assert!(grid.cell(x, frame.row).dim, "tail {x}");
+    }
+
+    // ⌥↑ selects the newest row: its mark in attention, its text default,
+    // the box's stripe in attention, and the dim hint at its right end.
+    run.write(ALT_UP);
+    run.wait_screen("the selected row", |grid| {
+        grid.rows.iter().any(|row| row.contains("▸ second"))
+    });
+    // The hint is right-aligned to the box's width, which settles as
+    // the panel fills in: wait for it whole, not just started.
+    grid = run.wait_screen("the full hint", |grid| {
+        grid.rows.iter().any(|row| row.contains("Esc stops"))
+    });
+    let selected = find_row(&grid.rows, "▸ second").expect("the selected row");
+    let mark = col_of(&grid.rows[selected], '▸').expect("the mark");
+    assert_eq!(grid.cell(mark, at(selected)).fg, ATTENTION);
+    let text_col = col_of(&grid.rows[selected], 's').expect("the text");
+    for x in text_col..text_col + 6 {
+        assert_eq!(grid.cell(x, at(selected)).fg, Colour::Default, "text {x}");
+    }
+    let box_row = input_row(&grid).expect("the box");
+    // Past the grip, which takes column 0.
+    assert_eq!(grid.cell(1, box_row).symbol.as_str(), "▌");
+    assert_eq!(grid.cell(1, box_row).fg, ATTENTION);
+    let hint = find_row(&grid.rows, "editing a queued message").expect("the hint");
+    assert!(
+        grid.rows[hint].trim_end().ends_with("Esc stops"),
+        "{}",
+        grid.rows[hint]
+    );
+    // The hint ends at the box's right end: only its own span is dim,
+    // past the stripe, the prompt, the draft and the cursor.
+    let hint_row = at(hint);
+    let hint_start = grid.rows[hint]
+        .find("editing a queued message")
+        .map(|at| grid.rows[hint][..at].chars().count())
+        .expect("the hint start");
+    for x in hint_start..usize::from(width(&grid.rows[hint])) {
+        let x = u16::try_from(x).unwrap_or(u16::MAX);
+        if !is_blank(&grid, x, hint_row) {
+            assert!(grid.cell(x, hint_row).dim, "hint {x}");
+        }
+    }
+
+    // Esc stops the edit and ⌥X drops the queue; the session box fills
+    // for one word and for a wrapping draft.
+    run.write(ESC);
+    run.write(ALT_X);
+    run.write(b"kq");
+    grid = run.wait_screen("one word in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| grid.rows[y as usize].contains("kq"))
+    });
+    let (one_box, one_box_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, one_box, one_box_x, "session one word");
+    run.write(b"w".repeat(150).as_slice());
+    grid = run.wait_screen("wrapping in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| {
+            grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
+                && grid.rows[y as usize].contains('w')
+        })
+    });
+    let (wrap_box, wrap_box_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, wrap_box, wrap_box_x, "session wrapping");
+
+    // The draft clears and the tool is released: the turn ends.
+    clear_draft(&mut run);
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
+    run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// The empty session box at 160x48 fills edge to edge and shows its
+/// info-coloured prompt mark. A shell call held on a marker file holds the
+/// turn open, so the state asserted is the one held.
+#[test]
+fn the_empty_session_box_fills_while_the_turn_streams() {
+    let setup = Setup::new();
+    let mut hold = held_tool(&setup);
+    config(&setup, false);
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"kq");
+    run.wait_screen("home with one word", |grid| {
+        boxed_row(grid, "› kq").is_some()
+    });
+    let from = run.output().len();
+    run.write(b"\r");
+    run_held_tool(&mut run);
+    let grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
+    let (empty_box, empty_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, empty_box, empty_x, "session empty");
+    assert_eq!(grid.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
+    assert_eq!(grid.cell(empty_x + 2, empty_box).fg, INFO);
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
+    run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// Under `tui.reduced_motion` the working line stays still at 160x48:
+/// the spinner is ● and no cell of the line is bold, across frames.
+#[test]
+fn the_reduced_working_line_stays_still() {
+    let setup = Setup::new();
+    let mut hold = held_tool(&setup);
+    config(&setup, true);
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    let from = run.output().len();
+    run.write(b"go\r");
+    run_held_tool(&mut run);
+    // Two frames: the tool holds the turn until the test releases it, and
+    // a typed letter makes the second frame.
+    for (typed, frame) in ["first", "second"].into_iter().enumerate() {
+        let grid = run.wait_screen("the working line", |grid| {
+            find_row(&grid.rows, "Working").is_some()
+                && session_box(grid)
+                    .is_some_and(|(y, _)| grid.rows[y as usize].matches('x').count() == typed)
+        });
+        let row = find_row(&grid.rows, "Working").expect("the working line");
+        let word = col_of(&grid.rows[row], 'W').expect("the word");
+        let spinner_col = word.saturating_sub(2);
+        assert_eq!(
+            grid.cell(spinner_col, at(row)).symbol.as_str(),
+            "●",
+            "{frame}"
+        );
+        assert_eq!(grid.cell(spinner_col, at(row)).fg, ATTENTION, "{frame}");
+        for x in word..word + 7 {
+            assert!(grid.cell(x, at(row)).dim, "{frame} word {x}");
+        }
+        for x in 0..width(grid.rows[row].trim_end()) {
+            assert!(!grid.cell(x, at(row)).bold, "{frame} cell {x}");
+        }
+        run.write(b"x");
+    }
+    clear_draft(&mut run);
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
+    run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// The input box fills edge to edge at 100x40, on home and in a session,
+/// for empty, one-word and wrapping drafts.
+#[test]
+fn the_input_box_fills_at_100x40() {
+    let setup = Setup::new();
+    let mut hold = held_tool(&setup);
+    config(&setup, false);
+    let mut run = Run::spawn(&setup, 100, 40, &[], &TRUECOLOUR);
+    run.ready();
+    let mut grid = run.wait_screen("home with its box", |grid| {
+        boxed_row(grid, "? for shortcuts").is_some()
+    });
+    let (empty_100, empty_100_x) = boxed_row(&grid, "? for shortcuts").expect("empty");
+    assert_fill(&grid, empty_100, empty_100_x, "home empty");
+    run.write(b"kq");
+    grid = run.wait_screen("home with one word", |grid| {
+        boxed_row(grid, "› kq").is_some()
+    });
+    let (one_100, one_100_x) = boxed_row(&grid, "› kq").expect("one word");
+    assert_fill(&grid, one_100, one_100_x, "home one word");
+    run.write(b"w".repeat(150).as_slice());
+    grid = run.wait_screen("home wrapping", |grid| {
+        boxed_row(grid, "› kq").is_some()
+            && grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
+    });
+    let (wrap_100, wrap_100_x) = boxed_row(&grid, "› kq").expect("wrapping");
+    assert_fill(&grid, wrap_100, wrap_100_x, "home wrapping");
+    let from = run.output().len();
+    run.write(b"\r");
+    run_held_tool(&mut run);
+    grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
+    let (empty_s, empty_s_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, empty_s, empty_s_x, "session empty");
+    run.write(b"kq");
+    grid = run.wait_screen("one word in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| grid.rows[y as usize].contains("kq"))
+    });
+    let (one_s, one_s_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, one_s, one_s_x, "session one word");
+    run.write(b"w".repeat(150).as_slice());
+    grid = run.wait_screen("wrapping in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| {
+            grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
+                && grid.rows[y as usize].contains('w')
+        })
+    });
+    let (wrap_s, wrap_s_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, wrap_s, wrap_s_x, "session wrapping");
+    clear_draft(&mut run);
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
+    run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}

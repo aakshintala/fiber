@@ -17,7 +17,7 @@ use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope, Seq};
 
 use crate::Error;
-use crate::handoff::Carry;
+use crate::compaction::Carry;
 use crate::prompt::{fill, message};
 
 /// A call with no `tool_call_completed`, which only a crash can leave
@@ -63,7 +63,7 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
 
 /// What [`rebuild_and_sent`] returns: the conversation, the previous
 /// request's end, the notices held behind the open batch, and the render
-/// state a handoff reads.
+/// state a compaction reads.
 pub(crate) type Rebuilt = (Vec<Input>, Option<usize>, Vec<Input>, Carry);
 
 /// The conversation `lines` render, with its length at the last
@@ -84,7 +84,7 @@ pub(crate) fn rebuild_and_sent(
     rebuild_with_cut(lines, model, open, seed, usize::MAX)
 }
 
-/// The cut path, keeping conversation across handoffs after `cut`.
+/// The cut path, keeping conversation across compactions after `cut`.
 pub(crate) fn summary_conversation(
     lines: &[Envelope],
     cut: usize,
@@ -128,7 +128,7 @@ fn rebuild_with_cut(
     for (index, line) in lines.iter().enumerate().filter(|(_, l)| l.is_durable()) {
         if let Some(mut event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
             if index >= cut {
-                if let Event::HandoffCompleted(done) = &mut event {
+                if let Event::CompactionCompleted(done) = &mut event {
                     done.outcome = Outcome::Failed;
                 } else if matches!(
                     event,
@@ -151,8 +151,8 @@ fn rebuild_with_cut(
             if matches!(event, Event::AssistantMessageStarted(_)) && !rendered.carry.in_summary() {
                 sent = Some(rendered.conversation.len());
             }
-            // The context a completed handoff starts has had no request.
-            if let Event::HandoffCompleted(done) = &event
+            // The context a completed compaction starts has had no request.
+            if let Event::CompactionCompleted(done) = &event
                 && done.outcome == Outcome::Completed
             {
                 sent = None;
@@ -185,8 +185,8 @@ struct Rendered {
     /// The content the model last had per instruction file path: a diff
     /// renders from this and the line's content, both in the log.
     had: BTreeMap<String, String>,
-    /// What a handoff reads: this turn's input, the jobs running, the
-    /// window a handoff has open.
+    /// What a compaction reads: this turn's input, the jobs running, the
+    /// window a compaction has open.
     carry: Carry,
 }
 
@@ -272,7 +272,7 @@ impl Rendered {
                 }
             }
             // A new process: no call the old one left without a result gets
-            // one later, so each gets its fixed one now. A handoff window the
+            // one later, so each gets its fixed one now. A compaction window the
             // old process left open then closes, and its truncation takes
             // each call with its result, so no result outlives its call.
             Event::FiberStarted(_) => {
@@ -291,7 +291,7 @@ impl Rendered {
             | Event::InstructionFile(_)
             | Event::SkillsChanged(_)
             | Event::DateChanged(_)
-            | Event::HandoffStarted(_)
+            | Event::CompactionStarted(_)
             | Event::AssistantMessageStarted(_) => {
                 self.flush();
                 self.render(event, action, model, seq_key);
@@ -334,7 +334,7 @@ impl Rendered {
             | Event::PreambleBuilt(_)
             | Event::ModelChanged(_)
             | Event::SkillsResent(_)
-            | Event::HandoffCompleted(_)
+            | Event::CompactionCompleted(_)
             | Event::ContextNudged(_)
             | Event::ReviewerKept(_)
             | Event::McpServerFailed(_)
@@ -456,8 +456,8 @@ impl Rendered {
     }
 
     /// The conversation, the notices still held behind calls with no
-    /// result yet, and the render state. A handoff window still open at the
-    /// end is closed: the process died during it, and the handoff did not
+    /// result yet, and the render state. A compaction window still open at the
+    /// end is closed: the process died during it, and the compaction did not
     /// take effect.
     fn finish(mut self) -> (Vec<Input>, Vec<Input>, Carry) {
         self.flush();
@@ -510,8 +510,8 @@ pub(crate) fn render(
                     // The jobs' own `job_completed` lines follow at the first
                     // step boundary and render there.
                     InputItem::Jobs { .. } => {}
-                    // The handoff's own lines render what it does.
-                    InputItem::Handoff { .. } => {}
+                    // The compaction's own lines render what it does.
+                    InputItem::Compaction { .. } => {}
                     // A sent shell the turn names renders its held line as
                     // one user message; an item naming no held line renders
                     // nothing.
@@ -536,11 +536,11 @@ pub(crate) fn render(
             conversation.push(user(&steering.content));
             carry.input.push(user(&steering.content));
         }
-        // The person's kept messages join the context a completed handoff
+        // The person's kept messages join the context a completed compaction
         // started, between the opening and the carried input.
         Event::ReviewerKept(kept) => carry.keep(&kept.kept, conversation),
         // A hook's added context: its own user message, holding the text
-        // alone. It joins neither the handoff's input nor what the
+        // alone. It joins neither the compaction's input nor what the
         // reviewer is shown (`docs/extensions.md`, "The hook points"). A
         // `session_start` context right after an opening message sits
         // between the opening and what follows; anywhere else it appends.
@@ -556,8 +556,8 @@ pub(crate) fn render(
         }
         // An added folder: one user message naming it, rendered from the
         // event alone, so a resume replays it after a crash before the
-        // acknowledgement. It joins neither the handoff's input nor what
-        // the reviewer is shown: the handoff opening lists the folded
+        // acknowledgement. It joins neither the compaction's input nor what
+        // the reviewer is shown: the compaction opening lists the folded
         // folders itself.
         Event::DirectoryAdded(added) if !added.inherited => conversation.push(Input::User {
             text: format!("Added folder {} to the session.", added.path),
@@ -572,13 +572,13 @@ pub(crate) fn render(
                 conversation.push(crate::rewind::note_input(rewind));
             }
         }
-        // The window opens at the conversation's length; a completed handoff
+        // The window opens at the conversation's length; a completed compaction
         // replaces the conversation, and any other end truncates it back, so
         // the note request's own lines never stay.
-        Event::HandoffStarted(_) => {
+        Event::CompactionStarted(_) => {
             carry.window = Some(conversation.len());
         }
-        Event::HandoffCompleted(done) => {
+        Event::CompactionCompleted(done) => {
             if done.outcome == Outcome::Completed {
                 carry.window = None;
                 *conversation = carry.restart(done);
@@ -626,9 +626,9 @@ pub(crate) fn render(
         // The opening message is rendered from its logged fields only, so
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").
-        // It sits at index 0 of the context it opens: after a handoff the
+        // It sits at index 0 of the context it opens: after a compaction the
         // carried input and the note are already there.
-        // The skills the handoff armed are sent by their own event, before
+        // The skills the compaction armed are sent by their own event, before
         // this opening: the opening clears any arming the event did not
         // take, so nothing is sent twice.
         Event::SkillsResent(resent) => {
@@ -636,7 +636,7 @@ pub(crate) fn render(
             for sent in &resent.skills {
                 conversation.push(Input::User {
                     text: fill(
-                        message("handoff-skill"),
+                        message("compaction-skill"),
                         &[
                             ("name", sent.name.as_str()),
                             ("path", sent.path.as_str()),
@@ -708,7 +708,7 @@ pub(crate) fn render(
             });
         }
         // A call the provider ran, and its result, render as the raw blocks
-        // they arrived as; the handoff carry does not record them.
+        // they arrived as; the compaction carry does not record them.
         Event::ToolCallRequested(ToolCallRequested {
             provider_item: Some(item),
             ..

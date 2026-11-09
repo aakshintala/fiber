@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/view/panel/delegates_motion_tests.rs
+assertion_line: 154
 expression: shown
 ---
 ⠋ alpha
-  0 calls · 0s
+  0 calls · 0s · $0.00
 ⠋ beta
   fiber · test/model

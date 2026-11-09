@@ -4,8 +4,8 @@
 use super::super::hub::Connection;
 use super::super::pause;
 use super::{
-    DEADLINE, answers_all, counted, counting, line, opened, quit, run_queued, serve, session,
-    shown, turn_lines,
+    DEADLINE, answers_all, counted, counting, line, opened, quit, quit_leaving_work, run_queued,
+    serve, session, shown, turn_lines,
 };
 use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
@@ -2133,7 +2133,9 @@ fn a_session_left_before_the_boundary_allows_history_on_demand() {
 
 /// A mouse report against the targets drawn for the app's current view.
 fn select_report(app: &mut crate::app::App, kind: crate::keys::MouseKind, col: u16, row: u16) {
-    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    // The app's own size: the layout draws to its height.
+    let (width, height) = app.screen_size();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buffer = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(app, area, &mut buffer, None);
     app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
@@ -2185,7 +2187,7 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
         .expect("the log names its session");
     lp.app.load(&piece, first.clone());
     assert!(lp.app.pages().part(0).is_some());
-    select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
+    select_report(&mut lp.app, MouseKind::Press(Button::Left), 2, 0);
     select_report(&mut lp.app, MouseKind::Drag(Button::Left), 59, 2);
     lp.app.on_key(Key::End, lp.clock.now());
     assert!(lp.app.pages().part(0).is_none());
@@ -2224,20 +2226,54 @@ fn reopened_history(older_ending: bool) {
     demand_top(&mut lp);
     let (history_tx, histories) = mpsc::channel();
     let (server_done_tx, server_done) = mpsc::channel();
+    let (taken_tx, taken) = mpsc::channel();
     let server_wire = Arc::clone(&wire);
     let input = tx.clone();
     let prefix = if older_ending { 3 } else { 1 };
-    let script = pool[..r].to_vec();
-    let server = std::thread::spawn(move || {
+    // A `full` subscribe folds the whole log from seq 0: the session's
+    // own lines, then the tail.
+    let mut script: Vec<Vec<u8>> = session()
+        .iter()
+        .map(|env| {
+            let mut b = serde_json::to_vec(env).unwrap();
+            b.push(b'\n');
+            b
+        })
+        .collect();
+    script.extend(pool[..r].iter().cloned());
+    let script_len = script.len();
+    // The hub answers `history` from the same log it replays.
+    let mut full = session();
+    full.extend(
+        pool[..r]
+            .iter()
+            .map(|bytes| serde_json::from_slice::<contract::Envelope>(bytes).unwrap()),
+    );
+    let (page_zero_tx, page_zero) = mpsc::channel();
+    // The loop writes a command line per replayed line (`commands`). The
+    // server below waits on the wire while the replay drains, so a
+    // thread of its own keeps reading the socket: with the server the
+    // only reader, a full socket buffer blocks the loop's write, the
+    // loop stops returning the reader's credits, and the hand-outs the
+    // server waits for stop. It ends when the loop drops its end.
+    let (command_tx, command_rx) = mpsc::channel::<String>();
+    let command_reader = std::thread::spawn(move || {
         let mut commands = std::io::BufReader::new(theirs);
-        let mut text = String::new();
-        let mut seen = 0;
         loop {
-            text.clear();
+            let mut text = String::new();
             match std::io::BufRead::read_line(&mut commands, &mut text) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
+            if command_tx.send(text).is_err() {
+                break;
+            }
+        }
+    });
+    let server = std::thread::spawn(move || {
+        let mut seen = 0;
+        // Ends when the reader thread above ends and drops its sender.
+        while let Ok(text) = command_rx.recv() {
             let command: serde_json::Value = serde_json::from_str(&text).unwrap();
             if command["command"] != "history" {
                 continue;
@@ -2291,10 +2327,13 @@ fn reopened_history(older_ending: bool) {
                     &session_id,
                     Some(last as u64)
                 ))));
+                // A push that fails would leave the replay short of the
+                // threshold below, so it fails here, naming the push.
                 for line in &script {
-                    if !server_wire.push(line.clone()) {
-                        break;
-                    }
+                    assert!(
+                        server_wire.push(line.clone()),
+                        "the wire to take every replayed line"
+                    );
                 }
             }
             let from = command["args"]["from_seq"].as_u64().unwrap();
@@ -2304,18 +2343,33 @@ fn reopened_history(older_ending: bool) {
             let lines = if seen == 1 {
                 Vec::new()
             } else {
-                super::history(&session(), from, to)
+                super::history(&full, from, to)
             };
             let mut answer = serde_json::to_vec(&command_answer(id, lines)).unwrap();
             answer.push(b'\n');
             if !server_wire.push(answer) {
                 break;
             }
+            if seen == 1 {
+                // A read after the late answer proves the answer reached
+                // the loop's input before any key the test sends next.
+                let mut marker = serde_json::to_vec(&line("read_marker", None, None, json!({})))
+                    .unwrap_or_else(|err| panic!("encode: {err}"));
+                marker.push(b'\n');
+                assert!(server_wire.push(marker));
+                let wire_lines = prefix + script_len + 2;
+                let reads = Deadline::after(DEADLINE);
+                while reads.recv_or_fail(&hand_rx, "the reader to take the late answer")
+                    < wire_lines
+                {}
+                taken_tx.send(()).unwrap_or(());
+            }
         }
         server_done_tx.send(seen).unwrap_or(());
     });
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
+        pause::install_page_zero(b"\x1b[6~", page_zero_tx);
         let code = lp.run(&rx);
         done_tx.send((code, lp)).unwrap_or(());
     });
@@ -2327,26 +2381,42 @@ fn reopened_history(older_ending: bool) {
         wait.recv_or_fail(&histories, "the initial history request"),
         0
     );
+    Deadline::after(DEADLINE).recv_or_fail(&taken, "the reader to take the late answer");
+    // The fold held page zero, so the top owes nothing: a few pages down
+    // reach the page after it, which the landing dropped.
+    for _ in 0..12 {
+        tx.send(Input::Bytes(b"\x1b[6~".to_vec())).unwrap();
+    }
+    // Page 0 as the loop held it when the first PageDown arrived, after
+    // the landing and the late empty answer: the fold's first page.
+    let held_zero = Deadline::after(DEADLINE).recv_or_fail(&page_zero, "page 0 before the keys");
+    assert!(
+        held_zero.iter().any(|row| row.contains("first")),
+        "page zero holds the session's first prompt: {held_zero:?}"
+    );
+    // The late empty answer did not erase the landed page: the first
+    // turn's tool steps still follow its prompt.
+    assert!(
+        held_zero.iter().any(|row| row.contains("read")),
+        "page zero keeps the first turn's tool steps: {held_zero:?}"
+    );
     let second = wait.recv_or_fail(&histories, "history after the reopened fold");
-    tx.send(quit()).unwrap();
+    tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
     assert!(
-        second >= prefix + r,
-        "history before the last fold line: {second}, prefix {prefix}, replay {r}"
+        second >= prefix + script_len,
+        "history before the last fold line: {second}, prefix {prefix}, replay {script_len}"
     );
     assert!(lp.hub.answer_stash_peak() <= K);
     assert!(!lp.app.pass_open());
-    assert!(
-        lp.app.pages().part(0).is_some(),
-        "the abandoned empty answer did not mark the page loaded"
-    );
     assert_eq!(code, 0);
     drop(lp);
     Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader to end");
     reader.join().unwrap();
     let seen = Deadline::after(DEADLINE).recv_or_fail(&server_done, "the command server to end");
     server.join().unwrap();
+    command_reader.join().unwrap();
     assert!(seen > 1, "pages load after the pass ends");
 }
 
@@ -2440,7 +2510,7 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
                 break;
             }
         }
-        tx.send(quit()).unwrap();
+        tx.send(quit_leaving_work()).unwrap();
         let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
         wire.close();
         let peak = lp.hub.answer_stash_peak();
@@ -2598,7 +2668,8 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         }
         // Quit is ordered after the answer is received by the loop, so
         // it cannot meet the stash arm in `answer`.
-        tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+        tx.send(quit_leaving_work())
+            .unwrap_or_else(|err| panic!("send: {err}"));
         release_tx
             .send(())
             .unwrap_or_else(|err| panic!("release: {err}"));
@@ -3404,7 +3475,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
 
 #[test]
 fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() {
-    let mut log = super::handoff_log(3, "tail reply");
+    let mut log = super::compaction_log(3, "tail reply");
     let at = log
         .iter()
         .position(|line| line.kind == EventKind::AssistantMessageCompleted)
@@ -3497,7 +3568,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
             }
         }
     }
-    let mut log = super::handoff_log(3, "tail reply");
+    let mut log = super::compaction_log(3, "tail reply");
     let at = log
         .iter()
         .position(|line| line.kind == EventKind::AssistantMessageCompleted)
@@ -3542,7 +3613,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
 
 #[test]
 fn the_first_frame_draws_the_last_page_before_the_full_subscribe() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let open = tail_open(log, Full::Hung, History::Windows, Vec::new());
     assert_eq!(
         seen_commands(&open),
@@ -3587,7 +3658,7 @@ fn older_reads_use_to_seq_just_below_the_earliest_held_line() {
 /// ends as failed with the answer's message, and the raise goes out.
 #[test]
 fn a_history_rejection_shows_the_notice_and_still_raises() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let open = tail_open(log, Full::Accepted, History::Reject("boom"), Vec::new());
     assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
     let levels: Vec<String> = seen_commands(&open)
@@ -3603,7 +3674,7 @@ fn a_history_rejection_shows_the_notice_and_still_raises() {
 /// open, and the raise goes out.
 #[test]
 fn a_reopening_during_the_read_abandons_it_and_still_raises() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let reopened = json!({"kind": "stream_reopened", "ts": 0,
         "schema_version": contract::SCHEMA_VERSION,
         "payload": {"session_id": "s_aaaaaaaaaaaaaaaa"}});
@@ -3622,7 +3693,7 @@ fn a_reopening_during_the_read_abandons_it_and_still_raises() {
 /// the tail never installs, and no raise goes out.
 #[test]
 fn a_lost_connection_during_the_read_ends_everything() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let mut open = tail_open(log, Full::Hung, History::Drop, Vec::new());
     assert!(!open.lp.app.connected());
     assert!(!open.lp.hub.has_stream());
@@ -3645,7 +3716,7 @@ fn a_lost_connection_during_the_read_ends_everything() {
 /// pass.
 #[test]
 fn an_empty_log_draws_no_history_and_raises() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let mut open = tail_open(log, Full::Accepted, History::Empty, Vec::new());
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
@@ -3669,7 +3740,7 @@ fn an_empty_log_draws_no_history_and_raises() {
 /// first with the answer wait holding the commands reply and two notices.
 #[test]
 fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let notice = |text: &str| {
         let envelope = super::line("notice", None, None, json!({"message": text}));
         let mut value = serde_json::to_value(&envelope).unwrap_or_default();
@@ -3718,7 +3789,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     const SHORT: usize = 50;
     // Nine lines a turn bar the last: the replay overfills one batch,
     // with a tail behind the short part.
-    let log = super::handoff_log(479, "the last reply holds quokkas");
+    let log = super::compaction_log(479, "the last reply holds quokkas");
     // The ack and `HUB_BATCH - 1` lines fill the first batch.
     let head = HUB_BATCH - 1;
     assert!(
@@ -3926,7 +3997,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     const SHORT: usize = 50;
     // Nine lines a turn bar the last: the replay overfills one batch,
     // with a tail behind the short part.
-    let log = super::handoff_log(479, "the last reply holds quokkas");
+    let log = super::compaction_log(479, "the last reply holds quokkas");
     // The ack and `HUB_BATCH - 1` lines fill the first batch.
     let head = HUB_BATCH - 1;
     assert!(
@@ -4091,7 +4162,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
 
 #[test]
 fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let mut open = tail_open(log.clone(), Full::Replay, History::Windows, Vec::new());
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
@@ -4361,7 +4432,7 @@ fn last_seq(log: &[contract::Envelope]) -> u64 {
 fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
     // The held rows stay the preview through the reconnect.
-    let log = super::handoff_log(5, "the held reply holds quokkas");
+    let log = super::compaction_log(5, "the held reply holds quokkas");
     let last = last_seq(&log);
     let mut app = live_app();
     for envelope in &log {
@@ -4400,7 +4471,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     // Without the anchor the landing follows the end: the replay
     // lacks the top row's reply, so the top row's text is gone and
     // the last lines show.
-    let log = super::handoff_log(2, "the first reply");
+    let log = super::compaction_log(2, "the first reply");
     let mut app = live_app();
     for envelope in &log {
         app.on_line(Line::Session(envelope.clone()));
@@ -4412,7 +4483,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
         !lines.iter().any(|line| line.contains("\"history\"")),
         "reads nothing: {lines:?}"
     );
-    let other = super::handoff_log(1, "the other last reply");
+    let other = super::compaction_log(1, "the other last reply");
     let summary = summary_id(&lines);
     app.on_line(session_accepted(SESSION, &summary));
     let raise: serde_json::Value =
@@ -4435,7 +4506,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     // A row open still reads and follows: the tail read goes out,
     // and the landed screen shows the end of a session taller than
     // the screen.
-    let log = super::handoff_log(5, "the last reply holds quokkas");
+    let log = super::compaction_log(5, "the last reply holds quokkas");
     let mut open = tail_open(log, Full::Replay, History::Windows, Vec::new());
     assert!(
         open.seen

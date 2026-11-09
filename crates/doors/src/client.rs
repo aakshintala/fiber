@@ -414,9 +414,9 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Sandbox(args, ack));
         }
-        Command::Handoff(args) => {
+        Command::Compact(args) => {
             let ack = inbox_ack(conn, id.clone());
-            conn.gate.deliver(Delivery::Handoff(id, args, ack));
+            conn.gate.deliver(Delivery::Compaction(id, args, ack));
         }
         Command::Rewind(args) => crate::rewind::run(conn, id, args),
         Command::ChangeWorkspace(args) => {
@@ -1241,7 +1241,7 @@ pub(crate) fn session_command_refusal(
         | Command::Credential(_)
         | Command::Name(_)
         | Command::AddDirectory(_)
-        | Command::Handoff(_)
+        | Command::Compact(_)
         | Command::Rewind(_)
         | Command::ChangeWorkspace(_)
         | Command::Shell(_)

@@ -151,7 +151,7 @@ fn copied_above_the_notice_rows() {
         .expect("the reply's row");
     let row = u16::try_from(row).expect("a row");
     assert!(matches!(
-        select(&mut app, 60, 10, (0, row), (3, row)),
+        select(&mut app, 60, 10, (2, row), (5, row)),
         Effect::Copy(_)
     ));
     assert!(app.copied());
@@ -890,6 +890,8 @@ fn the_bar_hides_while_the_results_are_open() {
     let text = super::super::text(&buf);
     assert!(
         text.lines().next().is_some_and(|row| {
+            // Past the grip's column.
+            let row: String = row.chars().skip(1).collect();
             row.starts_with(" Search  ⌕ needle") && row.ends_with("Esc returns")
         }),
         "the results top row draws without the bar over it: {text:?}"

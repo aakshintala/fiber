@@ -25,8 +25,19 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
     // text, the right pad and the stripe.
     let bubble = usize::from(columns).saturating_mul(72) / 100;
     let bubble = bubble.clamp(4, usize::from(columns));
-    let wrapped = wrap_joined(text, bubble.saturating_sub(3));
-    let widest = wrapped.iter().map(|(row, _)| width(row)).max().unwrap_or(0);
+    let inner = u16::try_from(bubble.saturating_sub(3)).unwrap_or(u16::MAX);
+    let rendered = crate::markdown::render_prompt(text, inner);
+    let wrapped: Vec<(String, RowText, Line<'static>)> = rendered
+        .lines
+        .iter()
+        .zip(rendered.text.iter())
+        .map(|(line, mark)| (line.to_string(), mark.clone(), line.clone()))
+        .collect();
+    let widest = wrapped
+        .iter()
+        .map(|(row, _, _)| width(row))
+        .max()
+        .unwrap_or(0);
     let block = (widest.saturating_add(3)).min(bubble);
     out.push_text(
         (
@@ -39,41 +50,34 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
         },
     );
     let tint = Style::default().bg(Role::Prompt.color());
-    for (row, join) in wrapped {
+    for (row, mut mark, markdown) in wrapped {
         let pad = " ".repeat(
             widest
                 .min(bubble.saturating_sub(3))
                 .saturating_sub(width(&row)),
         );
         if width(&row) <= bubble.saturating_sub(3) {
-            let span = Span::styled(format!(" {row}{pad} "), tint);
-            let line = Line::from(vec![
-                span,
-                surface::stripe_cell(Role::Accent, Role::Prompt, true),
-            ])
-            .right_aligned();
-            out.push_text(
-                (line, None),
-                RowText {
-                    join,
-                    skip: 1,
-                    tail: 2,
-                    ..RowText::plain()
-                },
-            );
+            let mut spans = bubble_spans(&row, &pad, markdown, tint);
+            spans.push(surface::stripe_cell(Role::Accent, Role::Prompt, true));
+            let line = Line::from(spans).right_aligned();
+            mark.skip = mark.skip.saturating_add(1);
+            mark.tail = mark.tail.saturating_add(2);
+            for (range, _) in &mut mark.links {
+                range.start = range.start.saturating_add(1);
+                range.end = range.end.saturating_add(1);
+            }
+            out.push_text((line, None), mark);
         } else {
             // A two-column glyph at a four-column bubble leaves no room
             // for the stripe: the pads stay, so the row keeps its columns.
-            let span = Span::styled(format!(" {row}{pad} "), tint);
-            out.push_text(
-                (Line::from(span).right_aligned(), None),
-                RowText {
-                    join,
-                    skip: 1,
-                    tail: 1,
-                    ..RowText::plain()
-                },
-            );
+            let spans = bubble_spans(&row, &pad, markdown, tint);
+            mark.skip = mark.skip.saturating_add(1);
+            mark.tail = mark.tail.saturating_add(1);
+            for (range, _) in &mut mark.links {
+                range.start = range.start.saturating_add(1);
+                range.end = range.end.saturating_add(1);
+            }
+            out.push_text((Line::from(spans).right_aligned(), None), mark);
         }
     }
     out.push_text(
@@ -86,6 +90,26 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
             ..RowText::plain()
         },
     );
+}
+
+/// The prompt text row between its tinted pads, retaining Markdown styles.
+fn bubble_spans(row: &str, pad: &str, markdown: Line<'static>, tint: Style) -> Vec<Span<'static>> {
+    if markdown
+        .spans
+        .iter()
+        .all(|span| span.style == Style::default())
+    {
+        return vec![Span::styled(format!(" {row}{pad} "), tint)];
+    }
+    let mut spans = vec![Span::styled(" ", tint)];
+    spans.extend(markdown.spans.into_iter().map(|span| {
+        Span::styled(
+            span.content.to_string(),
+            span.style.bg(span.style.bg.unwrap_or(Role::Prompt.color())),
+        )
+    }));
+    spans.push(Span::styled(format!("{pad} "), tint));
+    spans
 }
 
 /// The prompt below four columns: its edges with no pads and no stripe,

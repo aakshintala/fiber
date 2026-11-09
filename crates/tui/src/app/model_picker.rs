@@ -94,13 +94,7 @@ impl App {
         if remote && !self.take_start_pick() {
             return Vec::new();
         }
-        if remote
-            && self
-                .home
-                .as_ref()
-                .and_then(|home| home.launch.model.as_deref())
-                .is_some()
-        {
+        if remote && self.home.launch.model.as_deref().is_some() {
             // The hub named the chip's model: the pick is taken and
             // dropped, never opened.
             return Vec::new();
@@ -140,6 +134,20 @@ impl App {
     /// an owed start pick drops: the open's own read supersedes it.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
         self.close_config_view();
+        self.open_picker_here(mode)
+    }
+
+    /// Opens the model picker above the open `/settings` view, which stays
+    /// open and keeps its row focused: the choice saves to that row's key
+    /// ([`App::settings_choice`]). The view is closed by nothing here, so
+    /// no other opener can reach its target.
+    pub(in crate::app) fn open_model_picker_over_settings(&mut self) -> super::Effect {
+        self.open_picker_here(Mode::Choose)
+    }
+
+    /// The open every opener shares, once the configuration view is dealt
+    /// with.
+    fn open_picker_here(&mut self, mode: Mode) -> super::Effect {
         self.close_session_view();
         let _ = self.take_start_pick();
         let on_screen = if self.on_home() {
@@ -201,6 +209,9 @@ impl App {
     /// the next `start` carrying a session-only choice. The picker closes
     /// either way. With the hub not up, nothing is sent and it stays open.
     pub(crate) fn choose(&mut self, choice: Choice) -> super::Effect {
+        if let Some(effect) = self.settings_choice(&choice) {
+            return effect;
+        }
         let Some(session) = self.session().cloned() else {
             return self.choose_on_home(choice);
         };
@@ -232,6 +243,7 @@ impl App {
             id.clone(),
             (super::Kind::Command, crate::input::Draft::default()),
         );
+        self.outbox.wait(&id, super::Waiting::Model);
         // The send stashes its choice for the answer. A send while a
         // turn runs also says so up front: the chips hold the old model
         // and level until the session accepts it, so the notice says the
@@ -293,12 +305,10 @@ impl App {
     /// only when its write succeeds.
     fn picker_saved(&mut self, key: &str, choice: &Choice) {
         if key == "model" {
-            if let Some(home) = self.home.as_mut() {
-                home.launch.model = Some(choice.reference.clone());
-                // A model with no levels never shows one.
-                if choice.level.is_none() {
-                    home.launch.thinking = None;
-                }
+            self.home.launch.model = Some(choice.reference.clone());
+            // A model with no levels never shows one.
+            if choice.level.is_none() {
+                self.home.launch.thinking = None;
             }
             return;
         }
@@ -309,9 +319,7 @@ impl App {
             return;
         };
         self.picker_thinking_saved(reference, choice.level.clone());
-        if let Some(home) = self.home.as_mut() {
-            home.launch.thinking = choice.level.clone();
-        }
+        self.home.launch.thinking = choice.level.clone();
     }
 
     /// Writes the session-only choice on home into the `start` args: the
@@ -689,12 +697,11 @@ impl App {
         if let Some(choice) = self.model_picker.start_model.as_ref() {
             return Some((choice.reference.clone(), choice.level.clone()));
         }
-        self.home.as_ref().and_then(|home| {
-            home.launch
-                .model
-                .clone()
-                .map(|model| (model, home.launch.thinking.clone()))
-        })
+        self.home
+            .launch
+            .model
+            .clone()
+            .map(|model| (model, self.home.launch.thinking.clone()))
     }
 
     /// Runs `/scoped-models`: the picker as a checklist over every
@@ -730,9 +737,7 @@ impl App {
         match self.write_global("scoped_models", &text) {
             Some(Ok(_)) => {
                 self.model_picker.scoped = list;
-                if let Some(home) = self.home.as_mut() {
-                    home.launch.scoped_models = self.model_picker.scoped.clone();
-                }
+                self.home.launch.scoped_models = self.model_picker.scoped.clone();
             }
             Some(Err(error)) => {
                 self.push_notice(
@@ -892,7 +897,7 @@ impl App {
     /// The model picker's draw height below its one-row swapped-view
     /// header, matching the `area.height - 1` passed by `swapped::draw`.
     fn model_picker_area_height(&self) -> u16 {
-        let area = if self.home.is_some() && self.session().is_none() {
+        let area = if self.session().is_none() {
             usize::from(self.screen.height())
         } else {
             self.conversation_area_height()

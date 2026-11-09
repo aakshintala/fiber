@@ -6,7 +6,7 @@
 //! The outbox owns only this correlation state: applying a failure stays
 //! with `App`, which owns the queue, the offer, the phase and the draft.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 
 use contract::SessionId;
@@ -44,7 +44,7 @@ pub(crate) enum Kind {
     Reply,
     SteerDrop,
     Shell,
-    /// A built-in command such as `handoff`, `reload` or `close`.
+    /// A built-in command such as `compact`, `reload` or `close`.
     Command,
     /// An `import` for a named source or both; its answer's report is
     /// titled from it.
@@ -63,30 +63,48 @@ pub(crate) enum Waiting {
     ClearStart,
     ClearClose,
     History,
-    ImageFetch,
-    ImageDisplay,
+    /// A viewer's `read_file` fetch of `path` in `session`; `id` is the
+    /// viewer's request number.
+    ImageFetch {
+        id: u32,
+        session: String,
+        path: String,
+    },
+    /// A display `read_file` fetch of `path` in `session`.
+    ImageDisplay {
+        session: String,
+        path: String,
+    },
     Sessions,
     Abandoned,
-    /// A workspace picker `directories` listing.
-    Directories,
+    /// A workspace picker `directories` listing for the directory text as
+    /// sent, such as `/a/`.
+    Directories(String),
     /// A home `subscribe` for a session's level.
-    Subscribe,
+    Subscribe {
+        session: SessionId,
+        level: crate::home::Level,
+    },
     /// A `close` with `now` stopping a live row.
     Stop,
     /// A `delete` for an exited row.
     Delete,
     /// The first-run offer's `import`.
     OfferImport,
-    /// `/delete`'s discovery dry run.
-    DeleteDiscovery,
-    /// `/delete`'s confirmed stops.
-    DeleteStop,
-    /// `/delete`'s exact-set delete.
-    DeleteFinal,
+    /// `/delete`'s discovery dry run, for the command's generation.
+    DeleteDiscovery(u64),
+    /// `/delete`'s confirmed stop of one session, for the command's
+    /// generation.
+    DeleteStop {
+        generation: u64,
+        session: SessionId,
+    },
+    /// `/delete`'s exact-set delete, for the command's generation.
+    DeleteFinal(u64),
     /// Home's `feed`.
     Feed,
     /// Home's `recent` pages, scoped or not.
-    Recent,
+    Recent(RecentAsk),
     /// The quit question's closes.
     Close,
     /// A Changed files `figures` numstat query.
@@ -112,6 +130,35 @@ pub(crate) enum Waiting {
     JobStop,
     /// An item view's `job_input`.
     JobInput,
+    /// A conversation search's `history` fetch; `find_answered` settles it.
+    Find,
+    /// A session's `commands` ask filling the `/` list; `commands_answered`
+    /// settles it where it clears `commands_id`.
+    Commands,
+    /// A `model` command from the picker; its accept or refusal settles it.
+    Model,
+    /// A `reply` command from the question form or the offer; `reply_ack`
+    /// settles it.
+    Reply,
+    /// An `offered_file` command reading the held offer's source;
+    /// `file_answered` settles it, and every refusal but `DuplicateCommand`.
+    OfferFile,
+    /// A `steer` command from the steering queue or a delegate's box;
+    /// its answer settles generically, with no handler of its own.
+    Steer,
+    /// A `!` command's `shell` run; its accept settles it, then the fold.
+    Shell,
+}
+
+/// Which `recent` ask a [`Waiting::Recent`] tag stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecentAsk {
+    /// The unscoped first page.
+    First,
+    /// A later unscoped page.
+    Page,
+    /// A page scoped to one project.
+    Scoped(String),
 }
 
 /// The hub connection, as the terminal sees it.
@@ -151,8 +198,9 @@ pub(crate) struct Kept {
 /// command id: the hooks install offer's retry resends them unchanged.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
-    /// Feature owners, independent of generic draft settlement.
-    waits: BTreeMap<String, Waiting>,
+    /// Feature owners, independent of generic draft settlement, in the
+    /// order their commands went out; no id appears twice.
+    waits: Vec<(String, Waiting)>,
     /// The hub connection, as the terminal sees it.
     pub(crate) link: Link,
     /// The constructed `start` lines with no answer yet, by command id.
@@ -168,31 +216,48 @@ pub(crate) struct Outbox {
 
 impl Outbox {
     /// Registers the feature owning an id, returning any replaced owner.
+    /// A repeated id keeps its place in send order.
     pub(crate) fn wait(&mut self, id: &str, waiting: Waiting) -> Option<Waiting> {
-        self.waits.insert(id.to_owned(), waiting)
+        if let Some((_, owner)) = self.waits.iter_mut().find(|(wait, _)| wait == id) {
+            return Some(std::mem::replace(owner, waiting));
+        }
+        self.waits.push((id.to_owned(), waiting));
+        None
     }
 
     /// Peeks at the owner before any observer settles the answer.
     pub(crate) fn waiting(&self, id: &str) -> Option<Waiting> {
-        self.waits.get(id).cloned()
+        self.tags()
+            .find(|(wait, _)| *wait == id)
+            .map(|(_, owner)| owner.clone())
     }
 
     /// Takes a feature's wait once, without settling its draft.
     pub(crate) fn settled(&mut self, id: &str) -> Option<Waiting> {
-        self.waits.remove(id)
+        let at = self.waits.iter().position(|(wait, _)| wait == id)?;
+        Some(self.waits.remove(at).1)
+    }
+
+    /// Every registered tag with its command id, in send order.
+    pub(crate) fn tags(&self) -> impl Iterator<Item = (&str, &Waiting)> {
+        self.waits.iter().map(|(id, owner)| (id.as_str(), owner))
+    }
+
+    /// Removes every tag `matches` accepts.
+    pub(crate) fn settle_where(&mut self, matches: impl Fn(&Waiting) -> bool) {
+        self.waits.retain(|(_, owner)| !matches(owner));
     }
 
     /// Whether any id waits for this feature, regardless of its payload.
     pub(crate) fn waiting_any(&self, waiting: &Waiting) -> bool {
         self.waits
-            .values()
-            .any(|owner| std::mem::discriminant(owner) == std::mem::discriminant(waiting))
+            .iter()
+            .any(|(_, owner)| std::mem::discriminant(owner) == std::mem::discriminant(waiting))
     }
 
     /// Forgets a feature at the same reset that drops its request details.
     pub(crate) fn forget(&mut self, waiting: &Waiting) {
-        self.waits
-            .retain(|_, owner| std::mem::discriminant(owner) != std::mem::discriminant(waiting));
+        self.settle_where(|owner| std::mem::discriminant(owner) == std::mem::discriminant(waiting));
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the

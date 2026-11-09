@@ -160,7 +160,7 @@ fn query_resolves_both_project_settings_and_approvals_after_cache_priming() {
             json!({"old":entry("blocking")}),
         );
         let seam = Seam::new(rig.home.clone());
-        seam.settings(&rig.workspace).unwrap();
+        seam.settings(&rig.workspace, &[]).unwrap();
         fakes::git::git(&rig.workspace, &["init", "-q"]);
         let (_, fresh) = ::cli::project_of(&rig.home, &rig.workspace).unwrap();
         assert_ne!(old, fresh);

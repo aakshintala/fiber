@@ -100,6 +100,15 @@ impl List {
         }
     }
 
+    /// Brings the selection and the first row shown back onto the last
+    /// of `rows` rows when a re-flow left them past it; a list already
+    /// in range stays where it is.
+    pub(crate) fn clamp(&mut self, rows: usize) {
+        let last = rows.saturating_sub(1);
+        self.selected = self.selected.min(last);
+        self.top = self.top.min(last);
+    }
+
     /// Whether the list marks its selection with a gutter.
     pub(crate) fn is_gutter(&self) -> bool {
         self.gutter
@@ -355,13 +364,62 @@ pub(crate) struct Frame {
     pub(crate) field: Option<(String, usize)>,
     /// The view's keys.
     pub(crate) footer: String,
+    /// Fixed rows above the scrolling body, a field drawn in a row, and a
+    /// footer with styled keys. `None` for every view that has none of
+    /// them, which then draws exactly as it did before.
+    pub(crate) chrome: Option<Chrome>,
+}
+
+/// A styled run of text.
+pub(crate) type Span = (String, Style);
+
+/// What a view with fixed top rows, an in-row field and a styled footer
+/// adds to its [`Frame`] (`/settings`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Chrome {
+    /// Rows right under the title row, outside the scrolling body, each a
+    /// run of styled text.
+    pub(crate) top: Vec<Vec<Span>>,
+    /// A field drawn in place of part of a body row.
+    pub(crate) draft: Option<Inline>,
+    /// The footer when not empty, replacing [`Frame::footer`].
+    pub(crate) footer: Vec<Span>,
+}
+
+/// An edit field drawn inside a body row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Inline {
+    /// The body row it sits in, as an index into [`Frame::rows`].
+    pub(crate) row: usize,
+    /// The column, counted from the row's text start (after the gutter),
+    /// where the field begins.
+    pub(crate) column: usize,
+    /// The typed text.
+    pub(crate) text: String,
+    /// The caret's place in it, in characters.
+    pub(crate) caret: usize,
+}
+
+/// The fixed rows a frame keeps between its title row and its body.
+fn top_rows(frame: &Frame) -> usize {
+    frame.chrome.as_ref().map_or(0, |chrome| chrome.top.len())
 }
 
 /// The rows a view of `height` shows for `frame`: the height less the
-/// header, the lines below, the field and the footer.
+/// header, the fixed rows, the lines below, the field and the footer.
 pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
-    let fixed = 2 + frame.below.len() + usize::from(frame.field.is_some());
+    let fixed = 2 + top_rows(frame) + frame.below.len() + usize::from(frame.field.is_some());
     height.saturating_sub(fixed)
+}
+
+/// `style` on the `surface` tint, as the top row paints; with no colour
+/// the style stays as it is.
+pub(crate) fn tinted(style: Style) -> Style {
+    if crate::surface::boxed() {
+        style
+    } else {
+        style.bg(Role::Surface.color())
+    }
 }
 
 /// The top row: `" " + name` bold, `"  " + command` dim and `Esc
@@ -384,14 +442,7 @@ pub(crate) fn draw_top_row(
     });
     // The tint runs the whole row, padding included; each part paints
     // its own cells over it.
-    let tinted = !crate::surface::boxed();
-    let paint = |style: Style| {
-        if tinted {
-            style.bg(Role::Surface.color())
-        } else {
-            style
-        }
-    };
+    let paint = tinted;
     buf.set_style(
         Rect::new(area.x, area.y, area.width, 1),
         paint(Style::new()),
@@ -499,7 +550,11 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
     }
     let shown = rows_height(frame, usize::from(area.height));
     let mut noted = Vec::new();
-    let mut y = area.y.saturating_add(1);
+    let mut y = area
+        .y
+        .saturating_add(1)
+        .saturating_add(crate::text::to_u16(top_rows(frame)));
+    let body_top = y;
     for (at, cells) in frame
         .rows
         .iter()
@@ -526,6 +581,23 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
             join: frame.joins.get(at).copied().unwrap_or(Join::Break),
         });
         y = y.saturating_add(1);
+    }
+    if let Some(inline) = frame
+        .chrome
+        .as_ref()
+        .and_then(|chrome| chrome.draft.as_ref())
+        && let Some(shown_row) = inline.row.checked_sub(frame.list.top())
+        && shown_row < shown
+    {
+        let x = inline_x(frame, area, inline);
+        let room = usize::from(area.right().saturating_sub(x));
+        noted.push(crate::app::SpanRow {
+            y: body_top.saturating_add(crate::text::to_u16(shown_row)),
+            x,
+            end: area.right(),
+            text: visible_draft(&inline.text, inline.caret, room),
+            join: Join::Break,
+        });
     }
     let footer = area.bottom().saturating_sub(1);
     let mut y = footer
@@ -604,7 +676,28 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         targets,
     );
     let shown = rows_height(frame, usize::from(area.height));
+    let footer = area.bottom().saturating_sub(1);
     let mut y = area.y.saturating_add(1);
+    if let Some(chrome) = &frame.chrome {
+        for spans in &chrome.top {
+            if y >= footer {
+                break;
+            }
+            let mut x = area.x;
+            for (text, style) in spans {
+                let (end, _) = buf.set_stringn(
+                    x,
+                    y,
+                    text,
+                    usize::from(area.right().saturating_sub(x)),
+                    *style,
+                );
+                x = end;
+            }
+            y = y.saturating_add(1);
+        }
+    }
+    let body_top = y;
     for (at, cells) in frame
         .rows
         .iter()
@@ -659,7 +752,27 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         }
         y = y.saturating_add(1);
     }
-    let footer = area.bottom().saturating_sub(1);
+    if let Some(inline) = frame
+        .chrome
+        .as_ref()
+        .and_then(|chrome| chrome.draft.as_ref())
+        && let Some(shown_row) = inline.row.checked_sub(frame.list.top())
+        && shown_row < shown
+    {
+        let x = inline_x(frame, area, inline);
+        field_in(
+            &inline.text,
+            inline.caret,
+            Rect::new(
+                x,
+                body_top.saturating_add(crate::text::to_u16(shown_row)),
+                area.right().saturating_sub(x),
+                1,
+            ),
+            buf,
+            "",
+        );
+    }
     let mut y = footer
         .saturating_sub(u16::try_from(frame.below.len()).unwrap_or(u16::MAX))
         .saturating_sub(u16::from(frame.field.is_some()))
@@ -674,17 +787,53 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
     if let Some((text, caret)) = &frame.field
         && y < footer
     {
-        field(text, *caret, Rect::new(area.x, y, area.width, 1), buf);
+        field_in(text, *caret, Rect::new(area.x, y, area.width, 1), buf, "> ");
     }
-    if !frame.footer.is_empty() && footer > area.y {
-        buf.set_stringn(area.x, footer, &frame.footer, width, Ink::Muted.style());
+    if footer > area.y {
+        let styled = frame
+            .chrome
+            .as_ref()
+            .map(|chrome| chrome.footer.as_slice())
+            .filter(|spans| !spans.is_empty());
+        if let Some(spans) = styled {
+            let mut x = area.x;
+            for (text, style) in spans {
+                let (end, _) = buf.set_stringn(
+                    x,
+                    footer,
+                    text,
+                    usize::from(area.right().saturating_sub(x)),
+                    *style,
+                );
+                x = end;
+            }
+        } else if !frame.footer.is_empty() {
+            buf.set_stringn(area.x, footer, &frame.footer, width, Ink::Muted.style());
+        }
     }
 }
 
-/// Draws the edit field on `line`: `> ` then the text, scrolled so the
-/// caret shows, the caret's cell reversed.
-fn field(text: &str, caret: usize, line: Rect, buf: &mut Buffer) {
-    let room = usize::from(line.width).saturating_sub(3);
+/// The column an inline field starts at: the row's text start (after the
+/// gutter) plus the field's own column, never past the right edge.
+fn inline_x(frame: &Frame, area: Rect, inline: &Inline) -> u16 {
+    let gutter = if frame.list.is_gutter() { GUTTER } else { 0 };
+    area.x
+        .saturating_add(crate::text::to_u16(gutter.saturating_add(inline.column)))
+        .min(area.right())
+}
+
+/// The text of a field as drawn in `room` columns, scrolled so the caret
+/// shows.
+fn visible_draft(text: &str, caret: usize, room: usize) -> String {
+    let skip = caret.saturating_sub(room.saturating_sub(1));
+    text.chars().skip(skip).take(room).collect()
+}
+
+/// Draws the edit field on `line`: `prompt` then the text, scrolled so
+/// the caret shows, the caret's cell reversed.
+fn field_in(text: &str, caret: usize, line: Rect, buf: &mut Buffer, prompt: &str) {
+    let lead = prompt.chars().count();
+    let room = usize::from(line.width).saturating_sub(lead + 1);
     let skip = caret.saturating_sub(room);
     let shown: String = text
         .chars()
@@ -694,11 +843,11 @@ fn field(text: &str, caret: usize, line: Rect, buf: &mut Buffer) {
     buf.set_stringn(
         line.x,
         line.y,
-        format!("> {shown}"),
+        format!("{prompt}{shown}"),
         usize::from(line.width),
         Style::default(),
     );
-    let column = u16::try_from(caret - skip + 2).unwrap_or(u16::MAX);
+    let column = u16::try_from(caret - skip + lead).unwrap_or(u16::MAX);
     if column < line.width {
         buf.set_style(
             Rect::new(line.x.saturating_add(column), line.y, 1, 1),

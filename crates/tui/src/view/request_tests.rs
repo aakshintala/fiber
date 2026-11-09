@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::super::{render, text};
-use super::{draw, height};
+use super::{draw, draw_noted, height};
 use crate::app::{App, Effect};
 use crate::approvals::form::Spot;
 use crate::approvals::{Panel, PanelSpot, Queue};
@@ -117,6 +117,28 @@ fn screen(app: &App, width: u16, height: u16) -> (String, Vec<Target>) {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     let targets = render(app, area, &mut buf, None);
+    (text(&buf), targets)
+}
+
+/// Draws the panel into a `width` by `height` column of its own, with
+/// no chrome beside it: the widths below the Chrome floor (40 by 10),
+/// which the whole screen cannot draw.
+fn column(app: &App, width: u16, height: u16) -> (Buffer, Vec<Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    // A frame starts clean, like `render`'s.
+    app.clear_input_note();
+    app.frames().clear();
+    if let Some(panel) = app.panel() {
+        draw_noted(app, &panel, area, area.bottom(), &mut buf, &mut targets);
+    }
+    (buf, targets)
+}
+
+/// [`column`]'s screen as text, with its targets.
+fn column_screen(app: &App, width: u16, height: u16) -> (String, Vec<Target>) {
+    let (buf, targets) = column(app, width, height);
     (text(&buf), targets)
 }
 
@@ -234,7 +256,7 @@ fn form_scrolled_to_the_cursor_at_40x10() {
     // two, and its target only those rows.
     assert_eq!(
         rect_of(&targets, Spot::Option(0)),
-        Some(Rect::new(2, 1, 38, 2))
+        Some(Rect::new(3, 1, 37, 2))
     );
     // Back up to the first option, the header shows again.
     for _ in 0..6 {
@@ -405,7 +427,7 @@ fn a_narrow_submit_tab_keeps_chat_about_this_clickable() {
     // a click on the "Chat about this" label declines.
     let mut app = asking(base_and_name(false), 24, 40);
     press(&mut app, &[Key::Tab, Key::Tab]);
-    let (shown, targets) = screen(&app, 24, 40);
+    let (shown, targets) = column_screen(&app, 24, 40);
     let row = shown
         .lines()
         .position(|row| row.contains("Chat about this"))
@@ -454,6 +476,8 @@ fn an_option_that_wraps_has_one_target_covering_both_rows() {
     assert_eq!(rect.height, 2, "{shown}");
     let rows: Vec<&str> = shown.lines().collect();
     let first = rows.get(usize::from(rect.y)).copied().unwrap_or_default();
+    // The first cell is the grip column.
+    let first: String = first.chars().skip(1).collect();
     assert!(first.starts_with("▌ ▸ 1 ( ) one"), "{shown}");
 }
 
@@ -463,7 +487,7 @@ fn tab_targets_are_drawn_only_while_the_tab_line_fits() {
     // targets draw from width 36.
     for (width, tabs) in [(35, 0), (36, 3)] {
         let app = asking(base_and_name(false), width, 40);
-        let (shown, targets) = screen(&app, width, 40);
+        let (shown, targets) = column_screen(&app, width, 40);
         let drawn = spots(&targets)
             .iter()
             .filter(|(spot, _)| matches!(spot, Spot::Tab(_)))
@@ -485,16 +509,16 @@ fn each_tab_target_covers_its_cells() {
     // A wide character's second cell reads as a space in the screen's text.
     assert_eq!(
         rows.get(usize::from(y)).copied(),
-        Some("▌ ←  ☐ 名 前     ☐ Name    ✔ Submit  →")
+        Some(" ▌ ←  ☐ 名 前     ☐ Name    ✔ Submit  →")
     );
-    assert_eq!(rect_of(&targets, Spot::Tab(0)), Some(Rect::new(4, y, 8, 1)));
+    assert_eq!(rect_of(&targets, Spot::Tab(0)), Some(Rect::new(5, y, 8, 1)));
     assert_eq!(
         rect_of(&targets, Spot::Tab(1)),
-        Some(Rect::new(14, y, 8, 1))
+        Some(Rect::new(15, y, 8, 1))
     );
     assert_eq!(
         rect_of(&targets, Spot::Tab(2)),
-        Some(Rect::new(24, y, 10, 1))
+        Some(Rect::new(25, y, 10, 1))
     );
 }
 
@@ -507,16 +531,21 @@ fn form_words_row_scrolled_to_the_caret_at_30x12() {
         .map(Key::Char)
         .collect();
     press(&mut app, &words);
-    let (shown, _) = screen(&app, 30, 12);
+    let (shown, _) = column_screen(&app, 30, 12);
     insta::assert_snapshot!("form_words_row_scrolled_to_the_caret_at_30x12", shown);
-    let area = Rect::new(0, 0, 30, 12);
-    let row = shown
+    // The floor hides the cursor below 40 columns, so the full screen at
+    // the floor's width holds it: on the words row, clamped to the last
+    // column.
+    app.set_size(40, 12);
+    app.settle();
+    let (full, _) = screen(&app, 40, 12);
+    let row = full
         .lines()
         .position(|row| row.contains("✎ "))
         .and_then(|row| u16::try_from(row).ok());
     assert_eq!(
-        super::super::cursor(&app, area).map(|at| (at.x, Some(at.y))),
-        Some((29, row))
+        super::super::cursor(&app, Rect::new(0, 0, 40, 12)).map(|at| (at.x, Some(at.y))),
+        Some((39, row))
     );
 }
 
@@ -1410,8 +1439,8 @@ fn a_drag_across_two_lines_breaks_between_them() {
         app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
     };
     let _ = report(MouseKind::Press(Button::Left), find_col("Which", y0), y0);
-    let _ = report(MouseKind::Drag(Button::Left), 10, y1);
-    let effect = report(MouseKind::Release, 10, y1);
+    let _ = report(MouseKind::Drag(Button::Left), 11, y1);
+    let effect = report(MouseKind::Release, 11, y1);
     let Effect::Copy(copy) = effect else {
         panic!("the drag copies, got {effect:?}");
     };
@@ -1425,8 +1454,7 @@ fn a_drag_across_two_lines_breaks_between_them() {
 fn a_drag_across_a_wrap_keeps_the_dropped_space() {
     use crate::keys::{Button, Mouse, MouseKind};
     let mut app = asking(four_long_options(), 30, 24);
-    let area = Rect::new(0, 0, 30, 24);
-    let (screen, _) = screen(&app, 30, 24);
+    let (screen, _) = column_screen(&app, 30, 24);
     let y0 = screen
         .lines()
         .position(|line| line.contains("description"))
@@ -1444,8 +1472,7 @@ fn a_drag_across_a_wrap_keeps_the_dropped_space() {
     let mut pointer = crate::mouse::Pointer::default();
     let now = fakes::clock::FakeClock::new().now();
     let mut report = |kind: MouseKind, col: u16, row: u16| {
-        let mut buf = Buffer::empty(area);
-        let targets = crate::view::render(&app, area, &mut buf, None);
+        let targets = column(&app, 30, 24).1;
         app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
     };
     let _ = report(MouseKind::Press(Button::Left), col, y0);
@@ -1468,8 +1495,7 @@ fn a_scrolled_line_copies_its_shown_text() {
     for _ in 0..3 {
         app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
     }
-    let area = Rect::new(0, 0, 30, 10);
-    let (screen, _) = screen(&app, 30, 10);
+    let (screen, _) = column_screen(&app, 30, 10);
     assert!(
         screen
             .lines()
@@ -1480,8 +1506,7 @@ fn a_scrolled_line_copies_its_shown_text() {
     let mut pointer = crate::mouse::Pointer::default();
     let now = fakes::clock::FakeClock::new().now();
     let mut report = |kind: MouseKind, col: u16, row: u16| {
-        let mut buf = Buffer::empty(area);
-        let targets = crate::view::render(&app, area, &mut buf, None);
+        let targets = column(&app, 30, 10).1;
         app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
     };
     let _ = report(MouseKind::Press(Button::Left), 2, 0);
@@ -1506,7 +1531,8 @@ fn drawing_the_panel_notes_its_full_drawn_rectangle() {
         .slab_of(Surface::Panel)
         .expect("the panel drew");
     assert!(!slab.is_empty(), "the noted rectangle has rows");
-    assert_eq!((slab.x, slab.width), (area.x, area.width));
+    // The panel fills the column past the grip.
+    assert_eq!((slab.x, slab.width), (area.x + 1, area.width - 1));
     let rows: Vec<String> = (0..24)
         .map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect())
         .collect();

@@ -1,6 +1,6 @@
 //! Tests for the turn card's surface: one surface below the bubble,
-//! broken at a handoff's band, with half-block edges
-//! (`docs/tui.md`, "Look", "Turns", "Handoff").
+//! broken at a compaction's band, with half-block edges
+//! (`docs/tui.md`, "Look", "Turns", "Compaction").
 
 use contract::events::EventKind;
 use contract::{ActionId, Envelope, SessionId};
@@ -55,6 +55,11 @@ fn feed(cards: &mut Cards, kind: &str, action: Option<&str>, payload: Value) {
         &mut cards.turns,
         &mut cards.fold,
         &envelope(kind, action, 0, payload),
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
     );
 }
 
@@ -78,14 +83,19 @@ fn text(cards: &mut Cards, action: &str, text: &str) {
 }
 
 fn band(cards: &mut Cards) {
-    feed(cards, "handoff_started", None, json!({ "trigger": "auto" }));
-}
-
-/// The handoff completes, so later text is a reply, not the note.
-fn handed_off(cards: &mut Cards) {
     feed(
         cards,
-        "handoff_completed",
+        "compaction_started",
+        None,
+        json!({ "trigger": "auto" }),
+    );
+}
+
+/// The compaction completes, so later text is a reply, not the note.
+fn compacted(cards: &mut Cards) {
+    feed(
+        cards,
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 1_000}),
     );
@@ -157,12 +167,51 @@ fn shown_rows(rows: &[Row]) -> Vec<String> {
     rows.iter().map(|(line, _)| line.to_string()).collect()
 }
 
-fn handoff() -> Option<ratatui::style::Color> {
-    Some(Role::Handoff.color())
+fn compaction() -> Option<ratatui::style::Color> {
+    Some(Role::Compaction.color())
 }
 
 fn turn() -> Option<ratatui::style::Color> {
     Some(Role::Turn.color())
+}
+
+#[test]
+fn a_prompt_renders_markdown_in_its_bubble() {
+    let mut cards = fresh();
+    start(&mut cards, "**bold**\n\n1. one\n2. two\n\n# comment");
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("1. one")), "{shown:?}");
+    assert!(shown.iter().any(|row| row.contains("2. two")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("# comment")),
+        "{shown:?}"
+    );
+    let bold = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("bold"))
+        .expect("bold");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "bold"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
+
+    let mut code = fresh();
+    start(&mut code, "```rust\nlet x = 1;\n```");
+    let (rows, _, _) = draw(&code.turns[0], WIDTH, Edges::BOTH);
+    assert!(
+        rows.iter().any(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.style.bg == Some(Role::Code.color()))
+                && line.to_string().contains("let x = 1;")
+        }),
+        "{:?}",
+        shown_rows(&rows)
+    );
 }
 
 #[test]
@@ -393,15 +442,15 @@ fn an_ended_summary_leaves_the_open_cards_group_collapsed() {
 }
 
 #[test]
-fn a_handoff_breaks_the_card_into_two_surfaces() {
+fn a_compaction_breaks_the_card_into_two_surfaces() {
     // An edge closes the piece before the band, and one opens the piece
     // after it; the band's line keeps the surface tint
-    // (`docs/tui.md`, "Handoff").
+    // (`docs/tui.md`, "Compaction").
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_2", "after");
     done(&mut cards);
     let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
@@ -420,7 +469,7 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
     // the card ends at the band, and a second card below it continues
     // the turn.
     assert_eq!(shown[9], "▄".repeat(60));
-    let left = " ⇄ handoff · automatic";
+    let left = " ⇄ compaction · automatic";
     let right = "1k → … · 00:00 ";
     assert_eq!(
         shown[10],
@@ -436,7 +485,7 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
     assert_eq!(shown[14], "");
     assert_eq!(shown[15], " ▣ completed");
     assert_eq!(shown[16], "▀".repeat(60));
-    assert_eq!(rows[10].0.style.bg, handoff());
+    assert_eq!(rows[10].0.style.bg, compaction());
     // The ▣ line closes the turn once, below the band; none above it.
     assert_eq!(
         shown.iter().filter(|row| row.contains('▣')).count(),
@@ -448,8 +497,8 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
 #[test]
 fn an_open_note_sits_inside_the_band() {
     // The band row carries the half-block edges; "▸ note" and every
-    // note row sit under its lower edge on the handoff tint with no
-    // edges (`docs/tui.md`, "Handoff").
+    // note row sit under its lower edge on the compaction tint with no
+    // edges (`docs/tui.md`, "Compaction").
     use std::path::PathBuf;
 
     use ratatui::buffer::Buffer;
@@ -479,7 +528,7 @@ fn an_open_note_sits_inside_the_band() {
     );
     feed(
         &mut app,
-        "handoff_started",
+        "compaction_started",
         None,
         json!({"trigger": "auto"}),
     );
@@ -497,7 +546,7 @@ fn an_open_note_sits_inside_the_band() {
     );
     feed(
         &mut app,
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 1_000}),
     );
@@ -519,9 +568,9 @@ fn an_open_note_sits_inside_the_band() {
     assert_eq!(lines[band_at + 2], "  ▸ note");
     assert_eq!(lines[band_at + 3], "    ## Note");
     assert_eq!(lines[band_at + 4], "    keep going");
-    assert_eq!(app.lines()[band_at].style.bg, handoff());
+    assert_eq!(app.lines()[band_at].style.bg, compaction());
     for line in app.lines().iter().skip(band_at + 2).take(3) {
-        assert_eq!(line.style.bg, handoff());
+        assert_eq!(line.style.bg, compaction());
     }
     // Through the view the tint reaches the last text column.
     let area = Rect::new(0, 0, 80, 24);
@@ -535,18 +584,18 @@ fn an_open_note_sits_inside_the_band() {
                 .contains("keep going")
         })
         .expect("a note row on screen");
-    assert_eq!(buf[(78, row)].bg, Role::Handoff.color());
+    assert_eq!(buf[(78, row)].bg, Role::Compaction.color());
 }
 
 #[test]
 fn a_band_first_or_last_draws_no_empty_piece() {
     // A band as the first entry draws no edge pair before it; a running
     // turn whose last entry is a band draws none after it
-    // (`docs/tui.md`, "Handoff").
+    // (`docs/tui.md`, "Compaction").
     let mut cards = fresh();
     start(&mut cards, "go");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_1", "after");
     done(&mut cards);
     let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
@@ -559,7 +608,10 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     );
     let shown = shown_rows(&rows);
     assert_eq!(shown[6], "▄".repeat(60));
-    assert!(shown[7].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
+    assert!(
+        shown[7].starts_with(" ⇄ compaction · automatic"),
+        "{shown:?}"
+    );
     assert_eq!(shown[8], "▀".repeat(60));
     assert_eq!(shown[9], "▄".repeat(60));
     let mut cards = fresh();
@@ -579,7 +631,7 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     // last, the content row above it.
     assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
     assert!(
-        shown[shown.len() - 2].starts_with(" ⇄ handoff · automatic"),
+        shown[shown.len() - 2].starts_with(" ⇄ compaction · automatic"),
         "{shown:?}"
     );
 }
@@ -605,7 +657,7 @@ fn a_blank_reply_draws_no_piece() {
     // last, the content row above it.
     assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
     assert!(
-        shown[shown.len() - 2].starts_with(" ⇄ handoff · automatic"),
+        shown[shown.len() - 2].starts_with(" ⇄ compaction · automatic"),
         "{shown:?}"
     );
 }
@@ -618,7 +670,7 @@ fn edges_the_page_withholds_are_not_drawn() {
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_2", "after");
     done(&mut cards);
     // A page continuation carries no prompt bubble: only the pieces draw.
@@ -636,7 +688,10 @@ fn edges_the_page_withholds_are_not_drawn() {
     assert_eq!(shown[1], " before");
     assert_eq!(shown[2], "▀".repeat(60));
     assert_eq!(shown[3], "▄".repeat(60));
-    assert!(shown[4].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
+    assert!(
+        shown[4].starts_with(" ⇄ compaction · automatic"),
+        "{shown:?}"
+    );
     assert_eq!(shown[5], "▀".repeat(60));
     // The piece after the band still opens with an edge.
     assert_eq!(shown[6], "▄".repeat(60));
@@ -699,7 +754,7 @@ fn rows_reports_which_pieces_drew() {
     assert_eq!(
         draw_pieces(&|cards| {
             band(cards);
-            handed_off(cards);
+            compacted(cards);
             text(cards, "a_1", "hi");
         }),
         Pieces {
@@ -731,7 +786,7 @@ fn rows_reports_which_pieces_drew() {
         draw_pieces(&|cards| {
             text(cards, "a_1", "   ");
             band(cards);
-            handed_off(cards);
+            compacted(cards);
             text(cards, "a_2", "hi");
         }),
         Pieces {
@@ -747,10 +802,10 @@ fn a_later_band_does_not_change_whether_the_first_piece_drew() {
     let mut cards = fresh();
     start(&mut cards, "go");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_1", "middle");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_2", "last");
     assert_eq!(
         draw(&cards.turns[0], WIDTH, Edges::BOTH).2,
@@ -776,7 +831,7 @@ fn whether_a_piece_draws_does_not_depend_on_the_width() {
             }
             3 => {
                 band(&mut cards);
-                handed_off(&mut cards);
+                compacted(&mut cards);
                 text(&mut cards, "a_1", "hi");
             }
             4 => band(&mut cards),
@@ -787,7 +842,7 @@ fn whether_a_piece_draws_does_not_depend_on_the_width() {
             6 => {
                 text(&mut cards, "a_1", "   ");
                 band(&mut cards);
-                handed_off(&mut cards);
+                compacted(&mut cards);
                 text(&mut cards, "a_2", "hi");
             }
             _ => {}
@@ -1204,7 +1259,8 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
         None,
         json!({"input": [
             {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
-            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: quota notice"}]}
+            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: **quota notice**"}]},
+            {"type":"message", "source":"session", "from_session_id":"s_bbbbbbbbbbbbbbbb", "content":[{"type":"text","text":"1. first\n2. second"}]}
         ]}),
     );
     text(&mut cards, "a_1", "Hello.");
@@ -1223,6 +1279,25 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
         !shown.iter().any(|row| row.contains("Fiber: quota notice")),
         "{shown:?}"
     );
+    assert!(
+        shown.iter().any(|row| row.contains("1. first")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("2. second")),
+        "{shown:?}"
+    );
+    let bold = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("quota notice"))
+        .expect("formatted Fiber message");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "quota notice"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
     assert_eq!(
         shown.iter().filter(|row| row.starts_with("you ")).count(),
         1,
@@ -1583,7 +1658,7 @@ fn a_message_image_draws_below_its_text() {
 }
 
 #[test]
-fn an_open_card_or_a_handoff_does_not_get_a_trailing_gap() {
+fn an_open_card_or_a_compaction_does_not_get_a_trailing_gap() {
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "hi");
@@ -1706,20 +1781,23 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
     // bar's column blank.
     let top = u16::try_from(
         text.iter()
-            .position(|row| row.starts_with('┌'))
+            .position(|row| row.trim_start().starts_with('┌'))
             .expect("the card's top edge"),
     )
     .expect("a row");
-    assert_eq!(text[usize::from(top)], format!("┌{}┐ ", "─".repeat(77)));
+    assert_eq!(text[usize::from(top)], format!("  ┌{}┐ ", "─".repeat(75)));
     let bottom = u16::try_from(
         text.iter()
-            .position(|row| row.starts_with('└'))
+            .position(|row| row.trim_start().starts_with('└'))
             .expect("the card's bottom edge"),
     )
     .expect("a row");
     assert!(bottom > top);
-    assert_eq!(text[usize::from(bottom)], format!("└{}┘ ", "─".repeat(77)));
-    for x in 0..79u16 {
+    assert_eq!(
+        text[usize::from(bottom)],
+        format!("  └{}┘ ", "─".repeat(75))
+    );
+    for x in 2..79u16 {
         for y in [top, bottom] {
             let cell = &buf[(x, y)];
             assert_eq!(
@@ -1740,7 +1818,7 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
     for y in top + 1..bottom {
         // A card cut across pages draws no edge at the cut, and the
         // paint keeps the sides dim on the default colours.
-        for x in [0, 78] {
+        for x in [2, 78] {
             let row: String = (0..80u16).map(|x| buf[(x, y)].symbol()).collect();
             if row.trim().is_empty() {
                 continue;
@@ -1775,7 +1853,7 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         let mut cards = fresh();
         start(&mut cards, "go");
         band(&mut cards);
-        handed_off(&mut cards);
+        compacted(&mut cards);
         text(&mut cards, "a_1", "after");
         done(&mut cards);
         draw(&cards.turns[0], WIDTH, edges)
@@ -1785,7 +1863,7 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         let mut cards = fresh();
         start(&mut cards, "go");
         band(&mut cards);
-        handed_off(&mut cards);
+        compacted(&mut cards);
         text(&mut cards, "a_1", "after");
         done(&mut cards);
         draw(&cards.turns[0], WIDTH, edges)
@@ -1945,7 +2023,7 @@ fn rich() -> Cards {
     );
     completed(&mut cards, "a_d", json!({}));
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     feed(
         &mut cards,
         "job_started",

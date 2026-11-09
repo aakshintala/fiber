@@ -19,8 +19,13 @@ use contract::clock::Clock;
 /// An attached app `width` by `height` with `draft` typed.
 fn typed(width: u16, height: u16, draft: &str) -> App {
     let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
+    // The Chrome floor (40 by 10) would replace the box and hide the
+    // cursor; the draw area sets the box's height.
+    app.set_size(width, height.max(10));
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    // The layout follows the attach on the next settle, which a key
+    // would run.
+    app.settle();
     let now = fakes::clock::FakeClock::new().now();
     for ch in draft.chars() {
         app.on_key(Key::Char(ch), now);
@@ -61,16 +66,16 @@ fn every_cell_of_the_box_rows_is_surface() {
     // One draft row in a room of 11: the box is five rows at the
     // bottom, with the rule and the status row under the draft.
     let edge = Role::Surface.color();
-    for x in 0..80 {
+    for x in 1..80 {
         assert_eq!(buf[(x, 7)].fg, edge, "top edge at {x}");
         assert_eq!(buf[(x, 11)].fg, edge, "bottom edge at {x}");
         assert_eq!(buf[(x, 8)].bg, edge, "text row at {x}");
     }
-    assert_eq!(buf[(0, 8)].symbol(), "▌");
-    assert_eq!(buf[(0, 8)].fg, Role::Accent.color());
-    assert_eq!(buf[(2, 8)].symbol(), "›");
-    assert_eq!(buf[(4, 8)].symbol(), "h");
-    assert_eq!(buf[(5, 8)].symbol(), "i");
+    assert_eq!(buf[(1, 8)].symbol(), "▌");
+    assert_eq!(buf[(1, 8)].fg, Role::Accent.color());
+    assert_eq!(buf[(3, 8)].symbol(), "›");
+    assert_eq!(buf[(5, 8)].symbol(), "h");
+    assert_eq!(buf[(6, 8)].symbol(), "i");
 }
 
 #[test]
@@ -82,15 +87,15 @@ fn the_prompt_is_info_and_the_cursor_is_a_text_coloured_block() {
     // The prompt in `info`, the draft after it, and the cursor as a block
     // in the text colour at the caret, all above the rule and the row
     // (`docs/tui.md`, "The input box").
-    for x in [2, 3] {
+    for x in [3, 4] {
         assert_eq!(buf[(x, 8)].style().fg, Some(Role::Info.color()), "cell {x}");
     }
-    assert_eq!(buf[(2, 8)].symbol(), "›");
-    assert_eq!(buf[(6, 8)].symbol(), "█");
-    assert_eq!(buf[(6, 8)].style().fg, Some(Role::Text.color()));
-    assert_eq!(buf[(6, 8)].bg, Role::Surface.color());
+    assert_eq!(buf[(3, 8)].symbol(), "›");
+    assert_eq!(buf[(7, 8)].symbol(), "█");
+    assert_eq!(buf[(7, 8)].style().fg, Some(Role::Text.color()));
+    assert_eq!(buf[(7, 8)].bg, Role::Surface.color());
     assert!(
-        !buf[(6, 8)]
+        !buf[(7, 8)]
             .style()
             .add_modifier
             .contains(ratatui::style::Modifier::DIM),
@@ -108,11 +113,11 @@ fn the_cursor_reverses_the_covered_character() {
     // The caret on `i`: the covered character stays, in the slab's
     // colour on the text colour, with no dim (`docs/tui.md`, "The input
     // box"). The taller box lifts the draft two rows above main's.
-    assert_eq!(buf[(5, 8)].symbol(), "i");
-    assert_eq!(buf[(5, 8)].style().fg, Some(Role::Surface.color()));
-    assert_eq!(buf[(5, 8)].bg, Role::Text.color());
+    assert_eq!(buf[(6, 8)].symbol(), "i");
+    assert_eq!(buf[(6, 8)].style().fg, Some(Role::Surface.color()));
+    assert_eq!(buf[(6, 8)].bg, Role::Text.color());
     assert!(
-        !buf[(5, 8)]
+        !buf[(6, 8)]
             .style()
             .add_modifier
             .contains(ratatui::style::Modifier::DIM),
@@ -134,7 +139,7 @@ fn the_cursor_draws_over_a_backward_selection() {
     app.on_select(
         &Mouse {
             kind: MouseKind::Press(Button::Left),
-            col: 6,
+            col: 7,
             row: 8,
         },
         &targets,
@@ -142,7 +147,7 @@ fn the_cursor_draws_over_a_backward_selection() {
     app.on_select(
         &Mouse {
             kind: MouseKind::Drag(Button::Left),
-            col: 4,
+            col: 5,
             row: 8,
         },
         &targets,
@@ -152,9 +157,9 @@ fn the_cursor_draws_over_a_backward_selection() {
     // The caret's cell draws last, over the selection: the covered `h`
     // in the slab's colour on the text colour (`docs/tui.md`, "The input
     // box").
-    assert_eq!(buf[(4, 8)].symbol(), "h");
-    assert_eq!(buf[(4, 8)].style().fg, Some(Role::Surface.color()));
-    assert_eq!(buf[(4, 8)].bg, Role::Text.color());
+    assert_eq!(buf[(5, 8)].symbol(), "h");
+    assert_eq!(buf[(5, 8)].style().fg, Some(Role::Surface.color()));
+    assert_eq!(buf[(5, 8)].bg, Role::Text.color());
 }
 
 #[test]
@@ -174,25 +179,25 @@ fn the_box_fill_covers_empty_and_wrapped_drafts() {
             .rev()
             .find(|y| (0..80).any(|x| buf[(x, *y)].symbol() == "▄"))
             .expect("the top edge");
-        assert_eq!(buf[(0, bottom)].symbol(), "▀");
+        assert_eq!(buf[(1, bottom)].symbol(), "▀");
         for y in top + 1..bottom {
-            for x in 0..80 {
+            for x in 1..80 {
                 assert_eq!(buf[(x, y)].bg, edge, "draft {draft:?} at ({x}, {y})");
             }
         }
-        for x in 0..80 {
+        for x in 1..80 {
             assert_eq!(buf[(x, top)].fg, edge, "top edge at {x}");
             assert_eq!(buf[(x, bottom)].fg, edge, "bottom edge at {x}");
         }
         // The cursor marks the caret on the draft's last row, above the
         // rule and the status row: past the end it is a block in the
         // text colour on the slab.
-        let inner = crate::surface::inset(80);
+        let inner = crate::surface::inset(79);
         let shown = app.input().rows(inner);
         let (cursor_row, cursor_col) = app.input().cursor(inner);
         assert_eq!(cursor_row, shown.len() - 1);
         let y = bottom - 3;
-        let x = 2 + cursor_col;
+        let x = 3 + cursor_col;
         assert_eq!(buf[(x, y)].symbol(), "█", "draft {draft:?}");
         assert_eq!(
             buf[(x, y)].style().fg,
@@ -555,13 +560,13 @@ fn the_box_rows_start_past_the_stripe_and_gap() {
     let area = Rect::new(0, 0, 60, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    assert_eq!(buf[(0, 8)].symbol(), "▌");
-    assert_eq!(buf[(0, 8)].fg, Role::Accent.color());
-    assert_eq!(buf[(0, 8)].bg, Role::Surface.color());
-    assert_eq!(buf[(1, 8)].symbol(), " ");
+    assert_eq!(buf[(1, 8)].symbol(), "▌");
+    assert_eq!(buf[(1, 8)].fg, Role::Accent.color());
     assert_eq!(buf[(1, 8)].bg, Role::Surface.color());
-    assert_eq!(buf[(2, 8)].symbol(), "›");
-    let row: String = (0..6).map(|x| buf[(x, 8)].symbol().to_owned()).collect();
+    assert_eq!(buf[(2, 8)].symbol(), " ");
+    assert_eq!(buf[(2, 8)].bg, Role::Surface.color());
+    assert_eq!(buf[(3, 8)].symbol(), "›");
+    let row: String = (1..7).map(|x| buf[(x, 8)].symbol().to_owned()).collect();
     assert_eq!(row, "▌ › hi");
 }
 
@@ -671,7 +676,7 @@ fn no_color_drawn(app: &App, area: Rect) -> (Buffer, Vec<crate::mouse::Target>, 
 /// An app `width` by `height` with two queued steering rows.
 fn queued(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
+    app.set_size(width, height.max(10));
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
@@ -742,6 +747,9 @@ fn no_color_clips_the_editing_hint_before_the_side() {
         app.on_key(Key::Backspace, now);
     }
     assert_eq!(app.input().expand(), "");
+    // The floor hides the cursor below 40 columns; the area, not the
+    // app's size, sets the box's width.
+    app.set_size(40, 12);
     let area = Rect::new(0, 0, 8, 12);
     let (buf, _, _) = no_color_drawn(&app, area);
     let y = (0..12)
@@ -816,24 +824,45 @@ fn no_color_boxes_the_input_box_around_the_draft() {
 fn no_color_wraps_a_full_width_draft_inside_the_sides() {
     // A draft filling the interior but one: the caret takes the last
     // interior cell, and the side keeps its column. The prompt is the
-    // renderer's own first two cells.
-    let app = typed(10, 6, "12345");
-    let area = Rect::new(0, 0, 10, 6);
-    let (buf, _, _) = no_color_drawn(&app, area);
+    // renderer's own first two cells. The box fills the conversation
+    // column, so the wrap and the draw agree.
+    let column = typed(40, 12, "")
+        .chrome()
+        .layout()
+        .map_or(Rect::new(0, 0, 40, 12), |layout| layout.column);
+    let area = Rect::new(column.x, 0, column.width, 12);
+    let inner = usize::from(crate::surface::inset(area.width));
+    let digits = |n: usize| -> String {
+        (0..n)
+            .map(|i| char::from(b'0' + u8::try_from(i % 10).unwrap_or(0)))
+            .collect()
+    };
+    let (left, right) = (area.x, area.right() - 1);
+    let app = typed(40, 12, &digits(inner - 3));
+    let (buf, _, top) = no_color_drawn(&app, area);
     // The rule and the status row sit under the draft.
-    assert_eq!(buf[(0, 2)].symbol(), "│");
-    assert_eq!(buf[(9, 2)].symbol(), "│");
-    assert_eq!(buf[(1, 2)].symbol(), "›");
-    assert_eq!(buf[(7, 2)].symbol(), "5");
-    assert_eq!(buf[(8, 2)].symbol(), "█");
+    let row = top + 1;
+    assert_eq!(buf[(left, row)].symbol(), "│");
+    assert_eq!(buf[(right, row)].symbol(), "│");
+    assert_eq!(buf[(left + 1, row)].symbol(), "›");
+    let last = digits(inner - 3)
+        .pop()
+        .map(String::from)
+        .unwrap_or_default();
+    assert_eq!(buf[(right - 2, row)].symbol(), last.as_str());
+    assert_eq!(buf[(right - 1, row)].symbol(), "█");
     // A draft past the interior wraps at the boxed width: the overflow
     // row draws above, between the same sides.
-    let long = typed(10, 6, "123456");
-    let (wide, _, _) = no_color_drawn(&long, area);
-    let first: String = (0..10).map(|x| wide[(x, 1)].symbol()).collect();
-    let second: String = (0..10).map(|x| wide[(x, 2)].symbol()).collect();
-    assert_eq!(first, "│› 123456│");
-    assert_eq!(second, "│  █     │");
+    let long = typed(40, 12, &digits(inner - 2));
+    let (wide, _, top) = no_color_drawn(&long, area);
+    let first: String = (left..=right)
+        .map(|x| wide[(x, top + 1)].symbol())
+        .collect();
+    let second: String = (left..=right)
+        .map(|x| wide[(x, top + 2)].symbol())
+        .collect();
+    assert_eq!(first, format!("│› {}│", digits(inner - 2)));
+    assert_eq!(second, format!("│  █{}│", " ".repeat(inner - 3)));
 }
 
 #[test]
@@ -1310,7 +1339,7 @@ fn an_edit_selection_draws_the_editing_hint_in_an_item_view() {
     fold_delegate(&mut app);
     open_delegate(&mut app);
     app.on_line(session_line(
-        ITEM_SESSION,
+        ITEM_DELEGATE,
         "steering_queue",
         serde_json::json!({"messages": [
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
@@ -1356,7 +1385,7 @@ fn steering_selected_hides_the_item_hint_itself() {
     fold_delegate(&mut app);
     open_delegate(&mut app);
     app.on_line(session_line(
-        ITEM_SESSION,
+        ITEM_DELEGATE,
         "steering_queue",
         serde_json::json!({"messages": [
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
@@ -1421,9 +1450,9 @@ fn the_status_row_holds_both_sides_with_a_dim_joiner() {
     let middle = &row[left.len()..row.len() - right.len()];
     assert!(middle.chars().all(|cell| cell == ' '), "{row:?}");
     assert!(crate::format::width(middle) >= 2, "{row:?}");
-    // The row says nothing about handoff: the handoff point lives in
+    // The row says nothing about compaction: the compaction point lives in
     // the Session status card and the context breakdown.
-    assert!(!row.contains("handoff"), "{row:?}");
+    assert!(!row.contains("compaction"), "{row:?}");
 }
 
 /// The rule above the status row: `─` in `rule` from the stripe's next
@@ -2004,7 +2033,7 @@ fn input_status_empty_replacement_leaves_the_row_blank() {
 #[test]
 fn no_slot_runs_while_the_approval_panel_replaces_the_box() {
     use crate::ext::tests::{SlotScript, raw};
-    let mut app = typed(100, 30, "hi");
+    let mut app = typed(160, 30, "hi");
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
         "permission_requested",
@@ -2017,7 +2046,7 @@ fn no_slot_runs_while_the_approval_panel_replaces_the_box() {
         &["input_status", "status_rows"],
         SlotScript::Replace(vec![vec![raw("custom")]]),
     );
-    let shown = screen(&app, 100, 30);
+    let shown = screen(&app, 160, 30);
     assert!(fake.calls.borrow().is_empty(), "neither slot runs");
     assert!(!shown.contains("custom"), "no replacement paints");
 }
@@ -2116,11 +2145,14 @@ fn marker_rows(shown: &str) -> (String, String) {
         .nth(rule - 2)
         .expect("a top-edge row")
         .to_owned();
+    // The draft row without the grip column at x = 0.
     let draft = shown
         .lines()
         .nth(rule - 1)
         .expect("a first draft row")
-        .to_owned();
+        .chars()
+        .skip(1)
+        .collect();
     (edge, draft)
 }
 

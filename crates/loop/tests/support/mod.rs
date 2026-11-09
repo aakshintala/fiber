@@ -52,9 +52,9 @@ pub(crate) mod reviewer_eval;
 
 #[allow(unused_imports, reason = "each test target uses some helpers")]
 pub(crate) use events::{
-    assistant, completed_event, fiber_started, handoff_done, handoff_started, hosted_requested,
-    job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
-    standing_request, started, steering, text_of, texts, user_turn,
+    assistant, compaction_done, compaction_started, completed_event, fiber_started,
+    hosted_requested, job_completed, job_started, kinds_of, message_started, opening_of, requested,
+    result_of, standing_request, started, steering, text_of, texts, user_turn,
 };
 /// How long a turn may take before a test fails instead of hanging: the
 /// shared must-succeed bound.
@@ -765,11 +765,11 @@ pub(crate) fn name_reported(
     )
 }
 
-/// A person's `handoff` on the loop's inbox, with `instructions`.
-pub(crate) fn handoff(id: &str, instructions: Option<&str>) -> Delivery {
-    Delivery::Handoff(
+/// A person's `compact` on the loop's inbox, with `instructions`.
+pub(crate) fn compaction(id: &str, instructions: Option<&str>) -> Delivery {
+    Delivery::Compaction(
         CommandId(id.into()),
-        contract::commands::Handoff {
+        contract::commands::Compact {
             instructions: instructions.map(str::to_owned),
         },
         ignore(),
@@ -1667,15 +1667,18 @@ impl Session {
         self
     }
 
-    /// Sets automatic handoff's triggers.
-    pub(crate) fn handoff(mut self, settings: r#loop::HandoffSettings) -> Self {
-        self.looped = self.looped.take().map(|looped| looped.handoff(settings));
+    /// Sets automatic compaction's triggers.
+    pub(crate) fn compaction(mut self, settings: r#loop::CompactionSettings) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.compaction(settings));
         self
     }
 
-    /// Runs `forget` on every completed handoff.
-    pub(crate) fn on_handoff(mut self, forget: Arc<dyn Fn() + Send + Sync>) -> Self {
-        self.looped = self.looped.take().map(|looped| looped.on_handoff(forget));
+    /// Runs `forget` on every completed compaction.
+    pub(crate) fn on_compaction(mut self, forget: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.looped = self
+            .looped
+            .take()
+            .map(|looped| looped.on_compaction(forget));
         self
     }
 
@@ -2058,7 +2061,7 @@ impl History {
 
 /// One attempt number per `assistant_message_started`, in order. A start
 /// that follows a failed `assistant_message_completed` in the same step
-/// with no handoff line between is the next attempt at the same request;
+/// with no compaction line between is the next attempt at the same request;
 /// any other start is attempt 1 of its request.
 pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
     let mut numbers = Vec::new();
@@ -2080,8 +2083,8 @@ pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
             } else {
                 pending = None;
             }
-        } else if kind == EventKind::HandoffStarted
-            || kind == EventKind::HandoffCompleted
+        } else if kind == EventKind::CompactionStarted
+            || kind == EventKind::CompactionCompleted
             || kind == EventKind::StepStarted
             || kind == EventKind::TurnStarted
         {
@@ -2132,7 +2135,7 @@ pub(crate) fn assert_scheduled_attempts(lines: &[Envelope]) {
         }
         // The retry that ran is the next start; a schedule cancelled
         // during its wait has no next start and is checked by the first
-        // half only. A new request after a handoff starts at 1, so only
+        // half only. A new request after a compaction starts at 1, so only
         // a next start past 1 is checked against the schedule.
         let next_number = lines[i + 1..]
             .iter()
@@ -2354,10 +2357,10 @@ impl contract::hook::Hooks for CountingHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -2375,7 +2378,7 @@ pub(crate) struct StartHooks {
     shutdown_in_call: Mutex<Option<Arc<TurnCancel>>>,
     pause: Mutex<Option<(Sender<()>, mpsc::Receiver<()>)>>,
     /// The call the parked cancel, shutdown or pause fires in: the
-    /// first call runs the start reason, a handoff the second.
+    /// first call runs the start reason, a compaction the second.
     inside_at: AtomicUsize,
     turn_calls: AtomicUsize,
 }
@@ -2584,10 +2587,10 @@ impl contract::hook::Hooks for StartHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 

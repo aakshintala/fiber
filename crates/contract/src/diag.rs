@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
+use crate::ids::JobId;
 use crate::provider::{ModelCall, ModelRequest};
 
 /// Redacted digests of one request's cacheable prefix segments, in the
@@ -346,8 +347,8 @@ pub enum Op {
     TurnRequest,
     /// A model call, from sending the request until the stream ends.
     TurnModelCall,
-    /// One handoff, end to end.
-    TurnHandoff,
+    /// One compaction, end to end.
+    TurnCompaction,
     /// One hook chain other than the tool hooks, named by the chain.
     Hook(HookChain),
     /// One MCP server, from starting or dialing it until its tool list
@@ -355,6 +356,10 @@ pub enum Op {
     McpConnect,
     /// A background job or delegate, until it runs.
     JobsStart,
+    /// A delegate's exit, as the parent's job watcher receives it.
+    JobsReceive,
+    /// The same exit, as the runner delivers it to the loop.
+    JobsDeliver,
     /// Creating a git worktree a session or delegate runs in.
     WorktreeCreate,
     /// Removing one.
@@ -411,10 +416,12 @@ impl Op {
             Self::ToolRun => "tool.run",
             Self::TurnRequest => "turn.request",
             Self::TurnModelCall => "turn.model_call",
-            Self::TurnHandoff => "turn.handoff",
+            Self::TurnCompaction => "turn.compaction",
             Self::Hook(chain) => chain.hook_name(),
             Self::McpConnect => "mcp.connect",
             Self::JobsStart => "jobs.start",
+            Self::JobsReceive => "jobs.receive",
+            Self::JobsDeliver => "jobs.deliver",
             Self::WorktreeCreate => "worktree.create",
             Self::WorktreeRemove => "worktree.remove",
             Self::PictureRun => "picture.run",
@@ -448,8 +455,8 @@ pub enum HookChain {
     BeforeModelCall,
     /// A turn's end.
     TurnEnd,
-    /// Before a handoff's note is written.
-    BeforeHandoff,
+    /// Before a compaction's note is written.
+    BeforeCompaction,
 }
 
 impl HookChain {
@@ -462,7 +469,7 @@ impl HookChain {
             Self::BeforeMessage => "hook.before_message",
             Self::BeforeModelCall => "hook.before_model_call",
             Self::TurnEnd => "hook.turn_end",
-            Self::BeforeHandoff => "hook.before_handoff",
+            Self::BeforeCompaction => "hook.before_compaction",
         }
     }
 }
@@ -475,7 +482,19 @@ impl HookChain {
 /// may follow the work to its worker; dropping it without stopping stamps
 /// the drop time.
 pub type Timing =
-    Arc<dyn Fn(Op, Option<&str>, Option<Instant>) -> Option<Box<dyn Send>> + Send + Sync>;
+    Arc<dyn Fn(Op, Option<TimingName>, Option<Instant>) -> Option<Box<dyn Send>> + Send + Sync>;
+
+/// What names one `op_timing` line's subject: a tool's registered name,
+/// or a job's id, never an argument, a path or any content. One enum, so
+/// a line cannot name both (`docs/code-quality.md`, "Types"): tool timers
+/// carry the name, job timers carry the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingName<'a> {
+    /// A tool's registered name.
+    Tool(&'a str),
+    /// A job's id, a delegate's included.
+    Job(&'a JobId),
+}
 
 #[cfg(test)]
 #[path = "diag_tests.rs"]

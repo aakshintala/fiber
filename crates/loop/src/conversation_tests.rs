@@ -76,7 +76,7 @@ fn changed_with_diff_renders_the_recomputed_diff() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -104,7 +104,7 @@ fn changed_with_full_text_renders_the_replacement() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -129,7 +129,7 @@ fn created_renders_the_new_file() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -163,7 +163,7 @@ fn created_section_file_names_the_section() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -193,7 +193,7 @@ fn subdirectory_renders_the_reached_file() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -232,7 +232,7 @@ fn rendered_stub(event: &Event) -> (String, BTreeMap<String, String>) {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -297,7 +297,7 @@ fn subdirectory_changed_stub_rerenders_updated_headings_and_size() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -354,7 +354,7 @@ fn subdirectory_stub_invalid_utf8_size_is_raw_bytes_live_and_rebuild_equal() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(live.len(), 1);
@@ -415,7 +415,7 @@ fn subdirectory_small_file_still_renders_full() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -439,7 +439,7 @@ fn deleted_renders_one_line_and_forgets_the_path() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -463,7 +463,7 @@ fn own_edit_and_sent_none_render_nothing_but_move_what_the_model_had() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     render(
@@ -477,7 +477,7 @@ fn own_edit_and_sent_none_render_nothing_but_move_what_the_model_had() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert!(conversation.is_empty());
@@ -499,7 +499,7 @@ fn date_changed_renders_the_new_date() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -567,7 +567,7 @@ fn live_rendering_equals_rebuild() {
             None,
             "fake/model-1",
             &mut had,
-            &mut crate::handoff::Carry::default(),
+            &mut crate::compaction::Carry::default(),
             None,
         );
     }
@@ -644,7 +644,7 @@ fn dir_of_falls_back_to_empty_without_a_parent() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -714,7 +714,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
         None,
         "fake/model-1",
         &mut BTreeMap::new(),
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     let mut whole = cut.clone();
@@ -765,7 +765,7 @@ fn a_job_completed_renders_a_notice_only_without_an_action() {
             action.as_ref(),
             "fake/model-1",
             &mut BTreeMap::new(),
-            &mut crate::handoff::Carry::default(),
+            &mut crate::compaction::Carry::default(),
             None,
         );
     }
@@ -1054,7 +1054,7 @@ fn an_owned_settled_pair_behind_a_suspended_batch_still_logs_its_finish() {
         permission: None,
     });
     looped
-        .handoff
+        .compaction
         .carry
         .extension_jobs
         .insert("j_owned_settle".into());
@@ -1145,7 +1145,7 @@ fn a_rewritten_notice_rebuilds_as_the_model_saw_it() {
         None,
         "fake/model-1",
         &mut BTreeMap::new(),
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(live, rebuilt);
@@ -1163,7 +1163,7 @@ fn an_empty_notice_renders_nothing_and_holds_nothing() {
         None,
         "fake/model-1",
         &mut BTreeMap::new(),
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert!(live.is_empty());
@@ -1177,7 +1177,7 @@ fn an_empty_notice_renders_nothing_and_holds_nothing() {
         &waiting,
         "fake/model-1",
         &open,
-        crate::handoff::Carry::default(),
+        crate::compaction::Carry::default(),
     )
     .unwrap();
     assert_eq!(shape(&rebuilt), ["call a_1"]);
@@ -1262,7 +1262,7 @@ fn extension_job_ends_never_render_or_flush_batches_live_or_rebuilt() {
                         matches!(&rebuilt[1], Input::ToolResult { text, is_error: false, .. } if text == "logged result")
                     );
                 }
-                let mut carry = crate::handoff::Carry::default();
+                let mut carry = crate::compaction::Carry::default();
                 let mut live = Vec::new();
                 let mut had = BTreeMap::new();
                 for entry in &lines {
@@ -1295,7 +1295,7 @@ fn extension_job_ends_never_render_or_flush_batches_live_or_rebuilt() {
                         &lines,
                         "fake/model-1",
                         &std::collections::HashSet::from([ActionId("a_1".into())]),
-                        crate::handoff::Carry::default(),
+                        crate::compaction::Carry::default(),
                     )
                     .unwrap();
                     assert_eq!(held.is_empty(), extension);
@@ -1306,7 +1306,7 @@ fn extension_job_ends_never_render_or_flush_batches_live_or_rebuilt() {
 }
 
 #[test]
-fn extension_ownership_survives_handoff_and_seeded_rebuilds() {
+fn extension_ownership_survives_compaction_and_seeded_rebuilds() {
     let started = Event::JobStarted(contract::events::JobStarted {
         job_id: JobId("j_owned".into()),
         tool: None,
@@ -1337,7 +1337,7 @@ fn extension_ownership_survives_handoff_and_seeded_rebuilds() {
     assert!(held.is_empty());
     assert!(carry.owned("j_owned"));
     let mut lines = starts;
-    lines.push(line("handoff_completed", &handoff_over(true), None));
+    lines.push(line("compaction_completed", &compaction_over(true), None));
     let before = super::rebuild(&lines, "fake/model-1").unwrap();
     lines.extend(ends);
     assert_eq!(super::rebuild(&lines, "fake/model-1").unwrap(), before);
@@ -1382,7 +1382,7 @@ fn a_delegate_finish_then_its_end_renders_two_messages_in_log_order() {
             action.as_ref(),
             "fake/model-1",
             &mut BTreeMap::new(),
-            &mut crate::handoff::Carry::default(),
+            &mut crate::compaction::Carry::default(),
             None,
         );
     }
@@ -1574,7 +1574,7 @@ fn a_notice_behind_an_open_batch_renders_at_the_end() {
         &lines,
         "fake/model-1",
         &open,
-        crate::handoff::Carry::default(),
+        crate::compaction::Carry::default(),
     )
     .unwrap();
     // Held apart for the finishing turn to release after the results.
@@ -1647,7 +1647,7 @@ fn the_free_renderer_carries_image_refs_too() {
         Some(&ActionId("a_1".into())),
         "fake/model-1",
         &mut BTreeMap::new(),
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(out, vec![expected_image_result()]);
@@ -1813,7 +1813,7 @@ fn rebuild_stamps_a_tool_call_with_the_model_in_force() {
         Some(&ActionId("a_1".into())),
         "p/m",
         &mut BTreeMap::new(),
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     let Input::ToolCall { model, .. } = &live[0] else {
@@ -1822,7 +1822,7 @@ fn rebuild_stamps_a_tool_call_with_the_model_in_force() {
     assert_eq!(model, "p/m");
 }
 
-// The resume window (`docs/events.md`, "Resume"; `docs/handoff.md`,
+// The resume window (`docs/events.md`, "Resume"; `docs/compaction.md`,
 // "Resume"): one pass folds the session-wide facts and finds the window, and
 // the window's rebuild equals the whole log's.
 
@@ -1831,16 +1831,16 @@ mod window {
     use std::path::PathBuf;
 
     use contract::events::{
-        AskStep, DecidedBy, Decision, Empty, Environment, Event, FiberExited, FiberStarted, Grant,
-        HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, JobCompleted, JobStarted,
-        Note, OpeningMessage, Outcome, PermissionRequested, PermissionResolved, ReviewerRef,
-        RuleScope, SessionStarted, StandingRule, TextCompleted, TurnStarted, UsageRecorded,
-        Variables, VariablesSource,
+        AskStep, CompactionCompleted, CompactionStarted, CompactionTrigger, DecidedBy, Decision,
+        Empty, Environment, Event, FiberExited, FiberStarted, Grant, InputItem, JobCompleted,
+        JobStarted, Note, OpeningMessage, Outcome, PermissionRequested, PermissionResolved,
+        ReviewerRef, RuleScope, SessionStarted, StandingRule, TextCompleted, TurnStarted,
+        UsageRecorded, Variables, VariablesSource,
     };
     use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Tokens, Usage};
     use contract::{ActionId, Envelope, ErrorCode, GenerationId, JobId, RequestId, SessionId};
 
-    use crate::handoff::Carry;
+    use crate::compaction::Carry;
     use crate::resume::{Resumed, resumed, suspended};
     use crate::reviewer::{PendingAsks, render_reviewed};
 
@@ -1958,14 +1958,14 @@ mod window {
         })
     }
 
-    fn handoff_started() -> Event {
-        Event::HandoffStarted(HandoffStarted {
-            trigger: HandoffTrigger::Auto,
+    fn compaction_started() -> Event {
+        Event::CompactionStarted(CompactionStarted {
+            trigger: CompactionTrigger::Auto,
         })
     }
 
-    fn handoff_done(outcome: Outcome, note: &str) -> Event {
-        Event::HandoffCompleted(HandoffCompleted {
+    fn compaction_done(outcome: Outcome, note: &str) -> Event {
+        Event::CompactionCompleted(CompactionCompleted {
             outcome,
             error: None,
             note: (outcome == Outcome::Completed).then(|| Note::Actions {
@@ -1976,13 +1976,13 @@ mod window {
         })
     }
 
-    /// One handoff in `turn`: its window, the note under `note`, and its
+    /// One compaction in `turn`: its window, the note under `note`, and its
     /// end with `outcome`.
-    fn handoff(session: &Session, turn: &str, note: &str, outcome: Outcome) {
-        session.write(&handoff_started(), Some(turn), None);
+    fn compaction(session: &Session, turn: &str, note: &str, outcome: Outcome) {
+        session.write(&compaction_started(), Some(turn), None);
         session.write(&reply(), Some(turn), Some(note));
         session.write(&text(note), Some(turn), Some(note));
-        session.write(&handoff_done(outcome, note), Some(turn), None);
+        session.write(&compaction_done(outcome, note), Some(turn), None);
     }
 
     fn job_started(id: &str) -> Event {
@@ -2231,7 +2231,7 @@ mod window {
     }
 
     #[test]
-    fn with_no_handoff_the_window_is_the_whole_log() {
+    fn with_no_compaction_the_window_is_the_whole_log() {
         let session = Session::new();
         first_context(&session);
         session.write(&job_completed("j_late"), None, None);
@@ -2246,14 +2246,14 @@ mod window {
     }
 
     #[test]
-    fn the_window_starts_at_the_completed_handoffs_turn() {
+    fn the_window_starts_at_the_completed_compactions_turn() {
         let session = Session::new();
         first_context(&session);
         let start = session.write(&turn("two"), Some("t_2"), None);
         // A call requested before the window and completed in it, and a
         // job started before it and ended in it.
         session.write(&job_completed("j_late"), None, None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
         session.write(&turn("three"), Some("t_3"), None);
         session.write(&reply(), Some("t_3"), Some("a_3"));
@@ -2307,49 +2307,49 @@ mod window {
         session.write(&call(), Some("t_1"), Some("a_9"));
         let start = session.write(&turn("two"), Some("t_2"), None);
         session.write(&result(Some("artifacts/a_9")), Some("t_2"), Some("a_9"));
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
         assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
-    fn a_failed_handoff_after_a_completed_one_keeps_the_completed_window() {
+    fn a_failed_compaction_after_a_completed_one_keeps_the_completed_window() {
         let session = Session::new();
         first_context(&session);
         let start = session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
         session.write(&turn("three"), Some("t_3"), None);
-        handoff(&session, "t_3", "a_note2", Outcome::Failed);
-        // A handoff that never completed changes nothing either.
+        compaction(&session, "t_3", "a_note2", Outcome::Failed);
+        // A compaction that never completed changes nothing either.
         session.write(&turn("four"), Some("t_4"), None);
-        session.write(&handoff_started(), Some("t_4"), None);
+        session.write(&compaction_started(), Some("t_4"), None);
         session.write(&reply(), Some("t_4"), Some("a_note3"));
 
         assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
-    fn only_a_failed_handoff_leaves_the_whole_log() {
+    fn only_a_failed_compaction_leaves_the_whole_log() {
         let session = Session::new();
         first_context(&session);
         session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Failed);
+        compaction(&session, "t_2", "a_note", Outcome::Failed);
 
         assert_eq!(same_as_whole(&session).window, (0, 0));
     }
 
     #[test]
-    fn the_latest_of_two_completed_handoffs_starts_the_window() {
+    fn the_latest_of_two_completed_compactions_starts_the_window() {
         let session = Session::new();
         first_context(&session);
         session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("mid-log"), Some("t_2"), None);
         session.write(&job_started("j_mid"), None, None);
         let start = session.write(&turn("three"), Some("t_3"), None);
-        handoff(&session, "t_3", "a_note2", Outcome::Completed);
+        compaction(&session, "t_3", "a_note2", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_3"), None);
 
         let folded = same_as_whole(&session);
@@ -2360,49 +2360,49 @@ mod window {
     }
 
     #[test]
-    fn a_second_handoff_in_the_same_turn_starts_at_that_turn() {
+    fn a_second_compaction_in_the_same_turn_starts_at_that_turn() {
         let session = Session::new();
         first_context(&session);
         let start = session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("mid-log"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note2", Outcome::Completed);
+        compaction(&session, "t_2", "a_note2", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
         assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
-    fn the_latest_turn_started_of_the_handoffs_turn_wins() {
+    fn the_latest_turn_started_of_the_compactions_turn_wins() {
         let session = Session::new();
         first_context(&session);
         session.write(&turn("two"), Some("t_2"), None);
         session.write(&turn("three"), Some("t_3"), None);
         let start = session.write(&turn("two again"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
         assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
-    fn an_earlier_turn_named_by_the_handoff_still_starts_the_window() {
-        // Not the latest `turn_started`: the one whose turn the handoff names.
+    fn an_earlier_turn_named_by_the_compaction_still_starts_the_window() {
+        // Not the latest `turn_started`: the one whose turn the compaction names.
         let session = Session::new();
         first_context(&session);
         let start = session.write(&turn("two"), Some("t_2"), None);
         session.write(&turn("three"), Some("t_3"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
         assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
-    fn a_completed_handoff_with_no_turn_started_reads_the_whole_log() {
+    fn a_completed_compaction_with_no_turn_started_reads_the_whole_log() {
         let session = Session::new();
         first_context(&session);
-        handoff(&session, "t_x", "a_note", Outcome::Completed);
+        compaction(&session, "t_x", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_x"), None);
 
         let folded = same_as_whole(&session);
@@ -2412,7 +2412,7 @@ mod window {
     }
 
     #[test]
-    fn a_handoff_turn_finished_in_a_later_process_starts_at_its_turn() {
+    fn a_compaction_turn_finished_in_a_later_process_starts_at_its_turn() {
         let session = Session::new();
         first_context(&session);
         let start = session.write(&turn("two"), Some("t_2"), None);
@@ -2428,7 +2428,7 @@ mod window {
             Some("a_6"),
         );
         session.write(&result(None), Some("t_2"), Some("a_6"));
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
         let folded = same_as_whole(&session);
@@ -2438,11 +2438,11 @@ mod window {
     }
 
     #[test]
-    fn a_turn_suspended_after_a_completed_handoff_suspends_the_same() {
+    fn a_turn_suspended_after_a_completed_compaction_suspends_the_same() {
         let session = Session::new();
         first_context(&session);
         session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
         session.write(&turn("three"), Some("t_3"), None);
         session.write(&reply(), Some("t_3"), Some("a_5"));
@@ -2456,11 +2456,11 @@ mod window {
     }
 
     #[test]
-    fn a_turn_suspended_in_its_own_handoff_turn_suspends_the_same() {
+    fn a_turn_suspended_in_its_own_compaction_turn_suspends_the_same() {
         let session = Session::new();
         first_context(&session);
         session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
         session.write(&reply(), Some("t_2"), Some("a_5"));
         session.write(&call(), Some("t_2"), Some("a_6"));
@@ -2472,11 +2472,11 @@ mod window {
     }
 
     #[test]
-    fn a_log_ending_at_a_completed_handoff_keeps_the_old_path() {
+    fn a_log_ending_at_a_completed_compaction_keeps_the_old_path() {
         let session = Session::new();
         first_context(&session);
         session.write(&turn("two"), Some("t_2"), None);
-        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        compaction(&session, "t_2", "a_note", Outcome::Completed);
 
         let folded = same_as_whole(&session);
 
@@ -2541,7 +2541,7 @@ mod window {
             log,
         };
         let start = after.write(&turn("two"), Some("t_2"), None);
-        handoff(&after, "t_2", "a_note", Outcome::Completed);
+        compaction(&after, "t_2", "a_note", Outcome::Completed);
 
         let folded = resumed(&after.dir()).unwrap();
 
@@ -2617,7 +2617,7 @@ fn a_prompt_image_renders_on_the_user_message_and_the_carry() {
         }],
     });
     let mut conversation = Vec::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     render(
         &mut conversation,
         &started,
@@ -2657,7 +2657,7 @@ fn a_steered_image_renders_on_the_user_message_and_the_carry() {
         changed_by: None,
     });
     let mut conversation = Vec::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     render(
         &mut conversation,
         &steering,
@@ -2757,7 +2757,7 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
         kept: None,
         changes: None,
         control: Some(contract::events::Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: Some(contract::events::SkillLoad {
                 name: name.into(),
@@ -2773,8 +2773,8 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
     })
 }
 
-fn handoff_over(completed: bool) -> Event {
-    Event::HandoffCompleted(contract::events::HandoffCompleted {
+fn compaction_over(completed: bool) -> Event {
+    Event::CompactionCompleted(contract::events::CompactionCompleted {
         outcome: if completed {
             Outcome::Completed
         } else {
@@ -2804,7 +2804,7 @@ fn a_failed_or_cancelled_call_with_control_skill_is_not_folded() {
             &lines,
             "fake/model-1",
             &open,
-            crate::handoff::Carry::default(),
+            crate::compaction::Carry::default(),
         )
         .unwrap();
         assert!(carry.skills.is_empty(), "{status:?}");
@@ -2812,7 +2812,7 @@ fn a_failed_or_cancelled_call_with_control_skill_is_not_folded() {
 }
 
 #[test]
-fn a_completed_handoff_rebuilds_to_empty_skills_and_a_failed_one_keeps_them() {
+fn a_completed_compaction_rebuilds_to_empty_skills_and_a_failed_one_keeps_them() {
     let loads = || {
         vec![
             line("tool_call_requested", &call("skill"), Some("a_1")),
@@ -2839,22 +2839,22 @@ fn a_completed_handoff_rebuilds_to_empty_skills_and_a_failed_one_keeps_them() {
     };
     let open = std::collections::HashSet::new();
     let mut done_lines = loads();
-    done_lines.push(line("handoff_completed", &handoff_over(true), None));
+    done_lines.push(line("compaction_completed", &compaction_over(true), None));
     let (_, _, _, carry) = super::rebuild_and_sent(
         &done_lines,
         "fake/model-1",
         &open,
-        crate::handoff::Carry::default(),
+        crate::compaction::Carry::default(),
     )
     .unwrap();
     assert!(carry.skills.is_empty());
     let mut failed_lines = loads();
-    failed_lines.push(line("handoff_completed", &handoff_over(false), None));
+    failed_lines.push(line("compaction_completed", &compaction_over(false), None));
     let (_, _, _, carry) = super::rebuild_and_sent(
         &failed_lines,
         "fake/model-1",
         &open,
-        crate::handoff::Carry::default(),
+        crate::compaction::Carry::default(),
     )
     .unwrap();
     assert_eq!(
@@ -2898,7 +2898,7 @@ fn rendering_line_by_line_and_rebuilding_agree_on_skills() {
     ];
     let mut conversation = Vec::new();
     let mut had = BTreeMap::new();
-    let mut live = crate::handoff::Carry::default();
+    let mut live = crate::compaction::Carry::default();
     for envelope in &lines {
         let event = Event::from_envelope(envelope).unwrap().unwrap();
         render(
@@ -2916,7 +2916,7 @@ fn rendering_line_by_line_and_rebuilding_agree_on_skills() {
         &lines,
         "fake/model-1",
         &open,
-        crate::handoff::Carry::default(),
+        crate::compaction::Carry::default(),
     )
     .unwrap();
     assert_eq!(live.skills, rebuilt.skills);
@@ -2941,7 +2941,7 @@ fn a_skills_change_renders_the_added_then_the_removed_line() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert_eq!(conversation.len(), 1);
@@ -3008,9 +3008,9 @@ mod from_log {
     use log::Log;
 
     use super::events::{
-        assistant, completed_event, fiber_started, handoff_done, handoff_started, hosted_requested,
-        job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
-        started, steering, text_of, texts, user_turn,
+        assistant, compaction_done, compaction_started, completed_event, fiber_started,
+        hosted_requested, job_completed, job_started, kinds_of, message_started, opening_of,
+        requested, result_of, started, steering, text_of, texts, user_turn,
     };
     use super::line;
     use serde_json::json;
@@ -3402,7 +3402,7 @@ mod from_log {
         // The same lines through `render`, as the live loop builds them.
         let mut live = Vec::new();
         let mut had = std::collections::BTreeMap::new();
-        let mut carry = crate::handoff::Carry::default();
+        let mut carry = crate::compaction::Carry::default();
         for line in &lines {
             let Some(event) = Event::from_envelope(line).unwrap() else {
                 panic!("a known kind: {}", line.kind().name());
@@ -3520,7 +3520,7 @@ mod from_log {
 
     /// A log: an opening message, the turn's input and a steer, then (when
     /// `jobs`) a job still running and one that ended.
-    fn before_handoff(log: &LogLines, jobs: bool) {
+    fn before_compaction(log: &LogLines, jobs: bool) {
         log.append(opening_of("old-os"), None);
         if jobs {
             log.append(job_started("j_1"), None);
@@ -3533,7 +3533,7 @@ mod from_log {
 
     /// The note request's lines under the message action `a_note`.
     fn note_lines(log: &LogLines) {
-        log.append(handoff_started(), None);
+        log.append(compaction_started(), None);
         log.append(message_started(), Some("a_note"));
         log.append(assistant("the note"), Some("a_note"));
     }
@@ -3541,12 +3541,12 @@ mod from_log {
     const JOBS_LINE: &str = "Fiber: these background jobs are still running. Each one's end is reported when it happens.\n\n- j_1: npm test";
 
     #[test]
-    fn a_completed_handoff_is_the_opening_the_turn_input_the_note_and_the_jobs_line() {
+    fn a_completed_compaction_is_the_opening_the_turn_input_the_note_and_the_jobs_line() {
         let log = LogLines::new();
-        before_handoff(&log, true);
+        before_compaction(&log, true);
         note_lines(&log);
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note"]),
             None,
         );
         log.append(opening_of("new-os"), None);
@@ -3556,7 +3556,7 @@ mod from_log {
         let seen = texts(&conversation);
         assert_eq!(seen.len(), 5, "{seen:?}");
         assert!(seen[0].contains("new-os"), "{seen:?}");
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — input and steer in new-message blocks (item 5), the note (item 6: "The handoff note"), then the jobs line (item 7).
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — input and steer in new-message blocks (item 5), the note (item 6: "The compaction note"), then the jobs line (item 7).
         assert_eq!(
             seen[1..],
             [
@@ -3569,21 +3569,21 @@ mod from_log {
     }
 
     #[test]
-    fn a_completed_handoff_with_no_job_running_has_no_jobs_line() {
+    fn a_completed_compaction_with_no_job_running_has_no_jobs_line() {
         let log = LogLines::new();
-        before_handoff(&log, false);
+        before_compaction(&log, false);
         log.append(job_started("j_3"), None);
         log.append(job_completed("j_3"), None);
         note_lines(&log);
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note"]),
             None,
         );
         log.append(opening_of("new-os"), None);
 
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — input and steer in new-message blocks (item 5), then the note (item 6).
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — input and steer in new-message blocks (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             [
@@ -3595,14 +3595,14 @@ mod from_log {
     }
 
     #[test]
-    fn a_handoff_carries_only_the_latest_turns_input() {
+    fn a_compaction_carries_only_the_latest_turns_input() {
         let log = LogLines::new();
-        before_handoff(&log, false);
+        before_compaction(&log, false);
         log.append(assistant("answer"), Some("a_1"));
         log.append(user_turn("two"), None);
         note_lines(&log);
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note"]),
             None,
         );
         log.append(opening_of("new-os"), None);
@@ -3610,40 +3610,27 @@ mod from_log {
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         // The first turn's "one" and its steer stay behind in the log.
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             ["The person's new message:\ntwo", "the note"]
         );
     }
 
-    /// The conversation before `handoff_started`.
+    /// The conversation before `compaction_started`.
     fn before(jobs: bool) -> Vec<Input> {
         let log = LogLines::new();
-        before_handoff(&log, jobs);
+        before_compaction(&log, jobs);
         crate::conversation::rebuild(&log.lines(), MODEL).unwrap()
     }
 
     #[test]
-    fn a_failed_handoff_leaves_the_conversation_as_it_was() {
+    fn a_failed_compaction_leaves_the_conversation_as_it_was() {
         let log = LogLines::new();
-        before_handoff(&log, true);
-        note_lines(&log);
-        log.append(handoff_done(contract::events::Outcome::Failed, &[]), None);
-
-        assert_eq!(
-            crate::conversation::rebuild(&log.lines(), MODEL).unwrap(),
-            before(true)
-        );
-    }
-
-    #[test]
-    fn a_cancelled_handoff_leaves_the_conversation_as_it_was() {
-        let log = LogLines::new();
-        before_handoff(&log, true);
+        before_compaction(&log, true);
         note_lines(&log);
         log.append(
-            handoff_done(contract::events::Outcome::Cancelled, &[]),
+            compaction_done(contract::events::Outcome::Failed, &[]),
             None,
         );
 
@@ -3654,9 +3641,25 @@ mod from_log {
     }
 
     #[test]
-    fn a_handoff_that_never_completed_leaves_the_conversation_as_it_was() {
+    fn a_cancelled_compaction_leaves_the_conversation_as_it_was() {
         let log = LogLines::new();
-        before_handoff(&log, true);
+        before_compaction(&log, true);
+        note_lines(&log);
+        log.append(
+            compaction_done(contract::events::Outcome::Cancelled, &[]),
+            None,
+        );
+
+        assert_eq!(
+            crate::conversation::rebuild(&log.lines(), MODEL).unwrap(),
+            before(true)
+        );
+    }
+
+    #[test]
+    fn a_compaction_that_never_completed_leaves_the_conversation_as_it_was() {
+        let log = LogLines::new();
+        before_compaction(&log, true);
         note_lines(&log);
 
         assert_eq!(
@@ -3666,9 +3669,9 @@ mod from_log {
     }
 
     #[test]
-    fn a_turn_resumed_after_an_unfinished_handoff_is_never_discarded() {
+    fn a_turn_resumed_after_an_unfinished_compaction_is_never_discarded() {
         let log = LogLines::new();
-        before_handoff(&log, false);
+        before_compaction(&log, false);
         note_lines(&log);
         log.append(fiber_started(), None);
         log.append(user_turn("three"), None);
@@ -3690,17 +3693,20 @@ mod from_log {
     }
 
     #[test]
-    fn a_handoff_window_closes_at_each_completion_even_in_a_later_window() {
+    fn a_compaction_window_closes_at_each_completion_even_in_a_later_window() {
         let log = LogLines::new();
-        before_handoff(&log, false);
+        before_compaction(&log, false);
         note_lines(&log);
-        log.append(handoff_done(contract::events::Outcome::Failed, &[]), None);
+        log.append(
+            compaction_done(contract::events::Outcome::Failed, &[]),
+            None,
+        );
         log.append(user_turn("two"), None);
-        log.append(handoff_started(), None);
+        log.append(compaction_started(), None);
         log.append(message_started(), Some("a_note2"));
         log.append(assistant("second note"), Some("a_note2"));
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note2"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note2"]),
             None,
         );
         log.append(opening_of("new-os"), None);
@@ -3708,7 +3714,7 @@ mod from_log {
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         // The first note's text never reaches the second window's note.
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             ["The person's new message:\ntwo", "second note"]
@@ -3718,7 +3724,7 @@ mod from_log {
     #[test]
     fn a_note_call_cut_short_by_a_crash_leaves_no_result_behind() {
         let log = LogLines::new();
-        before_handoff(&log, false);
+        before_compaction(&log, false);
         note_lines(&log);
         // The process died after logging the note reply's call, before its
         // completion; a new process resumed and took a turn.
@@ -3753,17 +3759,17 @@ mod from_log {
 
         assert_eq!(
             text_of(conversation.last().unwrap()),
-            "Fiber: your context holds 266700 tokens. At 400000 tokens Fiber will ask you for a handoff note and continue this work from it in a fresh context, so carry on as normal. The whole session stays in the session log at /log/events.jsonl."
+            "Fiber: your context holds 266700 tokens. At 400000 tokens Fiber will ask you for a compaction note and continue this work from it in a fresh context, so carry on as normal. The whole session stays in the session log at /log/events.jsonl."
         );
     }
 
     #[test]
     fn a_second_opening_message_sits_at_the_front() {
         let log = LogLines::new();
-        before_handoff(&log, false);
+        before_compaction(&log, false);
         note_lines(&log);
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note"]),
             None,
         );
         log.append(opening_of("new-os"), None);
@@ -3773,7 +3779,7 @@ mod from_log {
 
         let seen = texts(&conversation);
         assert!(seen[0].contains("new-os"), "{seen:?}");
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — input and steer in new-message blocks (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — input and steer in new-message blocks (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
         assert_eq!(
             seen[1..],
             [
@@ -3789,9 +3795,9 @@ mod from_log {
         );
     }
 
-    // A person's and a tool's handoff render as every handoff does.
+    // A person's and a tool's compaction render as every compaction does.
 
-    fn handoff_turn(items: Vec<InputItem>) -> Event {
+    fn compaction_turn(items: Vec<InputItem>) -> Event {
         Event::TurnStarted(TurnStarted { input: items })
     }
 
@@ -3806,39 +3812,39 @@ mod from_log {
         }
     }
 
-    fn handoff_item(id: &str) -> InputItem {
-        InputItem::Handoff {
+    fn compaction_item(id: &str) -> InputItem {
+        InputItem::Compaction {
             command_id: CommandId(id.into()),
         }
     }
 
     #[test]
-    fn a_handoff_item_renders_nothing_and_a_turn_of_only_one_carries_no_input() {
+    fn a_compaction_item_renders_nothing_and_a_turn_of_only_one_carries_no_input() {
         let log = LogLines::new();
         log.append(opening_of("old-os"), None);
         log.append(
-            handoff_turn(vec![handoff_item("c_h"), message_item("one")]),
+            compaction_turn(vec![compaction_item("c_h"), message_item("one")]),
             None,
         );
         note_lines(&log);
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note"]),
             None,
         );
         log.append(opening_of("new-os"), None);
-        log.append(handoff_turn(vec![handoff_item("c_h2")]), None);
+        log.append(compaction_turn(vec![compaction_item("c_h2")]), None);
         note_lines(&log);
 
-        // The first handoff carries the message beside the command's item.
+        // The first compaction carries the message beside the command's item.
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             ["The person's new message:\none", "the note"]
         );
 
         log.append(
-            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            compaction_done(contract::events::Outcome::Completed, &["a_note"]),
             None,
         );
         log.append(opening_of("newer-os"), None);
@@ -3854,18 +3860,18 @@ mod from_log {
         let Event::ToolCallCompleted(mut done) = completed_event(text) else {
             panic!("a completion");
         };
-        done.control = note.map(|handoff| contract::events::Control {
-            handoff: Some(handoff.into()),
+        done.control = note.map(|compaction| contract::events::Control {
+            compact: Some(compaction.into()),
             ..Default::default()
         });
         Event::ToolCallCompleted(done)
     }
 
     /// A turn whose reply made the calls `a_w1` (`get_weather`), `a_h1`
-    /// (`wrapup`, which set `control.handoff`) and `a_w2` (`get_weather`) and
-    /// whose results were all written, then the tool handoff and the new
+    /// (`wrapup`, which set `control.compact`) and `a_w2` (`get_weather`) and
+    /// whose results were all written, then the tool compaction and the new
     /// opening message.
-    fn tool_handoff(log: &LogLines, notes: &[(&str, &str)]) {
+    fn tool_compaction(log: &LogLines, notes: &[(&str, &str)]) {
         log.append(opening_of("old-os"), None);
         log.append(user_turn("one"), None);
         log.append(message_started(), Some("a_m"));
@@ -3891,7 +3897,7 @@ mod from_log {
         }
         let ids: Vec<&str> = notes.iter().map(|(call, _)| *call).collect();
         log.append(
-            Event::HandoffCompleted(contract::events::HandoffCompleted {
+            Event::CompactionCompleted(contract::events::CompactionCompleted {
                 outcome: contract::events::Outcome::Completed,
                 error: None,
                 note: Some(contract::events::Note::Actions {
@@ -3925,15 +3931,15 @@ mod from_log {
     }
 
     #[test]
-    fn a_tool_handoff_renders_the_note_then_the_other_calls_and_their_results() {
+    fn a_tool_compaction_renders_the_note_then_the_other_calls_and_their_results() {
         let log = LogLines::new();
-        tool_handoff(&log, &[("a_h1", "Tool note.")]);
+        tool_compaction(&log, &[("a_h1", "Tool note.")]);
 
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         let seen = call_ids(&conversation);
         assert!(seen[0].1.contains("new-os"), "{seen:?}");
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6), then the other calls and their results "as one message holding those calls in call order, then one message holding their results in the same order".
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — new-message input (item 5), the note (item 6), then the other calls and their results "as one message holding those calls in call order, then one message holding their results in the same order".
         assert_eq!(
             seen[1..],
             [
@@ -3950,12 +3956,12 @@ mod from_log {
     #[test]
     fn two_tool_notes_join_in_the_order_the_line_lists_the_calls() {
         let log = LogLines::new();
-        tool_handoff(&log, &[("a_w1", "First."), ("a_h1", "Second.")]);
+        tool_compaction(&log, &[("a_w1", "First."), ("a_h1", "Second.")]);
 
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         let seen = call_ids(&conversation);
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), then the joined notes (item 6; "their notes are joined in call order").
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — new-message input (item 5), then the joined notes (item 6; "their notes are joined in call order").
         assert_eq!(
             seen[1..],
             [
@@ -3968,10 +3974,11 @@ mod from_log {
     }
 
     #[test]
-    fn a_tool_handoff_survives_a_crash_and_a_second_resume() {
+    fn a_tool_compaction_survives_a_crash_and_a_second_resume() {
         let log = LogLines::new();
-        tool_handoff(&log, &[("a_h1", "Tool note.")]);
-        let after_handoff = call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
+        tool_compaction(&log, &[("a_h1", "Tool note.")]);
+        let after_compaction =
+            call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
         for _ in 0..2 {
             log.append(fiber_started(), None);
             log.append(user_turn("again"), None);
@@ -3980,11 +3987,11 @@ mod from_log {
 
         let seen = call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
 
-        // The context from the handoff on is intact, with each resumed turn
+        // The context from the compaction on is intact, with each resumed turn
         // after it.
-        assert_eq!(seen[..after_handoff.len()], after_handoff[..]);
+        assert_eq!(seen[..after_compaction.len()], after_compaction[..]);
         assert_eq!(
-            seen[after_handoff.len()..],
+            seen[after_compaction.len()..],
             [
                 ("text", "again".to_owned()),
                 ("text", "answer".to_owned()),
@@ -3994,7 +4001,7 @@ mod from_log {
         );
     }
 
-    // Resuming over handoffs (`docs/handoff.md`, "Resume").
+    // Resuming over compactions (`docs/compaction.md`, "Resume").
 
     fn hosted_completed() -> Event {
         let Event::ToolCallCompleted(done) = completed_event("https://blog.rust-lang.org/") else {
@@ -4217,7 +4224,7 @@ fn inner_lines(crash: bool) -> Vec<Envelope> {
 fn live_and_rebuilt_conversations_exclude_inner_calls_and_their_results() {
     let lines = inner_lines(false);
     let mut live = Vec::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     for line in &lines {
         render(
             &mut live,
@@ -4295,7 +4302,7 @@ fn the_suspended_batch_excludes_inner_requests() {
 }
 
 #[test]
-fn inner_control_never_changes_the_skills_or_handoff_step() {
+fn inner_control_never_changes_the_skills_or_compaction_step() {
     let mut lines = inner_lines(false);
     let mut done = crate::completion::completed("inner control".into(), None);
     done.control = Some(contract::events::Control {
@@ -4303,7 +4310,7 @@ fn inner_control_never_changes_the_skills_or_handoff_step() {
             name: "inner".into(),
             path: "inner/SKILL.md".into(),
         }),
-        handoff: Some("inner note".into()),
+        compact: Some("inner note".into()),
         ..Default::default()
     });
     lines[3] = line(
@@ -4312,7 +4319,7 @@ fn inner_control_never_changes_the_skills_or_handoff_step() {
         Some("a_inner"),
     );
     let mut conversation = Vec::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     let kept = contract::events::SkillLoad {
         name: "kept".into(),
         path: "kept/SKILL.md".into(),
@@ -4399,7 +4406,7 @@ fn start_turn(text: &str) -> Event {
 fn live_and_rebuilt(staged: &[(&str, Event)]) -> Vec<Input> {
     let mut live = Vec::new();
     let mut had = BTreeMap::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     for (_, event) in staged {
         render(
             &mut live,
@@ -4695,18 +4702,18 @@ fn a_sent_shell_never_named_stays_held() {
     assert_eq!(carry.pending(), vec![2]);
 }
 
-/// A handoff turn between turns: its `turn_started` holds only the
-/// `handoff` command.
-fn kept_handoff_turn() -> Event {
+/// A compaction turn between turns: its `turn_started` holds only the
+/// `compact` command.
+fn kept_compaction_turn() -> Event {
     Event::TurnStarted(TurnStarted {
-        input: vec![InputItem::Handoff {
+        input: vec![InputItem::Compaction {
             command_id: contract::CommandId("c_h".into()),
         }],
     })
 }
 
-fn kept_handoff_done(note: &str) -> Event {
-    Event::HandoffCompleted(contract::events::HandoffCompleted {
+fn kept_compaction_done(note: &str) -> Event {
+    Event::CompactionCompleted(contract::events::CompactionCompleted {
         outcome: Outcome::Completed,
         error: None,
         note: Some(contract::events::Note::Hook {
@@ -4734,10 +4741,10 @@ fn kept_of(keys: &[(u64, u64)]) -> Event {
 /// Renders the `(seq, kind, event)` lines live, each under its own `seq`,
 /// and rebuilds them: the conversation and the render state agree, and the
 /// caller pins what the conversation holds.
-fn kept_run(staged: &[(u64, &str, Event)]) -> (Vec<Input>, crate::handoff::Carry) {
+fn kept_run(staged: &[(u64, &str, Event)]) -> (Vec<Input>, crate::compaction::Carry) {
     let mut live = Vec::new();
     let mut had = BTreeMap::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     for (seq, _, event) in staged {
         let was_summary = carry.in_summary();
         carry.observe_reviewed(event, None, Some(Seq(*seq)), was_summary);
@@ -4783,12 +4790,12 @@ fn after_opening(conversation: &[Input]) -> Vec<&str> {
 fn a_kept_message_sits_between_the_opening_and_the_carried_input() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("read-only")),
-        (7, "turn_started", kept_handoff_turn()),
-        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (7, "turn_started", kept_compaction_turn()),
+        (8, "compaction_completed", kept_compaction_done("NOTE")),
         (9, "opening_message", start_opening()),
         (10, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept message in its earlier block (item 4: "each in its own labelled block"), then the note (item 6: "The handoff note").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — kept message in its earlier block (item 4: "each in its own labelled block"), then the note (item 6: "The compaction note").
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4803,12 +4810,12 @@ fn kept_messages_go_in_oldest_first_order() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("A")),
         (12, "turn_started", start_turn("B")),
-        (13, "turn_started", kept_handoff_turn()),
-        (14, "handoff_completed", kept_handoff_done("NOTE")),
+        (13, "turn_started", kept_compaction_turn()),
+        (14, "compaction_completed", kept_compaction_done("NOTE")),
         (15, "opening_message", start_opening()),
         (16, "reviewer_kept", kept_of(&[(6, 0), (12, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "The person's earlier messages that still bind, oldest first, each in its own labelled block"; then the note (item 6: "The handoff note").
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "The person's earlier messages that still bind, oldest first, each in its own labelled block"; then the note (item 6: "The compaction note").
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4834,13 +4841,13 @@ fn a_session_opening_arms_no_kept_slot() {
 fn a_kept_message_follows_the_session_start_context() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("read-only")),
-        (7, "turn_started", kept_handoff_turn()),
-        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (7, "turn_started", kept_compaction_turn()),
+        (8, "compaction_completed", kept_compaction_done("NOTE")),
         (9, "opening_message", start_opening()),
         (10, "context_added", start_context("session_start", "ctx")),
         (11, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), kept message in its earlier block (item 4), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), kept message in its earlier block (item 4), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4855,13 +4862,13 @@ fn a_kept_message_follows_the_session_start_context() {
 fn a_context_that_is_not_session_start_leaves_the_kept_spot_alone() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("read-only")),
-        (7, "turn_started", kept_handoff_turn()),
-        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (7, "turn_started", kept_compaction_turn()),
+        (8, "compaction_completed", kept_compaction_done("NOTE")),
         (9, "opening_message", start_opening()),
         (10, "context_added", start_context("before_message", "late")),
         (11, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept message in its earlier block (item 4), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — kept message in its earlier block (item 4), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4877,11 +4884,11 @@ fn a_kept_message_of_this_turn_is_not_repeated() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("read-only")),
         (29, "turn_started", start_turn("this turn")),
-        (30, "handoff_completed", kept_handoff_done("NOTE")),
+        (30, "compaction_completed", kept_compaction_done("NOTE")),
         (31, "opening_message", start_opening()),
         (32, "reviewer_kept", kept_of(&[(6, 0), (29, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept earlier message (item 4), this turn's input in a new-message block (item 5: a kept message from this turn "appears once, as part of this turn's input"), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — kept earlier message (item 4), this turn's input in a new-message block (item 5: a kept message from this turn "appears once, as part of this turn's input"), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4899,11 +4906,11 @@ fn a_parent_message_sharing_a_key_with_this_turn_is_still_kept() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("parent: read-only")),
         (6, "turn_started", start_turn("child")),
-        (7, "handoff_completed", kept_handoff_done("NOTE")),
+        (7, "compaction_completed", kept_compaction_done("NOTE")),
         (8, "opening_message", start_opening()),
         (9, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept earlier message (item 4), this turn's input in a new-message block (item 5: a kept message from this turn "appears once, as part of this turn's input"), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — kept earlier message (item 4), this turn's input in a new-message block (item 5: a kept message from this turn "appears once, as part of this turn's input"), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4915,18 +4922,18 @@ fn a_parent_message_sharing_a_key_with_this_turn_is_still_kept() {
 }
 
 #[test]
-fn a_second_handoff_in_the_same_turn_does_not_repeat_this_turns_message() {
+fn a_second_compaction_in_the_same_turn_does_not_repeat_this_turns_message() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("A")),
         (12, "turn_started", start_turn("B")),
-        (13, "handoff_completed", kept_handoff_done("NOTE 1")),
+        (13, "compaction_completed", kept_compaction_done("NOTE 1")),
         (14, "opening_message", start_opening()),
         (15, "reviewer_kept", kept_of(&[(12, 0)])),
-        (16, "handoff_completed", kept_handoff_done("NOTE 2")),
+        (16, "compaction_completed", kept_compaction_done("NOTE 2")),
         (17, "opening_message", start_opening()),
         (18, "reviewer_kept", kept_of(&[(12, 0)])),
     ]);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         ["The person's new message:\nB", "NOTE 2"]
@@ -4971,13 +4978,13 @@ fn a_message_in_a_rewind_summary_turn_is_not_kept() {
         (6, "turn_started", summary),
         (7, "steering_applied", steering),
         (8, "turn_completed", completed),
-        (9, "turn_started", kept_handoff_turn()),
-        (10, "handoff_completed", kept_handoff_done("NOTE")),
+        (9, "turn_started", kept_compaction_turn()),
+        (10, "compaction_completed", kept_compaction_done("NOTE")),
         (11, "opening_message", start_opening()),
         (12, "reviewer_kept", kept_of(&[(6, 1), (7, 0)])),
     ]);
     assert_eq!(after_opening(&conversation), ["NOTE"]);
-    // docs/handoff.md, "What the model sees after a handoff", item 4 holds "The person's earlier messages that still bind": the summary turn's message is none of them, so the index stays empty.
+    // docs/compaction.md, "What the model sees after a compaction", item 4 holds "The person's earlier messages that still bind": the summary turn's message is none of them, so the index stays empty.
     assert!(carry.reviewed.is_empty());
 }
 
@@ -5006,14 +5013,14 @@ fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
                 "from an extension",
             ),
         ),
-        (9, "turn_started", kept_handoff_turn()),
-        (10, "handoff_completed", kept_handoff_done("NOTE")),
+        (9, "turn_started", kept_compaction_turn()),
+        (10, "compaction_completed", kept_compaction_done("NOTE")),
         (11, "opening_message", start_opening()),
         (12, "reviewer_kept", kept_of(&[(7, 0), (8, 0)])),
     ]);
     // The driver's steering is carried; the extension's is not the
     // person's, so naming it keeps nothing.
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept steering message in its earlier block (item 4), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — kept steering message in its earlier block (item 4), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         ["The person's earlier message:\nThe person: steered", "NOTE"]
@@ -5021,23 +5028,23 @@ fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
 }
 
 #[test]
-fn a_second_handoff_keeps_only_what_the_first_kept() {
+fn a_second_compaction_keeps_only_what_the_first_kept() {
     let (conversation, carry) = kept_run(&[
         (6, "turn_started", start_turn("A")),
         (12, "turn_started", start_turn("B")),
-        (13, "turn_started", kept_handoff_turn()),
-        (14, "handoff_completed", kept_handoff_done("NOTE 1")),
+        (13, "turn_started", kept_compaction_turn()),
+        (14, "compaction_completed", kept_compaction_done("NOTE 1")),
         (15, "opening_message", start_opening()),
         (16, "reviewer_kept", kept_of(&[(6, 0)])),
-        (17, "turn_started", kept_handoff_turn()),
-        (18, "handoff_completed", kept_handoff_done("NOTE 2")),
+        (17, "turn_started", kept_compaction_turn()),
+        (18, "compaction_completed", kept_compaction_done("NOTE 2")),
         (19, "opening_message", start_opening()),
         (20, "reviewer_kept", kept_of(&[(12, 0)])),
     ]);
     // B was dropped at the first selection: the second names a message the
     // index no longer holds, and carries nothing.
     assert_eq!(after_opening(&conversation), ["NOTE 2"]);
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "They are the `reviewer_kept` selection unchanged" — the second selection names only the dropped message, so the index keeps nothing.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "They are the `reviewer_kept` selection unchanged" — the second selection names only the dropped message, so the index keeps nothing.
     assert!(carry.reviewed.is_empty());
 }
 
@@ -5045,8 +5052,8 @@ fn a_second_handoff_keeps_only_what_the_first_kept() {
 fn a_kept_key_naming_no_message_inserts_nothing() {
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("A")),
-        (7, "turn_started", kept_handoff_turn()),
-        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (7, "turn_started", kept_compaction_turn()),
+        (8, "compaction_completed", kept_compaction_done("NOTE")),
         (9, "opening_message", start_opening()),
         (10, "reviewer_kept", kept_of(&[(99, 0), (6, 3)])),
     ]);
@@ -5134,7 +5141,7 @@ fn directory_added_renders_the_add_message_and_rebuilds_it_from_the_log() {
         None,
         "fake/model-1",
         &mut BTreeMap::new(),
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         Some(Seq(3)),
     );
     assert_eq!(conversation.len(), 1);
@@ -5189,7 +5196,7 @@ fn a_rebuilt_conversation_lists_the_added_folders_and_keeps_the_add_message() {
     )
     .unwrap();
     assert_eq!(rebuilt.len(), 2);
-    // The handoff's opening message lists the folded folders.
+    // The compaction's opening message lists the folded folders.
     let text = user_text(&rebuilt[0]);
     assert!(text.contains("- /shared"), "{text}");
     // The event-derived add message stays visible to the consumer.

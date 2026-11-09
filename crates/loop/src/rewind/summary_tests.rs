@@ -125,7 +125,7 @@ fn a_crashed_summary_stops_being_skipped_at_the_process_start() {
 #[test]
 fn summary_rendering_preserves_the_persons_input_and_last_step() {
     let mut conversation = Vec::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     let mut had = std::collections::BTreeMap::new();
     let action = contract::ActionId("a_real".into());
     let before = [

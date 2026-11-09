@@ -43,12 +43,23 @@ fn ctx_with<'a>(
     doctor: &'a dyn Fn() -> Result<String, FeedbackError>,
     diagnostics: &'a dyn Fn(Option<&SessionId>) -> String,
 ) -> ReportContext<'a> {
+    ctx_frames(cwd, clock, doctor, diagnostics, &[])
+}
+
+fn ctx_frames<'a>(
+    cwd: &'a Path,
+    clock: &'a dyn Clock,
+    doctor: &'a dyn Fn() -> Result<String, FeedbackError>,
+    diagnostics: &'a dyn Fn(Option<&SessionId>) -> String,
+    frames: &'a [contract::feedback::FrameShape],
+) -> ReportContext<'a> {
     ReportContext {
         version: VERSION,
         cwd,
         clock,
         doctor,
         diagnostics,
+        frames,
     }
 }
 
@@ -225,7 +236,7 @@ fn write_writes_the_report_once_and_returns_its_path_and_link() {
     assert_eq!(
         fs::read_to_string(&expected).unwrap(),
         format!(
-            "{}\n{DIAGNOSTICS}",
+            "{}\n{DIAGNOSTICS}{EMPTY_SHAPES}",
             build_report(
                 VERSION,
                 &super::platform(),
@@ -394,7 +405,8 @@ fn the_file_ends_with_diagnostics_and_the_link_never_carries_them() {
     )
     .unwrap();
     let saved = fs::read_to_string(&done.path).unwrap();
-    assert!(saved.ends_with(&format!("\n{DIAGNOSTICS}")), "{saved}");
+    assert!(saved.contains(&format!("\n{DIAGNOSTICS}")), "{saved}");
+    assert!(saved.ends_with(EMPTY_SHAPES), "{saved}");
     let (_, body) = linked(&done.link);
     assert!(!body.contains("stub diagnostics"), "{body}");
     assert!(!body.contains("## Diagnostics"), "{body}");
@@ -1086,4 +1098,443 @@ fn every_crash_report_of_the_session_is_listed_oldest_first_with_no_cap() {
     for left_out in ["hunter2", "other", "pid", "not-ms", "not-txt", "longer-id"] {
         assert!(!report.contains(left_out), "{left_out}: {report}");
     }
+}
+
+// The frame-shapes section: shapes, never glyphs, in Diagnostics only.
+
+use contract::feedback::{FrameShape, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue};
+
+/// The shapes section for an empty ring.
+const EMPTY_SHAPES: &str = "### Frame shapes\n\nNo frames captured on this machine.\n\n";
+
+/// A style with every channel reset: the palette's base entry.
+fn base_style() -> StyleValue {
+    StyleValue {
+        fg: ShapeColor::Reset,
+        bg: ShapeColor::Reset,
+        ul: ShapeColor::Reset,
+        mods: 0,
+    }
+}
+
+/// A row of `cells`, in column order.
+fn row(cells: Vec<ShapeCell>) -> ShapeRow {
+    ShapeRow::new(cells)
+}
+
+/// Eight cells of one kind, for a width-8 frame.
+fn blanks(count: usize) -> Vec<ShapeCell> {
+    (0..count)
+        .map(|_| ShapeCell::new(ShapeKind::Blank, false, 0))
+        .collect()
+}
+
+/// A 2-frame snapshot: the first frame's lead cell in red, the second
+/// frame's wide lead in blue. The wide lead stands in for a `\u{1f511}`-width
+/// cell: its glyph never reaches the section, only its width class.
+fn two_frames() -> Vec<FrameShape> {
+    let red = StyleValue {
+        fg: ShapeColor::Red,
+        ..base_style()
+    };
+    let blue = StyleValue {
+        fg: ShapeColor::Blue,
+        ..base_style()
+    };
+    let mut first_row = vec![
+        ShapeCell::new(ShapeKind::Content, false, 1),
+        ShapeCell::new(ShapeKind::Continuation, false, 1),
+    ];
+    first_row.extend(blanks(6));
+    let mut second_row = vec![
+        ShapeCell::new(ShapeKind::Content, true, 1),
+        ShapeCell::new(ShapeKind::Continuation, false, 1),
+    ];
+    second_row.extend(blanks(6));
+    let mut third_row = vec![
+        ShapeCell::new(ShapeKind::Blank, true, 0),
+        ShapeCell::new(ShapeKind::Exempt, false, 0),
+    ];
+    third_row.extend(blanks(6));
+    vec![
+        FrameShape {
+            width: 8,
+            height: 2,
+            top: None,
+            has_new: false,
+            palette: vec![base_style(), red],
+            rows: vec![row(first_row), row(blanks(8))],
+        },
+        FrameShape {
+            width: 8,
+            height: 3,
+            top: Some(12),
+            has_new: true,
+            palette: vec![base_style(), blue],
+            rows: vec![row(second_row), row(third_row), row(blanks(8))],
+        },
+    ]
+}
+
+/// One wire colour name back to its colour.
+fn parse_color(name: &str) -> Option<ShapeColor> {
+    match name {
+        "reset" => Some(ShapeColor::Reset),
+        "black" => Some(ShapeColor::Black),
+        "red" => Some(ShapeColor::Red),
+        "green" => Some(ShapeColor::Green),
+        "yellow" => Some(ShapeColor::Yellow),
+        "blue" => Some(ShapeColor::Blue),
+        "magenta" => Some(ShapeColor::Magenta),
+        "cyan" => Some(ShapeColor::Cyan),
+        "gray" => Some(ShapeColor::Gray),
+        "darkgray" => Some(ShapeColor::DarkGray),
+        "lightred" => Some(ShapeColor::LightRed),
+        "lightgreen" => Some(ShapeColor::LightGreen),
+        "lightyellow" => Some(ShapeColor::LightYellow),
+        "lightblue" => Some(ShapeColor::LightBlue),
+        "lightmagenta" => Some(ShapeColor::LightMagenta),
+        "lightcyan" => Some(ShapeColor::LightCyan),
+        "white" => Some(ShapeColor::White),
+        indexed if indexed.starts_with("indexed(") => {
+            let index = indexed
+                .strip_prefix("indexed(")
+                .and_then(|rest| rest.strip_suffix(')'))?;
+            Some(ShapeColor::Indexed(index.parse().ok()?))
+        }
+        rgb if rgb.starts_with("rgb(") => {
+            let triple = rgb
+                .strip_prefix("rgb(")
+                .and_then(|rest| rest.strip_suffix(')'))?;
+            let mut channels = triple.split(',');
+            Some(ShapeColor::Rgb(
+                channels.next()?.parse().ok()?,
+                channels.next()?.parse().ok()?,
+                channels.next()?.parse().ok()?,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// One palette entry back to its style: split on the channel prefixes,
+/// never on commas, which a truecolour triple holds.
+fn parse_entry(entry: &str) -> StyleValue {
+    let (_, channels) = entry.split_once(':').unwrap();
+    let (channels, mods) = channels.rsplit_once(",mods=").unwrap();
+    let (fg, rest) = channels.split_once(",bg=").unwrap();
+    let (bg, ul) = rest.split_once(",ul=").unwrap();
+    StyleValue {
+        fg: parse_color(fg.strip_prefix("fg=").unwrap()).unwrap(),
+        bg: parse_color(bg).unwrap(),
+        ul: parse_color(ul).unwrap(),
+        mods: mods.parse().unwrap(),
+    }
+}
+
+/// One frame header back to its geometry and scroll state.
+fn parse_header(header: &str) -> (u16, u16, Option<usize>, bool) {
+    let mut parts = header.split(", ");
+    parts.next().unwrap();
+    let geometry = parts.next().unwrap();
+    let (width, height) = geometry.split_once('x').unwrap();
+    let top = parts.next().unwrap().strip_prefix("top=").unwrap();
+    let has_new = parts.next().unwrap().strip_prefix("has_new=").unwrap();
+    (
+        width.parse().unwrap(),
+        height.parse().unwrap(),
+        if top == "none" {
+            None
+        } else {
+            Some(
+                top.strip_prefix("Some(")
+                    .and_then(|rest| rest.strip_suffix(')'))
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            )
+        },
+        has_new == "true",
+    )
+}
+
+/// The section back to its frames: one palette plus one `frame i/n`
+/// block per frame, one shape line then one style-id line per row,
+/// cells in column order.
+fn parse_section(section: &str) -> Vec<FrameShape> {
+    fn wire(kind: char) -> Option<(ShapeKind, bool)> {
+        match kind {
+            '.' => Some((ShapeKind::Blank, false)),
+            ':' => Some((ShapeKind::Blank, true)),
+            '#' => Some((ShapeKind::Content, false)),
+            'W' => Some((ShapeKind::Content, true)),
+            '>' => Some((ShapeKind::Continuation, false)),
+            '~' => Some((ShapeKind::Exempt, false)),
+            _ => None,
+        }
+    }
+    let rest = section.split("### Frame shapes\n\n").nth(1).unwrap();
+    let mut pieces = rest.split("palette ");
+    pieces.next().unwrap();
+    let mut frames = Vec::new();
+    for piece in pieces {
+        let mut lines = piece.lines();
+        let palette = lines
+            .next()
+            .unwrap()
+            .split(' ')
+            .map(parse_entry)
+            .collect::<Vec<_>>();
+        let (width, height, top, has_new) = parse_header(lines.next().unwrap());
+        let mut rows = Vec::new();
+        while let Some(shape) = lines.next() {
+            if shape.is_empty() {
+                break;
+            }
+            let shape = shape
+                .strip_prefix("shape \"")
+                .and_then(|line| line.strip_suffix('"'))
+                .unwrap();
+            let style = lines
+                .next()
+                .unwrap()
+                .strip_prefix("style \"")
+                .and_then(|line| line.strip_suffix('"'))
+                .unwrap();
+            let cells = shape
+                .chars()
+                .zip(style.split(','))
+                .map(|(glyph, id)| {
+                    let (kind, wide) = wire(glyph).unwrap();
+                    ShapeCell::new(kind, wide, id.parse().unwrap())
+                })
+                .collect::<Vec<_>>();
+            rows.push(ShapeRow::new(cells));
+        }
+        frames.push(FrameShape {
+            width,
+            height,
+            top,
+            has_new,
+            palette,
+            rows,
+        });
+    }
+    frames
+}
+
+/// The section of `saved` past its `### Frame shapes` heading.
+fn section(saved: &str) -> String {
+    format!(
+        "### Frame shapes{}",
+        saved
+            .split("### Frame shapes")
+            .nth(1)
+            .expect("shapes section")
+    )
+}
+
+#[test]
+fn frame_shapes_round_trip_through_write() {
+    // `docs/user/reporting.md`, "Diagnostics" (kept frames oldest first, one `frame i/n` block
+    // per frame in ring order) plus `docs/invocation.md`, "Commands and flags" (each row lists
+    // its cells in column order, left to right; rows run top to bottom; palette entries appear
+    // in first-appearance order, numbered from 0): the dump parses back into the seed frames,
+    // so the round trip proves the values survive in that documented order, not exact bytes.
+    let root = fakes::TempDir::new("fiber-feedback-shapes");
+    let clock = FakeClock::new();
+    let doctor = || Ok(DOCTOR.to_owned());
+    let frames = two_frames();
+    let done = write(
+        DESCRIPTION,
+        None,
+        &ctx_frames(
+            root.path(),
+            clock.as_ref(),
+            &doctor,
+            &stub_diagnostics,
+            &frames,
+        ),
+    )
+    .unwrap();
+    let saved = fs::read_to_string(&done.path).unwrap();
+    let section = section(&saved);
+    assert_eq!(parse_section(&section), frames);
+    assert!(section.is_ascii(), "the section carries no glyphs");
+    assert!(
+        !section.contains("\u{1f511}"),
+        "the emoji-width lead leaves no glyph"
+    );
+}
+
+#[test]
+fn empty_snapshot_renders_only_the_notice() {
+    let root = fakes::TempDir::new("fiber-feedback-shapes-empty");
+    let clock = FakeClock::new();
+    let doctor = || Ok(DOCTOR.to_owned());
+    let done = write(
+        DESCRIPTION,
+        None,
+        &ctx(root.path(), clock.as_ref(), &doctor),
+    )
+    .unwrap();
+    let saved = fs::read_to_string(&done.path).unwrap();
+    assert!(saved.ends_with(EMPTY_SHAPES), "{saved}");
+    let section = section(&saved);
+    assert_eq!(section, EMPTY_SHAPES);
+    assert!(!section.contains("frame 1/"), "{section}");
+    assert!(!section.contains("palette "), "{section}");
+}
+
+/// `count` frames of one blank cell, each with its own scrolled top.
+fn tops(count: usize) -> Vec<FrameShape> {
+    (0..count)
+        .map(|at| FrameShape {
+            width: 1,
+            height: 1,
+            top: Some(at),
+            has_new: false,
+            palette: vec![base_style()],
+            rows: vec![row(blanks(1))],
+        })
+        .collect()
+}
+
+#[test]
+fn frame_cap_keeps_the_newest_twenty() {
+    // `docs/user/reporting.md`, "Diagnostics" (at most the newest 20 frame shapes) plus
+    // `docs/invocation.md`, "Commands and flags" and docs/tui.md `/feedback` row (last 20 painted
+    // frames): the writer keeps the newest 20 and drops the oldest first.
+    let root = fakes::TempDir::new("fiber-feedback-shapes-cap");
+    let clock = FakeClock::new();
+    let doctor = || Ok(DOCTOR.to_owned());
+    let written = |frames: &[FrameShape]| {
+        let done = write(
+            DESCRIPTION,
+            None,
+            &ctx_frames(
+                root.path(),
+                clock.as_ref(),
+                &doctor,
+                &stub_diagnostics,
+                frames,
+            ),
+        )
+        .unwrap();
+        section(&fs::read_to_string(&done.path).unwrap())
+    };
+    let one = written(&tops(1));
+    assert!(one.contains("1 frame, oldest first"), "{one}");
+    assert!(one.contains("frame 1/1, 1x1, top=Some(0)"), "{one}");
+    let nineteen = written(&tops(19));
+    assert!(nineteen.contains("19 frames, oldest first"), "{nineteen}");
+    assert!(
+        nineteen.contains("frame 1/19, 1x1, top=Some(0)"),
+        "{nineteen}"
+    );
+    assert!(
+        nineteen.contains("frame 19/19, 1x1, top=Some(18)"),
+        "{nineteen}"
+    );
+    let twenty = written(&tops(21 - 1));
+    assert!(twenty.contains("20 frames, oldest first"), "{twenty}");
+    assert!(twenty.contains("frame 1/20, 1x1, top=Some(0)"), "{twenty}");
+    assert!(
+        twenty.contains("frame 20/20, 1x1, top=Some(19)"),
+        "{twenty}"
+    );
+    let twenty_one = written(&tops(21));
+    assert!(
+        twenty_one.contains("20 frames, oldest first"),
+        "{twenty_one}"
+    );
+    assert!(
+        twenty_one.contains("frame 1/20, 1x1, top=Some(1)"),
+        "the 21st frame drops exactly the first: {twenty_one}"
+    );
+    assert!(
+        twenty_one.contains("frame 20/20, 1x1, top=Some(20)"),
+        "{twenty_one}"
+    );
+}
+
+#[test]
+fn the_link_never_carries_shapes() {
+    let root = fakes::TempDir::new("fiber-feedback-shapes-link");
+    let clock = FakeClock::new();
+    let doctor = || Ok(DOCTOR.to_owned());
+    let frames = two_frames();
+    let done = write(
+        DESCRIPTION,
+        None,
+        &ctx_frames(
+            root.path(),
+            clock.as_ref(),
+            &doctor,
+            &stub_diagnostics,
+            &frames,
+        ),
+    )
+    .unwrap();
+    let (_, body) = linked(&done.link);
+    for marker in ["### Frame shapes", "palette ", "frame 1/", "\u{1f511}"] {
+        assert!(!body.contains(marker), "full link carries {marker}: {body}");
+    }
+    // A report too long for the link falls back to the description, and
+    // that form carries no shapes either.
+    let long = "a".repeat(3000);
+    let done = write(
+        &long,
+        None,
+        &ctx_frames(
+            root.path(),
+            clock.as_ref(),
+            &doctor,
+            &stub_diagnostics,
+            &frames,
+        ),
+    )
+    .unwrap();
+    let (_, body) = linked(&done.link);
+    assert!(body.contains("attach the report file"), "{body}");
+    for marker in ["### Frame shapes", "palette ", "frame 1/", "\u{1f511}"] {
+        assert!(!body.contains(marker), "fallback link carries {marker}");
+    }
+    assert!(
+        fs::read_to_string(&done.path)
+            .unwrap()
+            .contains("### Frame shapes"),
+        "the fallback report still holds the file-only section"
+    );
+}
+
+#[test]
+fn out_of_range_style_ids_fall_back_to_base() {
+    let root = fakes::TempDir::new("fiber-feedback-shapes-fallback");
+    let clock = FakeClock::new();
+    let doctor = || Ok(DOCTOR.to_owned());
+    // A hand-built snapshot, never the ring's: its id names no palette
+    // entry, so the render falls back to the base slot.
+    let frames = vec![FrameShape {
+        width: 1,
+        height: 1,
+        top: None,
+        has_new: false,
+        palette: Vec::new(),
+        rows: vec![row(vec![ShapeCell::new(ShapeKind::Content, false, 7)])],
+    }];
+    let done = write(
+        DESCRIPTION,
+        None,
+        &ctx_frames(
+            root.path(),
+            clock.as_ref(),
+            &doctor,
+            &stub_diagnostics,
+            &frames,
+        ),
+    )
+    .unwrap();
+    let saved = fs::read_to_string(&done.path).unwrap();
+    assert!(section(&saved).contains("style \"0\""), "{saved}");
 }

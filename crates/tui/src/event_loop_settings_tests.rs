@@ -10,8 +10,9 @@ use ratatui::style::Color;
 use super::Input;
 use super::tests::{DEADLINE, feed, new_loop, open};
 use crate::Configure;
-use crate::configure::{Shown, WriteScope};
-use crate::configure_fake::{Fake, row};
+use crate::configure::{SettingControl, Shown, WriteScope};
+use crate::configure_fake::{Fake, controlled, placed};
+use contract::settings::SettingsTab;
 use fakes::Deadline;
 
 /// The bytes that open `/settings`, then `then`, one input each.
@@ -23,13 +24,27 @@ fn inputs(then: &[&str]) -> Vec<Input> {
         .collect()
 }
 
-/// A seam over the `tui.theme` row alone.
+/// The bytes that open the `/theme` choices, then `then`, one input each.
+fn theme_inputs(then: &[&str]) -> Vec<Input> {
+    ["/theme", "\r"]
+        .iter()
+        .chain(then)
+        .map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()))
+        .collect()
+}
+
+/// A seam over the `tui.theme` row alone, on the first tab.
 fn theme_seam() -> Arc<Fake> {
-    let mut fake = Fake::new(vec![row(
-        "tui.theme",
-        Shown::Unset,
-        "default",
-        WriteScope::Any { repo: false },
+    let mut fake = Fake::new(vec![placed(
+        controlled(
+            "tui.theme",
+            Shown::Unset,
+            "default",
+            WriteScope::Any { repo: false },
+            SettingControl::Theme,
+        ),
+        SettingsTab::Appearance,
+        "Theme",
     )]);
     fake.themes = vec!["solar".to_owned()];
     Arc::new(fake)
@@ -91,9 +106,9 @@ fn a_theme_choice_repaints_the_next_frame() {
     lp.var = Box::new(|name| (name == "COLORTERM").then(|| "truecolor".to_owned()));
     lp.app
         .set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
-    // Enter opens the choices on `auto`; two Downs reach `light`.
+    // `/theme` opens the choices on `auto`; two Downs reach `light`.
     let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
-        feed(&mut lp, inputs(&["\r", "\x1b[B", "\x1b[B", "\r"]));
+        feed(&mut lp, theme_inputs(&["\x1b[B", "\x1b[B", "\r"]));
         lp
     });
     let written = lp.screen.backend().buffer();
@@ -120,7 +135,7 @@ fn a_bad_theme_file_follows_the_terminal_with_its_notice() {
         .set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     // `solar` is the fourth choice; the seam cannot read its file.
     let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
-        feed(&mut lp, inputs(&["\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]));
+        feed(&mut lp, theme_inputs(&["\x1b[B", "\x1b[B", "\x1b[B", "\r"]));
         lp
     });
     assert_eq!(

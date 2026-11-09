@@ -890,13 +890,14 @@ fn budgeted(
         .into_iter()
         .map(|message| contract::inbox::Delivery::Steer(message, support::ignore()))
         .collect();
-    // The scripted spend is far past the default handoff trigger; these
+    // The scripted spend is far past the default compaction trigger; these
     // tests are about the budget alone.
-    let mut session =
-        Session::open(script, during, vec![weather()], model).handoff(r#loop::HandoffSettings {
+    let mut session = Session::open(script, during, vec![weather()], model).compaction(
+        r#loop::CompactionSettings {
             enabled: false,
-            ..r#loop::HandoffSettings::default()
-        });
+            ..r#loop::CompactionSettings::default()
+        },
+    );
     if let Some(usd) = usd {
         session = session.budget(Some(usd));
     }

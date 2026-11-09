@@ -352,7 +352,7 @@ jobs:
         with:
           tool: cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
-      # and fish (crates/main/tests/completion.rs).
+      # and fish (crates/main/tests/commands/completion.rs).
       # The archives are cached per runner image and architecture. The key
       # names the package list: change it here, in mutants-scheduled.yml and
       # in scripts/install-shells together. ImageOS and ImageVersion are not in
@@ -659,7 +659,7 @@ jobs:
           # an executed id is decided and only a skipped one is unrunnable.
           # A failure list past the argument limit fails this step, failing
           # closed.
-          if NEXTEST_PROFILE=ci cargo nextest run --no-fail-fast --exact "${names[@]}"; then
+          if NEXTEST_PROFILE=ci cargo nextest run --no-fail-fast -- --exact "${names[@]}"; then
             echo "the base rerun passed"
           else
             echo "the base rerun failed: the outcomes below decide the break"
@@ -1162,7 +1162,7 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0,cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
-      # and fish (crates/main/tests/completion.rs).
+      # and fish (crates/main/tests/commands/completion.rs).
       - *shell-debs-key
       - *shell-debs-restore
       - *install-shells

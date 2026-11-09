@@ -92,6 +92,11 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   invalid value fails with `invalid_arguments` and lists the roles in full
   on one line, up to 3 closest references nearest-first with ties in sorted
   order, and names `delegate_models` for the rest.
+- A thinking level the model does not take fails the same way, and its reason
+  names the levels that model takes before the roles line.
+- A model refusal names at most 3 suggested references and one model's
+  thinking levels. Apart from the names it echoes, such as roles, the model
+  asked for and suggested model ids, which print in full, it stays within 2 KB.
 - Neither the roles nor the references appear in any tool definition or the
   system prompt. They change when config changes, when a provider withdraws a
   model, or when model discovery refreshes, and a tool definition that changes
@@ -115,7 +120,9 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - The model is fixed when the delegate starts and never changes.
 - A reload refreshes the parent's lookup and catalogue, so later spawns
   see the reloaded models; a running delegate keeps the model it
-  started with. A reload measures a cached model list stale when the provider's extension source is newer than the cache; start-time and background refresh still measure age alone, and #4326 makes them one.
+  started with. Start-time and background refresh use the configured
+  `model_lists.refresh_after` age and the provider-source mtime; reload refreshes
+  only when the source is newer than the cached copy, with no maximum age.
 
 ## Talking to a delegate
 
@@ -370,7 +377,7 @@ path is `invalid_arguments` and a git failure is `io_failed`.
 - With `isolation: worktree`, the fork records its own worktree on
   `session_started`, separately from the worktree in its inherited history.
   It shares both worktree locks for its life. Its parent releases the new
-  worktree's handoff share only after the durable `session_started`
+  worktree's transfer share only after the durable `session_started`
   acknowledges adoption; failed startup retains that share through child exit.
 - When the fork's workspace differs from its parent's, its first user message
   includes this paragraph before the unattended instruction and task:

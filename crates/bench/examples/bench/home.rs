@@ -23,7 +23,7 @@ pub(crate) const KEY_VAR: &str = "FIBER_TEST_FAKE_KEY";
 const SESSION_IDLE_EXIT_MS: u64 = 3_600_000;
 
 /// How long the hub a terminal started stays up after its last client
-/// leaves, as `crates/main/tests/terminal.rs` sets it.
+/// leaves, as `crates/main/tests/screens/terminal.rs` sets it.
 const HUB_IDLE_EXIT_MS: u64 = 1_000;
 
 /// Every log text read from a diagnostic home's `logs/`, or why one could

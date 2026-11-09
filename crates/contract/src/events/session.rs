@@ -210,8 +210,8 @@ pub enum InputItem {
         /// The jobs.
         job_ids: Vec<JobId>,
     },
-    /// A `handoff` command sent between turns.
-    Handoff {
+    /// A `compact` command sent between turns.
+    Compaction {
         /// The command.
         command_id: CommandId,
     },

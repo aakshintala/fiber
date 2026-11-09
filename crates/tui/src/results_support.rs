@@ -37,15 +37,12 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
     };
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
-    assert!(
-        app.on_line(Line::Hub(contract::HubLine {
-            kind: HubEventKind::HubHello,
-            ts: 0,
-            schema_version: contract::SCHEMA_VERSION,
-            payload: serde_json::Map::new(),
-        }))
-        .is_empty()
-    );
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_line(session(
         "turn_started",

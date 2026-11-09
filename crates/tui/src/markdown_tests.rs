@@ -3,7 +3,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
-use super::{CopyTarget, render};
+use super::{CopyTarget, render, render_prompt};
 use crate::theme::{Role, style};
 use contract::events::EventKind;
 
@@ -57,6 +57,42 @@ fn a_paragraph_carries_the_full_text_colour() {
             style(Role::Text)
         ))]
     );
+}
+
+#[test]
+fn prompt_headings_keep_the_marker_and_heading_style() {
+    let rendered = render_prompt("## comment", 40);
+    assert_eq!(texts_prompt("## comment", 40), vec!["## comment"]);
+    let heading = style_at(&rendered.lines[0], 0);
+    assert_eq!(heading.fg, fg(Role::Heading));
+    assert!(heading.add_modifier.contains(Modifier::BOLD));
+}
+
+/// Every prompt-rendered line's text.
+fn texts_prompt(markdown: &str, width: u16) -> Vec<String> {
+    render_prompt(markdown, width)
+        .lines
+        .iter()
+        .map(text)
+        .collect()
+}
+
+#[test]
+fn prompt_inline_bold_and_ordered_lists_keep_reply_styles() {
+    let rendered = render_prompt("**bold**\n\n1. one\n2. two", 40);
+    assert!(
+        style_at(&rendered.lines[0], 0)
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+    assert_eq!(
+        texts_prompt("**bold**\n\n1. one\n2. two", 40),
+        vec!["bold", "", "1. one", "2. two"]
+    );
+    assert_eq!(style_at(&rendered.lines[2], 0).fg, fg(Role::Accent));
+    let code = render_prompt("```\nx\n```", 12);
+    assert_eq!(code.lines[0].width(), 12);
+    assert_eq!(code.lines[2].width(), 12);
 }
 
 #[test]
@@ -1254,7 +1290,7 @@ fn no_color_code_slabs_draw_their_own_sides_in_the_conversation() {
         let left = u16::try_from(at).expect("a column").saturating_sub(7);
         assert_side(&buf, left, y);
         assert!(left > 0, "the slab nests inside the turn's side");
-        assert_eq!(buf[(0, y)].symbol(), "│", "{row:?}");
+        assert_eq!(buf[(2, y)].symbol(), "│", "{row:?}");
         // The slab's trailing side ends the code row before the turn's
         // own right side: the last box side inside it.
         let right = glyphs[..78]
@@ -1290,9 +1326,9 @@ fn no_color_code_slabs_draw_their_own_sides_in_the_conversation() {
         if markdown.starts_with('>') {
             // The quote bars stay outside the slab's own sides: the
             // turn's side, the bar, then the slab's side.
-            assert!(row.starts_with("││ │"), "{row:?}");
+            assert!(row.starts_with("  ││ │"), "{row:?}");
         } else {
-            assert!(row.starts_with("││   1  "), "{row:?}");
+            assert!(row.starts_with("  ││   1  "), "{row:?}");
         }
     }
 }

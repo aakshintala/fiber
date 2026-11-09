@@ -5,6 +5,7 @@ use serde_json::json;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
+use super::via;
 use super::{
     Kind, Kinds, capitalise, content_text, count, cut, duration, heading, headline, kind, money,
     seconds, spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
@@ -1086,7 +1087,7 @@ const KIND_WORDS: [(&str, &str); 11] = [
     ("delegate_models", "delegate"),
     ("session_list", "session"),
     ("session_search", "session"),
-    ("handoff", "session"),
+    ("compact", "session"),
     ("name_session", "session"),
 ];
 
@@ -1282,4 +1283,14 @@ fn docs_kind_table_matches_code() {
         assert!(tools.contains(name), "{name} has no row in the table");
     }
     assert_eq!(tools.len(), contract::tool::BUILT_IN_TOOLS.len());
+}
+
+#[test]
+fn via_names_the_extensions_that_rewrote_a_call() {
+    assert_eq!(via(&["guard".to_owned()]).as_deref(), Some("via guard"));
+    assert_eq!(
+        via(&["guard".to_owned(), "audit".to_owned()]).as_deref(),
+        Some("via guard, audit")
+    );
+    assert_eq!(via(&[]), None);
 }

@@ -377,6 +377,16 @@ impl Switching {
             .map_err(|error| crate::failed(error.code(), error))
     }
 
+    /// The request tags fixed when the session started: the reviewer's
+    /// reconstructed connection reads them here, never from the reloaded
+    /// configuration (`docs/configuration.md`, "When Fiber reads
+    /// configuration").
+    pub(crate) fn databricks_request_tags(
+        &self,
+    ) -> Option<&std::collections::BTreeMap<String, String>> {
+        self.startup_config.databricks_request_tags()
+    }
+
     pub(crate) fn reviewer_for(
         self: &Arc<Self>,
         route: &r#loop::ReloadRoute,
@@ -474,6 +484,7 @@ impl Switching {
                     .startup_config
                     .flag("cache.diagnostics", None)
                     .unwrap_or_default(),
+                databricks_request_tags: shared.startup_config.databricks_request_tags().cloned(),
             };
             let provider = connect(
                 resolved,
@@ -640,7 +651,7 @@ type Read = Result<(Got, Option<Result<Got, Failure>>), Failure>;
 
 /// Prepares a switch from the same calls `parts_in` makes for the startup
 /// model: resolving, thinking, the reviewer's model, the credential and
-/// Lua provider, connecting, the cache lifetime, the handoff settings, the
+/// Lua provider, connecting, the cache lifetime, the compaction settings, the
 /// addendum and the hosted search. Every check that can reject runs before
 /// the read, so a read's key is cached only for an admitted switch; a
 /// failed read rejects with its own code and caches nothing. The keys and
@@ -743,6 +754,7 @@ pub(crate) fn prepare(
             .config
             .flag("cache.diagnostics", None)
             .unwrap_or_default(),
+        databricks_request_tags: switching.startup_config.databricks_request_tags().cloned(),
     };
     // The session's route with its observed factory when the session
     // shared its writer; without one the switch carries no factories.
@@ -860,7 +872,7 @@ pub(crate) fn prepare(
         cache_lifetime: crate::settings::cache_lifetime(&now.config, &reference),
         context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
-        handoff: crate::handoff::handoff_settings(&now.config, &reference),
+        compaction: crate::compaction::compaction_settings(&now.config, &reference),
         reviewer,
         observe,
         reviewer_observe,

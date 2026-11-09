@@ -25,7 +25,7 @@ fn attached() -> App {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
     app.attach(contract::SessionId(S_A.to_owned()));
     app
 }
@@ -144,8 +144,8 @@ fn header(app: &App) -> String {
     panel(app).first().cloned().unwrap_or_default()
 }
 
-/// The form's title at the app's default width: the column is 80 wide
-/// and the panel pads to its inset of 78. `questions` is `None` on a
+/// The form's title at the app's default width: the column is 79 wide
+/// past the grip and the panel pads to its inset of 77. `questions` is `None` on a
 /// one-question panel, `place` only when more than one request waits.
 fn form_title(session: &str, questions: Option<usize>, place: Option<(usize, usize)>) -> String {
     let mut left = format!("Question from {session}");
@@ -155,17 +155,17 @@ fn form_title(session: &str, questions: Option<usize>, place: Option<(usize, usi
     if let Some((k, n)) = place {
         left.push_str(&format!(" · {k} of {n}"));
     }
-    let pad = 78_usize
+    let pad = 77_usize
         .saturating_sub(crate::format::width(&left).saturating_add("Esc: chat about this".len()))
         .max(1);
     format!("{left}{}{}", " ".repeat(pad), "Esc: chat about this")
 }
 
 /// An approval's header for `k` of `n` at the app's default width: the
-/// column is 80 wide and the panel pads to its inset of 78.
+/// column is 79 wide past the grip and the panel pads to its inset of 77.
 fn approval_header(k: usize, n: usize) -> String {
     let left = format!("Approval {k} of {n} · {S_A}");
-    let pad = 78_usize
+    let pad = 77_usize
         .saturating_sub(crate::format::width(&left).saturating_add("Esc puts it aside".len()))
         .max(1);
     format!("{left}{}{}", " ".repeat(pad), "Esc puts it aside")
@@ -318,6 +318,69 @@ fn resolved_declined() -> contract::Envelope {
 /// The lines folding `line` sends.
 fn fold(app: &mut App, line: contract::Envelope) -> Vec<String> {
     app.on_line(Line::Session(line))
+}
+
+#[test]
+fn reply_answer_reaches_its_handler() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    // Declining answers with a `reply` the accept then cancels: the
+    // handler, not the generic path, sends the `cancel`.
+    let (id, value) = without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
+    assert_eq!(value["command"], "reply");
+    assert_eq!(value["session_id"], S_A);
+    assert_eq!(
+        value["args"],
+        json!({"request_id": "r_c", "declined": true})
+    );
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Reply));
+    let cancel = cancels(&mut app, accepted(S_A, &id), S_A);
+    assert_ne!(cancel, id);
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn reply_tag_is_gone_after_answer() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let (id, _) = sent(&mut app, Key::Enter);
+    fold(&mut app, accepted(S_A, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn reply_after_refusal() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let (id, _) = sent(&mut app, Key::Enter);
+    assert!(app.panel().is_none());
+    assert!(fold(&mut app, rejected(S_A, &id)).is_empty());
+    // The refusal restores the question, and its wait goes with the
+    // entry.
+    assert_eq!(header(&app), form_title(S_A, None, None));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_lost_reply_line_settles_its_tag_and_restores_the_queue() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter answers");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap();
+    let id = line["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(crate::app::Waiting::Reply));
+    app.write_failed_inner(&lines);
+    // The lost line settles the wait with its entry, and the failure
+    // puts the question back where it was.
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(!app.outbox.pending.contains_key(id));
+    assert_eq!(header(&app), form_title(S_A, None, None));
 }
 
 /// The single `cancel` line folding `line` sends: its command id, after
@@ -498,13 +561,13 @@ fn the_form_keys_go_through_the_keyset() {
     assert_eq!(tab_line(&app), "←  ✔ Base    ☐ Name    ✔ Submit  →");
     // Nine panel lines on the bottom rows: the words row is the seventh,
     // inset two columns with the bottom edge below.
-    assert_eq!(caret(&app), Some((8, 8)));
+    assert_eq!(caret(&app), Some((9, 8)));
     for ch in "ab".chars() {
         press(&mut app, Key::Char(ch));
     }
-    assert_eq!(caret(&app), Some((10, 8)));
+    assert_eq!(caret(&app), Some((11, 8)));
     stroke(&mut app, "left");
-    assert_eq!(caret(&app), Some((9, 8)));
+    assert_eq!(caret(&app), Some((10, 8)));
     assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");
     stroke(&mut app, "shift+tab");
     assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");

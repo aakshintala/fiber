@@ -220,7 +220,7 @@ impl Loop {
             | Delivery::Sandbox(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Reply(..)
             | Delivery::Close(_)
             | Delivery::JobLine(_)

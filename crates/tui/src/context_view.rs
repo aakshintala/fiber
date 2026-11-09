@@ -43,7 +43,7 @@ pub(crate) struct ContextFold {
 }
 
 impl ContextFold {
-    /// Folds preamble sizes, tool results and handoffs from the session stream.
+    /// Folds preamble sizes, tool results and compactions from the session stream.
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
         match envelope.kind() {
             EventKind::SessionStarted => {
@@ -91,7 +91,7 @@ impl ContextFold {
                 }
             }
             EventKind::ToolCallCompleted => self.tool_completed(envelope),
-            EventKind::HandoffCompleted
+            EventKind::CompactionCompleted
                 if envelope
                     .payload
                     .get("outcome")
@@ -145,8 +145,8 @@ impl ContextFold {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -255,8 +255,8 @@ fn role_of(category: Category) -> Role {
 
 /// The bar as coloured runs: one █ run per non-empty category in its
 /// role, ▁ in `rule` for the room left, one │ in `attention` at the
-/// handoff point. The bar spans `span` tokens in `cells` cells; with
-/// no handoff point the frame passes the window and no trigger, so no
+/// compaction point. The bar spans `span` tokens in `cells` cells; with
+/// no compaction point the frame passes the window and no trigger, so no
 /// marker draws. No run when `cells` or `span` is 0.
 pub(crate) fn bar(
     fill: &[(Category, u64)],
@@ -321,30 +321,30 @@ pub(crate) fn bar(
     runs
 }
 
-/// The automatic handoff point in force: known from the session's own
+/// The automatic compaction point in force: known from the session's own
 /// `preamble_built`, known off when that build sets none, or unknown
 /// when the session logged no `preamble_built` of its own. A rewind, a
-/// fork or a workspace change continues another log, whose handoff point
+/// fork or a workspace change continues another log, whose compaction point
 /// the client never learns (`docs/tui.md`, "Swapped views").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Handoff {
-    /// The handoff runs at this context size in tokens.
+pub(crate) enum Compaction {
+    /// The compaction runs at this context size in tokens.
     At(u64),
-    /// Automatic handoff is off.
+    /// Automatic compaction is off.
     Off,
     /// No own `preamble_built` named one.
     Unknown,
 }
 
-/// The current context size, model window and automatic handoff point.
+/// The current context size, model window and automatic compaction point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Sized {
     /// The total context in tokens.
     pub(crate) total: u64,
     /// The model's context window in tokens.
     pub(crate) window: u64,
-    /// The automatic handoff point in force.
-    pub(crate) trigger: Handoff,
+    /// The automatic compaction point in force.
+    pub(crate) trigger: Compaction,
 }
 
 /// The context rows and footer for the swapped view.
@@ -366,8 +366,8 @@ pub(crate) fn frame(
             u128::from(sized.total) * 100 / u128::from(sized.window)
         };
         let mut tail = format!(" · {percent}% of the {} window", compact(sized.window));
-        if let Handoff::At(point) = sized.trigger {
-            tail.push_str(&format!(" · automatic handoff at {}", compact(point)));
+        if let Compaction::At(point) = sized.trigger {
+            tail.push_str(&format!(" · automatic compaction at {}", compact(point)));
         }
         rows.push(indented(vec![
             (
@@ -384,12 +384,12 @@ pub(crate) fn frame(
             (Category::ToolResults, 0),
             (Category::Messages, sized.total),
         ]);
-        // The bar spans to a known handoff point, not the window; with
-        // no handoff point it spans the window and draws no marker. A
+        // The bar spans to a known compaction point, not the window; with
+        // no compaction point it spans the window and draws no marker. A
         // window of 0 draws no bar.
         let trigger = match sized.trigger {
-            Handoff::At(point) => Some(point),
-            Handoff::Off | Handoff::Unknown => None,
+            Compaction::At(point) => Some(point),
+            Compaction::Off | Compaction::Unknown => None,
         };
         let span = trigger.unwrap_or(sized.window);
         // The bar leaves the indent's two columns.
@@ -405,7 +405,7 @@ pub(crate) fn frame(
                 .map(|(text, role)| (text.clone(), None, Ink::Role(*role))),
         );
         rows.push(bar_row);
-        if let Handoff::At(point) = sized.trigger {
+        if let Compaction::At(point) = sized.trigger {
             // The label ends under the marker, in attention; the pad
             // counts the indent's two columns.
             let mut end = 0usize;
@@ -418,7 +418,7 @@ pub(crate) fn frame(
             let (pad, label) = if runs.is_empty() {
                 (String::new(), String::new())
             } else {
-                let label = format!("handoff {}", compact(point));
+                let label = format!("compaction {}", compact(point));
                 (
                     " ".repeat(
                         end.saturating_add(2)
@@ -458,15 +458,18 @@ pub(crate) fn frame(
                 Ink::Muted,
             )));
         }
-        // Only a known-off handoff draws the off row: an unknown one —
+        // Only a known-off compaction draws the off row: an unknown one —
         // a continuation with no `preamble_built` of its own — draws
         // neither a marker nor a row.
-        if sized.trigger == Handoff::Off {
-            rows.push(indented(row("automatic handoff off", Ink::Muted)));
+        if sized.trigger == Compaction::Off {
+            rows.push(indented(row("automatic compaction off", Ink::Muted)));
         }
         rows.push(indented(row("Largest tool results", Ink::Heading)));
         if fold.largest.is_empty() {
-            rows.push(indented(row("  none since the last handoff", Ink::Muted)));
+            rows.push(indented(row(
+                "  none since the last compaction",
+                Ink::Muted,
+            )));
         } else {
             for result in &fold.largest {
                 let size = rate.tokens(result.bytes).map_or_else(
@@ -489,6 +492,7 @@ pub(crate) fn frame(
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Context".to_owned(),
         command: "/context".to_owned(),
         rows,

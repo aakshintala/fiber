@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
-use contract::diag::{Op, Timing};
+use contract::diag::{Op, Timing, TimingName};
 use contract::images::{ImageError, Images};
 use contract::provider::ImageRef;
 use contract::shapes::ContentPart;
@@ -142,7 +142,7 @@ impl Probe {
     fn timing(&self) -> Timing {
         let inner = Arc::clone(&self.inner);
         Arc::new(
-            move |op: Op, tool: Option<&str>, started: Option<Instant>| {
+            move |op: Op, name: Option<TimingName>, started: Option<Instant>| {
                 inner.calls.fetch_add(1, Ordering::SeqCst);
                 if inner.decline {
                     return None;
@@ -152,7 +152,10 @@ impl Probe {
                     inner: Arc::clone(&inner),
                     start: inner.clock.now(),
                     op,
-                    tool: tool.map(str::to_owned),
+                    tool: name.and_then(|name| match name {
+                        TimingName::Tool(tool) => Some(tool.to_owned()),
+                        TimingName::Job(_) => None,
+                    }),
                     started,
                 };
                 Some(Box::new(scope) as Box<dyn Send>)

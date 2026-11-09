@@ -6,6 +6,9 @@ now, not a plan. It is settled by
 [The tool contract: what every tool shares](https://github.com/aakshintala/fiber/issues/14);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
+The first-party `codemode` extension adds one tool that runs a script calling
+the session's other tools (`docs/extensions.md`, "Code mode").
+
 Vocabulary is `GLOSSARY.md`. Tool call, effect, artifact, participant, seam,
 extension and event mean what it says there and nothing else. How effects are
 judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
@@ -169,11 +172,11 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   separate artifact text, the result carries no `kept`, since its ranges would
   not index that artifact.
 - `control`: instructions to the loop, absent on most results. Four fields
-  are defined. `handoff`, a handoff note: the loop restarts the model's
-  context from it at the step boundary (`docs/handoff.md`). `questions`, a
+  are defined. `compact`, a compaction note: the loop restarts the model's
+  context from it at the step boundary (`docs/compaction.md`). `questions`, a
   `questions` array: once every call in the step has completed, the turn ends
   `completed` with the questions of every call that set it, in call order, on
-  `turn_completed`, after any handoff in the step. `name`, a session name: the
+  `turn_completed`, after any compaction in the step. `name`, a session name: the
   loop writes `session_named` just before the call's `tool_call_completed`, or
   fails the call `name_pinned` while the person's name pins it. `skill`, a
   skill the call loaded: the loop folds every completed call's into the
@@ -222,7 +225,7 @@ by content.
   no dedicated tool for it. A read of `artifacts/` has only the `reads` effect,
   so it is never reviewed.
 - There is no cap across one step's results. When they overflow the context
-  window, the overflow rule in `docs/handoff.md` ("Overflow") moves them to
+  window, the overflow rule in `docs/compaction.md` ("Overflow") moves them to
   the session's `artifacts/`.
 - A cut read continues from an offset, a cut fetch leaves the whole page in the
   artifact, and search runs through the shell ("Search").
@@ -418,8 +421,8 @@ path's directory, ending in `/`.
   down still meets the stored hash and is refused with the message that it
   changed since it was read. A log written before the field existed rebuilds
   nothing, as when the record started empty.
-- A handoff clears what was seen, because the new context has not seen the
-  file (`docs/handoff.md`); a `write` there is refused until the file is read
+- A compaction clears what was seen, because the new context has not seen the
+  file (`docs/compaction.md`); a `write` there is refused until the file is read
   again.
 
 ### How a change lands
@@ -653,8 +656,6 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - It was started with `run_in_background`, `tty` or `monitor`, in which
     case it moves at once.
   - A driver sends the `background` driver command (`docs/invocation.md`).
-  - Its shell exits while processes it started are still running ("When a
-    command ends").
 - Moving never kills anything and never restarts anything. The tool call
   completes with the job's receipt, which says the command is still
   running, why it moved, the `job_id` and the output file's path. When
@@ -666,18 +667,40 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
 ### When a command ends
 
-- A command runs until its process group is empty, not until its shell
-  exits and not until its output pipe closes. Fiber checks whether the
-  group still has members (`kill(-pgid, 0)`).
-- If the shell exits and processes it started are still in the group, the
-  command moves to the background at once. The receipt gives the shell's
-  exit code and names what was left running (command names and process
-  ids). The job ends when the group is empty, and keeps the command's
-  timeout. A receipt for a move that kept a timeout ends with the stop
-  time in UTC, the timeout, and the long-running-process hint, for
-  example (``Fiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000).
-  To keep a long-running process such as a server, start it with
-  `run_in_background` and no timeout, or with `detach`. ``).
+- A command with no job list (a run that cannot move) runs until its
+  process group is empty, not until its shell exits and not until its
+  output pipe closes. Fiber checks whether the group still has members
+  (`kill(-pgid, 0)`).
+- A foreground `shell` call ends when its shell exits. If processes it
+  started are still in the group, the call still completes at once, with
+  the shell's output and exit code as for any command that finished
+  ("Result and output"): `completed` for 0, `failed` with `nonzero_exit`
+  otherwise. The leftovers are a side effect, not the work, so they are
+  not a job: they get no timeout and no notice, and only a shutdown stops
+  them. The result ends with one line after the closing line: how many
+  processes are left running and the first three by name and process id
+  (for example `2 processes left running (first: sleep (12), sleep (13)).`),
+  the artifact file for what they print after the call returns, and
+  the long-running-process hint (``To keep a long-running process such as
+  a server, start it with `run_in_background` and no timeout, or with
+  `detach`.``). When the group cannot be listed the line gives no count and
+  says processes are still running in the group; when the session has no
+  artifacts directory it says the output could not be saved, and that output
+  is dropped. A shell that leaves nothing running ends with no such line.
+- Where the leftovers' output lands has three tiers. Output already
+  delivered when the shell exits is in the result. Output still in flight at
+  exit, or written before the call returns, may be in either place. Output
+  written after the call returns is in the artifact file. A byte lands in
+  one place only, and the artifact stops growing at the same cap as a job's
+  output file. The file closes when the output pipe does, and Fiber takes the
+  group off its list once the group is empty.
+- A command still running after 30 seconds moves to the background as
+  "Moving to the background" says, and a move that kept a timeout ends its
+  receipt with the stop time in UTC, the timeout, and the
+  long-running-process hint, for example (``Fiber stops it at
+  2023-11-14T22:13:50Z (timeout_ms 60000). To keep a long-running process
+  such as a server, start it with `run_in_background` and no timeout, or
+  with `detach`. ``).
 - A process that left the group on purpose, for example with `setsid`,
   is not tracked. `nohup` does not leave the group: the process stays in
   it, and a timeout, a cancellation, a `jobs stop` and a shutdown stop it
@@ -725,7 +748,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
   A notice that the job could not be opened goes on the line before it. On an
   output Fiber kept whole, `Output was still held open.` goes on the line after
-  it. `process` and `details` carry the same facts for a client, which should
+  it. A shell that exited with processes left running adds its one
+  leftover line after the closing line, on a whole and a spilled output alike
+  ("When a command ends"). `process` and `details` carry the same facts for a client, which should
   read them there rather than parse the text.
 - `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
   in place of `"exit_code"` when a signal killed it, so a client draws the
@@ -1040,6 +1065,11 @@ The kinds are `docs/events.md`.
   answer still reports the final state, without the delegate's final message.
   Its `delegate_finished` and `job_completed` are written with no turn, after
   the `after_tool` hooks (`docs/extensions.md`, "Host calls").
+- A `jobs wait` that returns a job's final state carries the same `output_tail`
+  as the completion notice, with the output path in the wait answer. A wait
+  that ends at its deadline with the job still running reports `still_running`
+  with no tail; a finished job whose output file is empty or missing carries
+  no tail either.
 - A monitor is a job running a watch command. The model starts one with a
   `shell` call that sets `monitor: true`, so the command goes through the
   shell's classifier, permissions and `workdir` like any other. Lines on its standard output
@@ -1575,7 +1605,7 @@ first prompt.
   `invalid_arguments`; only the person clears a name, with the `name` command
   and empty text (`docs/invocation.md`, "What each command does").
 - The description tells the model to name the session after the first
-  prompt, and to rename it when the work's topic changes, a handoff included.
+  prompt, and to rename it when the work's topic changes, a compaction included.
 - A name the person set with the `name` command pins it. While pinned, the
   call fails with `name_pinned` and the message "the person named this
   session". Clearing the person's name unpins it. A rewind carries the name and its pin (`docs/events.md`, "Rewind"); a fork starts unnamed.
@@ -1875,9 +1905,9 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
   adding or removing a skill never changes the tool set and the cached prefix
   holds (`docs/prompt-cache.md`).
 - Fiber records each load as the result's `control.skill`, so it knows which
-  skills the current context is working under. A handoff sends them again
+  skills the current context is working under. A compaction sends them again
   after the note
-  (`docs/handoff.md`, "What the model sees after a handoff"), and the terminal
+  (`docs/compaction.md`, "What the model sees after a compaction"), and the terminal
   shows each load as a skill, not as a file read.
 - It declares `reads` on the resolved target of the skill's file, and a link that
   changes before the read fails the call with `path_changed`. It is never reviewed.
@@ -1889,7 +1919,7 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
+`compact` (`docs/compaction.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.
@@ -1991,7 +2021,7 @@ its tools are deferred, change only when the preamble is built.
 - A search is an ordinary tool call. A resume, fork or rewind re-sends its result byte for byte while the preamble defers the same tools; otherwise the result leaves out the names it no longer defers, as above.
 - A cancelled search loads nothing; its result is the line "The search was
   cancelled; no tool was loaded."
-- A loaded tool stays loaded until a handoff, which restarts the conversation after the preamble (`docs/handoff.md`); after that the model searches again. A reload or a model switch keeps it: each request renders every search result from `loaded`, leaving out names the preamble it sends does not defer, and on a model without deferral renders it as text naming the tools.
+- A loaded tool stays loaded until a compaction, which restarts the conversation after the preamble (`docs/compaction.md`); after that the model searches again. A reload or a model switch keeps it: each request renders every search result from `loaded`, leaving out names the preamble it sends does not defer, and on a model without deferral renders it as text naming the tools.
 - A call to a deferred tool that was never loaded runs like any other call,
   after the schema check.
 

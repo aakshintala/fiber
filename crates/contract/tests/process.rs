@@ -216,7 +216,7 @@ fn hello_and_request_read_as_ephemeral_process_kinds() {
         (ExtensionReason::Resume, "resume"),
         (ExtensionReason::Fork, "fork"),
         (ExtensionReason::Rewind, "rewind"),
-        (ExtensionReason::Handoff, "handoff"),
+        (ExtensionReason::Compaction, "compaction"),
     ] {
         assert_eq!(serde_json::to_value(reason).unwrap(), wire);
         let event = Event::from_envelope(&envelope(
