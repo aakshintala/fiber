@@ -5,7 +5,7 @@
 //! `cargo run -p loop --example review -- [--notes FILE] [--keep-all]
 //! [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email
 //! EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR... |
-//! --scan FILE] [<session directory>]`
+//! --reviewer-denies DIR... | --scan FILE] [<session directory>]`
 //!
 //! At each completed compaction with person messages the jig prints the
 //! reviewer's selection request and reads one answer line on stdin, in the
@@ -79,6 +79,23 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
         return match support::review::run_synthetic(&sample_opts.synthetic, std::io::stdout()) {
+            Ok(report) => sampled(report),
+            Err(problem) => {
+                eprintln!("{problem}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if !sample_opts.reviewer_denies.is_empty() {
+        if !rest.is_empty() {
+            eprintln!("review: --reviewer-denies takes no session directory");
+            return ExitCode::from(2);
+        }
+        return match support::review::run_reviewer_denies(
+            &sample_opts.reviewer_denies,
+            &sample_opts,
+            std::io::stdout(),
+        ) {
             Ok(report) => sampled(report),
             Err(problem) => {
                 eprintln!("{problem}");
