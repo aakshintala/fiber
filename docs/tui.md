@@ -572,6 +572,18 @@ With the rail hidden and sessions waiting, the Session status card ends with "! 
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
+While a Fiber delegate's view is open the Session status card follows
+that delegate's figures: its title reads "◆ <description>", from the
+open job record, and every figure below it reads the delegate's own
+`session_status`, `preamble_built`, `model_changed`, `turn_completed`
+and `usage_recorded` lines. A value the delegate has not sent yet reads
+the unknown form above for it — a blank workspace, model and branch, an
+empty bar, dim dashes — never the attached session's. A finished
+delegate's view keeps its last status, every row dim, with the items
+outcome (`completed`, `failed` or `cancelled`) beside the permission
+mode; without a stored status it shows the delegate's calls and elapsed
+time instead. Esc returns the card to the attached session.
+
 The context bar is drawn against the window `session_status` reports and
 the compaction point the session's own `preamble_built` names. That window is
 the latest own build's `context_window`, or the inherited one when the
@@ -666,6 +678,17 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   shows one dim line under the path line instead: "No transcript for
   <harness> delegates". A finished delegate whose log is missing or
   unreadable shows "No transcript: <reason>", dim.
+
+While a Fiber delegate's view is open, the Session status card, the
+input box's status row and the status line's cost and cache segments
+follow that delegate's figures; changed files, Delegates, Jobs and Quota
+keep the attached session's. A value the delegate has not sent yet reads
+its unknown form there too, never the attached session's: a blank model
+and branch, an empty context bar, dim dashes for the figures, and no
+cost segment until its status lands. A finished delegate's card keeps
+its last status, dim, with the outcome beside the permission mode;
+without a stored status it shows the delegate's calls and elapsed time
+instead.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model
@@ -2133,7 +2156,9 @@ about compaction: the compaction point is in the Session status card and the
 context breakdown. When the row is too wide, the working directory is cut
 from the left to keep its last part ("…/fiber"), then the left side is cut
 at its right end; the right side is cut only when the slab is narrower than
-it, at the slab's right edge. Clicking the model or the thinking level
+it, at the slab's right edge. A cut right side ends in an ellipsis; a model
+neither preamble nor status has named leaves no model text rather than a
+partial one. Clicking the model or the thinking level
 opens the model picker, as Ctrl+L does; clicking the ctx segment opens the
 context breakdown; clicking the working directory or the permission mode
 opens the Session status card's view. An extension redraws the row
