@@ -620,7 +620,7 @@ fn manifest_binary_observation_keeps_host_but_omits_path() {
     let (lines, observe) = observed(&clock);
     super::prepare_binary(dir.path(), &manifest, &observe).unwrap();
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line for this actual binary request, with its manifest path omitted.
+    // `docs/state.md`, "What each part holds": one line for this actual binary request, with its manifest path omitted.
     assert_eq!(lines.len(), 1, "one request: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -653,7 +653,7 @@ fn an_observed_download_writes_one_extension_release_line_per_hop() {
     let bytes = download_observed("probe", &url, &observe).unwrap();
     assert_eq!(bytes, b"{}");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, each redirect included.
+    // `docs/state.md`, "What each part holds": one line per actual release HTTP request, each redirect included.
     assert_eq!(lines.len(), 2, "one line per request: {lines:?}");
     let host = server.url().trim_start_matches("http://").to_owned();
     for line in &lines {
@@ -701,7 +701,7 @@ fn a_refused_download_writes_a_statusless_line() {
     let err = download_observed("probe", &format!("{closed}/tool"), &observe).unwrap_err();
     assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
+    // `docs/state.md`, "What each part holds": post-send failure and body-read rules are the Lua provider's.
     assert_eq!(
         lines.len(),
         1,
@@ -725,7 +725,7 @@ fn a_failed_status_keeps_its_status() {
     let err = download_observed("probe", &url, &observe).unwrap_err();
     assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
+    // `docs/state.md`, "What each part holds": post-send failure and body-read rules are the Lua provider's.
     assert_eq!(lines.len(), 1, "{lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -753,7 +753,7 @@ fn a_stalled_body_keeps_its_status_and_consumed_bytes() {
     .unwrap_err();
     assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
+    // `docs/state.md`, "What each part holds": post-send failure and body-read rules are the Lua provider's.
     assert_eq!(lines.len(), 1, "{lines:?}");
     let line = &lines[0];
     assert_release_shape(line);

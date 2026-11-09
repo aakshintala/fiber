@@ -489,7 +489,7 @@ fn link_notice(item: &RepoItem, path: &Path) -> Notice {
 /// the set already settled its own duplicates.
 ///
 /// The load pass groups the batch by code before writing it
-/// (`docs/errors.md`, "Notices").
+/// (`docs/errors.md`, "Registry").
 pub(crate) fn candidates(
     personal: Vec<crate::installed::Entry>,
     set: &RepositorySet,

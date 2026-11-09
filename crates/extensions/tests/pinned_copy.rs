@@ -1,6 +1,6 @@
 //! A pinned copy's transaction: what a failure leaves behind, the
 //! completion marker, legacy rebuilds and home-anchored confinement
-//! (`docs/extensions.md`, "Pinning"). Through the public [`Store`] API,
+//! (`docs/extensions.md`, "Code a repository ships"). Through the public [`Store`] API,
 //! with dependencies from local tagged repositories; no network, no loading.
 
 #![allow(

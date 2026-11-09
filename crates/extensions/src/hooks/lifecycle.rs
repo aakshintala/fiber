@@ -22,7 +22,7 @@ mod tests;
 
 /// Groups one chain's notice batch by code, so a pass with several
 /// non-blocking failures answers one notice per code; the loop groups the
-/// batch again at its event flush (`docs/errors.md`, "Notices").
+/// batch again at its event flush (`docs/errors.md`, "Registry").
 fn grouped(notices: Vec<Notice>) -> Vec<Notice> {
     group_notices(notices, grouped_lead)
 }
