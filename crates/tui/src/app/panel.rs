@@ -240,6 +240,8 @@ fn fold_session_figures(figures: &mut SessionFigures, envelope: &Envelope) {
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients
@@ -569,6 +571,8 @@ impl PanelState {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients
