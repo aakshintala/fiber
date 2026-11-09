@@ -341,7 +341,9 @@ impl Feed {
         self.attention.forget(session);
     }
 
-    /// `recent`: a page of exited sessions, newest first.
+    /// `recent`: a page of exited sessions, newest first. With
+    /// `archived`, only archived sessions; without it, archived sessions
+    /// are left out.
     pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let text = |key: &str| match args.get(key) {
             None => Ok(None),
@@ -350,7 +352,15 @@ impl Feed {
         };
         let before = text("before")?;
         let project = text("project")?;
-        if args.keys().any(|key| key != "before" && key != "project") {
+        let archived = match args.get("archived") {
+            None => false,
+            Some(Value::Bool(wanted)) => *wanted,
+            Some(_) => return Err(invalid()),
+        };
+        if args
+            .keys()
+            .any(|key| key != "before" && key != "project" && key != "archived")
+        {
             return Err(invalid());
         }
         let running = lock(&self.state)
@@ -359,7 +369,7 @@ impl Feed {
             .filter(|(_, entry)| matches!(entry, Entry::Running(_)))
             .map(|(id, _)| id.clone())
             .collect();
-        match recent::page_with_total(&self.home, before, project, &running) {
+        match recent::page_with_total(&self.home, before, project, &running, archived) {
             Ok((rows, total)) => Ok(Some(
                 serde_json::json!({ "sessions": rows, "total": total }),
             )),
@@ -670,6 +680,7 @@ impl Feed {
             name: status.map(|status| status.name.clone()).unwrap_or_default(),
             how: Left::Crashed,
             status: status.cloned(),
+            archived: false,
         };
         // Losing the row loses only the listing; the log stays.
         recent::append(&self.home, &row).unwrap_or(());

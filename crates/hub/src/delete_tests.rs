@@ -169,6 +169,7 @@ fn delete_removes_the_directory_and_is_accepted_with_no_result() {
         name: "n".to_owned(),
         how: crate::Left::Exited,
         status: None,
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let rows = fs::read(temp.dir.join("recent.jsonl")).unwrap();
@@ -729,6 +730,7 @@ fn a_dry_run_keeps_the_feed_entry() {
         name: "n".to_owned(),
         how: crate::Left::Crashed,
         status: Some(serde_json::from_value(status("n", "/w", "idle", None)).unwrap()),
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let hub = temp.hub();
@@ -1136,6 +1138,7 @@ fn a_crashed_feed_entry_is_dropped_by_delete() {
         name: "n".to_owned(),
         how: crate::Left::Crashed,
         status: Some(serde_json::from_value(status("n", "/w", "idle", None)).unwrap()),
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let hub = temp.hub();

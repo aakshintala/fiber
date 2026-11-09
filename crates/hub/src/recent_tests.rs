@@ -57,6 +57,7 @@ fn row(n: u64, project: &str, how: Left, state: Option<&str>) -> RecentRow {
         name: format!("session {n}"),
         how,
         status: state.map(|state| serde_json::from_value(status("n", "/w", state, None)).unwrap()),
+        archived: false,
     }
 }
 
@@ -65,9 +66,25 @@ fn ids(rows: &[RecentRow]) -> Vec<String> {
 }
 
 fn page_of(home: &Path, before: Option<&str>, project: Option<&str>) -> Vec<String> {
-    ids(&page_with_total(home, before, project, &BTreeSet::new())
+    ids(
+        &page_with_total(home, before, project, &BTreeSet::new(), false)
+            .unwrap()
+            .0,
+    )
+}
+
+fn archived_page_of(home: &Path, before: Option<&str>, project: Option<&str>) -> Vec<String> {
+    ids(
+        &page_with_total(home, before, project, &BTreeSet::new(), true)
+            .unwrap()
+            .0,
+    )
+}
+
+fn total_of(home: &Path, archived: bool) -> usize {
+    page_with_total(home, None, None, &BTreeSet::new(), archived)
         .unwrap()
-        .0)
+        .1
 }
 
 #[test]
@@ -159,7 +176,7 @@ fn the_newest_row_of_each_session_wins_newest_first() {
     let mut again = first;
     again.how = Left::Exited;
     temp.append(&again);
-    let listed = page_with_total(&temp.dir, None, None, &BTreeSet::new())
+    let listed = page_with_total(&temp.dir, None, None, &BTreeSet::new(), false)
         .unwrap()
         .0;
     assert_eq!(ids(&listed), [id(1), id(2)]);
@@ -192,14 +209,18 @@ fn a_running_session_is_skipped() {
     temp.append(&temp.row(2, "p", Left::Exited, None));
     let running = BTreeSet::from([id(2)]);
     assert_eq!(
-        ids(&page_with_total(&temp.dir, None, None, &running).unwrap().0),
+        ids(&page_with_total(&temp.dir, None, None, &running, false)
+            .unwrap()
+            .0),
         [id(1)]
     );
     // A running session still anchors `before`.
     assert_eq!(
-        ids(&page_with_total(&temp.dir, Some(&id(2)), None, &running)
-            .unwrap()
-            .0),
+        ids(
+            &page_with_total(&temp.dir, Some(&id(2)), None, &running, false)
+                .unwrap()
+                .0
+        ),
         [id(1)]
     );
 }
@@ -251,9 +272,10 @@ fn total_covers_every_row_past_the_page() {
     for n in 100..102 {
         temp.append(&temp.row(n, "q", Left::Exited, None));
     }
-    let (_, project) = page_with_total(&temp.dir, None, Some("p"), &BTreeSet::new()).unwrap();
+    let (_, project) =
+        page_with_total(&temp.dir, None, Some("p"), &BTreeSet::new(), false).unwrap();
     assert_eq!(project, 53);
-    let (_, all) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
+    let (_, all) = page_with_total(&temp.dir, None, None, &BTreeSet::new(), false).unwrap();
     assert_eq!(all, 55);
 }
 
@@ -268,12 +290,12 @@ fn total_skips_running_delegate_and_missing_directory_rows() {
         Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(1)))).unwrap());
     temp.append(&delegate);
     temp.append(&row(5, "p", Left::Exited, None));
-    let (_, all) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
+    let (_, all) = page_with_total(&temp.dir, None, None, &BTreeSet::new(), false).unwrap();
     assert_eq!(all, 3);
     let running = BTreeSet::from([id(3)]);
-    let (_, unfiltered) = page_with_total(&temp.dir, None, None, &running).unwrap();
+    let (_, unfiltered) = page_with_total(&temp.dir, None, None, &running, false).unwrap();
     assert_eq!(unfiltered, 2);
-    let (_, project) = page_with_total(&temp.dir, None, Some("p"), &running).unwrap();
+    let (_, project) = page_with_total(&temp.dir, None, Some("p"), &running, false).unwrap();
     assert_eq!(project, 2);
 }
 
@@ -283,7 +305,8 @@ fn total_counts_every_row_whatever_before_holds() {
     for n in 0..3 {
         temp.append(&temp.row(n, "p", Left::Exited, None));
     }
-    let (rows, total) = page_with_total(&temp.dir, Some(&id(2)), None, &BTreeSet::new()).unwrap();
+    let (rows, total) =
+        page_with_total(&temp.dir, Some(&id(2)), None, &BTreeSet::new(), false).unwrap();
     assert_eq!(ids(&rows), [id(1), id(0)]);
     assert_eq!(total, 3);
 }
@@ -293,12 +316,14 @@ fn an_unknown_before_is_an_error() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));
     assert_eq!(
-        page_with_total(&temp.dir, Some(&id(9)), None, &BTreeSet::new()).map(|(rows, _)| rows),
+        page_with_total(&temp.dir, Some(&id(9)), None, &BTreeSet::new(), false)
+            .map(|(rows, _)| rows),
         Err(PageError::UnknownBefore)
     );
     // Outside the project filter is not in the list either.
     assert_eq!(
-        page_with_total(&temp.dir, Some(&id(1)), Some("q"), &BTreeSet::new()).map(|(rows, _)| rows),
+        page_with_total(&temp.dir, Some(&id(1)), Some("q"), &BTreeSet::new(), false)
+            .map(|(rows, _)| rows),
         Err(PageError::UnknownBefore)
     );
 }
@@ -562,4 +587,158 @@ fn append_exited_reports_an_unwritable_recent_file() {
     .unwrap_err();
     assert_eq!(error.code(), contract::ErrorCode::IoFailed);
     assert!(error.to_string().contains("recent.jsonl"));
+}
+
+#[test]
+fn an_ordinary_row_omits_archived_and_an_old_row_reads_as_not_archived() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Exited, Some("idle")));
+    let text = fs::read_to_string(temp.dir.join("recent.jsonl")).unwrap();
+    assert!(!text.contains("archived"));
+    // A row from a build without the flag reads back as not archived.
+    let old: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert!(old.get("archived").is_none());
+    let rows = read_all(&temp.dir);
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].archived);
+    assert_eq!(rows, [temp.row(1, "p", Left::Exited, Some("idle"))]);
+}
+
+#[test]
+fn an_archived_row_writes_the_flag_and_reads_back() {
+    let temp = Temp::new();
+    let mut archived = temp.row(1, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    temp.append(&archived);
+    let text = fs::read_to_string(temp.dir.join("recent.jsonl")).unwrap();
+    assert!(text.contains("\"archived\":true"), "{text}");
+    assert_eq!(read_all(&temp.dir), [archived]);
+}
+
+#[test]
+fn archived_partitions_pages_and_totals_by_newest_row() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Exited, Some("idle")));
+    temp.append(&temp.row(2, "p", Left::Exited, Some("idle")));
+    // Session 3 exits, then archives: its newest row decides.
+    temp.append(&temp.row(3, "p", Left::Exited, Some("idle")));
+    let mut archived = temp.row(3, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    temp.append(&archived);
+    // Session 4 archives with no earlier ordinary row.
+    let mut only = temp.row(4, "p", Left::Crashed, None);
+    only.archived = true;
+    temp.append(&only);
+    assert_eq!(page_of(&temp.dir, None, None), [id(2), id(1)]);
+    assert_eq!(total_of(&temp.dir, false), 2);
+    assert_eq!(archived_page_of(&temp.dir, None, None), [id(4), id(3)]);
+    assert_eq!(total_of(&temp.dir, true), 2);
+}
+
+#[test]
+fn a_newer_ordinary_row_unarchives_the_listing() {
+    let temp = Temp::new();
+    let mut archived = temp.row(5, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    temp.append(&archived);
+    assert_eq!(archived_page_of(&temp.dir, None, None), [id(5)]);
+    assert!(page_of(&temp.dir, None, None).is_empty());
+    // Its next exit appends a row without the flag.
+    temp.append(&temp.row(5, "p", Left::Exited, Some("idle")));
+    assert_eq!(page_of(&temp.dir, None, None), [id(5)]);
+    assert!(archived_page_of(&temp.dir, None, None).is_empty());
+}
+
+#[test]
+fn archived_lists_keep_projection_delegate_and_running_exclusions() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "q", Left::Exited, Some("idle")));
+    let mut other = temp.row(1, "q", Left::Exited, Some("idle"));
+    other.archived = true;
+    temp.append(&other);
+    // An archived delegate: skipped by both partitions.
+    let mut delegate = temp.row(2, "p", Left::Exited, None);
+    delegate.status =
+        Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(1)))).unwrap());
+    delegate.archived = true;
+    temp.append(&delegate);
+    let mut archived = temp.row(3, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    temp.append(&archived);
+    // Other projects stay out of both partitions.
+    assert!(archived_page_of(&temp.dir, None, Some("p")).contains(&id(3)));
+    assert!(!archived_page_of(&temp.dir, None, Some("p")).contains(&id(1)));
+    // Delegates stay out of the archived partition too.
+    assert_eq!(archived_page_of(&temp.dir, None, None), [id(3), id(1)]);
+    // A running session's archived row is suppressed in both.
+    let running = BTreeSet::from([id(3)]);
+    let (rows, total) = page_with_total(&temp.dir, None, None, &running, false).unwrap();
+    assert!(rows.is_empty());
+    assert_eq!(total, 0);
+    let (rows, total) = page_with_total(&temp.dir, None, None, &running, true).unwrap();
+    assert_eq!(ids(&rows), [id(1)]);
+    assert_eq!(total, 1);
+}
+
+#[test]
+fn archived_pages_walk_past_fifty_with_matching_totals() {
+    let temp = Temp::new();
+    for n in 0..55 {
+        let mut archived = temp.row(n, "p", Left::Exited, Some("idle"));
+        archived.archived = true;
+        temp.append(&archived);
+    }
+    for n in 100..103 {
+        temp.append(&temp.row(n, "p", Left::Exited, Some("idle")));
+    }
+    assert_eq!(total_of(&temp.dir, true), 55);
+    assert_eq!(total_of(&temp.dir, false), 3);
+    let first = archived_page_of(&temp.dir, None, None);
+    assert_eq!(first.len(), RECENT_PAGE);
+    assert_eq!(first.first(), Some(&id(54)));
+    let second = archived_page_of(&temp.dir, first.last().map(String::as_str), None);
+    assert_eq!(second.len(), 5);
+    assert_eq!(second.last(), Some(&id(0)));
+}
+
+#[test]
+fn a_before_outside_the_partition_is_unknown() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Exited, Some("idle")));
+    let mut archived = temp.row(2, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    temp.append(&archived);
+    // An archived session is no anchor in the default list, and an
+    // ordinary one is none in the archived list.
+    assert_eq!(
+        page_with_total(&temp.dir, Some(&id(2)), None, &BTreeSet::new(), false)
+            .map(|(rows, _)| rows),
+        Err(PageError::UnknownBefore)
+    );
+    assert_eq!(
+        page_with_total(&temp.dir, Some(&id(1)), None, &BTreeSet::new(), true)
+            .map(|(rows, _)| rows),
+        Err(PageError::UnknownBefore)
+    );
+    // Anchors inside the partition still page.
+    assert!(
+        page_with_total(&temp.dir, Some(&id(2)), None, &BTreeSet::new(), true)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+}
+
+#[test]
+fn seeds_skip_archived_crashed_and_waiting_rows() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Crashed, Some("idle")));
+    temp.append(&temp.row(2, "p", Left::Exited, Some("waiting")));
+    let mut crashed = temp.row(3, "p", Left::Crashed, Some("idle"));
+    crashed.archived = true;
+    temp.append(&crashed);
+    let mut waiting = temp.row(4, "p", Left::Exited, Some("waiting"));
+    waiting.archived = true;
+    temp.append(&waiting);
+    assert_eq!(ids(&seeds(&temp.dir)), [id(2), id(1)]);
 }

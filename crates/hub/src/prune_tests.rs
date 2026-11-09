@@ -418,6 +418,7 @@ fn the_passed_callback_deletes_through_the_hubs_own_delete() {
         name: "n".to_owned(),
         how: crate::Left::Crashed,
         status: Some(serde_json::from_value(crate::fake::status("n", "/w", "idle", None)).unwrap()),
+        archived: false,
     };
     crate::append(&dir, &row).unwrap();
     let clock: Arc<dyn Clock> = FakeClock::new();

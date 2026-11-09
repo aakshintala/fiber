@@ -756,6 +756,10 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         json!({"project": true}),
         json!({"limit": "x"}),
         json!({"before": id(5)}),
+        json!({"archived": 1}),
+        json!({"archived": "yes"}),
+        json!({"archived": null}),
+        json!({"archived": true, "limit": "x"}),
     ] {
         let refused = feed.recent(&args(bad.clone())).unwrap_err();
         assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");

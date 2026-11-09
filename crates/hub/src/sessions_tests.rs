@@ -69,6 +69,24 @@ impl Temp {
             name: name.to_owned(),
             how: Left::Exited,
             status: Some(serde_json::from_value(payload(project, parent)).unwrap()),
+            archived: false,
+        };
+        recent::append(&self.dir, &row).unwrap();
+    }
+
+    /// Appends an archived row for session `n` named `name`, its
+    /// directory made.
+    fn archived(&self, n: u64, project: &str, name: &str) {
+        fs::create_dir_all(session_dir(&self.dir, project, &contract::SessionId(id(n)))).unwrap();
+        let row = RecentRow {
+            session_id: contract::SessionId(id(n)),
+            ts: n,
+            project: project.to_owned(),
+            workspace: "/w".to_owned(),
+            name: name.to_owned(),
+            how: Left::Exited,
+            status: Some(serde_json::from_value(payload(project, None)).unwrap()),
+            archived: true,
         };
         recent::append(&self.dir, &row).unwrap();
     }
@@ -212,6 +230,58 @@ fn a_running_sessions_row_is_listed_live_only() {
 }
 
 #[test]
+fn archived_rows_are_left_out_unless_asked() {
+    let temp = Temp::new();
+    temp.exited(1, "p", "one", None, true);
+    temp.archived(2, "p", "two");
+    let feed = temp.feed();
+    assert_eq!(listed(&feed, &temp.dir, json!({})), (vec![], vec![id(1)]));
+    assert_eq!(
+        listed(&feed, &temp.dir, json!({"archived": true})),
+        (vec![], vec![id(2)])
+    );
+    assert_eq!(
+        listed(&feed, &temp.dir, json!({"archived": false})),
+        (vec![], vec![id(1)])
+    );
+}
+
+#[test]
+fn an_archived_only_answer_has_no_live_entries() {
+    let mut temp = Temp::new();
+    temp.running(7, "p");
+    temp.exited(1, "p", "one", None, true);
+    temp.archived(2, "p", "two");
+    // A stale archived row for the running session is suppressed too.
+    temp.archived(7, "p", "earlier run");
+    let feed = temp.feed();
+    let got = answered(&feed, &temp.dir, json!({"archived": true}));
+    assert_eq!(ids_of(&got), (vec![], vec![id(2)]));
+    assert_eq!(got["exited"][0]["archived"], true);
+    let got = answered(&feed, &temp.dir, json!({}));
+    assert_eq!(ids_of(&got), (vec![id(7)], vec![id(1)]));
+}
+
+#[test]
+fn active_is_opt_in_and_carries_timestamps_for_archived_rows() {
+    let temp = Temp::new();
+    temp.exited(1, "p", "one", None, true);
+    temp.archived(2, "p", "two");
+    let feed = temp.feed();
+    // Without `active`, no entry opens a session log: no entry carries it.
+    let got = answered(&feed, &temp.dir, json!({"archived": true}));
+    assert!(got["exited"][0].get("active").is_none());
+    let got = answered(&feed, &temp.dir, json!({}));
+    assert!(got["exited"][0].get("active").is_none());
+    // With `active`, every entry carries its timestamp semantics: a
+    // directory without a log reads null.
+    let got = answered(&feed, &temp.dir, json!({"archived": true, "active": true}));
+    assert_eq!(got["exited"][0]["active"], Value::Null);
+    let got = answered(&feed, &temp.dir, json!({"active": true}));
+    assert_eq!(got["exited"][0]["active"], Value::Null);
+}
+
+#[test]
 fn delegates_and_gone_directories_are_skipped_and_the_newest_row_wins() {
     let temp = Temp::new();
     temp.exited(1, "p", "delegate", Some(&id(9)), true);
@@ -235,6 +305,11 @@ fn arguments_that_do_not_fit_are_invalid_arguments() {
         json!({"project": 1}),
         json!({"project": null}),
         json!({"project": "p", "x": "q"}),
+        json!({"archived": 1}),
+        json!({"archived": "yes"}),
+        json!({"archived": null}),
+        json!({"archived": true, "x": "q"}),
+        json!({"active": true, "archived": null}),
     ] {
         let (tx, rx) = mpsc::channel();
         let (answering, home, sent) = (Arc::clone(&feed), temp.dir.clone(), args(bad.clone()));
