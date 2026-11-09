@@ -7,8 +7,15 @@ use crate::deadline::Deadline;
 /// The deadline for a wait that must succeed. It only catches a hang, so it
 /// is far above what a thread start, a socket or a TLS handshake takes under
 /// full parallelism (`docs/testing.md`, "Waits and timeouts"). A "nothing
-/// arrives" check keeps its own short bound.
+/// arrives" check keeps its own short bound. A wait that bounds a whole
+/// subsystem operation, or that contains another floor-bound wait, reads
+/// `WHOLE_SUBSYSTEM_WITHIN` instead, so the inner wait expires first.
 pub const MUST_SUCCEED_WITHIN: Duration = Duration::from_secs(10);
+
+/// The deadline for a wait that bounds a whole subsystem operation: exactly
+/// twice the floor, so a nested floor-bound wait expires first and the
+/// failure names the stalled step (`docs/testing.md`, "Waits and timeouts").
+pub const WHOLE_SUBSYSTEM_WITHIN: Duration = Duration::from_secs(2 * MUST_SUCCEED_WITHIN.as_secs());
 
 /// Runs `work` on its own thread and returns its value. Fails the test
 /// naming `what` when `work` panics, and when it has not returned within
