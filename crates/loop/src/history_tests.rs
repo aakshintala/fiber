@@ -2036,7 +2036,7 @@ fn a_resume_seed_carries_the_kept_messages() {
     let (conversation, _, _, carry) =
         rebuild_and_sent(window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
     assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — kept message in its earlier block (item 4), carried input in a new-message block (item 5), then the note (item 6).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — kept message in its earlier block (item 4), carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         conversation[1..],
         [
@@ -2045,7 +2045,7 @@ fn a_resume_seed_carries_the_kept_messages() {
             user("")
         ]
     );
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         crate::reviewer::Reviewed::person_pairs(&carry.reviewed),
         [
@@ -2073,10 +2073,10 @@ fn a_resume_seed_carries_the_kept_messages() {
         crate::compaction::Carry::default(),
     )
     .unwrap();
-    // docs/loop.md, "What the model is sent": "The conversation in each request is built from the session log's durable events, the only state of record (ADR 0001)" — the whole-log rebuild matches the window rebuild, index included.
+    // `docs/loop.md`, "What the model is sent": "The conversation in each request is built from the session log's durable events, the only state of record (ADR 0001)" — the whole-log rebuild matches the window rebuild, index included.
     assert_eq!(whole, conversation);
     assert_eq!(whole_carry.reviewed, carry.reviewed);
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "each in its own labelled block" — two kept messages, two pairs.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "each in its own labelled block" — two kept messages, two pairs.
     assert_eq!(
         crate::reviewer::Reviewed::person_pairs(&carry.reviewed).len(),
         2
@@ -2122,7 +2122,7 @@ fn a_summary_turn_message_never_reaches_the_seed() {
     let folded = resumed(&sessions.join(A)).unwrap();
     // No doc promises the resume window's position; the seed exclusion below
     // is the property under test.
-    // docs/compaction.md, "What the model sees after a compaction", item 4 holds "The person's earlier messages that still bind": the summary turn's driver message is not one, so the seed stays empty.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4 holds "The person's earlier messages that still bind": the summary turn's driver message is not one, so the seed stays empty.
     assert!(
         folded.seed.reviewed.is_empty(),
         "{:?}",
@@ -2159,7 +2159,7 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
         summary_conversation(&compaction_lines(true), 4, "fake/model-1", seed).unwrap();
     assert_eq!(after.len(), 3);
     assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(after[1..], [user("The person's new message:\nB"), user("")]);
 }
 

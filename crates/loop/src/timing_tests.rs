@@ -1,4 +1,4 @@
-//! Part 7 operation timers (`docs/state.md`, "Diagnostic logs"): one
+//! Part 7 operation timers (`docs/state.md`, "What each part holds"): one
 //! `op_timing` line per timed scope through the one installed timer.
 //!
 //! Time comes from the injected clock; a test advances the fake clock only
@@ -904,7 +904,7 @@ fn turn(world: &mut World) -> Option<TurnOutcome> {
     // Detached and never joined: the deadline below must fail the test even
     // when the turn hangs. A scoped worker would hold the test at scope exit
     // until the hung turn ends, so the expiry panic could never unwind and
-    // the test would hang until nextest kills it (docs/testing.md, "Waits
+    // the test would hang until nextest kills it (`docs/testing.md`, "Waits
     // and timeouts"). The worker owns the loop; on expiry it is left behind
     // with it, and the park-back below runs only when the turn ends in time.
     std::thread::spawn(move || {

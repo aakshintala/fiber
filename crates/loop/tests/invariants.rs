@@ -1117,8 +1117,8 @@ proptest! {
 
     /// No accepted input is lost or repeated (`docs/testing.md`,
     /// "Invariants"; `docs/loop.md`, "Starting a turn", "Ending a
-    /// turn" and "Interrupt"; `docs/invocation.md`, "A prompt arriving
-    /// mid-turn is rejected `busy`"). Batched inputs start one turn, a
+    /// turn" and "Interrupt"; `docs/invocation.md`, "What each command
+    /// does"). Batched inputs start one turn, a
     /// steer sent mid-turn continues it, and inputs a cancelled turn never
     /// read appear in the next one.
     /// Faults it catches:

@@ -433,7 +433,7 @@ fn an_inner_call_matching_one_other_tool_gets_no_suggestion() {
     // `read` is the one other tool whose schema fits them. The failure
     // still keeps only its field lines: the suggestion answers the model,
     // and an inner call's result goes to the extension instead
-    // (`docs/extensions.md`, "When an extension calls a tool").
+    // (`docs/extensions.md`, "Running a tool").
     let mut shell = FakeTool::new("shell", |_, _, _, _| text("must not run"));
     shell.schema = json!({
         "type": "object",

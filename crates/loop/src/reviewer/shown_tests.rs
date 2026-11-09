@@ -1900,7 +1900,7 @@ fn person_pairs_reuse_rendered_replies_for_each_occurrence() {
         &mut PendingAsks::default(),
     );
 
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [
@@ -1930,7 +1930,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
         Some(Seq(14)),
         &mut PendingAsks::default(),
     );
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [(kept(14, 0), "The person: unprompted".into())]
@@ -1956,7 +1956,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
     let Input::User { text: person, .. } = &reviewed[2].input else {
         panic!("not a rendered person");
     };
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pair reuses the reviewer-rendered reply.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pair reuses the reviewer-rendered reply.
     assert_eq!(
         Reviewed::person_pairs(&reviewed)[1].1,
         format!("{reply}\n{person}"),
@@ -1989,7 +1989,7 @@ fn a_reply_does_not_cross_a_different_sequence_person() {
         &mut PendingAsks::default(),
     );
 
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [

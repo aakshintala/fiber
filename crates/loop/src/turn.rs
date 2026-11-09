@@ -321,7 +321,7 @@ impl Loop {
         let skills = self.skills.check();
         // One pass's notices, grouped by code: the instruction files',
         // the skills', and the refreshed commands', so one pass raises
-        // one notice per code (`docs/errors.md`, "Notices").
+        // one notice per code (`docs/errors.md`, "Registry").
         let mut batch = out.notices;
         batch.extend(skills.notices);
         if skills.commands_changed {
