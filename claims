@@ -108,7 +108,6 @@ crates/tui/src/copy_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aa
 crates/tui/src/turn_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 crates/tui/src/view_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 docs/tui.md	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
-crates/main/tests/screens/terminal.rs	fiber-4223	plan	2026-11-08T21:37:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/panel.rs	fiber-4180	plan	2026-11-09T02:05:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app.rs	fiber-4180	plan	2026-11-09T02:05:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/panel.rs	fiber-4180	plan	2026-11-09T02:05:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -231,7 +230,6 @@ crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_interrupted_wit
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_turn_interrupted.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_turn_running.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_next_turn_reads_the_queue.snap	fiber-4180	plan	2026-11-09T06:49:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4470
-crates/main/src/idle_tests.rs	fiber-4223	plan	2026-11-09T08:46:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4477
 crates/tui/src/turn/crash_tests.rs	fiber-3896	plan	2026-11-09T08:59:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/examples/review.rs	fiber-4460	plan	2026-11-09T09:03:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/support/review.rs	fiber-4460	plan	2026-11-09T09:03:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
