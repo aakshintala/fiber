@@ -428,3 +428,4 @@ crates/tools/src/shell/restored_tests.rs	fiber-4054	plan	2026-11-09T19:37:42Z	Am
 crates/main/src/reload_tests.rs	fiber-4311	plan	2026-11-09T19:56:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4492
 crates/main/tests/support/mod.rs	fiber-4311	plan	2026-11-09T19:56:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4492
 crates/main/tests/tool_calls/sandbox.rs	fiber-4484	plan	2026-11-09T19:59:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/support_helpers.rs	fiber-4311	plan	2026-11-09T21:01:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4492
