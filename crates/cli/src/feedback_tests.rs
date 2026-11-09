@@ -1209,8 +1209,8 @@ fn section(saved: &str) -> String {
 
 #[test]
 fn frame_shapes_round_trip_through_write_byte_for_byte() {
-    // docs/user/reporting.md:17,21 plus docs/invocation.md:211 (shapes of the
-    // last 20 painted frames, per cell width class/style/blank plus geometry,
+    // `docs/user/reporting.md`, "Diagnostics" plus `docs/invocation.md`, "Commands and flags"
+    // (shapes of the last 20 painted frames, per cell width class/style/blank plus geometry,
     // at most 20): the section renders the ring deterministically, oldest
     // first, so the byte-for-byte pin proves the renderer, not an event order.
     let root = fakes::TempDir::new("fiber-feedback-shapes");
@@ -1282,8 +1282,8 @@ fn tops(count: usize) -> Vec<FrameShape> {
 
 #[test]
 fn frame_cap_keeps_the_newest_twenty() {
-    // docs/user/reporting.md:21 (at most the newest 20 frame shapes) plus
-    // docs/invocation.md:211 and docs/tui.md `/feedback` row (last 20 painted
+    // `docs/user/reporting.md`, "Diagnostics" (at most the newest 20 frame shapes) plus
+    // `docs/invocation.md`, "Commands and flags" and docs/tui.md `/feedback` row (last 20 painted
     // frames): the writer keeps the newest 20 and drops the oldest first.
     let root = fakes::TempDir::new("fiber-feedback-shapes-cap");
     let clock = FakeClock::new();

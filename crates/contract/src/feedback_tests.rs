@@ -65,8 +65,8 @@ fn blank_and_content_kinds_follow_the_blank_flag() {
 
 #[test]
 fn ring_depth_holds_a_full_screen_of_scrolling() {
-    // docs/user/reporting.md:21 (at most 20 frame shapes) and
-    // docs/invocation.md:211 plus docs/tui.md `/feedback` row (last 20 painted frames).
+    // `docs/user/reporting.md`, "Diagnostics" (at most 20 frame shapes) and
+    // `docs/invocation.md`, "Commands and flags" plus docs/tui.md `/feedback` row (last 20 painted frames).
     assert_eq!(RING_DEPTH, 20);
 }
 
@@ -124,7 +124,7 @@ fn shape_cells_round_trip_through_the_constructor() {
 
 #[test]
 fn shape_rows_hold_their_cells_in_order() {
-    // docs/user/reporting.md:17 (per cell its width class, style and whether
+    // `docs/user/reporting.md`, "Diagnostics" (per cell its width class, style and whether
     // it is blank, plus the frame geometry): a row holds its cells in column
     // order by construction, so the report can place each cell.
     let cells = vec![

@@ -627,7 +627,7 @@ fn headless_report_holds_the_empty_ring_notice() {
 /// A seeded 2-frame snapshot through a unit-level `ReportContext`:
 /// the written shapes section parses back to the seed, proving the
 /// door passes the slice through.
-// docs/user/reporting.md:17,21 plus docs/invocation.md:211 (shapes of the last
+// `docs/user/reporting.md`, "Diagnostics" plus `docs/invocation.md`, "Commands and flags" (shapes of the last
 // 20 painted frames with scroll state, at most 20): with 2 frames the whole
 // seed survives in order, oldest first.
 #[test]
