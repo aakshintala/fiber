@@ -4,8 +4,8 @@
 //!
 //! `cargo run -p loop --example review -- [--notes FILE] [--keep-all]
 //! [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email
-//! EMAIL] | --import-claude PATH | --import-pi PATH | --scan FILE]
-//! [<session directory>]`
+//! EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR... |
+//! --scan FILE] [<session directory>]`
 //!
 //! At each completed compaction with person messages the jig prints the
 //! reviewer's selection request and reads one answer line on stdin, in the
@@ -15,7 +15,9 @@
 //! or its denial carrying its declared effects prints one `unreplayable`
 //! line instead of invented input. The sampling flags instead print one
 //! label-input line per replayable call; the importer flags fold native
-//! session files instead of a Fiber session directory; `--scan FILE`
+//! session files instead of a Fiber session directory; `--synthetic DIR`
+//! converts the committed synthetic fixture dirs instead of a session
+//! directory, with no allowlist and no drop classes; `--scan FILE`
 //! prints the final-set scan of the committed file. The source directory
 //! is only read, never written.
 
@@ -64,6 +66,19 @@ fn main() -> ExitCode {
         && (!sample_opts.import_claude.is_empty() || !sample_opts.import_pi.is_empty())
     {
         return match support::review::run_sampled(None, &sample_opts, std::io::stdout()) {
+            Ok(report) => sampled(report),
+            Err(problem) => {
+                eprintln!("{problem}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if !sample_opts.synthetic.is_empty() {
+        if !rest.is_empty() {
+            eprintln!("review: --synthetic takes no session directory");
+            return ExitCode::from(2);
+        }
+        return match support::review::run_synthetic(&sample_opts.synthetic, std::io::stdout()) {
             Ok(report) => sampled(report),
             Err(problem) => {
                 eprintln!("{problem}");

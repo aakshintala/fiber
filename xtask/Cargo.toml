@@ -11,6 +11,8 @@ skrifa.workspace = true
 tiny-skia.workspace = true
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 pulldown-cmark = { workspace = true, features = ["html"] }
+grep-matcher.workspace = true
+grep-regex.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../crates/fakes" }

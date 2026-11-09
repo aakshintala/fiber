@@ -1113,3 +1113,45 @@ fn closing_the_panels_leaves_the_next_slash_panel_able_to_open() {
     app.on_files(generation, Ok(vec!["a.rs".to_owned()]));
     assert!(app.completions().is_none());
 }
+
+#[test]
+fn commands_answer_reaches_its_handler() {
+    let mut app = attached();
+    let rows =
+        json!([{"name": "tdd", "description": "Runs tdd.", "tag": "skill", "extension": true}]);
+    let id = answer_rows(&mut app, rows);
+    assert_eq!(app.outbox.waiting(&id), None);
+    // The answer fills the `/` list from the result rows.
+    assert_eq!(app.completion.extensions, vec!["tdd".to_owned()]);
+    assert!(app.completion.commands_id.is_none());
+}
+
+#[test]
+fn commands_tag_is_gone_after_answer() {
+    let mut app = attached();
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let id = asked["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Commands));
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.completion.commands_id.is_none());
+}
+
+#[test]
+fn reset_session_forgets_the_commands_tag() {
+    let mut app = attached();
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let id = asked["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Commands));
+    app.reset_session();
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.completion.commands_id.is_none());
+}

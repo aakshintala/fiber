@@ -1774,6 +1774,57 @@ fn a_rejected_bang_command_returns_to_an_empty_draft() {
     assert_eq!(app.draft(), "!!ls");
 }
 
+#[test]
+fn shell_answer_reaches_its_handler() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!git status", now)));
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Shell));
+    let result = serde_json::json!({"output": "clean\n",
+        "process": {"exit_code": 0, "timed_out": false}});
+    app.on_line(accepted(&id, Some(result)));
+    // The accept folds the run's output into the conversation.
+    assert_eq!(
+        texts(&app),
+        vec!["! git status", "only you see this", "clean", "exit 0"]
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn shell_tag_is_gone_after_answer() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!ls", now)));
+    let result = serde_json::json!({"output": "clean\n",
+        "process": {"exit_code": 0, "timed_out": false}});
+    app.on_line(accepted(&id, Some(result)));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn shell_after_refusal() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!ls", now)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "no"}),
+        None,
+    ));
+    // The refusal names its error, puts the draft back, and settles
+    // the run's wait with its entry.
+    assert_eq!(app.notice(), Some("no"));
+    assert_eq!(app.draft(), "!ls");
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
 /// The box's top-edge row and first draft row in a whole rendered
 /// screen, found from the rule between the draft and the chrome.
 fn shell_box_rows(shown: &str) -> (String, String) {

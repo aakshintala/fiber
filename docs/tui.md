@@ -470,9 +470,10 @@ The default cards, in order:
   what a compaction is: when the context fills, Fiber writes a summary and the
   work continues in a fresh context (`docs/compaction.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
-- **Delegates:** one card for all of them, two rows each, at most 6 rows
-  shown, drawn from each delegate's `session_status` over a `summary`
-  connection. It scrolls on its own under the mouse wheel.
+- **Delegates:** one six-row card, running first, with finished delegates
+  folded and whole-entry scrolling. Detail rows retain each delegate's
+  spend after completion. The detailed Delegates rules below define the
+  fold, scrolling and cost cases.
 - **Jobs:** one line saying how many run, shown only while a job runs. A
   click lists them, one row each.
 - **Quota,** from each provider's `quota()`, as `/quota` shows it
@@ -509,9 +510,10 @@ cut with "…". The cards draw:
 
   Delegates                 1 running
   ● review: the diff
-    14 calls · 2m 10s · read app.rs
+    14 calls · 2m 10s · $0.42 · read app.rs
+  1 finished ▾
   ✓ docs check
-    6 calls · 48s · done
+    6 calls · 48s · $1.10 sub · done
 
   Jobs                    1 running ▸
 
@@ -543,10 +545,21 @@ cut with "…". The cards draw:
   "+N" in `added` and "−N" in `removed` right-aligned. The last row is
   "… N more" dim, when there are more, and the totals.
 - **Delegates.** The title's figure is "N running", in `attention` while one
-  runs and dim otherwise. Each delegate is a spinner in `attention` while it runs
-  ("●" when still; "The working line") or "✓" in `success` once done, then its description; under it, dim, its calls,
-  elapsed time and its last step, or "done", or "failed" or "cancelled"
-  when it did not complete.
+  runs and dim otherwise. Running delegates come first. A dim `N finished ▸`
+  row folds every finished delegate by default; click or Enter opens it with
+  `▾`, listing finished delegates in start order. The state lasts for the
+  session. The card scrolls on its own under the mouse wheel: one delegate or
+  the fold row per step, and never half a delegate, within its six-row cap.
+  Opening or closing keeps the scroll position and clamps it to the last full
+  window. Each delegate has a spinner in `attention` while it runs ("●" when
+  still; "The working line") or "✓" in `success` once done, then its
+  description. Its second row shows calls and elapsed time, then known billed
+  and subscription costs, then its last step or outcome. Subscription cost is
+  dim and ends in `sub`. Positive billed and subscription totals both show,
+  both zero totals show `$0.00`, and unknown billed spend with zero
+  subscription spend shows no cost. A finished delegate keeps its last
+  reported spend. Spend comes from each delegate's `session_status` over a
+  `summary` connection.
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
 - **Quota.** "extension" dim in the title. Each limit is its name dim with
   the share left right-aligned, and a bar of ▆ under it in `accent`, or in
@@ -3379,7 +3392,7 @@ five-file cut does, and the replacement inherits the cap.
 
 | Field | What it holds |
 |---|---|
-| `delegates` | Running delegates in the order they started first, then finished ones in the order they started, each with `job_id`, `description`, `harness`, `model`, `calls`, `step` and `started`; a finished one also carries `outcome` and `ended` |
+| `delegates` | Running delegates in start order first, then finished ones in start order, each with `job_id`, `description`, `harness`, `model`, `calls`, `step` and `started`; a finished one also carries `outcome` and `ended`; each has `cost` when spend was reported, with `billed` (number or null) and `subscription` (number) copied from its spend |
 
 `card:jobs` draws the jobs card:
 
