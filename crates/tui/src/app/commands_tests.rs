@@ -1677,7 +1677,11 @@ fn a_rejected_extension_command_returns_its_draft_with_the_notice() {
 
 /// A writer answering `done` for every description.
 fn feedback_writer(done: crate::FeedbackDone) -> crate::WriteFeedback {
-    std::sync::Arc::new(move |_: &str, _: Option<&contract::SessionId>| Ok(done.clone()))
+    std::sync::Arc::new(
+        move |_: &str, _: Option<&contract::SessionId>, _: &[contract::feedback::FrameShape]| {
+            Ok(done.clone())
+        },
+    )
 }
 
 fn feedback_done() -> crate::FeedbackDone {
@@ -1717,7 +1721,13 @@ fn feedback_without_a_writer_lands_the_notice_through_the_loop() {
     // No writer, so nothing starts: the loop lands the same notice.
     let (tx, _rx) = mpsc::channel();
     assert_eq!(
-        crate::feedback::start(app.feedback_writer(), Some(&tx), description, None),
+        crate::feedback::start(
+            app.feedback_writer(),
+            Some(&tx),
+            description,
+            None,
+            Vec::new()
+        ),
         Some(crate::feedback::NO_WRITER.to_owned())
     );
     app.on_feedback(Err(crate::feedback::NO_WRITER.to_owned()));
@@ -1778,7 +1788,13 @@ fn feedback_renders_the_prompt_then_the_written_report() {
     };
     let (tx, rx) = mpsc::channel();
     assert_eq!(
-        crate::feedback::start(app.feedback_writer(), Some(&tx), description, None),
+        crate::feedback::start(
+            app.feedback_writer(),
+            Some(&tx),
+            description,
+            None,
+            Vec::new()
+        ),
         None
     );
     let crate::Input::Feedback(result) = fakes::Deadline::after(std::time::Duration::from_secs(10))
