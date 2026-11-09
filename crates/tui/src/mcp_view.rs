@@ -238,6 +238,7 @@ impl Mcp {
         };
         Frame {
             joins: Vec::new(),
+            chrome: None,
             title: "MCP servers".to_owned(),
             command: "/mcp".to_owned(),
             rows,

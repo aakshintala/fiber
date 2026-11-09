@@ -3140,7 +3140,8 @@ fn credential_provider_pair(setup: &support::Setup, server: &ProviderServer) {
 
 #[test]
 fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
-    let setup = support::Setup::new();
+    // The credential-pair extension supplies both providers and the selected model.
+    let setup = support::Setup::without_provider();
     let server = ProviderServer::start([
         calls_echo_hi(),
         hello(),
@@ -3707,4 +3708,46 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
         "no repeat in a second session"
     );
     quit_live(run);
+}
+
+#[test]
+fn pty_launch_uses_default_test_credential_before_caller_env() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[]);
+    let grid = run.wait_screen("the default signed-in home", |grid| {
+        grid.contents.contains("Enter starts a session")
+            && !grid.contents.contains("Log in")
+            && !grid.contents.contains("Choose a model")
+    });
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    run.ready();
+    run.write(b"say hi\r");
+    run.wait_screen("the default credential's response", |grid| {
+        grid.contents.contains("Hel")
+    });
+    quit_live(run);
+
+    let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
+    run.wait_screen("the caller-overridden keyless home", |grid| {
+        grid.contents.contains("Enter starts a session")
+    });
+    run.ready();
+    run.write(b"say hi\r");
+    let grid = run.wait_screen("the keyless credential notice", |grid| {
+        grid.contents.contains("no key for fake")
+            && grid.contents.contains("FIBER_TEST_FAKE_KEY is empty")
+    });
+    assert!(
+        grid.contents.contains("FIBER_TEST_FAKE_KEY is empty"),
+        "{grid:?}"
+    );
+    run.write(b"\x03");
+    run.wait_screen("the cleared keyless draft", |grid| {
+        !grid.contents.contains("say hi")
+    });
+    run.write(b"/quit\r");
+    assert_eq!(run.wait().status.code(), Some(0));
 }

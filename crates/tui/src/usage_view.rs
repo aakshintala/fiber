@@ -130,6 +130,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Usage".to_owned(),
         command: "/usage".to_owned(),
         rows,

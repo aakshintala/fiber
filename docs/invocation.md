@@ -1297,8 +1297,9 @@ required unless marked optional; unknown keys, wrong types and explicit
 
 | Operation | Arguments besides `operation` | Result |
 |---|---|---|
-| `settings` | `workspace` (string) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted |
+| `settings` | `workspace` (string); optional `overrides` (array of strings) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted. `overrides` are the run's `-c` arguments as `key=value`, in the order given: the last for a key wins and its row reads `-c` with no `file`. Omitting it means none; an explicit `null`, a non-array or a non-string member is `invalid_arguments` |
 | `set` | `workspace`, `layer`, `key`, `text` (strings) | `file` (string) and `warnings` (array of strings); `layer` is `global`, `project` or `repository`; a client-owned key is rejected `invalid_arguments` without writing |
+| `reset` | `workspace`, `layer`, `key`, `expected` (strings) | `file` (string) and `warnings` (array of strings); removes `key` from that layer's file so the value below applies, only when the file still holds `expected`, JSON text, compared under the file's lock. A layer that sets nothing succeeds without writing; a changed value is `stale_request` and nothing is written; `expected` that is not JSON, a key the layer may not hold and a client-owned key are `invalid_arguments` or the check's own refusal, without writing |
 | `global_file` | none | `file` (string), the hub's global configuration file |
 | `rules` | `workspace` (string) | `global` and `project`, each with `file` and either `rows` or `error`; a row holds `line` (integer), `text` (string) and `rule` (the standing rule object from `docs/configuration.md`) |
 | `revoke` | `workspace`, `scope`, `text` (strings), `line` (integer) | `revoked`, either `removed` or `stale`; `scope` is `global` or `project` |
@@ -1326,6 +1327,17 @@ when that layer has one. `shown` is `unset`, `value`, `redacted` or `union`.
 (`[name, layer]` pairs) and `own` (`[layer, json]` pairs).
 `scope` is `any` (with `repo`, a boolean), `global_only`, `repo_only` or
 `person_files`. Values are JSON text, not decoded values.
+
+A row also holds `label` and `description` (strings, from the schema), `tab`
+when the schema gives the key one (`appearance`, `notifications`, `models`,
+`permissions`, `sessions` or `advanced`), and `control`, an object whose
+`kind` is `boolean`, `number`, `text`, `fixed`, `model`, `theme`,
+`string_list`, `repository_extensions` or `json`. Only `fixed` carries
+`choices`, an array of strings in the schema's order; no other kind has the
+field. An unknown `tab` or `kind`, a missing field or a malformed `choices`
+fails the whole reply, never a subset of its rows. The control is derived
+from the type `fiber config set` checks, so the view holds no type table of
+its own.
 
 `keys` and every `tui.*` key belong to the terminal that draws, including
 `/keys`, `/settings` rows for those keys and the theme picker. They stay in

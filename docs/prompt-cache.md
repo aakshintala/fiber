@@ -32,7 +32,7 @@ fork or when a server reconnects. So:
 
 ## The preamble
 
-The preamble is built at four points, and only these:
+The preamble is built at five points, and only these:
 
 | Point | What happens |
 |---|---|
@@ -40,6 +40,7 @@ The preamble is built at four points, and only these:
 | Resume | Built again from current inputs: the person's system prompt files, extension prompt texts, the model's addendum, the servers' tool lists. Instruction files and the date are not inputs: they live in the logged opening message (`docs/system-prompt.md`). If nothing changed, the bytes match and the cache still hits. |
 | `reload` | Built again with the new tool set (`docs/mcp.md`, "Reload"). |
 | Switch | Built again with the new model, thinking level or credential label ("Switching model"). |
+| `/sandbox` | Built again with the shell tool's new description; the miss stays person-initiated, which is allowed. |
 
 Each build is logged as `preamble_built` (`docs/events.md`), carrying the
 reason, the request settings, the system prompt text and the full tool
@@ -180,7 +181,9 @@ does no work. With `cache.warm_idle` set, an idle session refreshes its cache
 counted from the last request's send, with a request that reads the cached prefix
 and asks for one token of output, so a person who returns after a long pause finds the
 cache still warm. The refresh is logged as `usage_recorded` like any request,
-so its cost shows in the session's spend.
+so its cost shows in the session's spend. A `/sandbox` toggle or a `reload`
+stops warming, dropping the held request, so the next refresh resends the
+fresh bytes.
 
 A refresh is the session's last request with its output capped at one token,
 so it reads the cache only when every other byte is the same. A session sends

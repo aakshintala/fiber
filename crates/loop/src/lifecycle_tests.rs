@@ -4410,3 +4410,18 @@ fn a_cancel_between_a_turn_end_failure_and_end_turn_ends_interrupted() {
         "interrupted"
     );
 }
+
+#[test]
+fn a_sandbox_rebuild_continues_the_session() {
+    use contract::events::PreambleReason;
+    use contract::{SessionId, hook::StartReason};
+    let session = SessionId("s_sandbox".into());
+    let state = crate::lifecycle::State::new(PreambleReason::Sandbox, &session);
+    assert_eq!(
+        state.reason,
+        StartReason::Resume,
+        "a sandbox rebuild continues rather than starts"
+    );
+    let start = crate::lifecycle::State::new(PreambleReason::Start, &session);
+    assert_eq!(start.reason, StartReason::Start);
+}

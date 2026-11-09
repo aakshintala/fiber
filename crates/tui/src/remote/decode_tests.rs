@@ -1,4 +1,6 @@
 use super::*;
+use crate::configure::SettingControl;
+use contract::settings::SettingsTab;
 use serde_json::json;
 
 #[test]
@@ -119,11 +121,11 @@ fn answer_validation_preserves_rejections_and_names_malformed_answers() {
 #[test]
 fn setting_rows_preserve_all_shown_and_scope_forms() {
     let input = json!({"rows":[
-        {"key":"a","layer":"default","shown":"unset","scope":"global_only"},
-        {"key":"b","layer":"global","file":"/hub/config.json","shown":"value","value":"true","scope":"any","repo":true},
-        {"key":"c","layer":"repository","shown":"redacted","value":"hidden","scope":"repo_only"},
-        {"key":"d","layer":"project","shown":"union","names":[["one","global"]],"own":[["global","[]"],["project","[1]"],["repository","[2]"]],"scope":"person_files"},
-        {"key":"e","layer":"default","shown":"unset","scope":"any","repo":false}
+        {"key":"a","layer":"default","shown":"unset","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
+        {"key":"b","layer":"global","file":"/hub/config.json","shown":"value","value":"true","scope":"any","repo":true,"label":"L","description":"D","control":{"kind":"text"}},
+        {"key":"c","layer":"repository","shown":"redacted","value":"hidden","scope":"repo_only","label":"L","description":"D","control":{"kind":"text"}},
+        {"key":"d","layer":"project","shown":"union","names":[["one","global"]],"own":[["global","[]"],["project","[1]"],["repository","[2]"]],"scope":"person_files","label":"L","description":"D","control":{"kind":"text"}},
+        {"key":"e","layer":"default","shown":"unset","scope":"any","repo":false,"label":"L","description":"D","control":{"kind":"text"}}
     ]});
     let rows = settings(&input).unwrap();
     assert_eq!(rows.len(), 5);
@@ -335,5 +337,83 @@ fn notes_saves_carry_each_sent_files_outcome_or_stale() {
         json!({"saved":"written","files":[{"file":"/hub/config.json","saved":true,"error":{}}]}),
     ] {
         assert!(notes_saved(&bad).is_none(), "malformed {bad}");
+    }
+}
+
+fn setting_row(extra: Value) -> Value {
+    let mut row = json!({"key":"thinking","layer":"default","shown":"unset","scope":"global_only","label":"Thinking","description":"The level.","control":{"kind":"text"}});
+    for (name, value) in extra.as_object().unwrap() {
+        row[name] = value.clone();
+    }
+    row
+}
+
+#[test]
+fn settings_rows_decode_every_control_and_tab() {
+    for (control, want) in [
+        (json!({"kind":"boolean"}), SettingControl::Boolean),
+        (json!({"kind":"number"}), SettingControl::Number),
+        (json!({"kind":"text"}), SettingControl::Text),
+        (json!({"kind":"model"}), SettingControl::Model),
+        (json!({"kind":"theme"}), SettingControl::Theme),
+        (json!({"kind":"string_list"}), SettingControl::StringList),
+        (
+            json!({"kind":"repository_extensions"}),
+            SettingControl::RepositoryExtensions,
+        ),
+        (json!({"kind":"json"}), SettingControl::Json),
+        (
+            json!({"kind":"fixed","choices":["b","a","c"]}),
+            SettingControl::Fixed(vec!["b".into(), "a".into(), "c".into()]),
+        ),
+    ] {
+        let rows = settings(&json!({"rows":[setting_row(json!({"control":control}))]})).unwrap();
+        assert_eq!(rows[0].control, want);
+        assert_eq!(rows[0].presentation.label, "Thinking");
+        assert_eq!(rows[0].presentation.description, "The level.");
+        assert_eq!(rows[0].presentation.tab, None);
+    }
+    for tab in SettingsTab::ALL {
+        let rows = settings(&json!({"rows":[setting_row(json!({"tab":tab.tag()}))]})).unwrap();
+        assert_eq!(rows[0].presentation.tab, Some(tab));
+    }
+}
+
+#[test]
+fn settings_rows_with_malformed_presentation_fail_the_whole_reply() {
+    let good = setting_row(json!({}));
+    assert!(settings(&json!({"rows":[good.clone()]})).is_some());
+    let mut broken = vec![
+        // Unknown tags and kinds.
+        setting_row(json!({"tab":"elsewhere"})),
+        setting_row(json!({"control":{"kind":"slider"}})),
+        // A fixed set needs ordered, non-empty string choices; no other
+        // kind may carry any.
+        setting_row(json!({"control":{"kind":"fixed"}})),
+        setting_row(json!({"control":{"kind":"fixed","choices":[]}})),
+        setting_row(json!({"control":{"kind":"fixed","choices":[1]}})),
+        setting_row(json!({"control":{"kind":"fixed","choices":null}})),
+        setting_row(json!({"control":{"kind":"text","choices":["a"]}})),
+        setting_row(json!({"control":{"kind":"fixed","choices":["a"],"extra":1}})),
+        // Explicit nulls and wrong types.
+        setting_row(json!({"tab":null})),
+        setting_row(json!({"tab":3})),
+        setting_row(json!({"label":null})),
+        setting_row(json!({"description":7})),
+        setting_row(json!({"control":null})),
+        setting_row(json!({"control":"text"})),
+        setting_row(json!({"control":{}})),
+    ];
+    for field in ["label", "description", "control"] {
+        let mut missing = good.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        broken.push(missing);
+    }
+    for row in broken {
+        // One bad row rejects the others beside it: no partial answer.
+        assert!(
+            settings(&json!({"rows":[good.clone(), row.clone()]})).is_none(),
+            "{row}"
+        );
     }
 }

@@ -14,7 +14,7 @@ use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::tests::{DEADLINE, command, hello, launch, new_loop, open};
+use super::tests::{DEADLINE, command, hello, launch, launch_without_model, new_loop, open};
 use crate::pty_watch::{watch, watched};
 
 /// At `info` the terminal records nothing: a refused-connect run writes
@@ -1104,9 +1104,11 @@ fn refused_run_with_startup(
     std::thread::Builder::new()
         .name("timing-startup".to_owned())
         .spawn(move || {
+            let mut launch = launch_without_model();
+            launch.models = None;
             let code = super::run_with(
                 slave,
-                launch(),
+                launch,
                 Box::new(|| Err(std::io::Error::other("refused"))),
                 Box::new(|_| {}),
                 FakeClock::new(),

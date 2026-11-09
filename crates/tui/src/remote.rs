@@ -23,7 +23,7 @@ use crate::configure::{
     BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
     LoginTarget, LogoutRow, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked,
     RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
-    ToolGroup, ToolSwitches,
+    ToolGroup, ToolSwitches, WriteScope,
 };
 use contract::clock::Clock;
 use contract::{ErrorCode, Secret};
@@ -654,18 +654,36 @@ impl Configure for Remote {
         )
     }
 
-    fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {
+    fn settings(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<SettingRow>, ConfigureError> {
         let workspace = self.workspace(workspace)?;
+        // Each side reads only the overrides of keys it owns, in the order
+        // given: a `tui` or `keys` override never reaches the hub.
+        let (local_overrides, hub_overrides): (Vec<String>, Vec<String>) =
+            overrides.iter().cloned().partition(|arg| {
+                arg.split_once('=')
+                    .is_some_and(|(key, _)| client_owned(key))
+            });
+        let mut args = Map::from_iter([("workspace".into(), json!(workspace))]);
+        if !hub_overrides.is_empty() {
+            drop(args.insert("overrides".into(), json!(hub_overrides)));
+        }
         let mut hub = self.call(
             "settings",
-            json!({"workspace":workspace}),
+            Value::Object(args),
             Caller::Loop,
             decode::settings,
         )?;
         hub.retain(|row| !client_owned(&row.key));
         let mut rows = Vec::new();
-        for row in self.local.settings(&self.client_dir)? {
+        for mut row in self.local.settings(&self.client_dir, &local_overrides)? {
             if client_owned(&row.key) {
+                // A client-owned key lives in the client's own global file,
+                // whatever its schema scope says.
+                row.scope = WriteScope::GlobalOnly;
                 rows.push(row);
             } else if let Some(index) = hub.iter().position(|h| h.key == row.key) {
                 rows.push(hub.remove(index));
@@ -682,9 +700,28 @@ impl Configure for Remote {
         text: &str,
     ) -> Result<Saved, ConfigureError> {
         if client_owned(key) {
-            return self.local.set(&self.client_dir, layer, key, text);
+            return self.local.set(&self.client_dir, Layer::Global, key, text);
         }
         self.call("set",json!({"workspace":self.workspace(workspace)?,"layer":layer_name(layer),"key":key,"text":text}),Caller::Loop,decode::saved)
+    }
+    fn reset(
+        &self,
+        workspace: &Path,
+        layer: Layer,
+        key: &str,
+        expected: &str,
+    ) -> Result<Saved, ConfigureError> {
+        if client_owned(key) {
+            return self
+                .local
+                .reset(&self.client_dir, Layer::Global, key, expected);
+        }
+        self.call(
+            "reset",
+            json!({"workspace":self.workspace(workspace)?,"layer":layer_name(layer),"key":key,"expected":expected}),
+            Caller::Loop,
+            decode::saved,
+        )
     }
     fn global_file(&self) -> PathBuf {
         self.hub_global().unwrap_or_default()

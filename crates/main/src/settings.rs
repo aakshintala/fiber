@@ -401,13 +401,13 @@ pub(crate) fn sandbox_settings(
 
 /// Builds the session sandbox toggle for the loop from the handle, the
 /// workspace and the shared latch the session assembly holds: flips the
-/// shared setting first, then reports whether the sandbox applies.
-/// Disabling never needs availability. Enabling while unavailable sets
-/// the setting on and accepts with no result; the one notice goes out
-/// only when the latch is unset, and an already-reported unavailability
-/// carries no notice. A concurrent settings replacement between the flip
-/// and the read can only clear the flag, which the next command reports;
-/// the toggle still accepts.
+/// shared setting first, then reports availability paired with whether the
+/// value flipped. Disabling never needs availability. Enabling while
+/// unavailable sets the setting on and accepts with no result; the one
+/// notice goes out only when the latch is unset, and an already-reported
+/// unavailability carries no notice, even when the value did not flip. A
+/// concurrent settings replacement between the flip and the read can only
+/// clear the flag, which the next command reports; the toggle still accepts.
 pub(crate) fn sandbox_toggle(
     sandbox: &SandboxHandle,
     workspace: &Path,
@@ -416,13 +416,24 @@ pub(crate) fn sandbox_toggle(
     let sandbox = Arc::clone(sandbox);
     let workspace = workspace.to_path_buf();
     Arc::new(move |enabled| {
-        support::lock(&sandbox).enabled = enabled;
+        let changed = {
+            let mut guard = support::lock(&sandbox);
+            let previous = guard.enabled;
+            guard.enabled = enabled;
+            previous != enabled
+        };
         if !enabled {
-            return r#loop::Availability::Available;
+            return r#loop::Applied {
+                availability: r#loop::Availability::Available,
+                changed,
+            };
         }
         let settings = support::lock(&sandbox).clone();
         match tools::sandbox_check_available(&settings, &workspace) {
-            Ok(()) => r#loop::Availability::Available,
+            Ok(()) => r#loop::Applied {
+                availability: r#loop::Availability::Available,
+                changed,
+            },
             Err(unavailable) => {
                 let cause = match &unavailable {
                     tools::SandboxUnavailable::Off => None,
@@ -444,7 +455,10 @@ pub(crate) fn sandbox_toggle(
                     }
                 };
                 let Some(cause) = cause else {
-                    return r#loop::Availability::Available;
+                    return r#loop::Applied {
+                        availability: r#loop::Availability::Available,
+                        changed,
+                    };
                 };
                 let reported = latch();
                 let notice = (!reported).then(|| Notice {
@@ -452,7 +466,10 @@ pub(crate) fn sandbox_toggle(
                     message: format!("sandbox unavailable: {unavailable}"),
                     extension: None,
                 });
-                r#loop::Availability::Unavailable { cause, notice }
+                r#loop::Applied {
+                    availability: r#loop::Availability::Unavailable { cause, notice },
+                    changed,
+                }
             }
         }
     })

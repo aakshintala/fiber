@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use contract::ErrorCode;
+use contract::settings::SettingPresentation;
 use hub::Machine;
 use serde_json::{Value, json};
 
@@ -236,8 +237,9 @@ fn remote_operations_round_trip_their_wire_shapes() {
         .unwrap();
     assert_eq!(
         *thinking,
-        json!({"key":"thinking","shown":"value","value":"\"high\"","layer":"global","file":home.join("config.json"),"scope":"any","repo":true})
+        json!({"key":"thinking","shown":"value","value":"\"high\"","layer":"global","file":home.join("config.json"),"scope":"any","repo":true,"label":"Thinking level","description":thinking["description"],"tab":"models","control":{"kind":"fixed","choices":["off","minimal","low","medium","high","xhigh","max"]}})
     );
+    assert!(!thinking["description"].as_str().unwrap().is_empty());
     assert_eq!(
         result(
             &seam,
@@ -425,6 +427,125 @@ fn remote_client_keys_are_filtered_and_refused_without_writes() {
 }
 
 #[test]
+fn remote_settings_apply_ordered_overrides_and_refuse_malformed_ones() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(home.clone());
+    write(&home.join("config.json"), r#"{"thinking":"minimal"}"#);
+    let thinking = |rows: &Value| {
+        rows["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == "thinking")
+            .unwrap()
+            .clone()
+    };
+    let rows = result(
+        &seam,
+        "settings",
+        json!({"workspace":workspace,"overrides":["thinking=high","thinking=low"]}),
+    );
+    let row = thinking(&rows);
+    assert_eq!(
+        (&row["layer"], &row["value"]),
+        (&json!("-c"), &json!("\"low\""))
+    );
+    assert!(row.get("file").is_none());
+    // An empty list is the same as none; null, a non-array, a non-string
+    // member and an override with no `=` are refused.
+    let rows = result(
+        &seam,
+        "settings",
+        json!({"workspace":workspace,"overrides":[]}),
+    );
+    assert_eq!(thinking(&rows)["layer"], "global");
+    for bad in [json!(null), json!("thinking=low"), json!([1]), json!({})] {
+        assert_eq!(
+            call(
+                &seam,
+                "settings",
+                json!({"workspace":workspace,"overrides":bad})
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::InvalidArguments,
+            "{bad}"
+        );
+    }
+    assert!(
+        call(
+            &seam,
+            "settings",
+            json!({"workspace":workspace,"overrides":["thinking"]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn remote_reset_removes_a_hub_value_and_refuses_client_keys_and_stale_values() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("one");
+    let file = home.join("config.json");
+    let seam = Seam::new(home.clone());
+    write(
+        &file,
+        r#"{"thinking":"low","tui":{"theme":"dark"},"keys":{"app.quit":["ctrl+q"]}}"#,
+    );
+    let reset = |key: &str, expected: &str| {
+        call(
+            &seam,
+            "reset",
+            json!({"workspace":workspace,"layer":"global","key":key,"expected":expected}),
+        )
+    };
+    let before = fs::read(&file).unwrap();
+    // Client-owned keys are never written by the hub, whatever they hold.
+    for key in ["tui.theme", "keys.\"app.quit\"", "tui"] {
+        assert_eq!(
+            reset(key, "\"dark\"").unwrap_err().code,
+            ErrorCode::InvalidArguments,
+            "{key}"
+        );
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+    // Malformed expected JSON, a bad layer and a changed value write nothing.
+    assert_eq!(
+        reset("thinking", "low").unwrap_err().code,
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(
+        call(
+            &seam,
+            "reset",
+            json!({"workspace":workspace,"layer":"everywhere","key":"thinking","expected":"\"low\""})
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(
+        reset("thinking", "\"high\"").unwrap_err().code,
+        ErrorCode::StaleRequest
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
+    assert_eq!(
+        result(
+            &seam,
+            "reset",
+            json!({"workspace":workspace,"layer":"global","key":"thinking","expected":"\"low\""})
+        ),
+        json!({"file":file,"warnings":[]})
+    );
+    let after: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(after.get("thinking"), None);
+    assert_eq!(after["tui"]["theme"], "dark");
+}
+
+#[test]
 fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
     let dirs = Dirs::new();
     let seam = Seam::new(dirs.home());
@@ -434,6 +555,10 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
         (
             "set",
             json!({"workspace":workspace,"layer":"global","key":"thinking","text":"high"}),
+        ),
+        (
+            "reset",
+            json!({"workspace":workspace,"layer":"global","key":"thinking","expected":"\"high\""}),
         ),
         ("global_file", json!({})),
         ("rules", json!({"workspace":workspace})),
@@ -867,10 +992,19 @@ fn remote_setting_shapes_preserve_values_layers_and_scope() {
             file: None,
             value: shown,
             scope,
+            presentation: SettingPresentation {
+                tab: None,
+                label: "L".into(),
+                description: "D".into(),
+            },
+            control: SettingControl::Text,
         });
         let mut expected = expected;
         expected["key"] = json!("test");
         expected["layer"] = json!("default");
+        expected["label"] = json!("L");
+        expected["description"] = json!("D");
+        expected["control"] = json!({"kind":"text"});
         assert_eq!(found, expected);
     }
     assert_eq!(
@@ -1397,6 +1531,7 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
         [
             "settings",
             "set",
+            "reset",
             "global_file",
             "rules",
             "revoke",

@@ -341,7 +341,7 @@ fn setup_from_installed_home_with_provider_pick_then_first_turn() {
         // server state is touched after a caught panic; the wrapper only
         // records the failure and unwinds.
         std::panic::AssertUnwindSafe(|| {
-            let setup = Setup::new();
+            let setup = Setup::without_provider();
             let server = ProviderServer::start([support::hello_inline_completed()]).unwrap();
             install_fake_provider_extension(&setup, &server);
             assert!(
@@ -1603,34 +1603,28 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 mark_text,
                 "the picker wheel left the conversation's scroll"
             );
-            // The settings table: one row per key under its header.
+            // The settings view: the tabbed rows. The wheel moves the
+            // focused row, as for the picker, and leaves the conversation
+            // where it was.
+            let settings_frame = run.output().len();
             run.write(b"/settings\r");
+            run.wait_bytes(settings_frame, FRAME_END, "the open settings frame");
             let pre = run.wait_screen("the open settings", |grid| {
-                shows(grid, "Settings") && shows(grid, "budget.usd")
+                shows(grid, "Settings") && shows(grid, "Appearance") && shows(grid, "Hover")
             });
-            let first = find_grid_row(&pre.rows, "budget.usd").expect("the first key row");
-            assert!(
-                pre.rows[usize::from(first) - 1].contains("key"),
-                "the header heads the table: {:?}",
-                pre.rows
-            );
-            // The header is a list row, so a step of three carries off the
-            // first two keys. Take the next row that holds a key and wait
-            // on the row that step moves it to.
-            let (lands, key) = (usize::from(first)..pre.rows.len())
-                .find_map(|row| {
-                    let word = pre.rows[row].split_whitespace().find(|word| *word != "›")?;
-                    let lands = row.checked_sub(3)?;
-                    (lands >= usize::from(first) - 1).then_some((lands, word.to_owned()))
-                })
-                .expect("a settings key");
+            let focused = |grid: &Grid| {
+                grid.rows
+                    .iter()
+                    .find_map(|row| row.trim_start().strip_prefix("› ").map(str::to_owned))
+            };
+            let first = focused(&pre).expect("a focused settings row");
             run.write(&wheel_down(at));
             let post = run.wait_screen("the wheeled settings", |grid| {
-                grid.rows[lands].contains(&key)
+                focused(grid).is_some_and(|row| row != first)
             });
             assert!(
-                !post.rows[usize::from(first) - 1].contains("budget.usd"),
-                "the first key scrolled out: {:?}",
+                shows(&post, "Appearance"),
+                "the tab bar stays: {:?}",
                 post.rows
             );
             run.write(b"\x1b[27u");

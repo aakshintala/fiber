@@ -80,7 +80,7 @@ fn a_missing_key_blocks_with_the_login_line() {
 
 #[test]
 fn a_missing_home_reports_no_model_and_leaves_the_tree() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let missing = setup.home().join("missing");
     let mut doctor = setup.fiber(&["doctor"]);
     doctor.env("FIBER_HOME", &missing);

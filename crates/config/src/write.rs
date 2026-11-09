@@ -627,6 +627,69 @@ pub fn clear_global_if_equals(
     Ok(true)
 }
 
+/// What [`reset`] did to a layer's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reset {
+    /// The value matched and was removed from the file.
+    Removed(PathBuf),
+    /// The layer sets no value: nothing was written, and no file created.
+    Absent(PathBuf),
+    /// The layer holds a value other than the expected one: nothing was
+    /// written.
+    Changed(PathBuf),
+}
+
+/// Removes `key` from a layer's file so the value below it applies, only
+/// when the file's value equals `expected`, comparing and writing under one
+/// lock. The key and layer are checked as [`set`] checks them, so a key the
+/// layer may not hold is refused with nothing read or written. A key the
+/// file does not set writes nothing and creates no file. Every other key
+/// keeps its place and spelling. A failure after the rename, syncing the
+/// directory, returns `Err` with the new content already in place.
+pub fn reset(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    key: &str,
+    expected: &Value,
+) -> Result<Reset, ConfigError> {
+    let (file, source) = layer_file(home, workspace, project, layer)?;
+    if settings_key(key).is_some() {
+        // An extension's own setting lives in its own settings file, not
+        // in `config.json`.
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file,
+            why: "an extension's setting has no override here",
+        });
+    }
+    let (segments, notices) = checked(key, expected.clone(), &source)?;
+    if !notices.is_empty() {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file,
+            why: refused_why(&segments, &source),
+        });
+    }
+    let _lock = locked(&file)?;
+    let Some(mut root) = read(&file)? else {
+        return Ok(Reset::Absent(file));
+    };
+    // A concurrent write may have replaced the whole document with a shape
+    // no layer may hold; `Config::load` would refuse it, and so does this.
+    crate::check_layer(root.clone(), &source, &mut Vec::new())?;
+    let resolved = resolve_spelling(&root, &segments);
+    match path::get(&root, &resolved) {
+        None => return Ok(Reset::Absent(file)),
+        Some(held) if held != expected => return Ok(Reset::Changed(file)),
+        Some(_) => {}
+    }
+    path::remove(&mut root, &resolved);
+    write_root(&file, &root)?;
+    Ok(Reset::Removed(file))
+}
+
 /// Inserts one named entry under `key` in a layer's file (`fiber mcp add`
 /// writing `mcp.servers`). The value is type-checked as [`set`] checks it,
 /// so on any `Err` the file is unchanged. `true` when it wrote; `false`

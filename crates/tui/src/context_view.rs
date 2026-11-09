@@ -490,6 +490,7 @@ pub(crate) fn frame(
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Context".to_owned(),
         command: "/context".to_owned(),
         rows,
