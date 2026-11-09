@@ -319,6 +319,5 @@ crates/tui/src/app/snapshots/tui__app__delegate_steering_tests__queued_delegate_
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_interrupted_with_steering_queued.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_turn_interrupted.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_turn_running.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/extension_host/hooks_offer.rs	fiber-3738	plan	2026-11-09T04:51:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/builtin.rs	fiber-3635	plan	2026-11-09T05:45:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/commands/change_workspace.rs	fiber-3797	plan	2026-11-09T05:51:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
