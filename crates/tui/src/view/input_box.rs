@@ -8,6 +8,8 @@ use ratatui::text::Span;
 
 use super::panel::{PERMISSION_MODE, bar_spans, short_tokens};
 use super::status_rows::{Joined, Segment, StatusRow, cut_row, push_segment};
+use contract::events::ContextFill;
+
 use crate::app::App;
 use crate::app::panel::Spot;
 use crate::ext::{Context, Input, InputStatus, RawSpan, SlotDraw};
@@ -321,6 +323,42 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
     cut_row(rest, room.saturating_add(1))
 }
 
+/// The context the status row reads: the open Fiber delegate's window
+/// and status context, else the attached session's. A zero window names
+/// no context, so the row shows dashes (`docs/tui.md`, "Swapped views").
+fn followed_context(app: &App) -> Option<(u64, &ContextFill)> {
+    let panel = app.panel_state();
+    match app.delegate_session().as_ref() {
+        Some(session) => {
+            let window = panel
+                .delegate_window_for(session)
+                .filter(|window| *window > 0)?;
+            let context = panel.delegate_status_for(session)?.context.as_ref()?;
+            Some((window, context))
+        }
+        None => {
+            let session = app.session()?;
+            let window = panel.window_for(session).filter(|window| *window > 0)?;
+            let context = panel.status_for(session)?.context.as_ref()?;
+            Some((window, context))
+        }
+    }
+}
+
+/// The model and thinking level the status row names: the open Fiber
+/// delegate's, else the attached session's (`docs/tui.md`, "Swapped
+/// views").
+fn followed_model(app: &App) -> (Option<&str>, Option<&str>) {
+    let panel = app.panel_state();
+    match app.delegate_session().as_ref() {
+        Some(session) => (
+            panel.delegate_model_for(session),
+            panel.delegate_thinking_for(session),
+        ),
+        None => (panel.session_model(), panel.thinking()),
+    }
+}
+
 /// The row's ctx segment over the whole segment: `ctx` dim, the 8-cell
 /// bar, the size and the share of the window dim, opening the context
 /// breakdown (`docs/tui.md`, "The input box"). Unknown figures show an
@@ -328,35 +366,16 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
 /// first frame.
 fn ctx_segment(app: &App) -> Segment {
     let panel = app.panel_state();
-    // While a Fiber delegate's view is open the context reads its
-    // fold; else the parent's (`docs/tui.md`, "Swapped views").
     let followed = app.delegate_session();
-    let known = match followed.as_ref() {
-        Some(session) => panel
-            .delegate_window_for(session)
-            .filter(|window| *window > 0)
-            .and_then(|window| {
-                panel
-                    .delegate_status_for(session)?
-                    .context
-                    .as_ref()
-                    .map(|context| (window, context))
-            }),
-        None => app.session().and_then(|session| {
-            let window = panel.window_for(session).filter(|window| *window > 0)?;
-            let context = panel.status_for(session)?.context.as_ref()?;
-            Some((window, context))
-        }),
-    };
+    let known = followed_context(app);
     // The build's trigger is the compactor's target, falling back to
-    // the window; the marker can warn past the reported window
-    // (`docs/tui.md`, "The panel").
+    // the window (`docs/tui.md`, "The panel"). The fallback feeds only
+    // the bar's goal below, where it resolves to the same window the
+    // context already read, so no comparison guards it.
     let trigger = match followed.as_ref() {
-        Some(session) => panel.delegate_trigger_for(session).or_else(|| {
-            panel
-                .delegate_window_for(session)
-                .filter(|window| *window > 0)
-        }),
+        Some(session) => panel
+            .delegate_trigger_for(session)
+            .or_else(|| panel.delegate_window_for(session)),
         None => panel.trigger_at(),
     };
     let mut spans = vec![
@@ -401,22 +420,11 @@ fn ctx_segment(app: &App) -> Segment {
 /// preamble's; it stays blank until one of them lands
 /// (`docs/tui.md`, "The input box").
 fn status_right(app: &App) -> Joined {
-    let panel = app.panel_state();
     let mut joined = Joined {
         spans: Vec::new(),
         spots: Vec::new(),
     };
-    // While a Fiber delegate's view is open the model and level read
-    // its fold; else the parent's (`docs/tui.md`, "Swapped views").
-    let followed = app.delegate_session();
-    let model = match followed.as_ref() {
-        Some(session) => panel.delegate_model_for(session),
-        None => panel.session_model(),
-    };
-    let thinking = match followed.as_ref() {
-        Some(session) => panel.delegate_thinking_for(session),
-        None => panel.thinking(),
-    };
+    let (model, thinking) = followed_model(app);
     let mut spans = Vec::new();
     if let Some(model) = model {
         spans.push(Span::styled(model.to_owned(), style(Role::Accent)));
@@ -570,34 +578,10 @@ fn put_status_row(
 fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
     let panel = app.panel_state();
     let status = panel.status();
-    // While a Fiber delegate's view is open the model, level and
-    // context read its fold; the working directory stays the parent's
-    // (`docs/tui.md`, "Swapped views").
-    let followed = app.delegate_session();
-    let known = match followed.as_ref() {
-        Some(session) => panel
-            .delegate_window_for(session)
-            .filter(|window| *window > 0)
-            .and_then(|window| {
-                panel
-                    .delegate_status_for(session)?
-                    .context
-                    .as_ref()
-                    .map(|context| (window, context))
-            }),
-        None => app.session().and_then(|session| {
-            let window = panel.window_for(session).filter(|window| *window > 0)?;
-            let context = panel.status_for(session)?.context.as_ref()?;
-            Some((window, context))
-        }),
-    };
-    let (model, thinking) = match followed.as_ref() {
-        Some(session) => (
-            panel.delegate_model_for(session),
-            panel.delegate_thinking_for(session),
-        ),
-        None => (panel.session_model(), panel.thinking()),
-    };
+    // The model, level and context read the followed fold; the working
+    // directory stays the parent's (`docs/tui.md`, "Swapped views").
+    let known = followed_context(app);
+    let (model, thinking) = followed_model(app);
     InputStatus {
         workspace: status.map(|status| status.workspace.as_str()),
         model,

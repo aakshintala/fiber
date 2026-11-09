@@ -1703,28 +1703,16 @@ fn delegate_job(app: &mut App, job: &str, delegate: &str, harness: &str, descrip
     ));
 }
 
-/// Opens `job`'s item view through the panel.
-fn open_item(app: &mut App, job: &str, serial_spot: Spot) {
+/// Opens `job`'s item view through the panel: its delegate view when
+/// `delegate`, else its job view.
+fn open_item(app: &mut App, job: &str, delegate: bool) {
     let serial = app
         .serial_of_job(&contract::JobId(job.to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
-    let spot = match serial_spot {
-        Spot::Delegate(_) => Spot::Delegate(serial),
-        Spot::Job(_) => Spot::Job(serial),
-        Spot::Jobs
-        | Spot::Branch
-        | Spot::Waiting
-        | Spot::Model
-        | Spot::Context
-        | Spot::Status
-        | Spot::Usage
-        | Spot::Quota
-        | Spot::File(_)
-        | Spot::DelegateList
-        | Spot::JobList
-        | Spot::ChangedFiles
-        | Spot::Tools
-        | Spot::Widget => panic!("a delegate or job spot"),
+    let spot = if delegate {
+        Spot::Delegate(serial)
+    } else {
+        Spot::Job(serial)
     };
     let _ = app.on_click(TargetId::Panel(spot));
     assert!(app.item_open());
@@ -1843,7 +1831,7 @@ fn delegate_status_segments_show_the_delegate_cost_and_cache() {
             "error": {"code": "mcp_server_unavailable", "message": "died"}}),
     ));
     delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
-    open_item(&mut app, "j_1", Spot::Delegate(0));
+    open_item(&mut app, "j_1", true);
     app.on_line(delegate_preamble(Some(2.5)));
     app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
     app.on_line(Line::Session(contract::Envelope {
@@ -1901,7 +1889,7 @@ fn delegate_status_segments_unknown_cost_never_shows_the_parent_spend() {
     app.on_line(preamble_budget(Some(5.0)));
     app.on_line(parent_status(serde_json::json!(4.12), 600_000));
     delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
-    open_item(&mut app, "j_1", Spot::Delegate(0));
+    open_item(&mut app, "j_1", true);
     let clock = fakes::clock::FakeClock::new();
     app.set_now(clock.now(), 0);
     // No delegate status at all: no cost and no cache segment, rather
@@ -1941,7 +1929,7 @@ fn delegate_status_segments_restore_the_parent_on_close_and_ignore_other_views()
     app.on_line(preamble_budget(Some(5.0)));
     app.on_line(parent_status(serde_json::json!(4.12), 600_000));
     delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
-    open_item(&mut app, "j_1", Spot::Delegate(0));
+    open_item(&mut app, "j_1", true);
     app.on_line(delegate_preamble(Some(2.5)));
     app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
     let clock = fakes::clock::FakeClock::new();
@@ -1965,7 +1953,7 @@ fn delegate_status_segments_restore_the_parent_on_close_and_ignore_other_views()
         serde_json::json!({"job_id": "j_2", "description": "build",
             "output_path": "/tmp/out"}),
     ));
-    open_item(&mut app, "j_2", Spot::Job(0));
+    open_item(&mut app, "j_2", false);
     let lines = line_texts(&app, 100);
     assert!(
         lines.iter().any(|row| row.contains("$4.12 of $5.00")),
@@ -1980,7 +1968,7 @@ fn delegate_status_segments_restore_the_parent_on_close_and_ignore_other_views()
         "claude",
         "other work",
     );
-    open_item(&mut app, "j_3", Spot::Delegate(0));
+    open_item(&mut app, "j_3", true);
     let lines = line_texts(&app, 100);
     assert!(
         lines.iter().any(|row| row.contains("$4.12 of $5.00")),

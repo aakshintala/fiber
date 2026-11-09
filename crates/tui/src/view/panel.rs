@@ -787,16 +787,11 @@ fn dim_rows(mut out: Vec<Row>) -> Vec<Row> {
     out
 }
 
-/// The delegate's Session card branch slot: its status's git, never the
-/// attached branch query's answer. It stays blank and has no target
-/// until its status names one; outside a repository the line stays
-/// blank, as the parent's does.
-fn delegate_branch_row(app: &App, session: &contract::SessionId) -> Row {
-    let branch = app
-        .panel_state()
-        .delegate_status_for(session)
-        .and_then(|status| status.git.as_ref())
-        .map(|git| git.branch.as_deref().unwrap_or("detached").to_owned());
+/// The Session card's branch slot from `branch`: "git" dim and the
+/// branch in secondary. It stays blank and has no target until a branch
+/// is known; outside a repository the line stays blank
+/// (`docs/tui.md`, "Git").
+fn branch_row_for(branch: Option<String>) -> Row {
     let Some(branch) = branch else {
         return Row {
             line: Line::from(""),
@@ -815,6 +810,17 @@ fn delegate_branch_row(app: &App, session: &contract::SessionId) -> Row {
         tint: None,
         edge: false,
     }
+}
+
+/// The delegate's Session card branch slot: its status's git, never the
+/// attached branch query's answer.
+fn delegate_branch_row(app: &App, session: &contract::SessionId) -> Row {
+    branch_row_for(
+        app.panel_state()
+            .delegate_status_for(session)
+            .and_then(|status| status.git.as_ref())
+            .map(|git| git.branch.as_deref().unwrap_or("detached").to_owned()),
+    )
 }
 
 /// A figure row: its plain label dim, the figure right-aligned in the
@@ -921,24 +927,7 @@ fn sides_spans(left: Vec<Span<'static>>, right: Vec<Span<'static>>, text: usize)
 /// secondary. It stays blank and has no target until a branch is known;
 /// outside a repository the line stays blank (`docs/tui.md`, "Git").
 fn branch_row(app: &App) -> Row {
-    let Some(branch) = branch_text(app) else {
-        return Row {
-            line: Line::from(""),
-            spot: None,
-            tint: None,
-            edge: false,
-        };
-    };
-    Row {
-        line: Line::from(vec![
-            Span::styled("git", style(Role::Muted)),
-            Span::raw("  "),
-            Span::styled(branch, style(Role::Secondary)),
-        ]),
-        spot: Some(Spot::Branch),
-        tint: None,
-        edge: false,
-    }
+    branch_row_for(branch_text(app))
 }
 
 /// The branch the Session card and the narrow status line show: the
