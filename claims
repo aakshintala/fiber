@@ -109,13 +109,6 @@ crates/tui/src/turn_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aa
 crates/tui/src/view_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 docs/tui.md	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 crates/main/tests/screens/terminal.rs	fiber-4223	plan	2026-11-08T21:37:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/code-quality/lints.md	fiber-4143	plan	2026-11-08T22:37:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4441
-docs/ci.md	fiber-4143	plan	2026-11-08T22:37:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4441
-xtask/src/narrating_comments.rs	fiber-4143	plan	2026-11-08T23:35:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/xtask/4143-narrating-comments-lint	
-xtask/src/narrating_comments_tests.rs	fiber-4143	plan	2026-11-08T23:35:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/xtask/4143-narrating-comments-lint	
-xtask/tests/narrating_comments.rs	fiber-4143	plan	2026-11-08T23:35:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/xtask/4143-narrating-comments-lint	
-docs/code-quality.md	fiber-4143	plan	2026-11-09T00:53:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4441
-docs/dependencies.md	fiber-4143	plan	2026-11-09T00:53:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4441
 crates/tui/src/app/panel.rs	fiber-4180	plan	2026-11-09T02:05:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app.rs	fiber-4180	plan	2026-11-09T02:05:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/panel.rs	fiber-4180	plan	2026-11-09T02:05:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
