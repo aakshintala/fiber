@@ -266,3 +266,4 @@ crates/doors/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:
 crates/main/tests/support/mod.rs	fiber-3093	plan	2026-11-09T12:56:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/reload.rs	fiber-3093	plan	2026-11-09T12:56:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/sandbox.rs	fiber-4484	plan	2026-11-09T12:59:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_exit_window.rs	fiber-4230	plan	2026-11-09T13:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
