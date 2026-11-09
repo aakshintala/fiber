@@ -626,11 +626,11 @@ fn serve_one(
                     // takes it does.
                     Some(_) => write_accepted(&mut writer, &text),
                     // Anything else is held until EOF.
-                    None => hold(&mut read),
+                    None => hold(Some(received), index, &mut read),
                 }
             }
             // Nothing sent yet: hold until EOF.
-            Err(_) => hold(&mut read),
+            Err(_) => hold(Some(received), index, &mut read),
         }
     }
 }
@@ -655,14 +655,22 @@ fn not_subscribed() -> Handshake {
     }
 }
 
-fn hold(read: &mut BufReader<UnixStream>) {
+fn hold(record: Option<&Received>, index: usize, read: &mut BufReader<UnixStream>) {
     if read.get_mut().set_read_timeout(None).is_err() {
         return;
     }
     loop {
         match support::framing::read_line(&mut *read, support::framing::MAX_LINE) {
             Ok(None) | Err(_) => return,
-            Ok(Some(_)) => {}
+            // The live path keeps each line's trailing line feed, so a
+            // fragment read here is recorded the same way: bytes the fake
+            // already read count however the session ended.
+            Ok(Some(mut buf)) => {
+                if let Some(received) = record {
+                    buf.push(b'\n');
+                    received.push(index, String::from_utf8_lossy(&buf).into_owned());
+                }
+            }
         }
     }
 }
@@ -883,6 +891,31 @@ impl FakeSession {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `hold` keeps the EOF fragment: a torn write the fake already read
+    /// is recorded the way the live path records it, not discarded, so a
+    /// cut command's bytes count however the session ended.
+    #[test]
+    fn hold_records_the_fragment_it_reads_before_eof() {
+        let received = Received::default();
+        let (mut writer, reader) = UnixStream::pair().expect("a fake connection pair");
+        let mut read = BufReader::new(reader);
+        writer
+            .write_all(b"{\"id\":\"c_2\",\"command\":\"prompt\"}")
+            .expect("the torn bytes arrive");
+        writer.shutdown(Shutdown::Write).expect("the session ends");
+        hold(Some(&received), 0, &mut read);
+        assert_eq!(
+            lock(&received.lines).clone(),
+            vec!["{\"id\":\"c_2\",\"command\":\"prompt\"}\n".to_owned()],
+            "the torn fragment is recorded with its line feed, as live reads are"
+        );
+    }
+}
+
 fn session_accept(
     listener: &UnixListener,
     shared: &Arc<(Mutex<SessionState>, std::sync::Condvar)>,
@@ -931,7 +964,8 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
                 state.subscribed += 1;
                 cv.notify_all();
             }
-            hold(&mut read);
+            // A feed probe keeps no record of what the hub sent.
+            hold(None, 0, &mut read);
         }
     }
 }
