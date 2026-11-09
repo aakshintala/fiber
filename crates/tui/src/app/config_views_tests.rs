@@ -2752,6 +2752,65 @@ fn the_launch_overrides_go_with_every_read_of_settings() {
 }
 
 #[test]
+fn settings_search_routes_through_the_app() {
+    // A tabbed row outside Appearance: the search must reach it from the
+    // first tab, through the app's own key and edit routes.
+    let seam = Arc::new(Fake::new(vec![
+        appearance(controlled(
+            "tui.hover",
+            Shown::Value("true".to_owned()),
+            "default",
+            WriteScope::Any { repo: true },
+            SettingControl::Boolean,
+        )),
+        placed(
+            controlled(
+                "reviewer.model",
+                Shown::Unset,
+                "default",
+                WriteScope::GlobalOnly,
+                SettingControl::Model,
+            ),
+            SettingsTab::Permissions,
+            "Reviewer model",
+        ),
+    ]));
+    let mut app = attached(seam);
+    slash_settings(&mut app);
+    assert_eq!(app.on_key(Key::Char('/'), now()), Effect::None);
+    for ch in "rev".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now()), Effect::None);
+    }
+    assert_eq!(app.on_edit(Edit::Paste("iewer".to_owned())), Effect::None);
+    // The query never leaks to the conversation input.
+    assert!(app.input().is_empty());
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("/ reviewer")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Reviewer model") && row.contains("Permissions")),
+        "{rows:?}"
+    );
+    // The first Esc clears the search onto the match, through the same
+    // Stay the view returns; the second Esc closes the view.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.config_view_open());
+    assert!(app.input().is_empty());
+    let rows = screen(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Appearance") && row.contains("Permissions")),
+        "{rows:?}"
+    );
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.config_view_open());
+    assert!(app.input().is_empty());
+}
+
+#[test]
 fn a_key_set_by_dash_c_takes_no_enter_tab_or_delete_through_the_app() {
     let seam = Arc::new(Fake::new(vec![appearance(controlled(
         "compaction.tokens",

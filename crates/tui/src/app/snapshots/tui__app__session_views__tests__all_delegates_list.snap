@@ -3,10 +3,10 @@ source: crates/tui/src/app/session_views_tests.rs
 expression: shown
 ---
   Delegates  /delegates                                              Esc returns
- ◆ task j_1 · 0s
-   test/model · s_dddddddddddddddd
- ◆ task j_2 · 0s
-   test/model · s_eeeeeeeeeeeeeeee
+ ● task j_1
+   3 calls · 6s · $0.42 · $0.75 sub
+ ✓ task j_2
+   3 calls · 6s · $0.42 · $0.75 sub · done
 
  a row opens that item's view
 
@@ -17,10 +17,10 @@ expression: shown
 ⋮
 ⋮
 
+
+
  ● task j_1
-   fiber · test/model
- ● task j_2
-   fiber · test/model
+   3 calls · 6s · $0.42 · $0.75 sub
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▌─────────────────────────────────────────────────────────────────────────────

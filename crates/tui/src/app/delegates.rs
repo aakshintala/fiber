@@ -81,10 +81,15 @@ impl App {
                         .get(&session)
                         .and_then(|row| row.status.as_ref())
                     {
-                        self.panel_state
-                            .keep_last(done.job_id, status.calls, status.started);
+                        self.panel_state.keep_last(
+                            done.job_id,
+                            status.calls,
+                            status.started,
+                            Some((status.spend.cost, status.spend.subscription_cost)),
+                        );
                     }
                     self.delegate_rows.remove(&session);
+                    self.panel_state.clamp_delegate_scroll();
                 }
             }
             return Vec::new();
