@@ -533,22 +533,14 @@ impl Loop {
     /// once on mismatch, then publishing. Inbox serialization (one delivery
     /// at a time, no scheduling point inside this synchronous seam) makes
     /// the mismatch unreachable.
-    pub(crate) fn invalidate_sandbox(
-        &mut self,
-        reason: PreambleReason,
-        expected_enabled: bool,
-    ) -> Result<(), Error> {
+    pub(crate) fn invalidate_sandbox(&mut self, reason: PreambleReason) -> Result<(), Error> {
         // The registered snapshot is what the preamble build and the `/tools`
         // publication read, not the live tool: rebuilding the preamble alone
         // would leave the shell description, the search catalogue and the
         // `/tools` metadata stale, so the seam refreshes the entry at the
         // single site. No other caller clears the cached build or stops
-        // warming for sandbox.
-        //
-        // The carried value names the intended setting through the delivery;
-        // the publish decision below reads the owned bytes, the only sandbox
-        // state this crate can observe.
-        let _ = expected_enabled;
+        // warming for sandbox. The publish decision below reads the owned
+        // bytes, the only sandbox state this crate can observe.
         let mut moved: Vec<(String, Arc<dyn Tool>, ToolDefinition)> = Vec::new();
         for (by, tool, stored) in self.tools.values() {
             let live = tool.definition();

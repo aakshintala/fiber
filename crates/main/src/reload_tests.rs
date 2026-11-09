@@ -3516,6 +3516,8 @@ fn flip_notices(prepared: &r#loop::ReloadPrepared) -> Vec<String> {
 
 #[test]
 fn a_reload_flip_notice_fires_exactly_on_effective_change() {
+    // (`docs/events.md:1191-1193`: one flip notice exactly when the effective
+    // setting changes, none otherwise.)
     let fixture = Fixture::new();
     assert!(
         flip_notices(&fixture.prepare()).is_empty(),
@@ -3548,7 +3550,7 @@ fn a_reload_flip_notice_fires_exactly_on_effective_change() {
 }
 
 #[test]
-fn an_enable_to_unavailable_reload_stages_flip_first_then_unavailable_once() {
+fn an_enable_to_unavailable_reload_stages_flip_and_unavailable_once() {
     let fixture = Fixture::new();
     let home_base = std::env::var_os("HOME").map_or_else(
         || std::path::PathBuf::from("/tmp"),
@@ -3570,17 +3572,20 @@ fn an_enable_to_unavailable_reload_stages_flip_first_then_unavailable_once() {
         .iter()
         .map(|notice| notice.message.clone())
         .collect();
-    let flip_at = messages
-        .iter()
-        .position(|message| message == "Sandbox on after /reload.")
-        .expect("the flip fires on enable");
-    let unavailable_at = messages
-        .iter()
-        .position(|message| message.starts_with("sandbox unavailable"))
-        .expect("the unavailable fires on the same reload");
+    // (`docs/events.md:1191-1193`: the flip stages one notice on effective
+    // change. No doc orders it against the unavailable notice, so both are
+    // asserted as a set.)
     assert!(
-        flip_at < unavailable_at,
-        "flip first, unavailable second: {messages:?}"
+        messages
+            .iter()
+            .any(|message| message == "Sandbox on after /reload."),
+        "the flip fires on enable: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.starts_with("sandbox unavailable")),
+        "the unavailable fires on the same reload: {messages:?}"
     );
     assert_eq!(
         flip_notices(&prepared),
@@ -3588,6 +3593,8 @@ fn an_enable_to_unavailable_reload_stages_flip_first_then_unavailable_once() {
     );
     (prepared.installed)();
     let again = fixture.prepare();
+    // (`docs/events.md:1191`: a flip fires only on effective change.
+    // `docs/invocation.md:491`: the unavailable notice fires once.)
     assert!(
         flip_notices(&again).is_empty(),
         "a second identical reload stages no flip"

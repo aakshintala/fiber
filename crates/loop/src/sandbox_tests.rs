@@ -18,8 +18,14 @@ use fakes::{Deadline, NoRules};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
-    let home = fakes::TempDir::new("fiber-loop-sandbox");
+/// A loop over `tools`: the one fixture every sandbox test starts from.
+/// `started` is the empty-tools wrapper below; the seam tests pass a
+/// registered `shell` whose definition the toggle flips.
+fn started_with_tools(
+    tools: Vec<(String, Arc<dyn contract::tool::Tool>)>,
+    dir: &str,
+) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    let home = fakes::TempDir::new(dir);
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(home.path().join("credentials")).unwrap();
@@ -47,7 +53,7 @@ fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
                 fakes::CONTEXT_WINDOW,
             ),
             inbox: rx,
-            tools: Vec::new(),
+            tools,
             permissions: crate::Permissions {
                 workspace: workspace.display().to_string(),
                 credentials: home.path().join("credentials"),
@@ -60,6 +66,10 @@ fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     .unwrap();
     let watched = log.watch();
     (looped, log, watched, home)
+}
+
+fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    started_with_tools(Vec::new(), "fiber-loop-sandbox")
 }
 
 /// The seam answering `available`: records every requested flag.
@@ -291,50 +301,13 @@ impl contract::tool::Tool for ToggleShell {
 fn started_with_shell(
     enabled: Arc<std::sync::Mutex<bool>>,
 ) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
-    let home = fakes::TempDir::new("fiber-loop-sandbox-seam");
-    let workspace = home.path().join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::create_dir_all(home.path().join("credentials")).unwrap();
-    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let log =
-        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
-    let (_inbox, rx) = mpsc::channel::<Delivery>();
     let shell: Arc<dyn contract::tool::Tool> = Arc::new(ToggleShell {
         enabled: Arc::clone(&enabled),
     });
-    let looped = Loop::start(
-        crate::Session {
-            log: Arc::clone(&log),
-            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-            model: Model {
-                reference: "fake/model".into(),
-                cost: None,
-                subscription: false,
-            },
-            prompt: crate::prompt::PromptInputs::new(
-                home.path().to_path_buf(),
-                "/bin/sh".into(),
-                home.path()
-                    .join("s_test/events.jsonl")
-                    .display()
-                    .to_string(),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                fakes::CONTEXT_WINDOW,
-            ),
-            inbox: rx,
-            tools: vec![("builtin".to_owned(), shell)],
-            permissions: crate::Permissions {
-                workspace: workspace.display().to_string(),
-                credentials: home.path().join("credentials"),
-                credential_files: Vec::new(),
-                rules: Arc::new(NoRules),
-            },
-        },
-        None,
+    started_with_tools(
+        vec![("builtin".to_owned(), shell)],
+        "fiber-loop-sandbox-seam",
     )
-    .unwrap();
-    let watched = log.watch();
-    (looped, log, watched, home)
 }
 
 fn flipping_apply(
@@ -416,11 +389,15 @@ fn a_flip_refreshes_the_registered_shell_bytes_with_reason_sandbox_notice_first(
     // The reply arrives first on the watcher: notice-before-build, since the
     // seam rebuilds after the notice append. A swapped order would deliver
     // the build first and fail the kind check below.
+    // (`docs/invocation.md:491`: the toggle reports its reply;
+    // `docs/events.md:1008`: the sandbox build follows the toggle.)
     assert!(
         replied(&mut watched) == SANDBOX_ON,
         "the reply arrives first"
     );
     // The seam rebuilt with the sandbox reason after the notice.
+    // (`docs/events.md:1008-1009`: a `sandbox` build follows a toggle that
+    // changed the setting.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
     assert_eq!(
         looped.preamble_reason,
@@ -465,6 +442,8 @@ fn a_flip_off_refreshes_the_registered_shell_bytes_back() {
     let answer = admit(&mut looped, false);
     assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
     assert_eq!(replied(&mut watched), SANDBOX_OFF);
+    // (`docs/events.md:1008-1009`: a `sandbox` build follows a toggle that
+    // changed the setting.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
     assert_eq!(
         registered_description(&looped),
@@ -493,7 +472,10 @@ fn a_repeated_available_toggle_replies_with_no_rebuild() {
     let builds_before = preamble_reasons(&looped).len();
     let answer = admit(&mut looped, true);
     assert!(matches!(answer, Ok(None)), "the no-op accepts: {answer:?}");
+    // (`docs/invocation.md:491`: a toggle on an already-on setting is a
+    // no-op with its reply.)
     assert_eq!(replied(&mut watched), SANDBOX_ON, "a no-op still replies");
+    // (`docs/events.md:1009`: a toggle that changes nothing builds nothing.)
     assert_eq!(
         preamble_reasons(&looped).len(),
         builds_before,
@@ -535,6 +517,8 @@ fn a_repeated_unavailable_on_says_its_line_at_most_once() {
         let answer = admit(&mut looped, true);
         assert!(matches!(answer, Ok(None)), "the toggle accepts: {answer:?}");
         if first {
+            // (`docs/invocation.md:491`: enabling while unavailable reports
+            // one `sandbox unavailable` notice.)
             assert_eq!(
                 replied(&mut watched),
                 "sandbox unavailable: Landlock ABI is below 2"
@@ -547,6 +531,8 @@ fn a_repeated_unavailable_on_says_its_line_at_most_once() {
                 .expect("the log outlives the drain")
                 .expect("the log ended before the build");
             assert_eq!(build.kind(), EventKind::PreambleBuilt);
+            // (`docs/events.md:1008-1009`: the flip's rebuild carries reason
+            // `sandbox`.)
             assert_eq!(build.payload["reason"], "sandbox");
         } else {
             assert!(
@@ -587,6 +573,8 @@ fn an_interleaved_flip_between_snapshot_and_publish_publishes_fresh_bytes() {
         ToggleShell::description(false),
         "the publish is fresh after the interleave"
     );
+    // (`docs/events.md:1008-1009`: the flip still builds once with reason
+    // `sandbox`.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
 }
 

@@ -123,7 +123,7 @@ impl Loop {
                     None,
                 )?;
                 if applied.changed {
-                    self.invalidate_sandbox(PreambleReason::Sandbox, args.enabled)?;
+                    self.invalidate_sandbox(PreambleReason::Sandbox)?;
                 }
                 accept(ack);
             }
@@ -132,7 +132,7 @@ impl Loop {
                     self.log.append(&Event::Notice(notice), None, None)?;
                 }
                 if applied.changed {
-                    self.invalidate_sandbox(PreambleReason::Sandbox, args.enabled)?;
+                    self.invalidate_sandbox(PreambleReason::Sandbox)?;
                 }
                 accept(ack);
             }
