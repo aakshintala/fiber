@@ -60,8 +60,11 @@ fn allow_shell(setup: &Setup) {
 fn started(setup: &Setup) -> (Run, usize) {
     let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
-    run.write(b"go\r");
+    // Bytes that never reach the cells, such as the window title, are
+    // waited for on the raw output from an offset taken before the input
+    // that causes the bytes (`docs/testing/screens.md`, "Screens").
     let from = run.output().len();
+    run.write(b"go\r");
     (run, from)
 }
 
