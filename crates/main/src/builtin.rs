@@ -316,9 +316,11 @@ pub(crate) fn tool_search_factory() -> r#loop::ToolSearchFactory {
 
 /// Publishes the loop's `/tools` rows through the session's declarer and
 /// state setter (`docs/tools.md`, "Seeing the tools"): `declare` reaches
-/// the declarer only for the search tool the loop adds and removes, so
-/// every other tool keeps the source its own registration gave it; `state`
-/// reaches the setter for every name, correcting each row at each build.
+/// the declarer for the search tool the loop adds and removes and for the
+/// shell tool whose description the sandbox toggle refreshes, so republished
+/// shell rows reach `/tools`; every other tool keeps the source its own
+/// registration gave it; `state` reaches the setter for every name,
+/// correcting each row at each build.
 #[allow(
     clippy::type_complexity,
     reason = "the setter type is doors' closure type, named at neither end"
@@ -327,9 +329,14 @@ pub(crate) fn tool_rows(
     declare: doors::Declare,
     state: Arc<dyn Fn(&str, ToolState) + Send + Sync>,
 ) -> r#loop::ToolRows {
+    // The shell name from its owned definition, never a literal: `Shell::definition`
+    // owns `name` in `crates/tools/src/shell.rs`, so the xtask name rules stay untouched.
+    let shell_name = tools::Shell::new(PathBuf::new(), Arc::new(support::clock::System))
+        .definition()
+        .name;
     r#loop::ToolRows {
         declare: Arc::new(move |name: &str, info: Option<ToolInfo>| {
-            if name == contract::provider::TOOL_SEARCH {
+            if name == contract::provider::TOOL_SEARCH || name == shell_name {
                 declare(name, info);
             }
         }),

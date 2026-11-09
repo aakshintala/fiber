@@ -2093,6 +2093,16 @@ fn has_row(rows: &[serde_json::Value], name: &str) -> bool {
     rows.iter().any(|row| row["name"] == name)
 }
 
+/// The `bytes` of the `name` row in a `tools` answer.
+fn row_bytes(rows: &[serde_json::Value], name: &str) -> u64 {
+    rows.iter()
+        .find(|row| row["name"] == name)
+        .expect("the row is declared")
+        .get("bytes")
+        .and_then(|bytes| bytes.as_u64())
+        .expect("the row carries bytes")
+}
+
 /// The `tool_call_started` line for the log's one `shell` call.
 fn shell_started(lines: &[serde_json::Value]) -> &serde_json::Value {
     let requested = lines
@@ -2769,7 +2779,7 @@ fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
     let id = doors::mint("s_");
     let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
     live.toggle("sb_on", true);
-    // (`docs/invocation.md:491`: the toggle reports its reply.)
+    // (`docs/invocation.md`, "What each command does": the toggle reports its reply.)
     assert_eq!(
         live.notices("Sandbox on for this session until /reload.")
             .len(),
@@ -2780,7 +2790,7 @@ fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
         .iter()
         .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "sandbox")
         .collect();
-    // (`docs/events.md:1008-1009`: one `sandbox` build follows a toggle that
+    // (`docs/events.md`, "`preamble_built`": one `sandbox` build follows a toggle that
     // changed the setting.)
     assert_eq!(
         on_built.len(),
@@ -2800,7 +2810,7 @@ fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
             .contains("confined"),
         "the sent bytes carry the fresh on-state sentence"
     );
-    // (`docs/invocation.md:495`: `tools` answers every declared tool. The
+    // (`docs/invocation.md`, "What each command does": `tools` answers every declared tool. The
     // rebuild re-derives the catalogue and rows from the refreshed registry.)
     let on_rows = live.tools_rows("tools_on");
     let on_names = row_names(&on_rows);
@@ -2808,15 +2818,16 @@ fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
         has_row(&on_rows, "shell"),
         "the rows still declare shell: {on_names:?}"
     );
+    let on_row_bytes = row_bytes(&on_rows, "shell");
     live.toggle("sb_off", false);
-    // (`docs/invocation.md:491`: the toggle reports its reply.)
+    // (`docs/invocation.md`, "What each command does": the toggle reports its reply.)
     assert_eq!(live.notices("Sandbox off for this session.").len(), 1);
     let off_log = session_log(&setup, &id);
     let off_built: Vec<&serde_json::Value> = off_log
         .iter()
         .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "sandbox")
         .collect();
-    // (`docs/events.md:1008-1009`: each flip builds, so two flips build
+    // (`docs/events.md`, "`preamble_built`": each flip builds, so two flips build
     // twice.)
     assert_eq!(off_built.len(), 2, "off rebuilds again with reason sandbox");
     let off_shell = off_built[1]["payload"]["tools"]
@@ -2832,9 +2843,9 @@ fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
             .contains("confined"),
         "the sent bytes carry the fresh off-state bytes"
     );
-    // (`docs/invocation.md:495`: the rows still list every declared tool with
+    // (`docs/invocation.md`, "What each command does": the rows still list every declared tool with
     // fresh sizes; the catalogue re-derivation drops and adds no row.
-    // `docs/tools.md:2005-2007`: `tool_search` appears only with a deferred
+    // `docs/tools.md`, "Tool search": `tool_search` appears only with a deferred
     // tool.)
     let off_rows = live.tools_rows("tools_off");
     let off_names = row_names(&off_rows);
@@ -2845,6 +2856,15 @@ fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
     assert!(
         !off_names.iter().any(|name| name == "tool_search"),
         "no stale search row: {off_names:?}"
+    );
+    let off_row_bytes = row_bytes(&off_rows, "shell");
+    assert_ne!(
+        on_row_bytes, off_row_bytes,
+        "the /tools shell bytes move with the toggle"
+    );
+    assert!(
+        on_row_bytes > off_row_bytes,
+        "the on-state row carries the longer confined description: {on_row_bytes} vs {off_row_bytes}"
     );
     live.finish();
 }
@@ -2882,7 +2902,7 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
         live.taken.iter().any(|line| line["kind"] == "reloaded"),
         "the reload applies"
     );
-    // (`docs/events.md:1191-1193`: one flip notice on effective change, after
+    // (`docs/events.md`, "`reloaded`": one flip notice on effective change, after
     // `reloaded` and before the rebuilt build.)
     assert_eq!(
         live.notices("Sandbox on after /reload.").len(),
@@ -2894,7 +2914,7 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
         .iter()
         .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload")
         .collect();
-    // (`docs/events.md:1191-1193`: the flip notice precedes the rebuilt
+    // (`docs/events.md`, "`reloaded`": the flip notice precedes the rebuilt
     // `preamble_built`.)
     assert!(!on_built.is_empty(), "the reload rebuilds");
     let on_shell = on_built.last().unwrap()["payload"]["tools"]
@@ -2910,7 +2930,7 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
             .contains("confined"),
         "the rebuilt bytes carry the fresh on-state sentence"
     );
-    // (`docs/invocation.md:495`: `tools` answers every declared tool. The
+    // (`docs/invocation.md`, "What each command does": `tools` answers every declared tool. The
     // rebuild re-derives the catalogue and rows from the refreshed registry.)
     let on_rows = live.tools_rows("tools_rl_on");
     let on_names = row_names(&on_rows);
@@ -2918,6 +2938,7 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
         has_row(&on_rows, "shell"),
         "the rows still declare shell: {on_names:?}"
     );
+    let on_row_bytes = row_bytes(&on_rows, "shell");
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "sandbox": {"enabled": false}}),
@@ -2931,7 +2952,7 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
         line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload"
     });
     live.taken.extend(rebuilt);
-    // (`docs/events.md:1191-1193`: one flip notice on effective change.)
+    // (`docs/events.md`, "`reloaded`": one flip notice on effective change.)
     assert_eq!(
         live.notices("Sandbox off after /reload.").len(),
         1,
@@ -2955,9 +2976,9 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
             .contains("confined"),
         "the rebuilt bytes carry the fresh off-state bytes"
     );
-    // (`docs/invocation.md:495`: the rows still list every declared tool with
+    // (`docs/invocation.md`, "What each command does": the rows still list every declared tool with
     // fresh sizes; the catalogue re-derivation drops and adds no row.
-    // `docs/tools.md:2005-2007`: `tool_search` appears only with a deferred
+    // `docs/tools.md`, "Tool search": `tool_search` appears only with a deferred
     // tool.)
     let off_rows = live.tools_rows("tools_rl_off");
     let off_names = row_names(&off_rows);
@@ -2968,6 +2989,15 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
     assert!(
         !off_names.iter().any(|name| name == "tool_search"),
         "no stale search row: {off_names:?}"
+    );
+    let off_row_bytes = row_bytes(&off_rows, "shell");
+    assert_ne!(
+        on_row_bytes, off_row_bytes,
+        "the /tools shell bytes move with the reload"
+    );
+    assert!(
+        on_row_bytes > off_row_bytes,
+        "the on-state row carries the longer confined description: {on_row_bytes} vs {off_row_bytes}"
     );
     live.finish();
 }

@@ -389,14 +389,14 @@ fn a_flip_refreshes_the_registered_shell_bytes_with_reason_sandbox_notice_first(
     // The reply arrives first on the watcher: notice-before-build, since the
     // seam rebuilds after the notice append. A swapped order would deliver
     // the build first and fail the kind check below.
-    // (`docs/invocation.md:491`: the toggle reports its reply;
-    // `docs/events.md:1008`: the sandbox build follows the toggle.)
+    // (`docs/invocation.md`, "What each command does": the toggle reports its reply;
+    // `docs/events.md`, "`preamble_built`": the sandbox build follows the toggle.)
     assert!(
         replied(&mut watched) == SANDBOX_ON,
         "the reply arrives first"
     );
     // The seam rebuilt with the sandbox reason after the notice.
-    // (`docs/events.md:1008-1009`: a `sandbox` build follows a toggle that
+    // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
     // changed the setting.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
     assert_eq!(
@@ -442,7 +442,7 @@ fn a_flip_off_refreshes_the_registered_shell_bytes_back() {
     let answer = admit(&mut looped, false);
     assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
     assert_eq!(replied(&mut watched), SANDBOX_OFF);
-    // (`docs/events.md:1008-1009`: a `sandbox` build follows a toggle that
+    // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
     // changed the setting.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
     assert_eq!(
@@ -472,10 +472,10 @@ fn a_repeated_available_toggle_replies_with_no_rebuild() {
     let builds_before = preamble_reasons(&looped).len();
     let answer = admit(&mut looped, true);
     assert!(matches!(answer, Ok(None)), "the no-op accepts: {answer:?}");
-    // (`docs/invocation.md:491`: a toggle on an already-on setting is a
+    // (`docs/invocation.md`, "What each command does": a toggle on an already-on setting is a
     // no-op with its reply.)
     assert_eq!(replied(&mut watched), SANDBOX_ON, "a no-op still replies");
-    // (`docs/events.md:1009`: a toggle that changes nothing builds nothing.)
+    // (`docs/events.md`, "`preamble_built`": a toggle that changes nothing builds nothing.)
     assert_eq!(
         preamble_reasons(&looped).len(),
         builds_before,
@@ -517,7 +517,7 @@ fn a_repeated_unavailable_on_says_its_line_at_most_once() {
         let answer = admit(&mut looped, true);
         assert!(matches!(answer, Ok(None)), "the toggle accepts: {answer:?}");
         if first {
-            // (`docs/invocation.md:491`: enabling while unavailable reports
+            // (`docs/invocation.md`, "What each command does": enabling while unavailable reports
             // one `sandbox unavailable` notice.)
             assert_eq!(
                 replied(&mut watched),
@@ -531,7 +531,7 @@ fn a_repeated_unavailable_on_says_its_line_at_most_once() {
                 .expect("the log outlives the drain")
                 .expect("the log ended before the build");
             assert_eq!(build.kind(), EventKind::PreambleBuilt);
-            // (`docs/events.md:1008-1009`: the flip's rebuild carries reason
+            // (`docs/events.md`, "`preamble_built`": the flip's rebuild carries reason
             // `sandbox`.)
             assert_eq!(build.payload["reason"], "sandbox");
         } else {
@@ -573,7 +573,7 @@ fn an_interleaved_flip_between_snapshot_and_publish_publishes_fresh_bytes() {
         ToggleShell::description(false),
         "the publish is fresh after the interleave"
     );
-    // (`docs/events.md:1008-1009`: the flip still builds once with reason
+    // (`docs/events.md`, "`preamble_built`": the flip still builds once with reason
     // `sandbox`.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
 }

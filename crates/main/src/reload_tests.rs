@@ -3516,7 +3516,7 @@ fn flip_notices(prepared: &r#loop::ReloadPrepared) -> Vec<String> {
 
 #[test]
 fn a_reload_flip_notice_fires_exactly_on_effective_change() {
-    // (`docs/events.md:1191-1193`: one flip notice exactly when the effective
+    // (`docs/events.md`, "`reloaded`": one flip notice exactly when the effective
     // setting changes, none otherwise.)
     let fixture = Fixture::new();
     assert!(
@@ -3572,7 +3572,7 @@ fn an_enable_to_unavailable_reload_stages_flip_and_unavailable_once() {
         .iter()
         .map(|notice| notice.message.clone())
         .collect();
-    // (`docs/events.md:1191-1193`: the flip stages one notice on effective
+    // (`docs/events.md`, "`reloaded`": the flip stages one notice on effective
     // change. No doc orders it against the unavailable notice, so both are
     // asserted as a set.)
     assert!(
@@ -3593,8 +3593,8 @@ fn an_enable_to_unavailable_reload_stages_flip_and_unavailable_once() {
     );
     (prepared.installed)();
     let again = fixture.prepare();
-    // (`docs/events.md:1191`: a flip fires only on effective change.
-    // `docs/invocation.md:491`: the unavailable notice fires once.)
+    // (`docs/events.md`, "`reloaded`": a flip fires only on effective change.
+    // `docs/invocation.md`, "What each command does": the unavailable notice fires once.)
     assert!(
         flip_notices(&again).is_empty(),
         "a second identical reload stages no flip"
