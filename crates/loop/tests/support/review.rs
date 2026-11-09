@@ -88,7 +88,7 @@ pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<ReviewArg
             notes,
             keep_all,
         }),
-        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --scan FILE] [<session directory>]".to_owned()),
+        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR | --scan FILE] [<session directory>]".to_owned()),
     }
 }
 
@@ -1394,14 +1394,18 @@ fn emit_sampled(
                 reviewed: &reviewed,
                 added_folders: &added_folders,
             };
-            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped)?;
+            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped, None)?;
         }
     }
     Ok(())
 }
 
 /// Emits one requested call's label-input line, or nothing when the call
-/// is not a review request or is unreplayable.
+/// is not a review request or is unreplayable. With a `synthetic` emission
+/// counter the line instead takes the synthetic identity (`{session}-{n}`
+/// with a synthetic source triple): the committed fixtures carry no owner
+/// data, so no entry meets a drop class and their controls stay the block
+/// side.
 fn emit_sampled_call(
     emit: &EmitCtx<'_>,
     envelope: &contract::Envelope,
@@ -1409,6 +1413,7 @@ fn emit_sampled_call(
     call: &ToolCallRequested,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
+    synthetic: Option<&mut u64>,
 ) -> Result<(), String> {
     let judged = emit.index.review.contains(&id.0);
     if emit.index.nonreview.contains(&id.0) && !judged {
@@ -1432,13 +1437,35 @@ fn emit_sampled_call(
         },
     };
     let paths = started.declared.paths.clone().unwrap_or_default();
-    if let Some(kind) = drop_kind(&arguments, &paths) {
-        dropped.push(format!("DROP {} id={}", kind.name(), id.0));
+    let is_synthetic = synthetic.is_some();
+    let (id, source) = match synthetic {
+        Some(counter) => {
+            *counter += 1;
+            (
+                format!("{}-{counter}", emit.session),
+                Source {
+                    kind: SourceKind::Synthetic,
+                    session: emit.session.to_owned(),
+                    seq: Some(*counter),
+                },
+            )
+        }
+        None => (
+            id.0.clone(),
+            Source {
+                kind: SourceKind::Sampled,
+                session: emit.session.to_owned(),
+                seq: envelope.seq.map(|seq| seq.0),
+            },
+        ),
+    };
+    if !is_synthetic && let Some(kind) = drop_kind(&arguments, &paths) {
+        dropped.push(format!("DROP {} id={}", kind.name(), id));
         return Ok(());
     }
     let snapshot = reviewed_items(emit.reviewed);
     let entry = foreign_to_label_input(ForeignInput {
-        id: &id.0,
+        id: &id,
         tool: &call.name,
         arguments: &arguments,
         declared: &started.declared,
@@ -1446,18 +1473,13 @@ fn emit_sampled_call(
         reviewed: snapshot,
         workspace: emit.workspace,
         added_folders: emit.added_folders,
-        source: Source {
-            kind: SourceKind::Sampled,
-            session: emit.session.to_owned(),
-            seq: envelope.seq.map(|seq| seq.0),
-        },
+        source,
         ctx: emit.ctx,
     });
     let line = emit_line(&entry).map_err(|error| {
         format!(
-            "review: {}: cannot print call {}: {error}",
+            "review: {}: cannot print call {id}: {error}",
             emit.dir.display(),
-            id.0
         )
     })?;
     lines.push(line);
@@ -1517,6 +1539,148 @@ pub(crate) fn run_sampled(
         lines: entries,
         dropped,
         unsupported,
+    })
+}
+
+/// The committed synthetic fixture roots `run_synthetic` converts: one
+/// session per `reviewer_consent/` directory plus the single
+/// `review_person_input/` session.
+fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    (
+        fixtures.join("reviewer_consent"),
+        fixtures.join("review_person_input"),
+    )
+}
+
+/// Resolves a `--synthetic` dir to its committed fixture directory,
+/// rejecting anything else with an error naming the dir: only the
+/// committed `reviewer_consent/` sessions and the `review_person_input/`
+/// session convert, so no owner directory or environment value reaches the
+/// converter through a flag.
+fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
+    let reject = || {
+        format!(
+            "review: --synthetic takes only the committed fixture dirs, not {}",
+            dir.display()
+        )
+    };
+    let candidate = dir.canonicalize().map_err(|_| reject())?;
+    let (consent, person_input) = synthetic_fixture_roots();
+    let consent = consent.canonicalize().map_err(|_| reject())?;
+    let person_input = person_input.canonicalize().map_err(|_| reject())?;
+    if candidate == person_input {
+        return Ok(candidate);
+    }
+    if candidate.is_dir() && candidate.parent().is_some_and(|parent| parent == consent) {
+        return Ok(candidate);
+    }
+    Err(reject())
+}
+
+/// Converts the committed synthetic fixture dirs to unlabelled
+/// synthetic-kind lines: the same `load_chain` plus `render_reviewed` fold
+/// plus `emit_sampled_call` reuse as `emit_sampled`, except nothing passes
+/// the project allowlist and no entry meets a drop class — the fixtures
+/// carry no owner data, so their controls stay the block side. The scrub
+/// context is empty (`_opts` takes the parsed flags for symmetry with
+/// `run_sampled`; the converter reads no flag): fixture workspaces are
+/// already `/synthetic/...` paths and `$HOME` placeholders, so the
+/// workspace lands verbatim. Each dir's lines take the synthetic identity
+/// (`{session}-{n}` with a 1-based emission index in file order, which is
+/// turn order); labels stay null for the recipe to fill. No cap, no
+/// truncation; a reviewed call without its start stays unreplayable and is
+/// excluded.
+pub(crate) fn run_synthetic(
+    dirs: &[String],
+    _opts: &SampleOpts,
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = ScrubCtx {
+        home: String::new(),
+        owner_name: String::new(),
+        owner_email: String::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    for dir in dirs {
+        let dir = check_synthetic_dir(Path::new(dir))?;
+        let (workspace, chain) = load_chain(&dir)?;
+        let index = Driver::index_chain(&chain)?;
+        let session = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut reviewed: Vec<Reviewed> = Vec::new();
+        let mut asks = PendingAsks::default();
+        let mut added_folders: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut summary = false;
+        let mut seq = 0u64;
+        for (position, item) in chain.iter().enumerate() {
+            let envelope = &item.envelope;
+            let event = Event::from_envelope(envelope).map_err(|error| {
+                format!(
+                    "review: {} {}: a {} payload that does not parse: {error}",
+                    item.dir.display(),
+                    describe(envelope, position),
+                    envelope.kind().name(),
+                )
+            })?;
+            let Some(event) = event else {
+                continue;
+            };
+            if r#loop::summary_skips(&mut summary, &event) {
+                continue;
+            }
+            if let Event::DirectoryAdded(added) = &event {
+                added_folders.push(added.path.clone());
+            }
+            render_reviewed(
+                &mut reviewed,
+                &event,
+                envelope.action_id.as_ref(),
+                envelope.seq,
+                &mut asks,
+            );
+            if let Event::ToolCallRequested(call) = event
+                && call.ran_by.is_none()
+                && call.provider_item.is_none()
+                && let Some(action) = envelope.action_id.clone()
+                && seen.insert(action.0.clone())
+            {
+                let emit = EmitCtx {
+                    dir: &dir,
+                    session: &session,
+                    workspace: &workspace,
+                    ctx: &ctx,
+                    index: &index,
+                    reviewed: &reviewed,
+                    added_folders: &added_folders,
+                };
+                emit_sampled_call(
+                    &emit,
+                    envelope,
+                    &action,
+                    &call,
+                    &mut entries,
+                    &mut dropped,
+                    Some(&mut seq),
+                )?;
+            }
+        }
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
     })
 }
 
