@@ -49,7 +49,8 @@ impl SourceKind {
             "sampled" => Some(SourceKind::Sampled),
             "seeded" => Some(SourceKind::Seeded),
             "synthetic" => Some(SourceKind::Synthetic),
-            _ =>         }
+            _ => None,
+        }
     }
 }
 
@@ -76,7 +77,8 @@ impl Label {
         match raw {
             "block" => Some(Label::Block),
             "pass" => Some(Label::Pass),
-            _ =>         }
+            _ => None,
+        }
     }
 }
 
@@ -116,7 +118,8 @@ impl ReviewedKind {
             "person" => Some(ReviewedKind::Person),
             "call" => Some(ReviewedKind::Call),
             "reply" => Some(ReviewedKind::Reply),
-            _ =>         }
+            _ => None,
+        }
     }
 }
 
@@ -240,7 +243,8 @@ fn parse_declared(value: &Value) -> Result<DeclaredEffects, String> {
         .and_then(Value::as_bool)
         .ok_or_else(|| "review: bad set line: declared has no reversible".to_owned())?;
     let paths = match value.get("paths") {
-        None | Some(Value::Null) =>         Some(Value::Array(paths)) => {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(paths)) => {
             let mut parsed_paths = Vec::new();
             for path in paths {
                 parsed_paths.push(
@@ -417,10 +421,7 @@ fn recorded_value(recorded: &RecordedVerdict) -> Value {
     let reviewer = match &recorded.reviewer {
         Some(reviewer) => {
             let mut map = Map::new();
-            map.insert(
-                "model".to_owned(),
-                Value::String(reviewer.model.clone()),
-            );
+            map.insert("model".to_owned(), Value::String(reviewer.model.clone()));
             map.insert("stage".to_owned(), Value::Number(reviewer.stage.into()));
             Value::Object(map)
         }
@@ -450,7 +451,8 @@ fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
         }
     };
     let reason = match value.get("reason") {
-        None | Some(Value::Null) =>         Some(Value::String(reason)) => Some(reason.clone()),
+        None | Some(Value::Null) => None,
+        Some(Value::String(reason)) => Some(reason.clone()),
         Some(_) => {
             return Err(format!(
                 "review: bad set line {id}: the recorded reason is not a string"
@@ -458,7 +460,8 @@ fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
         }
     };
     let reviewer = match value.get("reviewer") {
-        None | Some(Value::Null) =>         Some(reviewer) => {
+        None | Some(Value::Null) => None,
+        Some(reviewer) => {
             let model = reviewer
                 .get("model")
                 .and_then(Value::as_str)
@@ -509,7 +512,8 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
         .get("declared")
         .ok_or_else(|| format!("review: bad set line {id}: no declared effects"))?;
     let hosts = match value.get("hosts") {
-        None | Some(Value::Null) =>         Some(Value::Array(hosts)) => {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(hosts)) => {
             let mut parsed = Vec::new();
             for host in hosts {
                 parsed.push(
@@ -687,7 +691,8 @@ pub(crate) fn reviewed_items(reviewed: &[r#loop::Reviewed]) -> Vec<ReviewedItem>
                     ReviewedKind::Person,
                     Some(kept.seq.0),
                     Some(kept.item),
-                                    ),
+                    None,
+                ),
                 r#loop::Shown::Reply(_) => (ReviewedKind::Reply, None, None, None),
             };
             let text = match &item.input {
@@ -1096,7 +1101,9 @@ fn content_text(content: &Value) -> Option<String> {
             }
             Some(texts.join("\n"))
         }
-        Value::Null =>         Value::Object(_) | Value::Bool(_) | Value::Number(_) =>     }
+        Value::Null => None,
+        Value::Object(_) | Value::Bool(_) | Value::Number(_) => None,
+    }
 }
 
 /// Whether a message content array holds a result block, which the fold
@@ -1445,7 +1452,8 @@ fn shell_declared(
                 paths: Some(paths),
                 confined: false,
             },
-                    )
+            None,
+        )
     } else if elements.iter().any(|words| is_gh_read(words)) {
         let mut paths = Vec::new();
         for words in &elements {
@@ -1470,9 +1478,11 @@ fn shell_declared(
             DeclaredEffects {
                 effects: vec![Effect::Executes],
                 reversible: false,
-                paths:                 confined: false,
+                paths: None,
+                confined: false,
             },
-                    )
+            None,
+        )
     }
 }
 
@@ -1516,7 +1526,8 @@ pub(crate) fn declared_for(
                 ]),
                 confined: false,
             },
-                    ));
+            None,
+        ));
     }
     if tool == "write" {
         let Some(raw) = str_field(arguments, "path") else {
@@ -1537,7 +1548,8 @@ pub(crate) fn declared_for(
                 paths: Some(vec![ctx.scrub_text(&resolved.to_string_lossy())]),
                 confined: false,
             },
-                    ));
+            None,
+        ));
     }
     if tool == "edit" {
         let path = native_path(arguments, workspace, ctx).map_err(|_| unsupported(tool))?;
@@ -1551,7 +1563,8 @@ pub(crate) fn declared_for(
                 paths: Some(vec![path]),
                 confined: false,
             },
-                    ));
+            None,
+        ));
     }
     if tool == "shell" || tool == "bash" {
         let Some(command) = str_field(arguments, "command") else {
@@ -1559,9 +1572,11 @@ pub(crate) fn declared_for(
                 DeclaredEffects {
                     effects: vec![Effect::Executes],
                     reversible: false,
-                    paths:                     confined: false,
+                    paths: None,
+                    confined: false,
                 },
-                            ));
+                None,
+            ));
         };
         let workdir = str_field(arguments, "workdir");
         return Ok(shell_declared(command, workdir, workspace, ctx));
@@ -1577,7 +1592,8 @@ pub(crate) fn declared_for(
             DeclaredEffects {
                 effects: vec![Effect::Network],
                 reversible: false,
-                paths:                 confined: false,
+                paths: None,
+                confined: false,
             },
             Some(vec![host]),
         ));
@@ -1587,7 +1603,8 @@ pub(crate) fn declared_for(
             DeclaredEffects {
                 effects: vec![Effect::Network],
                 reversible: true,
-                paths:                 confined: false,
+                paths: None,
+                confined: false,
             },
             Some(Vec::new()),
         ));
@@ -1717,8 +1734,11 @@ pub(crate) fn foreign_to_label_input(input: ForeignInput<'_>) -> SetLine {
             })
             .collect(),
         labels: Labels {
-            family1:             family2:         },
-        recorded:     }
+            family1: None,
+            family2: None,
+        },
+        recorded: None,
+    }
 }
 
 /// One native session file's running fold: the `reviewed[]` prefix, the
@@ -1739,14 +1759,17 @@ impl FileFold {
             self.reviewed.push(ReviewedItem {
                 kind: ReviewedKind::Reply,
                 seq: Some(reply_seq),
-                item:                 action:                 text: ctx.scrub_text(&format!("The agent: {reply}")),
+                item: None,
+                action: None,
+                text: ctx.scrub_text(&format!("The agent: {reply}")),
             });
         }
         self.reviewed.push(ReviewedItem {
             kind: ReviewedKind::Person,
             seq: Some(seq),
             item: Some(0),
-            action:             text: ctx.scrub_text(text),
+            action: None,
+            text: ctx.scrub_text(text),
         });
     }
 
@@ -1762,7 +1785,8 @@ impl FileFold {
         self.reviewed.push(ReviewedItem {
             kind: ReviewedKind::Call,
             seq: Some(seq),
-            item:             action: Some(id.to_owned()),
+            item: None,
+            action: Some(id.to_owned()),
             text: format!("Tool call: {rendered}"),
         });
         self.reviewed.clone()
