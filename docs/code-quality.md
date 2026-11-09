@@ -216,7 +216,8 @@ code.
 - Other comments say why, and only where the code would surprise a careful
   reader.
 - No comment narrates history: no "changed from", "previously", "now uses" or
-  "fixed the bug where". Change the code and leave no trace. History is git's.
+  "fixed the bug where". `cargo xtask narrating-comments --base REV` checks
+  added comment lines. Change the code and leave no trace. History is git's.
 
 ## Prose
 
@@ -239,7 +240,7 @@ Only what no tool can:
 - error messages and event payloads read clearly to their consumer
 - every lint allow, `unsafe` block and mutation-test exemption gives a reason
   that holds
-- comments say why, not what happened
+- comments explain why, where the code would surprise a careful reader
 - a fix sits where the wrong value is made, not where it is noticed, and the
   same mistake elsewhere is fixed in the same pull request
 - no struct whose fields can contradict each other (see "Types")
