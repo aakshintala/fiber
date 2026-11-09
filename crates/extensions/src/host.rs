@@ -74,8 +74,8 @@ pub(crate) struct HostContext {
 
 /// `host.http` yields this tag, `"http"` and the request table. The
 /// extension's thread runs the request off to the side and resumes the
-/// coroutine with the reply (`docs/extensions.md`, "A host call suspends the
-/// code that made it"). Every host call that waits yields the tag and its
+/// coroutine with the reply (`docs/extensions.md`, "How an extension runs").
+/// Every host call that waits yields the tag and its
 /// kind, as [`Request`] lists.
 const HTTP: &str = r#"
 local host, tag, failure = ...
@@ -91,8 +91,8 @@ end
 
 /// `host.exec` yields this tag, `"exec"` and the call's spec. The
 /// extension's thread runs the program off to the side and resumes the
-/// coroutine with the reply (`docs/extensions.md`, "A host call suspends the
-/// code that made it"). Refused in the entry script before it yields, like
+/// coroutine with the reply (`docs/extensions.md`, "How an extension runs").
+/// Refused in the entry script before it yields, like
 /// `host.oauth.callback`.
 const EXEC: &str = r#"
 local host, tag, in_entry, failure = ...

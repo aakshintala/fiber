@@ -817,8 +817,8 @@ fn process_event_stream_forwards_live_and_replays_durable_lines() {
     for line in &replayed {
         session.deliver_line(line);
     }
-    // docs/extensions.md:246 (session order is kept) and :285 (a process
-    // extension keeps the same order, one item at a time); docs/events.md,
+    // `docs/extensions.md`, "How an extension runs" (session order is kept, and a
+    // process extension keeps the same order, one item at a time); docs/events.md,
     // `subscribe`/`history`: the fold sends before the stream goes live,
     // in `seq` order. The live envelope arrives first, then the replayed
     // pair, each exactly once.

@@ -607,7 +607,7 @@ fn a_process_package_matching_the_provider_short_name_runs_without_a_session() {
     );
     // The project directory is keyed by the CLI working directory, not
     // the machine directory: identical paths would prove nothing is
-    // keyed (`docs/extensions.md:211`, "With reason `call`").
+    // keyed (`docs/extensions.md`, "Process extensions").
     let project =
         config::ProjectKey::new(log::project_key(&cwd.canonicalize().unwrap_or(cwd.clone())))
             .expect("the CLI working directory keys a project");

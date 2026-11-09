@@ -14,8 +14,8 @@ use mlua::{Lua, Table, Value as LuaValue};
 
 /// `host.model` yields this tag, `"model"` and the call's spec. The
 /// extension's thread runs the model call off to the side and resumes the
-/// coroutine with the reply (`docs/extensions.md`, "A host call suspends the
-/// code that made it"). Refused in the entry script before it yields, like
+/// coroutine with the reply (`docs/extensions.md`, "How an extension runs").
+/// Refused in the entry script before it yields, like
 /// `host.exec`.
 const MODEL: &str = r#"
 local host, tag, in_entry, failure = ...

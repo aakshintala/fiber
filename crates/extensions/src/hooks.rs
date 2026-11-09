@@ -751,7 +751,7 @@ impl SessionExtensions {
         // install of the same name: the merged list carries both in slug
         // order, with one notice per shadowed install, grouped by code
         // with the pass's other notices before it is written
-        // (`docs/errors.md`, "Notices").
+        // (`docs/errors.md`, "Registry").
         // The merged inventory, however each entry is switched: the
         // candidates' filter stays open, and each arm below applies its
         // own policy, so a disabled package's provider data still loads.

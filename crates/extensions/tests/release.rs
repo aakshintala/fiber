@@ -646,7 +646,7 @@ fn an_observed_install_writes_one_extension_release_line_per_download() {
             files.extensions_sum.len(),
         ),
     ];
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // `docs/state.md`, "What each part holds": one line per tag lookup, checksum and binary download.
     assert_eq!(
         lines.len(),
         bodies.len(),

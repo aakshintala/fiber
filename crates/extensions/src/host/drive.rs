@@ -15,8 +15,8 @@ use mlua::{Function, Lua, Table};
 
 /// `host.drive` yields this tag, `"drive"` and the call's spec. The
 /// extension's thread sends the command through the session's door and
-/// resumes the coroutine with the reply (`docs/extensions.md`, "A host call
-/// suspends the code that made it"). Refused in the entry script before it
+/// resumes the coroutine with the reply (`docs/extensions.md`, "How an extension
+/// runs"). Refused in the entry script before it
 /// yields, like `host.exec`.
 const DRIVE: &str = r#"
 local host, tag, in_entry, failure = ...
