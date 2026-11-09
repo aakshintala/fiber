@@ -26,6 +26,7 @@ pub(crate) fn start(
     out: Option<&Sender<Input>>,
     description: String,
     session: Option<SessionId>,
+    shapes: Vec<contract::feedback::FrameShape>,
 ) -> Option<String> {
     let Some(writer) = writer else {
         return Some(NO_WRITER.to_owned());
@@ -37,7 +38,8 @@ pub(crate) fn start(
     match thread::Builder::new()
         .name("tui-feedback".to_owned())
         .spawn(move || {
-            let done: Result<FeedbackDone, String> = writer(&description, session.as_ref());
+            let done: Result<FeedbackDone, String> =
+                writer(&description, session.as_ref(), &shapes);
             match out.send(Input::Feedback(done)) {
                 Ok(()) | Err(_) => {}
             }

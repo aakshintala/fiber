@@ -761,6 +761,7 @@ impl<B: Backend> Loop<B> {
                         Some(&self.files_out),
                         description,
                         self.app.session().cloned(),
+                        self.screen.frame_shapes(),
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.
