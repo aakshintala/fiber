@@ -1,7 +1,8 @@
 //! Person-run sweep runner (`docs/testing/fakes.md`, "Live calls and
-//! evals"): runs the committed labelled set once per `--models` reviewer
-//! model through the public `routing::reviewer` seam and prints the
-//! miss/false-block table. `--check` only parses and counts a file. Live
+//! evals"): runs the committed labelled set `--runs` times per `--models`
+//! reviewer model (3 by default, back to back for cache reuse) through the
+//! public `routing::reviewer` seam and prints the per-entry and per-model
+//! miss/false-block tables. `--check` only parses and counts a file. Live
 //! calls are opt-in by running this example; no test can enable one.
 
 #![allow(
@@ -39,7 +40,7 @@ fn run(argv: &[String]) -> Result<(), String> {
             println!("{}: {} lines", file.display(), entries.len());
             Ok(())
         }
-        sweep::Mode::Sweep { models, set } => {
+        sweep::Mode::Sweep { models, set, runs } => {
             let entries = sweep::read_set_file(&set)?;
             let home = config::fiber_home_path_from_env().map_err(|error| error.to_string())?;
             let workspace = std::env::current_dir()
@@ -47,11 +48,10 @@ fn run(argv: &[String]) -> Result<(), String> {
             let clock: Arc<dyn Clock> = Arc::new(fakes::clock::SystemClock);
             let mut reports = Vec::with_capacity(models.len());
             for model in &models {
-                let provider = reviewer_provider(&home, &workspace, model, &clock)?;
-                let outcomes = entries
-                    .iter()
-                    .map(|entry| sweep::drive(entry, &provider, &clock))
-                    .collect::<Vec<_>>();
+                let (provider, sweep_model) = reviewer_provider(&home, &workspace, model, &clock)?;
+                let (tallies, outcomes) = sweep::sweep(&entries, runs, |entry| {
+                    sweep::drive(entry, &provider, &clock, &sweep_model)
+                });
                 for outcome in &outcomes {
                     if let sweep::Outcome::Errored(errored) = outcome {
                         eprintln!(
@@ -60,6 +60,7 @@ fn run(argv: &[String]) -> Result<(), String> {
                         );
                     }
                 }
+                print!("{}", sweep::render_entry_table(&tallies, runs));
                 reports.push(sweep::score(model, &outcomes));
             }
             print!("{}", sweep::render_table(&reports));
@@ -99,17 +100,18 @@ fn run_command(
     }
 }
 
-/// Builds the reviewer provider for one `--models` entry through the
-/// public `routing::reviewer::{reference, model, choose}` seam. The
-/// `--models` entry rides `reviewer.model`, so `reference` returns it
-/// before reading the session; the session model only feeds the fallback
-/// that never runs. Resolution failures name `reviewer.model`.
+/// Builds the reviewer provider and its resolved model metadata for one
+/// `--models` entry through the public `routing::reviewer::{reference,
+/// model, choose}` seam. The `--models` entry rides `reviewer.model`, so
+/// `reference` returns it before reading the session; the session model
+/// only feeds the fallback that never runs. Resolution failures name
+/// `reviewer.model`.
 fn reviewer_provider(
     home: &Path,
     workspace: &Path,
     bare: &str,
     clock: &Arc<dyn Clock>,
-) -> Result<Arc<dyn contract::provider::Provider>, String> {
+) -> Result<(Arc<dyn contract::provider::Provider>, sweep::SweepModel), String> {
     let config = config::Config::load(config::Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
@@ -158,5 +160,11 @@ fn reviewer_provider(
     let chosen = routing::reviewer::choose(&providers, &config, &session, &here, &mut lookup, None)
         .map_err(|error| format!("review_sweep: reviewer.model {bare}: {}", error.message))?
         .ok_or_else(|| format!("review_sweep: reviewer.model {bare} names no reviewer"))?;
-    Ok(chosen.provider)
+    let model = sweep::SweepModel {
+        reference: chosen.model.reference(),
+        cost: chosen.model.model.cost.clone(),
+        subscription: chosen.model.model.subscription,
+        thinking_levels: chosen.model.model.thinking_levels.clone(),
+    };
+    Ok((chosen.provider, model))
 }

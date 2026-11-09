@@ -284,12 +284,6 @@ crates/loop/tests/before_compaction.rs	3	docs/compaction.md, "What the model see
 crates/loop/tests/change_workspace.rs	1	docs/events.md:1606
 crates/loop/tests/changes.rs	1	docs/errors.md`,\n    // "Notices"
 crates/loop/tests/compaction.rs	14	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/configuration.md:79-81
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	102	docs/invocation.md:1159-1160
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:109-138
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:187-190
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:536-539
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	30	docs/testing.md:46-48
 crates/loop/tests/inner_calls.rs	1	docs/extensions.md`, "When an extension calls a tool"
 crates/loop/tests/invariants.rs	1	docs/invocation.md`, "A prompt arriving\n    /// mid-turn is rejected `busy`"
 crates/loop/tests/resume.rs	3	docs/compaction.md, "What the model sees after a compaction"
