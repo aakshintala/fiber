@@ -680,18 +680,29 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
     for key in ["model", "tuix.y", "models.\"tui/x\".thinking", "", "\"tui"] {
         assert!(!client_owned(key), "{key}");
     }
-    let row = |key: &str| SettingRow {
-        key: key.into(),
-        value: Shown::Unset,
-        layer: "default".into(),
-        file: None,
-        scope: WriteScope::GlobalOnly,
+    let row = |key: &str| {
+        crate::configure_fake::row(key, Shown::Unset, "default", WriteScope::Any { repo: true })
     };
     let mut local = Fake::new(vec![row("keys.quit"), row("model"), row("tui.hover")]);
     local.themes = vec!["client-night".into(), "client-day".into()];
     let local = Arc::new(local);
     let hub = Hub::new(Arc::clone(&local));
-    let rows=hub.call("settings",json!({"workspace":"/remote/ws"}),json!({"rows":[{"key":"model","layer":"global","shown":"value","value":"\"hub/m\"","scope":"global_only"},{"key":"tui.hover","layer":"global","shown":"value","value":"false","scope":"global_only"},{"key":"extra","layer":"default","shown":"unset","scope":"global_only"}]}),|r|r.settings(Path::new("/remote/ws"))).unwrap();
+    let overrides = [
+        "tui.hover=false".to_owned(),
+        "model=a/b".to_owned(),
+        "keys.quit=[\"q\"]".to_owned(),
+        "thinking=low".to_owned(),
+        "model=c/d".to_owned(),
+    ];
+    let hub_row = |key: &str, layer: &str, shown: &str, value: &str| json!({"key":key,"layer":layer,"shown":shown,"value":value,"scope":"global_only","label":key,"description":"d","control":{"kind":"text"}});
+    let rows = hub
+        .call(
+            "settings",
+            json!({"workspace":"/remote/ws","overrides":["model=a/b","thinking=low","model=c/d"]}),
+            json!({"rows":[hub_row("model","global","value","\"hub/m\""),hub_row("tui.hover","global","value","false"),hub_row("extra","default","unset","")]}),
+            move |r| r.settings(Path::new("/remote/ws"), &overrides),
+        )
+        .unwrap();
     assert_eq!(
         rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
         ["keys.quit", "model", "tui.hover", "extra"]
@@ -699,12 +710,36 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
     assert_eq!(rows[1].value, Shown::Value("\"hub/m\"".into()));
     assert_eq!(rows[2].value, Shown::Unset);
     assert_eq!(*support::lock(&local.reads), [PathBuf::from("/client")]);
+    // The client's own side read only its own overrides, in order; the hub
+    // got the rest above, and no `tui` or `keys` override left the client.
+    assert_eq!(
+        *support::lock(&local.settings_queries),
+        [(
+            PathBuf::from("/client"),
+            vec!["tui.hover=false".to_owned(), "keys.quit=[\"q\"]".to_owned()]
+        )]
+    );
+    // Client-owned rows offer only the client's global layer, whatever the
+    // schema allows; the hub's own row keeps the hub's scope.
+    assert_eq!(rows[0].scope, WriteScope::GlobalOnly);
+    assert_eq!(rows[2].scope, WriteScope::GlobalOnly);
     for key in ["tui.hover", "keys.quit"] {
         hub.remote
-            .set(Path::new("/remote/ws"), Layer::Global, key, "true")
+            .set(Path::new("/remote/ws"), Layer::Project, key, "true")
             .unwrap();
     }
-    assert_eq!(support::lock(&local.writes).len(), 2);
+    // A client-owned write lands in the client's global layer even when
+    // another was asked for.
+    assert_eq!(
+        support::lock(&local.writes)
+            .iter()
+            .map(|(_, layer, key, _)| (*layer, key.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (Layer::Global, "tui.hover".to_owned()),
+            (Layer::Global, "keys.quit".to_owned())
+        ]
+    );
     assert_eq!(hub.remote.themes(Path::new("/remote/ws")), local.themes);
     assert!(matches!(
         hub.remote.theme(Path::new("/remote/ws"), "light"),
@@ -716,6 +751,40 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
     }];
     hub.remote.save_keys(&edits).unwrap();
     assert_eq!(*support::lock(&local.keys_saved), [edits]);
+    // Resets follow the same ownership: a client key resets in the
+    // client's global layer and sends nothing to the hub.
+    hub.remote
+        .reset(Path::new("/remote/ws"), Layer::Project, "tui.hover", "true")
+        .unwrap();
+    assert_eq!(
+        *support::lock(&local.resets),
+        [(
+            PathBuf::from("/client"),
+            Layer::Global,
+            "tui.hover".to_owned(),
+            "true".to_owned()
+        )]
+    );
+    assert!(hub.lines.try_recv().is_err());
+    // A hub key goes to the hub with its layer and expected value.
+    let saved = hub.call(
+        "reset",
+        json!({"workspace":"/remote/ws","layer":"project","key":"model","expected":"\"hub/m\""}),
+        json!({"file":"/hub/projects/p/config.json","warnings":[]}),
+        |r| {
+            r.reset(
+                Path::new("/remote/ws"),
+                Layer::Project,
+                "model",
+                "\"hub/m\"",
+            )
+        },
+    );
+    assert_eq!(
+        saved.unwrap().file,
+        PathBuf::from("/hub/projects/p/config.json")
+    );
+    assert_eq!(support::lock(&local.resets).len(), 1);
     *support::lock(&local.refuse) = Some("client keys are read-only".into());
     let error = hub.remote.save_keys(&[]).unwrap_err();
     assert_eq!(error.code, ErrorCode::Usage);
@@ -733,7 +802,7 @@ fn no_workspace_reads_use_the_global_parent_and_cache_per_connection() {
         thread::spawn(move || {
             let outcome = remote
                 .global_parent()
-                .and_then(|parent| remote.settings(&parent));
+                .and_then(|parent| remote.settings(&parent, &[]));
             tx.send(outcome).unwrap_or(());
         });
         if first {
@@ -1602,7 +1671,7 @@ fn catalogue_reads_use_the_workspace_in_use() {
         );
         // The loop path: settings with an empty workspace is an error
         // naming workspace, sending nothing, whatever the file answers.
-        let error = hub.remote.settings(Path::new("")).unwrap_err();
+        let error = hub.remote.settings(Path::new(""), &[]).unwrap_err();
         assert_eq!(error.code, ErrorCode::IoFailed, "file {file:?}");
         assert!(
             error.message.contains("workspace"),
@@ -1902,11 +1971,11 @@ fn chip_read_takes_the_hub_model_thinking_and_scope() {
         &line,
         json!({"rows": [
             {"key":"model","shown":"value","value":"\"hub/m\"",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"models.hub/m.thinking","shown":"value","value":"\"high\"",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"scoped_models","shown":"value","value":"[\"hub/m\"]",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
         ]}),
     );
     assert_eq!(
@@ -1942,11 +2011,11 @@ fn chip_read_quotes_a_dotted_model_in_the_thinking_key() {
     hub.reply(
         &line,
         json!({"rows": [
-            {"key":"model","shown":"value","value":"\"acme/m.1\"",             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"model","shown":"value","value":"\"acme/m.1\"",             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"models.\"acme/m.1\".thinking","shown":"value","value":"\"low\"",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"scoped_models","shown":"value","value":"[\"acme/m.1\"]",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
         ]}),
     );
     assert_eq!(
@@ -1974,11 +2043,11 @@ fn chip_read_unsets_what_is_not_a_value() {
         &line,
         json!({"rows": [
             {"key":"model","shown":"value","value":"\"hub/m\"",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"models.\"hub/m\".thinking","shown":"unset",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"scoped_models","shown":"value","value":"not json",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
         ]}),
     );
     assert_eq!(
@@ -2007,13 +2076,13 @@ fn chip_read_ignores_non_value_rows_and_other_keys() {
         &line,
         json!({"rows": [
             {"key":"model","shown":"value","value":"not json",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"models.\"hub/m\".thinking","shown":"redacted","value":"secret",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"scoped_models","shown":"union","own":[],"names":[],
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
             {"key":"other","shown":"value","value":"\"x\"",
-             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+             "layer":"global","file":"/hub/config.json","scope":"global_only","label":"L","description":"D","control":{"kind":"text"}},
         ]}),
     );
     assert_eq!(
