@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/app/delegate_steering_tests.rs
+assertion_line: 83
 expression: shown
 ---
   Delegate  ◆ task j_1                                               Esc returns
@@ -23,6 +24,6 @@ expression: shown
  ▌ › █                                               steering goes to ◆ task j_1
  ▌─────────────────────────────────────────────────────────────────────────────
  ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
- ▌0 waiting  │  $0.00
+ ▌0 waiting
  ▌◆ 1 delegate running
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

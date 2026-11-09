@@ -2208,6 +2208,13 @@ impl App {
         // settle below, as any non-attached session's do.
         if self.is_item_session(&envelope.session_id) {
             self.item_session_line(envelope);
+            // The open Fiber delegate's own envelopes also fold its
+            // Session figures, so the card can follow its view; any
+            // other harness's keep the parent's (`docs/tui.md`, "Swapped
+            // views").
+            if self.delegate_session().as_ref() == Some(&envelope.session_id) {
+                self.panel_state.fold_delegate(envelope);
+            }
             match envelope.kind() {
                 EventKind::CommandAccepted => {
                     let accepted = read!(envelope, CommandAccepted);
