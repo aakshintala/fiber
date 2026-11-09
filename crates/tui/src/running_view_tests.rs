@@ -314,7 +314,7 @@ fn the_delegates_frame_matches_the_doc() {
         frame.rows[2],
         [
             (
-                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42 ".to_owned(),
+                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42".to_owned(),
                 Some(Spot::Item(serial)),
                 Ink::Muted
             ),
@@ -369,7 +369,7 @@ fn a_delegate_without_a_level_status_or_context_leaves_them_out() {
     ));
     assert_eq!(
         text(&delegates_frame(&app, List::default()).rows[2]),
-        "  test/model · 0 calls · s_dddddddddddddddd · $0.00 "
+        "  test/model · 0 calls · s_dddddddddddddddd · $0.00"
     );
 }
 
@@ -388,7 +388,7 @@ fn a_context_with_a_window_of_zero_draws_no_bar() {
     assert_eq!(frame.rows[2].len(), 1);
     assert_eq!(
         text(&frame.rows[2]),
-        "  test/model · 0 calls · s_dddddddddddddddd · $0.00 "
+        "  test/model · 0 calls · s_dddddddddddddddd · $0.00"
     );
 }
 
@@ -510,7 +510,7 @@ fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
         .collect();
     for (got, want) in firsts
         .iter()
-        .zip(["◆ task j_1", "✓ task j_2", "✗ task j_3", "⊘ task j_4"])
+        .zip(["● task j_1", "✓ task j_2", "✗ task j_3", "⊘ task j_4"])
     {
         assert!(got.starts_with(want), "{got}");
     }
@@ -586,6 +586,7 @@ fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
         "s_dddddddddddddddd",
         json!({
             "state": "streaming", "parent": SESSION, "thinking": "high", "calls": 3,
+            "started": wall.saturating_sub(61_000),
             "spend": {"tokens": {"input": 650, "cache_read": 0, "cache_write": {}, "output": 0},
                 "cost": 0.42, "subscription_cost": 0.0},
             "context": {"tokens": 650, "window": 1000}
@@ -604,31 +605,18 @@ fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
     assert_eq!(
         frame.rows[0],
         [(
-            "◆ task j_1 · 1m".to_owned(),
+            format!("{} task j_1", crate::motion::SPINNER[0]),
             Some(Spot::Item(running)),
             Ink::Plain
         )]
     );
     assert_eq!(
         frame.rows[1],
-        [
-            (
-                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42 ".to_owned(),
-                Some(Spot::Item(running)),
-                Ink::Muted
-            ),
-            (
-                "▆".repeat(6),
-                Some(Spot::Item(running)),
-                Ink::Role(Role::Warning)
-            ),
-            (
-                "░".repeat(4),
-                Some(Spot::Item(running)),
-                Ink::Role(Role::Rule)
-            ),
-            (" 65%".to_owned(), Some(Spot::Item(running)), Ink::Muted),
-        ]
+        [(
+            "  3 calls · 1m 01s · $0.42".to_owned(),
+            Some(Spot::Item(running)),
+            Ink::Muted
+        )]
     );
     let done = app
         .serial_of_job(&contract::JobId("j_2".to_owned()))
@@ -640,10 +628,49 @@ fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
     assert_eq!(
         frame.rows[3],
         [(
-            "  6 calls · 6s · done".to_owned(),
+            "  6 calls · 6s · $0.00 · done".to_owned(),
             Some(Spot::Item(done)),
             Ink::Muted
         )]
+    );
+}
+
+#[test]
+fn all_delegates_retains_both_costs_and_ignores_the_card_fold() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    app.set_now(clock.now(), 8_000);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    app.on_line(live(
+        "s_dddddddddddddddd",
+        json!({
+            "state": "idle", "parent": SESSION, "calls": 3, "started": 2_000,
+            "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                "cost": 0.42, "subscription_cost": 0.75}, "step": "read src/lib.rs"
+        }),
+    ));
+    let frame = all_delegates_frame(&app, List::default());
+    assert_eq!(text(&frame.rows[0]), "● task j_1");
+    assert_eq!(
+        text(&frame.rows[1]),
+        "  3 calls · 6s · $0.42 · $0.75 sub · read src/lib.rs"
+    );
+    complete(&mut app, "j_1", "completed", 8_000);
+    assert_eq!(
+        text(&all_delegates_frame(&app, List::default()).rows[1]),
+        "  3 calls · 6s · $0.42 · $0.75 sub · done"
+    );
+    app.set_now(clock.now(), 99_000);
+    let closed = all_delegates_frame(&app, List::default());
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    let open = all_delegates_frame(&app, List::default());
+    assert_eq!(closed.rows, open.rows);
+    assert_eq!(
+        text(&open.rows[1]),
+        "  3 calls · 6s · $0.42 · $0.75 sub · done"
     );
 }
 
