@@ -595,3 +595,248 @@ fn a_session_recorded_for_another_workspace_is_not_this_projects_newest() {
     assert!(!report.contains("Session:"), "{report}");
     assert!(!report.contains("kept-session-line"), "{report}");
 }
+
+/// The headless door draws no frames: its report holds Diagnostics
+/// with the empty-ring notice and no shape rows.
+#[test]
+fn headless_report_holds_the_empty_ring_notice() {
+    let setup = Setup::new();
+    let output = run(
+        &setup,
+        "headless feedback with no frames",
+        &["feedback", "the sound stopped"],
+        None,
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let report = fs::read_to_string(report_path(&output)).unwrap();
+    assert!(report.contains("## Diagnostics"), "{report}");
+    assert!(
+        report.contains("No frames captured on this machine."),
+        "{report}"
+    );
+    assert!(!report.contains("frame 1/"), "{report}");
+    assert!(!report.contains("palette "), "{report}");
+}
+
+/// A seeded 2-frame snapshot through a unit-level `ReportContext`:
+/// the written shapes section parses back to the seed, proving the
+/// door passes the slice through.
+#[test]
+fn seeded_shapes_section_parses_back_to_the_seed() {
+    use contract::feedback::{FrameShape, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue};
+    fn base() -> StyleValue {
+        StyleValue {
+            fg: ShapeColor::Reset,
+            bg: ShapeColor::Reset,
+            ul: ShapeColor::Reset,
+            mods: 0,
+        }
+    }
+    let seed = vec![
+        FrameShape {
+            width: 4,
+            height: 1,
+            top: None,
+            has_new: false,
+            palette: vec![
+                base(),
+                StyleValue {
+                    fg: ShapeColor::Red,
+                    bg: ShapeColor::Indexed(7),
+                    ul: ShapeColor::Rgb(1, 2, 3),
+                    mods: 2,
+                },
+            ],
+            rows: vec![ShapeRow::new(vec![
+                ShapeCell::new(ShapeKind::Content, false, 1),
+                ShapeCell::new(ShapeKind::Continuation, false, 1),
+                ShapeCell::new(ShapeKind::Blank, false, 0),
+                ShapeCell::new(ShapeKind::Exempt, false, 0),
+            ])],
+        },
+        FrameShape {
+            width: 2,
+            height: 2,
+            top: Some(5),
+            has_new: true,
+            palette: vec![base()],
+            rows: vec![
+                ShapeRow::new(vec![
+                    ShapeCell::new(ShapeKind::Content, true, 0),
+                    ShapeCell::new(ShapeKind::Continuation, false, 0),
+                ]),
+                ShapeRow::new(vec![
+                    ShapeCell::new(ShapeKind::Blank, true, 0),
+                    ShapeCell::new(ShapeKind::Continuation, false, 0),
+                ]),
+            ],
+        },
+    ];
+    let root = fakes::TempDir::new("fiber-feedback-seed");
+    let clock = fakes::clock::FakeClock::new();
+    let context = cli::ReportContext {
+        version: "0.3.0 (abc123)",
+        cwd: root.path(),
+        clock: clock.as_ref(),
+        doctor: &|| Ok("doctor".to_owned()),
+        diagnostics: &|_| String::new(),
+        frames: &seed,
+    };
+    let done = cli::write("the sound stopped", None, &context).unwrap();
+    let saved = fs::read_to_string(&done.path).unwrap();
+    assert_eq!(parse_shapes(&saved), seed);
+}
+
+/// One wire colour name back to its colour.
+fn parse_color(name: &str) -> Option<contract::feedback::ShapeColor> {
+    use contract::feedback::ShapeColor;
+    match name {
+        "reset" => Some(ShapeColor::Reset),
+        "black" => Some(ShapeColor::Black),
+        "red" => Some(ShapeColor::Red),
+        "green" => Some(ShapeColor::Green),
+        "yellow" => Some(ShapeColor::Yellow),
+        "blue" => Some(ShapeColor::Blue),
+        "magenta" => Some(ShapeColor::Magenta),
+        "cyan" => Some(ShapeColor::Cyan),
+        "gray" => Some(ShapeColor::Gray),
+        "darkgray" => Some(ShapeColor::DarkGray),
+        "lightred" => Some(ShapeColor::LightRed),
+        "lightgreen" => Some(ShapeColor::LightGreen),
+        "lightyellow" => Some(ShapeColor::LightYellow),
+        "lightblue" => Some(ShapeColor::LightBlue),
+        "lightmagenta" => Some(ShapeColor::LightMagenta),
+        "lightcyan" => Some(ShapeColor::LightCyan),
+        "white" => Some(ShapeColor::White),
+        indexed if indexed.starts_with("indexed(") => {
+            let index = indexed
+                .strip_prefix("indexed(")
+                .and_then(|rest| rest.strip_suffix(')'))?;
+            Some(ShapeColor::Indexed(index.parse().ok()?))
+        }
+        rgb if rgb.starts_with("rgb(") => {
+            let triple = rgb
+                .strip_prefix("rgb(")
+                .and_then(|rest| rest.strip_suffix(')'))?;
+            let mut channels = triple.split(',');
+            Some(ShapeColor::Rgb(
+                channels.next()?.parse().ok()?,
+                channels.next()?.parse().ok()?,
+                channels.next()?.parse().ok()?,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// One palette entry back to its style: split on the channel
+/// prefixes, never on commas, which a truecolour triple holds.
+fn parse_entry(entry: &str) -> contract::feedback::StyleValue {
+    use contract::feedback::StyleValue;
+    let (_, channels) = entry.split_once(':').unwrap();
+    let (channels, mods) = channels.rsplit_once(",mods=").unwrap();
+    let (fg, rest) = channels.split_once(",bg=").unwrap();
+    let (bg, ul) = rest.split_once(",ul=").unwrap();
+    StyleValue {
+        fg: parse_color(fg.strip_prefix("fg=").unwrap()).unwrap(),
+        bg: parse_color(bg).unwrap(),
+        ul: parse_color(ul).unwrap(),
+        mods: mods.parse().unwrap(),
+    }
+}
+
+/// One frame header back to its geometry and scroll state.
+fn parse_header(header: &str) -> (u16, u16, Option<usize>, bool) {
+    let mut parts = header.split(", ");
+    parts.next().unwrap();
+    let geometry = parts.next().unwrap();
+    let (width, height) = geometry.split_once('x').unwrap();
+    let top = parts.next().unwrap().strip_prefix("top=").unwrap();
+    let has_new = parts.next().unwrap().strip_prefix("has_new=").unwrap();
+    (
+        width.parse().unwrap(),
+        height.parse().unwrap(),
+        if top == "none" {
+            None
+        } else {
+            Some(
+                top.strip_prefix("Some(")
+                    .and_then(|rest| rest.strip_suffix(')'))
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            )
+        },
+        has_new == "true",
+    )
+}
+
+/// The report's shapes section back to its frames.
+fn parse_shapes(saved: &str) -> Vec<contract::feedback::FrameShape> {
+    use contract::feedback::{FrameShape, ShapeCell, ShapeKind, ShapeRow};
+    fn wire(kind: char) -> Option<(ShapeKind, bool)> {
+        match kind {
+            '.' => Some((ShapeKind::Blank, false)),
+            ':' => Some((ShapeKind::Blank, true)),
+            '#' => Some((ShapeKind::Content, false)),
+            'W' => Some((ShapeKind::Content, true)),
+            '>' => Some((ShapeKind::Continuation, false)),
+            '~' => Some((ShapeKind::Exempt, false)),
+            _ => None,
+        }
+    }
+    let rest = saved.split("### Frame shapes\n\n").nth(1).unwrap();
+    let mut pieces = rest.split("palette ");
+    pieces.next().unwrap();
+    let mut frames = Vec::new();
+    for piece in pieces {
+        let mut lines = piece.lines();
+        let palette = lines
+            .next()
+            .unwrap()
+            .split(' ')
+            .map(parse_entry)
+            .collect::<Vec<_>>();
+        let (width, height, top, has_new) = parse_header(lines.next().unwrap());
+        let mut rows = Vec::new();
+        while let Some(shape) = lines.next() {
+            if shape.is_empty() {
+                break;
+            }
+            let shape = shape
+                .strip_prefix("shape \"")
+                .and_then(|line| line.strip_suffix('"'))
+                .unwrap();
+            let style = lines
+                .next()
+                .unwrap()
+                .strip_prefix("style \"")
+                .and_then(|line| line.strip_suffix('"'))
+                .unwrap();
+            let cells = shape
+                .chars()
+                .zip(style.split(','))
+                .map(|(glyph, id)| {
+                    let (kind, wide) = wire(glyph).unwrap();
+                    ShapeCell::new(kind, wide, id.parse().unwrap())
+                })
+                .collect::<Vec<_>>();
+            rows.push(ShapeRow::new(cells));
+        }
+        frames.push(FrameShape {
+            width,
+            height,
+            top,
+            has_new,
+            palette,
+            rows,
+        });
+    }
+    frames
+}
