@@ -1976,6 +1976,82 @@ fn delegate_status_segments_restore_the_parent_on_close_and_ignore_other_views()
     );
 }
 
+/// A renderer filling the status_rows slot with no lines, recording the
+/// Session card's model each call.
+#[derive(Debug, Default)]
+struct ModelRecorder {
+    seen: std::cell::RefCell<Vec<Option<String>>>,
+}
+
+impl crate::ext::Renderer for ModelRecorder {
+    fn name(&self) -> &str {
+        "model-recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "status_rows"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::StatusRows(rows) = input {
+            self.seen
+                .borrow_mut()
+                .push(rows.session.model.map(str::to_owned));
+        }
+        crate::ext::tests::decide("model-recorder", || Ok(Vec::new()))
+    }
+}
+
+/// Draws `app` at 160 by 30 with a model recorder on the status_rows
+/// slot, returning the Session card's model each call saw. A fresh
+/// install clears the slot cache, so every phase renders anew.
+fn model_seen(app: &mut App) -> Vec<Option<String>> {
+    let fake = std::rc::Rc::new(ModelRecorder::default());
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.use_renderer(renderer);
+    draw(app, 160, 30);
+    fake.seen.take()
+}
+
+/// While a Fiber delegate's view is open the status_rows extension input
+/// carries the delegate's model; after Esc it carries the parent's
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn the_status_rows_session_model_follows_the_open_delegate() {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    let parent = model_seen(&mut app);
+    assert_eq!(
+        parent.last(),
+        Some(&Some("test/model".to_owned())),
+        "the parent model first: {parent:?}"
+    );
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
+    let delegate = model_seen(&mut app);
+    assert_eq!(
+        delegate.last(),
+        Some(&Some("two/model".to_owned())),
+        "the delegate model while its view is open: {delegate:?}"
+    );
+    close_item(&mut app);
+    let back = model_seen(&mut app);
+    assert_eq!(
+        back.last(),
+        Some(&Some("test/model".to_owned())),
+        "the parent model after Esc: {back:?}"
+    );
+}
+
 /// A decorating renderer on the status_rows slot is handed the built-in
 /// lines, so the figures the built-in draws reach the screen.
 #[test]
