@@ -28,14 +28,7 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
         .into_iter()
         .skip(app.panel_state().delegate_scroll())
         .take(DELEGATES_SHOWN)
-        .flat_map(|(started, description)| {
-            running_rows(
-                app,
-                started,
-                description,
-                app.serial_of_job(&started.job_id).map(Spot::Delegate),
-            )
-        })
+        .flat_map(|(started, description)| running_rows(app, started, description))
         .collect();
     super::fit_rows(out, text)
 }
@@ -43,28 +36,16 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
 /// The card's six-row whole-entry window: running delegates, the fold,
 /// then finished delegates while open.
 pub(crate) fn rows_with_done(app: &App, text: usize) -> Vec<Row> {
-    let mut all = entries(app);
-    let finished_count = app.panel_state().finished_delegates().len();
-    if finished_count > 0 {
-        let at = all
-            .iter()
-            .position(|entry| entry.outcome.is_some())
-            .unwrap_or(all.len());
-        all.insert(at, Entry::fold(finished_count));
-    }
-    if !app.panel_state().delegates_open() {
-        all.retain(|entry| entry.outcome.is_none());
-    }
+    let all = entries(app);
     let offset = app.panel_state().delegate_scroll().min(all.len());
     let mut used = 0;
     let mut out = Vec::new();
     for entry in all.into_iter().skip(offset) {
-        let rows = match entry.outcome {
-            None if entry.is_fold => vec![Row {
-                line: Line::from(vec![Span::styled(
+        let rows = match entry {
+            Entry::Fold(count) => vec![Row {
+                line: Line::from(Span::styled(
                     format!(
-                        "{} finished {}",
-                        entry.finished_count,
+                        "{count} finished {}",
                         if app.panel_state().delegates_open() {
                             "▾"
                         } else {
@@ -72,27 +53,23 @@ pub(crate) fn rows_with_done(app: &App, text: usize) -> Vec<Row> {
                         }
                     ),
                     style(Role::Muted),
-                )]),
+                )),
                 spot: Some(Spot::DelegateFold),
                 tint: None,
                 edge: false,
             }],
-            None => {
-                let Some(started) = entry.started else {
-                    continue;
-                };
-                running_rows(app, started, entry.description, entry.spot)
-                    .into_iter()
-                    .collect()
-            }
-            Some(outcome) => {
-                let Some(started) = entry.started else {
-                    continue;
-                };
-                finished_rows(app, started, entry.description, outcome, entry.spot)
-                    .into_iter()
-                    .collect()
-            }
+            Entry::Running(started, description) => running_rows(app, started, description)
+                .into_iter()
+                .collect(),
+            Entry::Finished(started, description, outcome) => finished_rows(
+                app,
+                started,
+                description,
+                outcome,
+                app.serial_of_job(&started.job_id).map(Spot::Delegate),
+            )
+            .into_iter()
+            .collect(),
         };
         if used + rows.len() > 6 {
             break;
@@ -105,74 +82,40 @@ pub(crate) fn rows_with_done(app: &App, text: usize) -> Vec<Row> {
 
 /// One held delegate in the combined window: running first, then
 /// finished, each in job start order.
-struct Entry<'a> {
-    started: Option<&'a DelegateStarted>,
-    description: &'a str,
-    outcome: Option<Outcome>,
-    spot: Option<Spot>,
-    is_fold: bool,
-    finished_count: usize,
+enum Entry<'a> {
+    Running(&'a DelegateStarted, &'a str),
+    Fold(usize),
+    Finished(&'a DelegateStarted, &'a str, Outcome),
 }
 
-impl<'a> Entry<'a> {
-    fn fold(finished_count: usize) -> Self {
-        Self {
-            started: None,
-            description: "",
-            outcome: None,
-            spot: None,
-            is_fold: true,
-            finished_count,
-        }
-    }
-}
-
-/// The combined window: running delegates in job start order, then
-/// finished ones in job start order, from the scroll offset clamped
-/// against the held delegates. A finished delegate never pushes a running
-/// one out of view.
+/// Visible entries in start order, with the finished prefix controlled by the fold.
 fn entries(app: &App) -> Vec<Entry<'_>> {
     let panel = app.panel_state();
-    let running = panel.running_delegates();
-    let finished = panel.finished_delegates();
-    let finished_count = finished.len();
-    let combined: Vec<Entry<'_>> = running
+    let mut all: Vec<_> = panel
+        .running_delegates()
         .into_iter()
-        .map(|(started, description)| Entry {
-            started: Some(started),
-            description,
-            outcome: None,
-            spot: app.serial_of_job(&started.job_id).map(Spot::Delegate),
-            is_fold: false,
-            finished_count,
-        })
-        .chain(
-            panel
-                .finished_delegates()
-                .into_iter()
-                .map(|(started, description, outcome)| Entry {
-                    started: Some(started),
-                    description,
-                    outcome: Some(outcome),
-                    spot: app.serial_of_job(&started.job_id).map(Spot::Delegate),
-                    is_fold: false,
-                    finished_count,
-                }),
-        )
+        .map(|(started, description)| Entry::Running(started, description))
         .collect();
-    combined
+    let finished = panel.finished_delegates();
+    if !finished.is_empty() {
+        all.push(Entry::Fold(finished.len()));
+    }
+    if panel.delegates_open() {
+        all.extend(
+            finished.into_iter().map(|(started, description, outcome)| {
+                Entry::Finished(started, description, outcome)
+            }),
+        );
+    }
+    all
 }
 
 /// A running delegate's two rows: `●` in attention, spinning while it
 /// works, then the description; under it, dim, calls, elapsed and step.
 /// Either row opens the delegate: the rows are named by the job's serial,
 /// never by position.
-fn running_rows(
-    app: &App,
-    started: &DelegateStarted,
-    description: &str,
-    spot: Option<Spot>,
-) -> [Row; 2] {
+pub(crate) fn running_rows(app: &App, started: &DelegateStarted, description: &str) -> [Row; 2] {
+    let spot = app.serial_of_job(&started.job_id).map(Spot::Delegate);
     let glyph = match app.delegate_row(&started.delegate_session_id) {
         // A subscribed delegate's own summary names its state, and its
         // glyph spins while it works (`docs/tui.md`, "State glyphs").
@@ -309,43 +252,23 @@ fn progress_line(
 /// an even index the window's running prefix covers.
 pub(crate) fn ask(app: &App, drawn: Range<usize>) {
     let panel = app.panel_state();
-    let mut all = entries(app);
-    let finished_count = panel.finished_delegates().len();
-    if finished_count > 0 {
-        let at = all
-            .iter()
-            .position(|entry| entry.outcome.is_some())
-            .unwrap_or(all.len());
-        all.insert(at, Entry::fold(finished_count));
-    }
-    if !panel.delegates_open() {
-        all.retain(|entry| entry.outcome.is_none());
-    }
-    let mut row = 0;
-    for entry in all.into_iter().skip(panel.delegate_scroll()) {
-        if entry.is_fold {
-            row += 1;
-            continue;
-        }
-        let Some(started) = entry.started else {
-            continue;
-        };
-        if row >= 6 {
-            break;
-        }
-        if entry.outcome.is_some() {
-            row += 2;
-            continue;
-        }
+    // Running entries are the entire moving prefix. Offsets at the fold
+    // or finished suffix skip past it; none of those rows can ask for motion.
+    for (index, (started, _)) in panel
+        .running_delegates()
+        .into_iter()
+        .skip(panel.delegate_scroll())
+        .take(DELEGATES_SHOWN)
+        .enumerate()
+    {
         let spinning = match app.delegate_row(&started.delegate_session_id) {
             Some(row) => crate::motion::Motion::spins(row),
             // Unsubscribed delegates run by definition.
             None => true,
         };
-        if spinning && drawn.contains(&row) {
+        if spinning && drawn.contains(&(index * 2)) {
             app.motion().ask_frame();
         }
-        row += 2;
     }
 }
 

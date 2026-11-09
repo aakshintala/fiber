@@ -36,7 +36,19 @@ pub(crate) fn delegates_frame(app: &App, list: List) -> Frame {
 pub(crate) fn all_delegates_frame(app: &App, list: List) -> Frame {
     let mut rows: Vec<Row> = Vec::new();
     for (started, description) in app.panel_state().running_delegates() {
-        rows.extend(running_delegate_rows(app, started, description));
+        let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
+        rows.extend(
+            crate::view::panel::delegates::running_rows(app, started, description)
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    vec![(
+                        row.line.to_string(),
+                        spot,
+                        if index == 0 { Ink::Plain } else { Ink::Muted },
+                    )]
+                }),
+        );
     }
     for (started, description, outcome) in app.panel_state().finished_delegates() {
         rows.extend(finished_delegate_rows(app, started, description, outcome));

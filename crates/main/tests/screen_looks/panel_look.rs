@@ -419,6 +419,10 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
     )
     .unwrap();
     let subject = format!("shell {command}");
+    let hub = Arc::new(Mutex::new(None));
+    let (feed, _) = connect_hub(&setup, &hub);
+    feed.send(r#"{"id":"c_feed","command":"feed"}"#);
+    support::recv_answer(&feed, "c_feed", "the registered status feed");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
@@ -426,18 +430,34 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         delegate_progress(grid, &subject, false)
     });
     std::io::Write::write_all(hold.release(), b"done\n").unwrap();
+    // The final parent summary carries the last usage that can move the panel.
+    until(&feed, "the final idle parent summary", |line| {
+        line["kind"] == "session_status"
+            && line["payload"]["parent"].is_null()
+            && line["payload"]["state"] == "idle"
+            && line["payload"]["turns"] == 2
+            && line["payload"]["delegates"] == 0
+    });
+    run.wait_screen("the final summary and folded row rendered", |grid| {
+        grid.contents.contains("1 finished ▸")
+            && grid.contents.contains("Waiting.")
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("tokens in / out") && row.trim_end().ends_with("0 / 0"))
+    });
     run.click_where("the finished delegates fold", |grid| {
-        grid.rows.iter().enumerate().find_map(|(y, row)| {
-            (row.contains("1 finished ▸") && row.find("1 finished ▸").is_some_and(|x| x >= 100))
-                .then(|| (row.find("1 finished ▸").unwrap_or(0) as u16 + 1, y as u16))
-        })
+        grid.text_at("1 finished ▸").filter(|&(x, _)| x >= 100)
     });
     run.wait_screen(
         "the finished delegate's calls, elapsed, known-zero cost and done, dim",
         |grid| delegate_progress(grid, "done", true),
     );
     hold.stand_down(setup.deadline.cleanup_phase());
+    drop(feed);
     quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
 }
 
 #[test]

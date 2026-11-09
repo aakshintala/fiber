@@ -423,28 +423,58 @@ fn finished_fold_keeps_running_first_and_exposes_every_finished_entry_by_scrolli
     app.on_click(crate::mouse::TargetId::Panel(
         crate::app::panel::Spot::DelegateFold,
     ));
-    let mut seen = Vec::new();
-    for _ in 0..8 {
+    // docs/tui.md: running first, then the fold and finished entries in start order.
+    let expected = [
+        vec!["● task 6", "  fiber · test/model"],
+        vec!["● task 7", "  fiber · test/model"],
+        vec!["5 finished ▾"],
+        vec!["✓ task 1", "  done"],
+        vec!["✓ task 2", "  done"],
+        vec!["✓ task 3", "  done"],
+        vec!["✓ task 4", "  done"],
+        vec!["✓ task 5", "  done"],
+    ];
+    for step in 0..8 {
+        assert_eq!(app.panel_state().delegate_scroll(), step.min(5));
         let rows = done_texts(&app);
-        let finished: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| row.starts_with("✓ task "))
-            .collect();
-        assert!(
-            finished
-                .iter()
-                .all(|(at, _)| rows.get(at + 1) == Some(&"  done".to_owned()))
-        );
-        for (_, row) in finished {
-            let identity = row.split_whitespace().nth(2).unwrap_or_default().to_owned();
-            if !seen.contains(&identity) {
-                seen.push(identity);
+        let mut window = Vec::new();
+        for entry in &expected[app.panel_state().delegate_scroll()..] {
+            if window.len() + entry.len() > 6 {
+                break;
             }
+            window.extend(entry.iter().copied());
         }
+        assert_eq!(rows, window);
         scroll_card(&mut app, 1);
     }
-    assert_eq!(seen, ["1", "2", "3", "4", "5"]);
+    assert_eq!(done_texts(&app).last().map(String::as_str), Some("  done"));
+    // Return to the fold row, close it, and prove finished rows disappear.
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap();
+    for _ in 0..8 {
+        app.on_wheel(&crate::keys::Mouse {
+            kind: crate::keys::MouseKind::WheelUp,
+            col: rect.x.saturating_add(4),
+            row: rect.y.saturating_add(1),
+        });
+    }
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    assert_eq!(app.panel_state().delegate_scroll(), 0);
+    assert_eq!(
+        done_texts(&app),
+        vec![
+            "● task 6",
+            "  fiber · test/model",
+            "● task 7",
+            "  fiber · test/model",
+            "5 finished ▸"
+        ]
+    );
 }
 
 #[test]
