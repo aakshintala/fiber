@@ -2452,6 +2452,12 @@ fn delegate_preamble(model: &str, thinking: &str) -> crate::link::Line {
 /// A delegate `session_status` in `workspace` naming `model`, with a
 /// context fill.
 fn delegate_status(workspace: &str, model: &str) -> crate::link::Line {
+    delegate_status_window(workspace, model, 4000)
+}
+
+/// A delegate `session_status` in `workspace` naming `model`, with a
+/// chosen context `window`.
+fn delegate_status_window(workspace: &str, model: &str, window: u64) -> crate::link::Line {
     session_line(
         DELEGATE,
         "session_status",
@@ -2462,7 +2468,7 @@ fn delegate_status(workspace: &str, model: &str) -> crate::link::Line {
                 "cache_write": {}, "output": 5},
                 "cost": 0.02, "subscription_cost": 0.01},
             "model": model, "delegates": 0, "jobs": 0, "clients": 0,
-            "context": {"tokens": 1500, "window": 4000},
+            "context": {"tokens": 1500, "window": window},
         }),
     )
 }
@@ -2548,4 +2554,46 @@ fn delegate_input_status_unknown_values_show_dashes_never_the_parent() {
         row.contains("/w/fiber"),
         "the parent directory stays: {row:?}"
     );
+}
+
+/// A zero context window on the delegate names no context: the row
+/// keeps its dashes rather than drawing its figures
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_input_status_zero_window_shows_dashes_never_figures() {
+    let mut app = full(80, 30);
+    delegate_job(&mut app);
+    open_delegate(&mut app);
+    app.on_line(delegate_status_window("/two", "two/model", 0));
+    let row = status_row_text(&app, 80, 30);
+    // The status folded: the model is the delegate's, so the dashes
+    // below are about the window.
+    assert!(
+        row.contains("two/model"),
+        "the delegate model folded: {row:?}"
+    );
+    assert!(!row.contains("1.5k"), "no delegate context: {row:?}");
+    assert!(row.contains("—"), "unknown context forms: {row:?}");
+    assert!(!row.contains("▆│"), "no compaction marker: {row:?}");
+}
+
+/// The input_status slot is handed the followed context, and a zero
+/// delegate window names none (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_row_input_zero_window_names_no_context() {
+    use std::rc::Rc;
+    let mut app = full(100, 30);
+    let fake = Rc::new(ContextRecorder::default());
+    let renderer: Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    delegate_job(&mut app);
+    open_delegate(&mut app);
+    app.on_line(delegate_status("/two", "two/model"));
+    let _ = screen(&app, 100, 30);
+    let seen = fake.seen.take();
+    assert_eq!(seen.last(), Some(&Some((1500, 4000))));
+    app.on_line(delegate_status_window("/two", "two/model", 0));
+    let _ = screen(&app, 100, 30);
+    let seen = fake.seen.take();
+    assert_eq!(seen.last(), Some(&None));
 }

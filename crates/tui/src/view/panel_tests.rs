@@ -2628,6 +2628,18 @@ fn close_delegate(app: &mut App) {
 /// A delegate `session_status` in `workspace` naming `model`, with git,
 /// a context fill and a cache expiry.
 fn delegate_status(delegate: &str, workspace: &str, model: &str, expiry: u64) -> Line {
+    delegate_status_window(delegate, workspace, model, expiry, 4000)
+}
+
+/// A delegate `session_status` in `workspace` naming `model`, with a
+/// chosen context `window`.
+fn delegate_status_window(
+    delegate: &str,
+    workspace: &str,
+    model: &str,
+    expiry: u64,
+    window: u64,
+) -> Line {
     timed_line_for(
         delegate,
         "session_status",
@@ -2640,7 +2652,7 @@ fn delegate_status(delegate: &str, workspace: &str, model: &str, expiry: u64) ->
                 "cost": 0.02, "subscription_cost": 0.01},
             "model": model, "delegates": 0, "jobs": 0, "clients": 0,
             "git": {"branch": "delegate-branch"},
-            "context": {"tokens": 1500, "window": 4000},
+            "context": {"tokens": 1500, "window": window},
             "cache_expires": expiry,
         }),
     )
@@ -2835,6 +2847,59 @@ fn delegate_session_card_unknown_values_show_dashes_never_the_parent() {
         assert!(!row.contains("main"), "parent branch in {row}");
         assert!(!row.contains("$0.41"), "parent cost in {row}");
     }
+}
+
+/// A zero context window on the delegate names no context: the card
+/// keeps its dim dashes rather than drawing its figures
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_session_card_zero_window_shows_dashes_never_figures() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(status_line(
+        spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+    ));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 0);
+    open_delegate(&mut app, "j_1");
+    app.on_line(delegate_status_window(
+        DELEGATE,
+        "/two",
+        "two/model",
+        2_550_000,
+        0,
+    ));
+    let card = session_card(&app, 40);
+    assert!(card[0].starts_with("◆ review the diff"), "{card:?}");
+    // The status folded: the workspace, branch and model are the
+    // delegate's, so the dashes below are about the window.
+    assert_eq!(card[1], "/two");
+    assert!(card[2].contains("delegate-branch"), "{card:?}");
+    assert!(
+        card.iter().any(|row| row.contains("two/model")),
+        "the delegate model folded: {card:?}"
+    );
+    // The context bar and its lines hold their unknown forms.
+    assert!(
+        !card.iter().any(|row| row.contains("1.5k")),
+        "no delegate context size: {card:?}"
+    );
+    let bars: Vec<_> = rows(&app, 40)
+        .into_iter()
+        .filter(|row| row.spot == Some(Spot::Context))
+        .collect();
+    assert_eq!(bars.len(), 3);
+    assert!(
+        bars[0].line.to_string().contains("—"),
+        "a dim dash for the size: {:?}",
+        bars[0].line.to_string()
+    );
+    assert!(
+        bars[1].line.to_string().starts_with("compacts at —"),
+        "an unknown compaction point: {:?}",
+        bars[1].line.to_string()
+    );
 }
 
 /// A finished delegate's view shows its last status dimmed, with the
