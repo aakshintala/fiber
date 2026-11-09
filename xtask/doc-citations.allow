@@ -153,31 +153,9 @@ crates/fakes/lua-fixture/init.lua	1	docs/model-routing.md, "Model discovery"
 crates/fakes/src/hold.rs	1	docs/testing.md:297-299
 crates/fakes/src/hold_tests.rs	1	docs/testing.md:297-299
 crates/fakes/src/jig_start.rs	1	docs/testing.md`:289
-crates/hub/src/closed_tests.rs	1	docs/invocation.md:1147
-crates/hub/src/closed_tests.rs	1	docs/invocation.md:1148
-crates/hub/src/closed_tests.rs	1	docs/invocation.md:1196
-crates/hub/src/closed_tests.rs	1	docs/invocation.md:467
 crates/hub/src/connection.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
-crates/hub/src/delete.rs	1	docs/events.md, "Writing"
-crates/hub/src/delete_tests.rs	9	docs/invocation.md, "The hub"
-crates/hub/src/devices.rs	1	docs/state.md`, "Paired devices"
-crates/hub/src/diag.rs	1	docs/state.md`, "Bounds"
-crates/hub/src/diag.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/hub/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/hub/src/environment/capture.rs	1	docs/invocation.md`, "The\n/// capture has 10 seconds"
-crates/hub/src/environment/capture_tests.rs	1	docs/testing.md`, "A test on a large value"
-crates/hub/src/error.rs	1	docs/state.md`, "Sockets"
 crates/hub/src/lib.rs	1	docs/invocation.md`, "`rewind` starts a new session\n    /// process"
 crates/hub/src/lib_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/hub/src/listen.rs	2	docs/state.md`, "Sockets"
-crates/hub/src/listen_tests.rs	1	docs/state.md`, "Sockets"
-crates/hub/src/port_pairing_tests.rs	1	docs/events.md:1388
-crates/hub/src/port_tests.rs	1	docs/events.md:1389
-crates/hub/src/port_tests.rs	1	docs/invocation.md`, "The terminal and the\n                // hub"
-crates/hub/src/prompt_history.rs	1	docs/state.md`, "Prompt\n//! history"
-crates/hub/src/recent.rs	1	docs/state.md`, "Recently\n//! exited sessions"
-crates/hub/src/relay/ack.rs	1	docs/events.md`:1308
-crates/hub/src/relay/ack.rs	1	docs/testing.md`, "a test of how much work something does counts the\n/// work"
 crates/hub/src/relay_tests.rs	1	docs/code-quality/lints.md:20-22
 crates/hub/src/relay_tests.rs	11	docs/invocation.md:1106
 crates/hub/src/relay_tests.rs	1	docs/invocation.md:1134-1161
@@ -207,23 +185,6 @@ crates/hub/src/relay_tests.rs	2	docs/invocation.md:1179
 crates/hub/src/relay_tests.rs	2	docs/invocation.md:1183
 crates/hub/src/relay_tests.rs	1	docs/invocation.md:467
 crates/hub/src/relay_tests.rs	1	docs/invocation.md:568
-crates/hub/src/resume_tests.rs	2	docs/invocation.md:1148
-crates/hub/src/resume_tests.rs	1	docs/invocation.md:1157
-crates/hub/src/resume_tests.rs	1	docs/invocation.md:368
-crates/hub/src/resume_tests.rs	1	docs/invocation.md:374-376
-crates/hub/src/resume_tests.rs	2	docs/invocation.md:473
-crates/hub/src/resume_tests.rs	1	docs/invocation.md:710
-crates/hub/src/resume_tests.rs	1	docs/state.md, "What each part holds"
-crates/hub/src/retire.rs	1	docs/invocation.md:1107-1112
-crates/hub/src/rewind.rs	1	docs/invocation.md`, "`rewind` starts a new session process"
-crates/hub/src/rewind_tests.rs	1	docs/invocation.md:1106
-crates/hub/src/rewind_tests.rs	1	docs/invocation.md:1154
-crates/hub/src/rewind_tests.rs	1	docs/invocation.md:1157
-crates/hub/src/rewind_tests.rs	6	docs/invocation.md:1179
-crates/hub/src/rewind_tests.rs	1	docs/invocation.md`, "Change\n        // workspace"
-crates/hub/src/rewind_tests.rs	9	docs/invocation.md`, "Change workspace"
-crates/hub/src/rewind_tests.rs	1	docs/testing.md`, "Races are forced"
-crates/hub/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
 crates/jobs/Cargo.toml	1	docs/architecture.md, "The call rules"
 crates/jobs/src/delegate/run_tests.rs	2	docs/delegates.md, "Lifetime"
 crates/jobs/src/delegate/run_tests.rs	1	docs/testing.md,\n    // "Waits and timeouts"

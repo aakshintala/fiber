@@ -95,7 +95,7 @@ pub(crate) enum Verdict {
 
 /// What one parse of a relayed session line settles: the acknowledged
 /// command's id and verdict, and the session an accepted `rewind` or
-/// `change_workspace` starts (`docs/events.md`:1308):
+/// `change_workspace` starts (`docs/events.md`, "Command acknowledgements"):
 /// `result.new_session_id` with the shape the hub mints. `None` for an
 /// acknowledgement that names none or names one of another shape, which
 /// starts nothing. `settle` still starts one only for a kept `rewind` or
@@ -745,8 +745,7 @@ thread_local! {
 }
 
 /// How many typed passes over relayed lines the calling thread has made
-/// (`docs/testing.md`, "a test of how much work something does counts the
-/// work"). The counted-work test reads it on the relay thread.
+/// (`docs/testing.md`, "Testing"). The counted-work test reads it on the relay thread.
 #[cfg(test)]
 pub(crate) fn ack_parses() -> usize {
     ACK_PARSES.with(|count| count.get())

@@ -1,4 +1,4 @@
-//! The hub's socket at `run/hub` (`docs/state.md`, "Sockets"): the single-hub
+//! The hub's socket at `run/hub` (`docs/state.md`, "What each part holds"): the single-hub
 //! lock on `run/`, stale-socket removal, and the 0600 bind.
 //!
 //! [`lock`] opens `run/` (created 0700 if missing) as a `File` and takes an
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::StartError;
 
 /// The longest socket path the platform binds: `sun_path` less its
-/// terminating byte (`docs/state.md`, "Sockets").
+/// terminating byte (`docs/state.md`, "What each part holds").
 pub(crate) const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
 /// The single-hub lock on `run/`. Only its holder writes `logs/hub.log`,

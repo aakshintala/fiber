@@ -1,4 +1,4 @@
-//! Paired device records (`docs/state.md`, "Paired devices"): one file per
+//! Paired device records (`docs/state.md`, "What each part holds"): one file per
 //! device under `hub/devices/`, holding the SHA-256 hash of its device
 //! token, never the token. The hub reads only the hash on every
 //! `authenticate`, never cached, so a deleted record refuses the next

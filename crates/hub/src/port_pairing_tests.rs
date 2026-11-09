@@ -130,7 +130,7 @@ fn pair_returns_a_token_named_after_the_device_and_writes_its_record() {
     );
     assert_eq!(record["paired_at"], record["last_connected_at"]);
     client.text(r#"{"id":"status","command":"status"}"#);
-    // docs/events.md:1388 includes the asker in `status.clients` (docs/testing.md, “Event streams”).
+    // `docs/events.md`, "Command acknowledgements" includes the asker in `status.clients` (docs/testing.md, “Event streams”).
     assert_eq!(
         text(Deadline::after(MUST_SUCCEED_WITHIN), &client)["payload"]["result"]["clients"],
         1

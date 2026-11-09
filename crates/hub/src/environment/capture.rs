@@ -13,8 +13,7 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use support::lock;
 
-/// How long the capture waits for the shell (`docs/invocation.md`, "The
-/// capture has 10 seconds").
+/// How long the capture waits for the shell (`docs/invocation.md`, "A session's environment").
 pub(crate) const CAPTURE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Past this many bytes before the end marker the capture fails: above
