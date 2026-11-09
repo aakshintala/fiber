@@ -364,17 +364,30 @@ impl Loop {
             None,
             None,
         )?;
-        for notice in group_notices(notices, grouped_lead) {
+        for notice in group_notices(notices.clone(), grouped_lead) {
             self.write(&Event::Notice(notice), None, None)?;
         }
         if let Some(hooks) = self.hooks.clone() {
             self.drain_state(&hooks, None)?;
         }
-        self.preamble = None;
-        self.preamble_reason = PreambleReason::Reload;
-        self.warming.stop(self.log.clock().now());
+        // The same seam the toggle takes, with the reload reason: the
+        // registered shell entry, warming, cached build and rows refresh
+        // identically to a toggle. The refreshed value rides the staged
+        // flip notice when one fired; with no flip the publish still reads
+        // the live definition, so the dummy never publishes stale bytes.
         self.load_after_reload = true;
-        self.build_preamble()?;
+        let refreshed = notices
+            .iter()
+            .find_map(|notice| match notice.message.as_str() {
+                "Sandbox on after /reload." => Some(true),
+                "Sandbox off after /reload." => Some(false),
+                _ => None,
+            });
+        // No flip stages no notice, so the handle kept its value: the live
+        // definition already matches the registry, and the seam's refresh
+        // is a no-op that still rebuilds with the reload reason.
+        let refreshed = refreshed.unwrap_or(false);
+        self.invalidate_sandbox(PreambleReason::Reload, refreshed)?;
         if self.opened {
             let skills = self.skills.reload_check();
             for notice in group_notices(skills.notices, grouped_lead) {
