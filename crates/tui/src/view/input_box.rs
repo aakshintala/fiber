@@ -328,11 +328,37 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
 /// first frame.
 fn ctx_segment(app: &App) -> Segment {
     let panel = app.panel_state();
-    let known = app.session().and_then(|session| {
-        let window = panel.window_for(session).filter(|window| *window > 0)?;
-        let context = panel.status_for(session)?.context.as_ref()?;
-        Some((window, context))
-    });
+    // While a Fiber delegate's view is open the context reads its
+    // fold; else the parent's (`docs/tui.md`, "Swapped views").
+    let followed = app.delegate_session();
+    let known = match followed.as_ref() {
+        Some(session) => panel
+            .delegate_window_for(session)
+            .filter(|window| *window > 0)
+            .and_then(|window| {
+                panel
+                    .delegate_status_for(session)?
+                    .context
+                    .as_ref()
+                    .map(|context| (window, context))
+            }),
+        None => app.session().and_then(|session| {
+            let window = panel.window_for(session).filter(|window| *window > 0)?;
+            let context = panel.status_for(session)?.context.as_ref()?;
+            Some((window, context))
+        }),
+    };
+    // The build's trigger is the compactor's target, falling back to
+    // the window; the marker can warn past the reported window
+    // (`docs/tui.md`, "The panel").
+    let trigger = match followed.as_ref() {
+        Some(session) => panel.delegate_trigger_for(session).or_else(|| {
+            panel
+                .delegate_window_for(session)
+                .filter(|window| *window > 0)
+        }),
+        None => panel.trigger_at(),
+    };
     let mut spans = vec![
         Span::styled("ctx", style(Role::Muted)),
         Span::raw(" ".to_owned()),
@@ -341,7 +367,7 @@ fn ctx_segment(app: &App) -> Segment {
         Some((window, context)) => {
             spans.extend(bar_spans(
                 context.tokens,
-                panel.trigger_at().unwrap_or(window),
+                trigger.unwrap_or(window),
                 None,
                 8,
             ));
@@ -380,12 +406,22 @@ fn status_right(app: &App) -> Joined {
         spans: Vec::new(),
         spots: Vec::new(),
     };
-    let model = panel.session_model();
+    // While a Fiber delegate's view is open the model and level read
+    // its fold; else the parent's (`docs/tui.md`, "Swapped views").
+    let followed = app.delegate_session();
+    let model = match followed.as_ref() {
+        Some(session) => panel.delegate_model_for(session),
+        None => panel.session_model(),
+    };
+    let thinking = match followed.as_ref() {
+        Some(session) => panel.delegate_thinking_for(session),
+        None => panel.thinking(),
+    };
     let mut spans = Vec::new();
     if let Some(model) = model {
         spans.push(Span::styled(model.to_owned(), style(Role::Accent)));
     }
-    if let Some(thinking) = panel.thinking() {
+    if let Some(thinking) = thinking {
         if !spans.is_empty() {
             spans.push(Span::raw(" ".to_owned()));
         }
@@ -534,15 +570,38 @@ fn put_status_row(
 fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
     let panel = app.panel_state();
     let status = panel.status();
-    let known = app.session().and_then(|session| {
-        let window = panel.window_for(session).filter(|window| *window > 0)?;
-        let context = panel.status_for(session)?.context.as_ref()?;
-        Some((window, context))
-    });
+    // While a Fiber delegate's view is open the model, level and
+    // context read its fold; the working directory stays the parent's
+    // (`docs/tui.md`, "Swapped views").
+    let followed = app.delegate_session();
+    let known = match followed.as_ref() {
+        Some(session) => panel
+            .delegate_window_for(session)
+            .filter(|window| *window > 0)
+            .and_then(|window| {
+                panel
+                    .delegate_status_for(session)?
+                    .context
+                    .as_ref()
+                    .map(|context| (window, context))
+            }),
+        None => app.session().and_then(|session| {
+            let window = panel.window_for(session).filter(|window| *window > 0)?;
+            let context = panel.status_for(session)?.context.as_ref()?;
+            Some((window, context))
+        }),
+    };
+    let (model, thinking) = match followed.as_ref() {
+        Some(session) => (
+            panel.delegate_model_for(session),
+            panel.delegate_thinking_for(session),
+        ),
+        None => (panel.session_model(), panel.thinking()),
+    };
     InputStatus {
         workspace: status.map(|status| status.workspace.as_str()),
-        model: panel.session_model(),
-        thinking: panel.thinking(),
+        model,
+        thinking,
         context: known.map(|(window, context)| Context {
             tokens: context.tokens,
             window,

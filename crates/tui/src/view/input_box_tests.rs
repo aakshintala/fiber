@@ -2412,3 +2412,140 @@ fn the_status_row_leaves_the_model_blank_with_neither_landed() {
     assert!(row.contains("ctx"), "{row:?}");
     assert!(!row.contains("high"), "{row:?}");
 }
+
+/// A delegate session id, distinct from every attached fixture.
+const DELEGATE: &str = "s_dddddddddddddddd";
+
+/// Folds job `j_1` as a Fiber delegate with session `DELEGATE` on the
+/// attached session.
+fn delegate_job(app: &mut App) {
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "job_started",
+        serde_json::json!({"job_id": "j_1", "description": "review the parser",
+            "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": "j_1",
+            "delegate_session_id": DELEGATE,
+            "harness": "fiber", "model": "delegate/model", "workspace": "/w"}),
+    ));
+}
+
+/// A delegate `preamble_built` naming `model` with a window, trigger
+/// and thinking level.
+fn delegate_preamble(model: &str, thinking: &str) -> crate::link::Line {
+    session_line(
+        DELEGATE,
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": model, "context_window": 4000,
+            "trigger_at": 3200, "thinking": thinking,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    )
+}
+
+/// A delegate `session_status` in `workspace` naming `model`, with a
+/// context fill.
+fn delegate_status(workspace: &str, model: &str) -> crate::link::Line {
+    session_line(
+        DELEGATE,
+        "session_status",
+        serde_json::json!({
+            "name": "delegate work", "workspace": workspace, "project": "-w",
+            "state": "streaming", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 10, "cache_read": 4,
+                "cache_write": {}, "output": 5},
+                "cost": 0.02, "subscription_cost": 0.01},
+            "model": model, "delegates": 0, "jobs": 0, "clients": 0,
+            "context": {"tokens": 1500, "window": 4000},
+        }),
+    )
+}
+
+/// Closes the open item view through its header target.
+fn close_item_view(app: &mut App) {
+    use crate::mouse::TargetId;
+    let _ = app.on_click(TargetId::Item(crate::app::items::Spot::Close));
+    assert!(!app.item_open());
+}
+
+/// The input box's status row text on a `width` by `height` screen.
+fn status_row_text(app: &App, width: u16, height: u16) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    row_cells(&buf, app, y)
+}
+
+/// While a Fiber delegate's view is open the input box's status row
+/// shows its model, thinking level and context, with the working
+/// directory still the parent's; Esc restores the parent's row
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_input_status_wide_row_shows_the_delegate_model_and_context() {
+    let mut app = full(80, 30);
+    delegate_job(&mut app);
+    open_delegate(&mut app);
+    app.on_line(delegate_preamble("two/model", "medium"));
+    app.on_line(delegate_status("/two", "two/model"));
+    let row = status_row_text(&app, 80, 30);
+    assert!(row.contains("two/model"), "the delegate model: {row:?}");
+    assert!(row.contains("medium"), "the delegate level: {row:?}");
+    assert!(row.contains("1.5k"), "the delegate context: {row:?}");
+    assert!(!row.contains("test/model"), "no parent model: {row:?}");
+    assert!(
+        row.contains("/w/fiber"),
+        "the parent directory stays: {row:?}"
+    );
+    close_item_view(&mut app);
+    let row = status_row_text(&app, 80, 30);
+    assert!(
+        row.contains("test/model"),
+        "the parent model is back: {row:?}"
+    );
+    assert!(!row.contains("two/model"), "no delegate model: {row:?}");
+}
+
+/// The narrow row keeps the delegate's right side under the same cut
+/// rules, then restores the parent's after Esc.
+#[test]
+fn delegate_input_status_narrow_row_keeps_the_delegate_right_side() {
+    let mut app = full(48, 30);
+    delegate_job(&mut app);
+    open_delegate(&mut app);
+    app.on_line(delegate_preamble("two/model", "medium"));
+    app.on_line(delegate_status("/two", "two/model"));
+    let row = status_row_text(&app, 48, 30);
+    assert!(row.contains("two/model"), "the delegate model: {row:?}");
+    assert!(!row.contains("test/model"), "no parent model: {row:?}");
+    close_item_view(&mut app);
+    let row = status_row_text(&app, 48, 30);
+    assert!(
+        row.contains("test/model"),
+        "the parent model is back: {row:?}"
+    );
+}
+
+/// With the parent seeded but no delegate line folded, the row shows
+/// unknown model and context forms, never the parent's.
+#[test]
+fn delegate_input_status_unknown_values_show_dashes_never_the_parent() {
+    let mut app = full(80, 30);
+    delegate_job(&mut app);
+    open_delegate(&mut app);
+    let row = status_row_text(&app, 80, 30);
+    assert!(!row.contains("test/model"), "no parent model: {row:?}");
+    assert!(!row.contains("268.0k"), "no parent context: {row:?}");
+    assert!(row.contains("—"), "unknown context forms: {row:?}");
+    assert!(
+        row.contains("/w/fiber"),
+        "the parent directory stays: {row:?}"
+    );
+}
