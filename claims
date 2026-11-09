@@ -172,3 +172,6 @@ crates/contract/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-P
 crates/main/src/main.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/tui/Cargo.toml	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/doors/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
+crates/tools/src/shell/background.rs	fiber-4177	plan	2026-11-09T18:35:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4422
+crates/tui/src/app/commands.rs	fiber-4177	plan	2026-11-09T18:35:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4422
+crates/tui/src/paging_tests.rs	fiber-4177	plan	2026-11-09T18:35:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4422
