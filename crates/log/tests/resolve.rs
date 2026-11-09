@@ -568,3 +568,219 @@ fn lookup_checks_the_workspace_without_a_recorded_repository() {
     );
     assert!(log::most_recent(&sessions, &|recorded| recorded == "/r/.git").is_none());
 }
+
+#[test]
+fn an_archived_current_maximum_is_skipped_for_the_next() {
+    let (_root, sessions) = setup();
+    logged_lines(
+        &sessions,
+        "s_old",
+        &[
+            started_line("s_old", 100, "/w"),
+            line("s_old", "fiber_exited", json!(200)),
+        ],
+    );
+    logged_lines(
+        &sessions,
+        "s_new",
+        &[
+            started_line("s_new", 100, "/w"),
+            line("s_new", "fiber_exited", json!(300)),
+            line("s_new", "archived", json!(400)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_old");
+}
+
+#[test]
+fn a_resumed_archived_session_is_a_candidate_again() {
+    let (_root, sessions) = setup();
+    logged_lines(
+        &sessions,
+        "s_old",
+        &[
+            started_line("s_old", 100, "/w"),
+            line("s_old", "fiber_exited", json!(200)),
+        ],
+    );
+    logged_lines(
+        &sessions,
+        "s_new",
+        &[
+            started_line("s_new", 100, "/w"),
+            line("s_new", "fiber_exited", json!(300)),
+            line("s_new", "archived", json!(400)),
+            line("s_new", "fiber_started", json!(500)),
+            line("s_new", "fiber_exited", json!(600)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_new");
+}
+
+#[test]
+fn all_archived_is_none() {
+    let (_root, sessions) = setup();
+    logged_lines(
+        &sessions,
+        "s_one",
+        &[
+            started_line("s_one", 100, "/w"),
+            line("s_one", "fiber_exited", json!(200)),
+            line("s_one", "archived", json!(300)),
+        ],
+    );
+    logged_lines(
+        &sessions,
+        "s_two",
+        &[
+            started_line("s_two", 100, "/w"),
+            line("s_two", "fiber_exited", json!(250)),
+            line("s_two", "archived", json!(350)),
+        ],
+    );
+
+    assert!(log::most_recent(&sessions, &|_| true).is_none());
+}
+
+#[test]
+fn explicit_resolve_still_finds_an_archived_session() {
+    let (_root, sessions) = setup();
+    logged_lines(
+        &sessions,
+        "s_arch",
+        &[
+            started_line("s_arch", 100, "/w"),
+            line("s_arch", "fiber_exited", json!(300)),
+            line("s_arch", "archived", json!(400)),
+        ],
+    );
+
+    assert_eq!(
+        log::resolve(&sessions, "s_arch", &|_| true).unwrap().0,
+        "s_arch"
+    );
+    assert_eq!(
+        log::resolve(&sessions, "s_a", &|_| true).unwrap().0,
+        "s_arch"
+    );
+}
+
+#[test]
+fn archived_selection_keeps_project_and_delegate_filtering() {
+    let (_root, sessions) = setup();
+    // Newest overall, but another project: never a candidate here.
+    logged_lines(
+        &sessions,
+        "s_other",
+        &[
+            started_line("s_other", 100, "/else"),
+            line("s_other", "fiber_exited", json!(900)),
+        ],
+    );
+    // A delegate that is also archived: skipped as a delegate.
+    let mut started = started_line("s_d", 100, "/w");
+    started["payload"]["parent"] =
+        json!({"session_id": "s_p", "delegate_id": "j_0123456789abcdef"});
+    logged_lines(
+        &sessions,
+        "s_d",
+        &[started, line("s_d", "archived", json!(800))],
+    );
+    logged_lines(
+        &sessions,
+        "s_arch",
+        &[
+            started_line("s_arch", 100, "/w"),
+            line("s_arch", "fiber_exited", json!(700)),
+            line("s_arch", "archived", json!(750)),
+        ],
+    );
+    logged_lines(
+        &sessions,
+        "s_good",
+        &[
+            started_line("s_good", 100, "/w"),
+            line("s_good", "fiber_exited", json!(200)),
+        ],
+    );
+    let in_project = |workspace: &str| workspace == "/w";
+
+    assert_eq!(
+        log::most_recent(&sessions, &in_project).unwrap().0,
+        "s_good"
+    );
+}
+
+#[test]
+fn an_archived_tie_falls_to_the_next_candidate() {
+    let (_root, sessions) = setup();
+    logged_lines(
+        &sessions,
+        "s_m1",
+        &[
+            started_line("s_m1", 100, "/w"),
+            line("s_m1", "fiber_exited", json!(300)),
+        ],
+    );
+    logged_lines(
+        &sessions,
+        "s_m2",
+        &[
+            started_line("s_m2", 200, "/w"),
+            line("s_m2", "fiber_exited", json!(300)),
+            line("s_m2", "archived", json!(350)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_m1");
+}
+
+#[test]
+fn archive_state_follows_file_order_not_timestamps() {
+    let (_root, sessions) = setup();
+    // The archived line carries the older ts but was written last.
+    logged_lines(
+        &sessions,
+        "s_reversed",
+        &[
+            started_line("s_reversed", 100, "/w"),
+            line("s_reversed", "fiber_started", json!(900)),
+            line("s_reversed", "archived", json!(100)),
+        ],
+    );
+    logged_lines(
+        &sessions,
+        "s_plain",
+        &[
+            started_line("s_plain", 100, "/w"),
+            line("s_plain", "fiber_exited", json!(200)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_plain");
+}
+
+#[test]
+fn a_torn_archived_tail_keeps_the_last_complete_marker() {
+    let (_root, sessions) = setup();
+    let text = format!(
+        "{}\n{}\n{{\"kind\": \"arch",
+        started_line("s_t", 100, "/w"),
+        line("s_t", "fiber_exited", json!(400)),
+    );
+    logged_text(&sessions, "s_t", &text);
+    logged_lines(
+        &sessions,
+        "s_c",
+        &[
+            started_line("s_c", 100, "/w"),
+            line("s_c", "fiber_exited", json!(300)),
+        ],
+    );
+
+    // The torn marker is skipped: the session counts as not archived,
+    // and its last complete line beats the competitor.
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_t");
+}

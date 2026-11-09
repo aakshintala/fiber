@@ -152,6 +152,7 @@ fn run(
     let command = HubCommand::Sessions(SessionsArgs {
         project: (!all && project.in_repository).then(|| log::project_key(&project.path)),
         active: None,
+        archived: None,
     });
     let (stream, _) = connect().map_err(CliError::Hub)?;
     let result = request_value(&mut BufReader::new(stream), LIST_ID, command)?;
@@ -188,6 +189,7 @@ pub fn resolve_listed(
         HubCommand::Sessions(SessionsArgs {
             project: None,
             active: None,
+            archived: None,
         }),
     )?;
     let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
@@ -233,6 +235,7 @@ pub fn latest_listed(
         HubCommand::Sessions(SessionsArgs {
             project: None,
             active: Some(true),
+            archived: None,
         }),
     )?;
     let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;

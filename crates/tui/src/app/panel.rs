@@ -329,6 +329,7 @@ impl PanelState {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::ContextAdded
             | EventKind::TextCompleted
@@ -925,6 +926,7 @@ impl App {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded

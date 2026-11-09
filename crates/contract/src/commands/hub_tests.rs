@@ -28,8 +28,14 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "dismiss", "args": {"session": "s_1"}}),
         json!({"id": "c", "command": "recent", "args": {"before": "s_1"}}),
         json!({"id": "c", "command": "recent", "args": {"project": "p"}}),
+        json!({"id": "c", "command": "recent", "args": {"archived": true}}),
+        json!({"id": "c", "command": "recent", "args": {"project": "p", "archived": false}}),
         json!({"id": "c", "command": "sessions", "args": {"project": "p"}}),
         json!({"id": "c", "command": "sessions", "args": {"project": "p", "active": true}}),
+        json!({"id": "c", "command": "sessions", "args": {"archived": true}}),
+        json!({"id": "c", "command": "sessions",
+            "args": {"project": "p", "active": false, "archived": false}}),
+        json!({"id": "c", "command": "archive", "args": {"session": "s_1"}}),
         json!({"id": "c", "command": "start", "args": {"workspace": "/w", "model": "m",
             "overrides": ["a=b"], "worktree": true,
             "content": [{"type": "text", "text": "t"}]}}),
@@ -91,22 +97,159 @@ fn every_hub_sample_reads_and_writes_back_unchanged() {
     }
 }
 
-/// Hub commands the doc names that the enum does not build yet; the build
-/// ticket (#3782) removes the entry.
-const NOT_BUILT: [&str; 1] = ["archive"];
-
 #[test]
 fn the_hub_samples_cover_every_hub_command_in_the_doc() {
     let named: BTreeSet<String> = samples()
         .iter()
         .map(|s| s["command"].as_str().unwrap().to_owned())
         .collect();
-    let doc: BTreeSet<String> = doc_hub_commands()
-        .into_iter()
-        .filter(|name| !NOT_BUILT.contains(name))
-        .map(str::to_owned)
-        .collect();
+    let doc: BTreeSet<String> = doc_hub_commands().into_iter().map(str::to_owned).collect();
     assert_eq!(named, doc);
+}
+
+#[test]
+fn archive_reads_a_session_and_refuses_anything_else() {
+    for (args, expected) in [
+        (r#"{"session":"s_1"}"#, Ok(())),
+        (r#"{}"#, Err(())),
+        (r#"{"session":null}"#, Err(())),
+        (r#"{"session":1}"#, Err(())),
+        (r#"{"session":"s_1","future":1}"#, Err(())),
+        (r#"{"future":1}"#, Err(())),
+    ] {
+        let sample = serde_json::json!({
+            "id": "c",
+            "command": "archive",
+            "args": serde_json::from_str::<Value>(args).unwrap(),
+        });
+        match expected {
+            Ok(()) => {
+                let read = serde_json::from_value::<HubCommandLine>(sample.clone())
+                    .unwrap_or_else(|e| panic!("{sample}: {e}"));
+                assert_eq!(
+                    read.command,
+                    HubCommand::Archive(Archive {
+                        session: SessionId("s_1".into()),
+                    }),
+                    "{sample}"
+                );
+                assert_eq!(serde_json::to_value(&read).unwrap(), sample, "{sample}");
+            }
+            Err(()) => assert!(
+                serde_json::from_value::<HubCommandLine>(sample.clone()).is_err(),
+                "{sample}"
+            ),
+        }
+    }
+    let full = HubCommandLine {
+        id: CommandId("c".into()),
+        command: HubCommand::Archive(Archive {
+            session: SessionId("s_1".into()),
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&full).unwrap(),
+        json!({"id": "c", "command": "archive", "args": {"session": "s_1"}})
+    );
+}
+
+#[test]
+fn recent_and_sessions_read_archived_absent_false_and_true() {
+    for (command, args, expected) in [
+        ("recent", r#"{}"#, None),
+        ("recent", r#"{"archived":true}"#, Some(true)),
+        ("recent", r#"{"archived":false}"#, Some(false)),
+        ("sessions", r#"{}"#, None),
+        ("sessions", r#"{"archived":true}"#, Some(true)),
+        ("sessions", r#"{"archived":false}"#, Some(false)),
+    ] {
+        let sample = serde_json::json!({
+            "id": "c",
+            "command": command,
+            "args": serde_json::from_str::<Value>(args).unwrap(),
+        });
+        let read = serde_json::from_value::<HubCommandLine>(sample.clone())
+            .unwrap_or_else(|e| panic!("{sample}: {e}"));
+        let archived = match &read.command {
+            HubCommand::Recent(recent) => recent.archived,
+            HubCommand::Sessions(args) => args.archived,
+            other => panic!("{sample} reads as {other:?}"),
+        };
+        assert_eq!(archived, expected, "{sample}");
+        assert_eq!(serde_json::to_value(&read).unwrap(), sample, "{sample}");
+    }
+}
+
+#[test]
+fn recent_and_sessions_read_a_null_archived_as_absent() {
+    // The hub boundary refuses an explicit null from its raw args map;
+    // the typed struct reads it as absent, like every other optional
+    // boolean, so a client struct never writes one.
+    for command in ["recent", "sessions"] {
+        let sample = serde_json::json!({
+            "id": "c",
+            "command": command,
+            "args": {"archived": null},
+        });
+        let read = serde_json::from_value::<HubCommandLine>(sample.clone())
+            .unwrap_or_else(|e| panic!("{sample}: {e}"));
+        let archived = match &read.command {
+            HubCommand::Recent(recent) => recent.archived,
+            HubCommand::Sessions(args) => args.archived,
+            other => panic!("{sample} reads as {other:?}"),
+        };
+        assert_eq!(archived, None, "{sample}");
+    }
+}
+
+#[test]
+fn recent_and_sessions_refuse_a_misshaped_archived() {
+    for (command, args) in [
+        ("recent", r#"{"archived":"yes"}"#),
+        ("recent", r#"{"archived":1}"#),
+        ("recent", r#"{"archived":true,"future":1}"#),
+        ("sessions", r#"{"archived":"yes"}"#),
+        ("sessions", r#"{"archived":1}"#),
+        ("sessions", r#"{"archived":true,"future":1}"#),
+    ] {
+        let sample = serde_json::json!({
+            "id": "c",
+            "command": command,
+            "args": serde_json::from_str::<Value>(args).unwrap(),
+        });
+        assert!(
+            serde_json::from_value::<HubCommandLine>(sample.clone()).is_err(),
+            "{sample}"
+        );
+    }
+}
+
+#[test]
+fn sessions_without_archived_writes_no_archived() {
+    let line = HubCommandLine {
+        id: CommandId("c".into()),
+        command: HubCommand::Sessions(SessionsArgs {
+            project: None,
+            active: None,
+            archived: None,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&line).unwrap(),
+        json!({"id": "c", "command": "sessions", "args": {}}),
+    );
+    let line = HubCommandLine {
+        id: CommandId("c".into()),
+        command: HubCommand::Recent(Recent {
+            before: None,
+            project: None,
+            archived: None,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&line).unwrap(),
+        json!({"id": "c", "command": "recent", "args": {}}),
+    );
 }
 
 #[test]

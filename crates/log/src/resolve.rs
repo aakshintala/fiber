@@ -11,7 +11,8 @@ use crate::{EVENTS, Error};
 
 /// The session used most recently in `sessions`
 /// (`docs/invocation.md`, "Commands and flags"): the one whose log's
-/// last line is newest, live or exited alike. A directory counts only
+/// last line is newest, live or exited alike, never an archived one
+/// (`docs/invocation.md`, "Archiving"). A directory counts only
 /// when [`resolve`] would accept it, and never when its first line names
 /// a parent: a delegate resumes only through its parent
 /// (`docs/delegates.md`), which the hub refuses to resume. `in_project`
@@ -29,6 +30,9 @@ pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option
         .filter_map(|entry| {
             let opening = opening(&entry.path(), in_project)?;
             if opening.delegate {
+                return None;
+            }
+            if crate::is_archived(&entry.path()) {
                 return None;
             }
             let activity = crate::last_ts(&entry.path()).unwrap_or(opening.ts);

@@ -2577,6 +2577,7 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded
@@ -2655,6 +2656,7 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded
