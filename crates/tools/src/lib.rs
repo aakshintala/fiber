@@ -47,6 +47,7 @@ pub use shell::Shell;
 pub use shell::hosted::{adopted_end, adopted_flooded_end};
 pub use shell::hosted::{keeper_spawn, kept_end};
 pub use shell::monitor::Feed as MonitorFeed;
+pub use shell::restored::{AdoptedRun, AdoptedSink};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use shell::sandbox::Prepared;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

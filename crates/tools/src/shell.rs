@@ -22,6 +22,7 @@ use crate::tool_util::{cancelled_before, errored};
 
 mod background;
 pub(crate) mod hosted;
+pub(crate) mod restored;
 
 mod command;
 mod detached;

@@ -10,10 +10,10 @@
 use std::io::{BufRead as _, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
-use contract::clock::{Clock, Wake};
+use contract::clock::Clock;
 use contract::events::{Event, JobStarted, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
@@ -29,39 +29,6 @@ fn deadline() -> Deadline {
     Deadline::after(Duration::from_secs(10))
 }
 
-/// The fake clock, telling the test each time the code under test reads it:
-/// a read is the signal that the runner has its time for the burst in hand.
-struct ProbeClock {
-    inner: Arc<FakeClock>,
-    reads: Mutex<mpsc::Sender<()>>,
-}
-
-impl Clock for ProbeClock {
-    fn now(&self) -> Instant {
-        let now = self.inner.now();
-        match support::lock(&self.reads).send(()) {
-            Ok(()) | Err(_) => {}
-        }
-        now
-    }
-
-    fn wall(&self) -> SystemTime {
-        self.inner.wall()
-    }
-
-    fn sleep(&self, d: Duration) {
-        self.inner.sleep(d);
-    }
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        self.inner.wait_until(until, wait);
-    }
-
-    fn subscribe(&self, waker: std::sync::Weak<dyn Wake>) {
-        self.inner.subscribe(waker);
-    }
-}
-
 /// A session directory with its log, the registry over its artifacts, the
 /// host, and the keeper's end of a handover connection.
 struct World {
@@ -73,11 +40,7 @@ struct World {
     host: Arc<Host>,
     keeper: UnixStream,
     session_end: Option<UnixStream>,
-    /// The clock the runners read, and the fake behind it.
     clock: Arc<dyn Clock>,
-    fake: Arc<FakeClock>,
-    /// One signal per read of `clock`.
-    reads: mpsc::Receiver<()>,
 }
 
 fn world() -> World {
@@ -91,15 +54,8 @@ fn world() -> World {
     let as_clock: Arc<dyn Clock> = clock.clone();
     let registry = jobs::Registry::new(dir.artifacts(), Arc::clone(&as_clock), recorder.clone());
     let (session_end, keeper) = UnixStream::pair().unwrap();
-    let (read, reads) = mpsc::channel();
-    let probe: Arc<dyn Clock> = Arc::new(ProbeClock {
-        inner: Arc::clone(&clock),
-        reads: Mutex::new(read),
-    });
     World {
-        clock: probe,
-        fake: clock,
-        reads,
+        clock: as_clock.clone(),
         host: host_without_keeper(as_clock),
         _root: root,
         dir,
@@ -149,23 +105,6 @@ impl World {
     fn send(&mut self, frame: serde_json::Value) {
         serde_json::to_writer(&mut self.keeper, &frame).unwrap();
         self.keeper.write_all(b"\n").unwrap();
-    }
-
-    /// Lets `by` pass on the fake clock. The runner only reads it, and the
-    /// caller has seen its read for the burst before this one.
-    fn advance(&self, by: Duration) {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "no code under test waits on the clock (ruling 6179406086)"
-        )]
-        self.fake.advance(by);
-    }
-
-    /// Sends one line as its own burst and waits for the runner to read the
-    /// clock for it, so the next send or advance cannot reach that burst.
-    fn burst(&mut self, call: &str, text: &str) {
-        self.send(output_frame(call, "out", text));
-        deadline().recv_or_fail(&self.reads, "the runner to read the clock for a burst");
     }
 
     fn output(&self, id: &str) -> Vec<u8> {
@@ -618,24 +557,6 @@ fn a_keeper_that_vanishes_after_the_handover_was_kept_fails_its_job_at_once() {
 }
 
 #[test]
-fn text_decoding_holds_an_incomplete_character_for_the_next_bytes() {
-    let mut text = super::Text::default();
-    let euro = "€".as_bytes();
-    assert_eq!(text.decode(&euro[..2]), "");
-    assert_eq!(text.decode(&euro[2..]), "€");
-    assert_eq!(text.decode(b"a\xffb"), "a\u{fffd}b");
-}
-
-#[test]
-fn newest_keeps_the_tail_on_a_character_boundary() {
-    let text = format!("a{}", "€".repeat(30_000));
-    let kept = super::newest(&text);
-    assert!(kept.len() <= 64 << 10);
-    assert!(kept.starts_with('€'));
-    assert_eq!(super::newest("short"), "short");
-}
-
-#[test]
 fn a_finish_that_fails_closes_the_writers_before_the_connection_ends() {
     let mut world = world();
     let (job, mut writers) = watched_job(&world, "j_job", "call_0");
@@ -704,114 +625,4 @@ fn a_finish_the_keeper_acknowledges_keeps_the_writers() {
         writers.open(),
         "the session owns the file after the handover"
     );
-}
-
-/// A monitor job restored and running, the registry's inbox, the lines the
-/// keeper hears, and the attachment that keeps the connection open.
-fn monitor() -> (
-    World,
-    Active,
-    mpsc::Receiver<Delivery>,
-    mpsc::Receiver<String>,
-    Attached,
-) {
-    let mut world = world();
-    let mut job = world.job("j_mon", "call_0", b"");
-    job.lines = true;
-    let mut attached = world.attach(vec![job]);
-    let deliveries = inbox(&world);
-    let heard = lines_of(&world.keeper);
-    let restored = restored(&world, &mut attached);
-    // The feed read the clock to start its budget.
-    deadline().recv_or_fail(&world.reads, "the feed's first read of the clock");
-    let active = restored.activate();
-    (world, active, deliveries, heard, attached)
-}
-
-/// The lines of the next delivery, which must be a monitor's.
-fn delivered(deliveries: &mpsc::Receiver<Delivery>) -> contract::events::JobLine {
-    let delivery = deadline().recv_or_fail(deliveries, "a monitor delivery");
-    let Delivery::JobLine(line) = delivery else {
-        panic!("expected a monitor delivery, got {delivery:?}")
-    };
-    line
-}
-
-#[test]
-fn a_restored_monitor_spends_a_budget_of_ten_and_reports_what_it_suppressed() {
-    let (mut world, active, deliveries, _heard, _attached) = monitor();
-    for n in 0..10 {
-        world.burst("call_0", &format!("line {n}\n"));
-        let line = delivered(&deliveries);
-        assert_eq!(line.lines, format!("line {n}"));
-        assert_eq!(line.suppressed, None);
-    }
-    // The clock stands still: the next two are dropped, not delivered.
-    world.burst("call_0", "dropped one\n");
-    world.burst("call_0", "dropped two\n");
-    world.send(exit_frame("call_0", 0));
-    // The count arrives before the ending, with no lines of its own.
-    let count = delivered(&deliveries);
-    assert_eq!((count.lines.as_str(), count.suppressed), ("", Some(2)));
-    let delivery = deadline().recv_or_fail(&deliveries, "the ending");
-    let Delivery::Job(notice) = delivery else {
-        panic!("expected the ending, got {delivery:?}")
-    };
-    assert_eq!(notice.completed.status, Outcome::Completed);
-    // The file keeps what the model was not sent.
-    assert!(
-        String::from_utf8(world.output("j_mon"))
-            .unwrap()
-            .ends_with("dropped one\ndropped two\n")
-    );
-    active.keep();
-}
-
-#[test]
-fn a_restored_monitor_earns_a_delivery_every_two_seconds() {
-    let (mut world, active, deliveries, _heard, _attached) = monitor();
-    for n in 0..10 {
-        world.burst("call_0", &format!("line {n}\n"));
-        delivered(&deliveries);
-    }
-    world.advance(Duration::from_secs(2));
-    world.burst("call_0", "earned\n");
-    let line = delivered(&deliveries);
-    assert_eq!((line.lines.as_str(), line.suppressed), ("earned", None));
-    active.keep();
-}
-
-#[test]
-fn a_restored_monitor_that_floods_for_thirty_seconds_is_stopped_and_ends_flooded() {
-    let (mut world, active, deliveries, heard, _attached) = monitor();
-    for n in 0..10 {
-        world.burst("call_0", &format!("line {n}\n"));
-        delivered(&deliveries);
-    }
-    // Two bursts every 1.5 s: the refill earns less than one a step, so the
-    // second of each is dropped, and the run of suppression reaches 30 s at
-    // the 21st step.
-    for _ in 0..21 {
-        world.burst("call_0", "noise\n");
-        world.burst("call_0", "noise\n");
-        world.advance(Duration::from_millis(1_500));
-    }
-    let stop = deadline().recv_or_fail(&heard, "the stop of a flooded monitor");
-    assert_eq!(stop.trim(), r#"{"stop":"call_0"}"#);
-    world.send(exit_frame("call_0", 0));
-    // What the budget let through is delivered, then the ending.
-    let dl = deadline();
-    let notice = loop {
-        let delivery = dl.recv_or_fail(&deliveries, "the ending");
-        if let Delivery::Job(notice) = delivery {
-            break notice;
-        }
-        assert!(matches!(delivery, Delivery::JobLine(_)), "{delivery:?}");
-    };
-    assert_eq!(notice.completed.status, Outcome::Failed);
-    assert_eq!(
-        notice.completed.error.map(|error| error.code),
-        Some(ErrorCode::Flooded)
-    );
-    active.keep();
 }

@@ -1,35 +1,28 @@
 //! Jobs a keeper handed over, running again in the session's registry
 //! (`docs/tools.md`, "The keeper": a resume takes the log back). The keeper
 //! keeps writing each job's files until the session says it is ready; from
-//! then on a job's output arrives as frames, and the runner here appends it
-//! after the keeper's bytes and reports the ending through the job's `End`,
-//! as any job's.
+//! then on a job's output arrives as frames, and each job's runner in
+//! [`tools`] appends it after the keeper's bytes and reports the ending
+//! through the job's `End`, as any job's. This module keeps the handover
+//! lifecycle around those runners: validation, the kept-or-abandoned
+//! verdict for lost connections, and the drop order that closes every
+//! append handle before the keeper can take the files back.
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{self, Write as _};
+use std::fs::OpenOptions;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use contract::JobId;
 use contract::clock::Clock;
-use contract::emit::Emit;
-use contract::events::{Event, EventKind, JobDelta, JobStarted, Progress};
+use contract::events::{Event, EventKind, JobStarted};
 use contract::jobs::{End, Input, Stop};
-use contract::keeper::{HostEvent, Stream};
 use support::lock;
+use tools::{AdoptedRun, AdoptedSink};
 
 use crate::keeper::{Adopted, Attached, Handover, Host};
-
-/// What the session's append handles are, shared with whoever may have to
-/// close them while the runner is blocked waiting for its next event.
-struct Sinks {
-    /// `None` once the handover was abandoned.
-    output: Option<File>,
-    errors: Option<File>,
-}
 
 /// What the session decided about the handover, once it has: runners that
 /// find the connection closed before then wait for it. A connection ends
@@ -91,39 +84,11 @@ impl Verdict {
     }
 }
 
-struct Runner {
-    job_id: JobId,
-    /// The job's output file, for the tail of its ending.
-    output_path: PathBuf,
-    events: Receiver<HostEvent>,
-    sinks: Arc<Mutex<Sinks>>,
-    /// Taken by the runner's one report, or dropped with an abandoned
-    /// handover: reporting is the registry's to make, never a teardown's.
-    end: Option<End>,
-    emit: Arc<dyn Emit>,
-    /// A monitor's deliveries under the rate budget and flood stop.
-    feed: Option<tools::MonitorFeed>,
-    clock: Arc<dyn Clock>,
-    verdict: Arc<Verdict>,
-}
-
-impl Drop for Runner {
-    fn drop(&mut self) {
-        // A runner that never reported was torn down before it ran, or
-        // after the handover was abandoned. Dropping its `End` would record
-        // the job failed `indeterminate`, a completion under a writer that
-        // may no longer be the session's, for a job the keeper still runs.
-        if let Some(end) = self.end.take() {
-            std::mem::forget(end);
-        }
-    }
-}
-
 /// Handed-over jobs recorded in the registry, their runners not started.
 /// Dropped, they close every append handle and report nothing.
 pub(crate) struct Restored {
     ids: Vec<JobId>,
-    runners: Vec<Runner>,
+    runners: Vec<AdoptedRun>,
     verdict: Arc<Verdict>,
 }
 
@@ -134,21 +99,28 @@ impl Restored {
     }
 
     /// Starts every runner. Call it once the registry's inbox is wired: an
-    /// ending reported before that would not reach the loop.
+    /// ending reported before that would not reach the loop. A runner whose
+    /// connection closes with no ending returns its uncalled report, which
+    /// lands in the verdict for the handover's answer.
     pub(crate) fn activate(mut self) -> Active {
-        let runners = std::mem::take(&mut self.runners);
-        let sinks = runners
-            .iter()
-            .map(|runner| Arc::clone(&runner.sinks))
-            .collect();
-        let threads = runners
+        let verdict = Arc::clone(&self.verdict);
+        let mut sinks = Vec::with_capacity(self.runners.len());
+        let threads = std::mem::take(&mut self.runners)
             .into_iter()
-            .map(|runner| thread::spawn(move || runner.run()))
+            .map(|runner| {
+                sinks.push(runner.sink());
+                let verdict = Arc::clone(&verdict);
+                thread::spawn(move || {
+                    if let Some(end) = runner.run() {
+                        verdict.lost(end);
+                    }
+                })
+            })
             .collect();
         Active {
             sinks,
             threads,
-            verdict: Arc::clone(&self.verdict),
+            verdict,
             armed: true,
         }
     }
@@ -157,7 +129,7 @@ impl Restored {
 /// Running runners. Dropped before [`Active::keep`], it closes every append
 /// handle at once, so the keeper can take the files back.
 pub(crate) struct Active {
-    sinks: Vec<Arc<Mutex<Sinks>>>,
+    sinks: Vec<AdoptedSink>,
     /// The runners' threads, for a test to learn each one finished.
     #[cfg_attr(not(test), expect(dead_code, reason = "only a test joins the runners"))]
     threads: Vec<thread::JoinHandle<()>>,
@@ -178,10 +150,8 @@ impl Drop for Active {
         if !self.armed {
             return;
         }
-        for sinks in &self.sinks {
-            let mut sinks = lock(sinks);
-            sinks.output = None;
-            sinks.errors = None;
+        for sink in &self.sinks {
+            sink.close();
         }
         // After the handles: a runner that held its report for the answer
         // finds the handover given up and reports nothing.
@@ -358,170 +328,19 @@ pub(crate) fn restore(
         let opened = registry
             .restore(started, stop(), input, job.lines)
             .map_err(|failure| io::Error::other(failure.to_string()))?;
-        // The monitor's own stop, which a flood sends.
-        let feed = opened
-            .lines
-            .map(|lines| tools::MonitorFeed::new(job.job_id.clone(), lines, stop(), clock.now()));
         restored.ids.push(job.job_id.clone());
-        restored.runners.push(Runner {
-            job_id: job.job_id,
-            output_path: job.output_path.clone(),
+        // The runner owns the execution from here: the registry's opened
+        // job carries its recorded identity, files and report, and the
+        // monitor's own stop, which a flood sends.
+        restored.runners.push(AdoptedRun::new(
+            opened,
             events,
-            sinks: Arc::new(Mutex::new(Sinks {
-                output: Some(opened.file),
-                errors,
-            })),
-            end: Some(opened.end),
-            emit: opened.emit,
-            feed,
-            clock: Arc::clone(clock),
-            verdict: Arc::clone(&restored.verdict),
-        });
+            errors,
+            stop(),
+            Arc::clone(clock),
+        ));
     }
     Ok(restored)
-}
-
-impl Runner {
-    /// Appends what the keeper sends after its own bytes, delivers a
-    /// monitor's lines, and reports the ending once. Everything that
-    /// arrived while the runner was not yet running is waiting in `events`.
-    fn run(mut self) {
-        let mut feed = self.feed.take();
-        let mut text = Text::default();
-        loop {
-            let Ok(first) = self.events.recv() else {
-                // The keeper's connection ended with no ending: the registry
-                // records the job failed `indeterminate`, as for any job
-                // whose host is lost, unless the handover was abandoned.
-                if lock(&self.sinks).output.is_none() {
-                    return;
-                }
-                if let Some(end) = self.end.take() {
-                    self.verdict.lost(end);
-                }
-                return;
-            };
-            // What is already queued goes out together: one delta per burst
-            // keeps a flood from becoming one event per frame, and one
-            // delivery per burst spends one token of a monitor's budget.
-            let mut burst = vec![first];
-            while !matches!(burst.last(), Some(HostEvent::Exit(_)))
-                && let Ok(more) = self.events.try_recv()
-            {
-                burst.push(more);
-            }
-            let mut shown = String::new();
-            let mut fresh = Vec::new();
-            for event in burst {
-                match event {
-                    HostEvent::Output { stream, bytes } => {
-                        let Some(output) = self.append(stream, &bytes) else {
-                            return;
-                        };
-                        if feed.is_some() {
-                            fresh.extend_from_slice(&output);
-                        }
-                        shown.push_str(&text.decode(&output));
-                    }
-                    HostEvent::Exit(exit) => {
-                        // An abandoned handover reports nothing: the keeper
-                        // still holds the job and a later resume owns it.
-                        if lock(&self.sinks).output.is_none() {
-                            return;
-                        }
-                        self.show(&shown);
-                        let flooded = feed.as_mut().is_some_and(|feed| {
-                            let now = self.clock.now();
-                            feed.deliver(&fresh, now, false);
-                            feed.end(now);
-                            feed.flooded()
-                        });
-                        if let Some(end) = self.end.take() {
-                            let ended = if flooded {
-                                tools::adopted_flooded_end
-                            } else {
-                                tools::adopted_end
-                            };
-                            (end.0)(ended(self.job_id.clone(), &self.output_path, &exit));
-                        }
-                        return;
-                    }
-                }
-            }
-            self.show(&shown);
-            if let Some(feed) = &mut feed {
-                feed.deliver(&fresh, self.clock.now(), true);
-            }
-        }
-    }
-
-    /// Appends `bytes` to the file `stream` belongs to; returns what went to
-    /// the output file. `None` when the handover was abandoned. A write that
-    /// fails loses those bytes from the file only: the job's ending still
-    /// reaches the model.
-    fn append(&self, stream: Stream, bytes: &[u8]) -> Option<Vec<u8>> {
-        let mut sinks = lock(&self.sinks);
-        sinks.output.as_ref()?;
-        if stream == Stream::Err
-            && let Some(errors) = &mut sinks.errors
-        {
-            match errors.write_all(bytes) {
-                Ok(()) | Err(_) => {}
-            }
-            return Some(Vec::new());
-        }
-        if let Some(output) = &mut sinks.output {
-            match output.write_all(bytes) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-        Some(bytes.to_vec())
-    }
-
-    fn show(&self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        self.emit.emit(&Event::JobDelta(JobDelta {
-            job_id: self.job_id.clone(),
-            progress: Progress {
-                text: Some(newest(text).to_owned()),
-                details: None,
-            },
-        }));
-    }
-}
-
-/// The newest 64 KiB of a delta, from a character boundary
-/// (`docs/events.md`, `job_delta`).
-fn newest(text: &str) -> &str {
-    const HELD_MAX: usize = 64 << 10;
-    let mut from = text.len().saturating_sub(HELD_MAX);
-    while !text.is_char_boundary(from) {
-        from = from.saturating_add(1);
-    }
-    text.get(from..).unwrap_or_default()
-}
-
-/// Decodes a stream's bytes, holding an incomplete character for the next.
-#[derive(Default)]
-struct Text {
-    carry: Vec<u8>,
-}
-
-impl Text {
-    fn decode(&mut self, bytes: &[u8]) -> String {
-        self.carry.extend_from_slice(bytes);
-        let whole = match std::str::from_utf8(&self.carry) {
-            Ok(_) => self.carry.len(),
-            Err(error) if error.error_len().is_none() => error.valid_up_to(),
-            Err(_) => self.carry.len(),
-        };
-        let rest = self.carry.split_off(whole);
-        let text = String::from_utf8_lossy(&self.carry).into_owned();
-        self.carry = rest;
-        text
-    }
 }
 
 #[cfg(test)]
