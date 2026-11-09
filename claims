@@ -326,3 +326,13 @@ docs/events.md	fiber-3635	grant	2026-11-09T03:37:49Z	roundhouse-7010-plus-1:/srv
 docs/prompt-cache.md	fiber-3635	grant	2026-11-09T03:37:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/permissions/3635-sandbox-toggle-plan	
 crates/loop/src/sandbox_tests.rs	fiber-3635	grant	2026-11-09T03:37:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/permissions/3635-sandbox-toggle-plan	
 crates/main/src/reload_tests.rs	fiber-3635	grant	2026-11-09T03:38:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/permissions/3635-sandbox-toggle-plan	
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/support/reviewer_eval.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/support/review.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/examples/review.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/review_sweep.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/examples/review_sweep.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/review_sweep.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
