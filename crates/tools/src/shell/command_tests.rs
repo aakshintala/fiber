@@ -20,6 +20,7 @@ use super::super::output::{
 };
 use super::{MovePolicy, MoveReason, StopKind};
 use fakes::children::{Ready, ignores_sigterm};
+use support::deadline::WAIT;
 use support::group::alive;
 
 #[allow(
@@ -2885,8 +2886,6 @@ impl contract::emit::Emit for Hook {
     }
 }
 
-const START_DEADLINE: Duration = Duration::from_secs(40);
-
 /// Runs `command` under `program` in `work` on its own thread with `hook`
 /// as its emitter, on the process clock: a stuck drive fails the test at
 /// the deadline instead of hanging it.
@@ -2946,11 +2945,7 @@ fn the_start_hook_is_asked_once_before_the_process_exists() {
     // The probe sees whether the command's own file exists yet.
     let hook = Arc::new(Hook::new(true, false, move || probe.exists()));
     let rx = execute_hooked("/bin/sh".into(), "touch ran", &work, &hook);
-    let finished = finished_of(
-        Deadline::after(START_DEADLINE)
-            .recv(&rx)
-            .expect("the command ended"),
-    );
+    let finished = finished_of(Deadline::after(WAIT).recv(&rx).expect("the command ended"));
     assert_eq!(exit_code_of(finished.status), 0);
     assert_eq!(
         hook.probes(),
@@ -2967,9 +2962,7 @@ fn a_declined_start_runs_nothing_and_returns_the_declined_shape() {
     let marker = work.join("ran");
     let hook = Arc::new(Hook::new(false, false, || false));
     let rx = execute_hooked("/bin/sh".into(), "touch ran", &work, &hook);
-    let ran = Deadline::after(START_DEADLINE)
-        .recv(&rx)
-        .expect("the call returned");
+    let ran = Deadline::after(WAIT).recv(&rx).expect("the call returned");
     assert!(
         matches!(ran, Ok(super::Ran::Declined)),
         "a declined start is neither a run nor an error"
@@ -3012,9 +3005,7 @@ fn a_spawn_failure_after_starting_reports_the_error() {
     let work = dir.path().to_path_buf();
     let hook = Arc::new(Hook::new(true, false, || false));
     let rx = execute_hooked(work.join("no-such-shell-4177"), "true", &work, &hook);
-    let ran = Deadline::after(START_DEADLINE)
-        .recv(&rx)
-        .expect("the call returned");
+    let ran = Deadline::after(WAIT).recv(&rx).expect("the call returned");
     let Err(error) = ran else {
         panic!("a program that does not exist does not start");
     };
@@ -3057,7 +3048,7 @@ fn a_paced_call_flushes_a_held_change_on_the_park_deadline() {
         &work,
         &hook,
     );
-    let wait = Deadline::after(START_DEADLINE);
+    let wait = Deadline::after(WAIT);
     // The first change after idle goes out at once.
     assert!(hook.recorder.wait_for_text("a", wait), "a goes out at once");
     {
@@ -3107,7 +3098,7 @@ fn an_unpaced_call_emits_each_chunk_as_it_is_read() {
         &work,
         &hook,
     );
-    let wait = Deadline::after(START_DEADLINE);
+    let wait = Deadline::after(WAIT);
     assert!(hook.recorder.wait_for_text("a", wait));
     {
         use std::io::Write as _;
