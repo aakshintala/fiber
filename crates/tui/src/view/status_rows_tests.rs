@@ -1711,7 +1711,20 @@ fn open_item(app: &mut App, job: &str, serial_spot: Spot) {
     let spot = match serial_spot {
         Spot::Delegate(_) => Spot::Delegate(serial),
         Spot::Job(_) => Spot::Job(serial),
-        _ => panic!("a delegate or job spot"),
+        Spot::Jobs
+        | Spot::Branch
+        | Spot::Waiting
+        | Spot::Model
+        | Spot::Context
+        | Spot::Status
+        | Spot::Usage
+        | Spot::Quota
+        | Spot::File(_)
+        | Spot::DelegateList
+        | Spot::JobList
+        | Spot::ChangedFiles
+        | Spot::Tools
+        | Spot::Widget => panic!("a delegate or job spot"),
     };
     let _ = app.on_click(TargetId::Panel(spot));
     assert!(app.item_open());

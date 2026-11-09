@@ -2121,11 +2121,10 @@ fn delegate_fold_status_routes_to_the_open_fiber_delegate() {
     assert_eq!(app.panel_state().session_model(), Some("one/model"));
 }
 
-/// A Fiber delegate's `preamble_built` supplies its window, trigger,
-/// budget and credential; a parent-only preamble leaves the delegate's
-/// bar empty.
+/// A Fiber delegate's `preamble_built` supplies its window, trigger
+/// and budget; a parent-only preamble leaves the delegate's bar empty.
 #[test]
-fn delegate_fold_preamble_supplies_window_trigger_budget_and_credential() {
+fn delegate_fold_preamble_supplies_window_trigger_and_budget() {
     let mut app = attached();
     app.set_size(80, 24);
     app.on_line(preamble_line("one/model", "low", 1000, 800));
@@ -2140,13 +2139,9 @@ fn delegate_fold_preamble_supplies_window_trigger_budget_and_credential() {
     assert_eq!(panel.delegate_window_for(&session), Some(4000));
     assert_eq!(panel.delegate_trigger_for(&session), Some(3200));
     assert_eq!(panel.delegate_budget_for(&session), Some(2.5));
-    assert_eq!(
-        panel.delegate_credential_for(&session),
-        Some(Some("delegate-key"))
-    );
     // The parent's preamble is untouched.
     assert_eq!(
-        app.panel_state().window_for(&app.session().unwrap()),
+        app.panel_state().window_for(app.session().unwrap()),
         Some(1000)
     );
     assert_eq!(app.panel_state().trigger_at(), Some(800));

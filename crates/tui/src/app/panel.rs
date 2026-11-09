@@ -671,14 +671,6 @@ impl PanelState {
             .map(|delegate| &delegate.down)
     }
 
-    /// The credential label the delegate's latest `preamble_built` or
-    /// `model_changed` names: `None` before either, `Some(None)` when
-    /// the provider takes no credential.
-    pub(crate) fn delegate_credential_for(&self, session: &SessionId) -> Option<Option<&str>> {
-        self.delegate_for(session)
-            .and_then(|delegate| delegate.credential.as_ref().map(Option::as_deref))
-    }
-
     /// Everything back to default.
     pub(crate) fn reset(&mut self) {
         *self = Self::default();

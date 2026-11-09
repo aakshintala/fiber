@@ -2987,7 +2987,18 @@ fn open_send(app: &mut App, job: &str) -> Option<Vec<serde_json::Value>> {
                 })
                 .collect(),
         ),
-        _ => None,
+        crate::app::Effect::None
+        | crate::app::Effect::Quit
+        | crate::app::Effect::ListFiles
+        | crate::app::Effect::FindPause { .. }
+        | crate::app::Effect::Search { .. }
+        | crate::app::Effect::Editor { .. }
+        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::Copy(_)
+        | crate::app::Effect::OpenLink(_)
+        | crate::app::Effect::OpenFile(_)
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => None,
     }
 }
 
