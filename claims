@@ -337,3 +337,17 @@ home_tests.rs	fiber-1732	plan	2026-11-09T03:19:20Z	roundhouse-7010-plus-1:/home/
 app_tests.rs	fiber-1732	plan	2026-11-09T03:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 model_picker_tests.rs	fiber-1732	plan	2026-11-09T03:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 app/overlay_tests.rs	fiber-1732	plan	2026-11-09T03:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/outbox.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/reconnect.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/find.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/completion.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/commands.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/model_picker.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/form.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/offer.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/offer/source.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/steering.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/items.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/offer.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
