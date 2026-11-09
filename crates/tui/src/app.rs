@@ -1899,9 +1899,8 @@ impl App {
     /// arm names its session outright.
     fn rejected(&mut self, id: &str, code: ErrorCode, message: String) {
         let session = self.session().cloned();
-        // Carries no owner: its refusals are never model-owned (replies
-        // settle their own tag, starts and non-model session refusals
-        // keep today's probe).
+        // Carries no owner: a model refusal routes by tag in `refused`
+        // and never reaches here, while replies settle their own tag.
         self.rejected_session(id, code, message, session, None);
     }
 
@@ -1939,10 +1938,6 @@ impl App {
                 return;
             }
             self.outbox.settled(id);
-        } else {
-            // Any other refusal keeps today's probe, which drops a
-            // model choice's writes when its id reaches here untagged.
-            self.model_picker_rejected(id);
         }
         match self.outbox.pending.get(id) {
             None => {}
@@ -2394,8 +2389,8 @@ impl App {
             return send;
         }
         // The search's fetch answers here, never in the pages: its lines
-        // fold into the scan and go no further. A tagged arm whose fetch
-        // is gone declines to the folds below, as the probe did.
+        // fold into the scan and go no further. A Find-tagged answer
+        // with no fetch falls through to the folds below.
         if waiting == Some(&Waiting::Find)
             && let Some(lines) = self.find_answered(envelope)
         {
@@ -2454,9 +2449,6 @@ impl App {
                         self.outbox.settled(&accepted.command_id.0);
                     }
                     changed |= file_answered;
-                    if waiting == Some(&Waiting::Shell) {
-                        self.outbox.settled(&accepted.command_id.0);
-                    }
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
                         .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));

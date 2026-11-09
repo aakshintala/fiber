@@ -966,6 +966,27 @@ fn offer_file_tag_is_gone_after_answer() {
 }
 
 #[test]
+fn an_offer_file_answer_its_handler_declines_keeps_its_tag() {
+    let mut app = with_source();
+    let first = open_source(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    // An accept whose result is not offered-file text declines the
+    // source view: the answer folds nowhere, and the wait stands for
+    // the late real answer.
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": id, "result": {"commands": []}}),
+        None,
+    ));
+    assert!(source_text(&app).contains("Loading…"));
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::OfferFile)
+    );
+}
+
+#[test]
 fn offer_file_after_refusal() {
     let mut app = with_source();
     let first = open_source(&mut app);

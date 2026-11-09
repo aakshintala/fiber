@@ -512,7 +512,7 @@ fn assert_isolated(app: &App, owner: usize, before: &Markers) {
 #[test]
 fn no_answer_path_probes_features_in_turn() {
     // Find: the fetch's answer scans the dropped page, and only the scan
-    // moves: the failed probe read every handler in turn for each line.
+    // moves: every other handler's state stays as it was.
     {
         let (mut app, log, fetch) = fetching_app();
         let (id, from, to) = fetch_command(&fetch);

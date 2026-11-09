@@ -71,8 +71,9 @@ impl App {
     /// copy of one the session already holds, so the entry closes with no
     /// notice; a refusal for a choice from a dropped session stays
     /// silent with it; any other refusal returns its draft. `waiting` is
-    /// the answer's captured owner: a model refusal routes once by tag,
-    /// settling in `rejected_session`, instead of probing twice.
+    /// the answer's captured owner: a model refusal routes by tag and
+    /// settles in `rejected_session`; any other refusal reports through
+    /// the generic path.
     pub(super) fn refused(
         &mut self,
         id: &str,
@@ -92,12 +93,8 @@ impl App {
         } else if waiting == Some(Waiting::Model) {
             let session = self.session().cloned();
             self.rejected_session(id, code.clone(), message, session, waiting);
-        } else if self.model_picker_rejected(id) {
-            self.rejected(id, code.clone(), message);
         } else {
-            // The choice belonged to a dropped session: its wait went
-            // with its notice, so the row closes with no further notice.
-            self.outbox.answered(id);
+            self.rejected(id, code.clone(), message);
         }
     }
 
