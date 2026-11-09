@@ -577,7 +577,7 @@ impl PanelState {
     /// Drops the delegate-scoped figures: a resume of the open job
     /// starts from unknown, never from the previous run's figures
     /// (`docs/tui.md`, "Swapped views").
-    pub(crate) fn clear_delegate(&mut self) {
+    fn clear_delegate(&mut self) {
         self.delegate = DelegateFigures::default();
     }
 
