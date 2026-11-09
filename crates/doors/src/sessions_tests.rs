@@ -1589,14 +1589,16 @@ fn probe_marks_an_accept_never_answer_peer_gone_only_past_its_bound() {
     let path = home.temp.path().to_owned();
     let clock = home.clock.clone();
     thread::spawn(move || {
-        let _ = done_tx.send(classify_sockets(&path, clock));
+        done_tx.send(classify_sockets(&path, clock)).unwrap();
     });
     // Short of the bound the probe is still parked: nothing returns.
     let bound = home.clock.now() + PROBE_DEADLINE;
     home.clock.advance_when_parked(
         Some(bound),
         None,
-        PROBE_DEADLINE - Duration::from_millis(500),
+        PROBE_DEADLINE
+            .checked_sub(Duration::from_millis(500))
+            .unwrap(),
         &wall,
     );
     assert!(

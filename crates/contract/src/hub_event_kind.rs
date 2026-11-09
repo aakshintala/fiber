@@ -60,7 +60,15 @@ impl HubEventKind {
             // The table holds every known member, so this finds one; a
             // row dropped by mistake reads a placeholder the round-trip
             // tests refuse.
-            known => KINDS
+            known @ HubEventKind::HubHello
+            | known @ HubEventKind::Attention
+            | known @ HubEventKind::DeviceChanged
+            | known @ HubEventKind::SessionLeft
+            | known @ HubEventKind::StreamClosed
+            | known @ HubEventKind::StreamReopened
+            | known @ HubEventKind::CommandAccepted
+            | known @ HubEventKind::CommandRejected
+            | known @ HubEventKind::Keepers => KINDS
                 .iter()
                 .find(|(_, kind)| kind == known)
                 .map_or("unknown", |(name, _)| name),

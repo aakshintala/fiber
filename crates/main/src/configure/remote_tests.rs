@@ -2264,7 +2264,9 @@ impl Served {
                         let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
                         let mut line = String::new();
                         if reader.read_line(&mut line).is_ok() {
-                            let _ = stream.write_all(b"{\"kind\":\"session_status\"}\n");
+                            stream
+                                .write_all(b"{\"kind\":\"session_status\"}\n")
+                                .unwrap();
                         }
                     }
                 })
@@ -2282,7 +2284,7 @@ impl Drop for Served {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
             thread.thread().unpark();
-            let _ = thread.join();
+            thread.join().unwrap_or(());
         }
     }
 }

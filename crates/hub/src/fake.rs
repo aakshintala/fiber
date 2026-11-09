@@ -1031,7 +1031,7 @@ impl Drop for HeldKeeper {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
             thread.thread().unpark();
-            let _ = thread.join();
+            thread.join().unwrap_or(());
         }
         std::fs::remove_file(&self.path).unwrap_or(());
     }
