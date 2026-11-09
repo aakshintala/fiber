@@ -28,26 +28,6 @@ fn hub_idle_exit_uses_a_set_value() {
     assert_eq!(idle, Duration::from_millis(7000));
 }
 
-fn wired_inputs(
-    config: &config::Config,
-    home: &std::path::Path,
-    project: &config::ProjectKey,
-    extensions: &SessionExtensions,
-    model: &config::ModelData,
-    notices: &mut Vec<contract::events::Notice>,
-) -> r#loop::ReloadSettings {
-    crate::parts::reload_inputs(
-        config,
-        home,
-        project,
-        extensions,
-        model,
-        "test/gpt-5.6",
-        notices,
-    )
-    .1
-}
-
 #[test]
 fn session_idle_exit_ms_reaches_the_loop_idle_exit() {
     let rig = test_support::Rig::new("fiber-idle-exit-wire");
@@ -63,25 +43,29 @@ fn session_idle_exit_ms_reaches_the_loop_idle_exit() {
 
     let config = rig.config(["session.idle_exit_ms=9000"]);
     let mut notices = Vec::new();
-    let settings = wired_inputs(
+    let settings = crate::parts::reload_inputs(
         &config,
         &rig.home,
         &project,
         &extensions,
         &model,
+        "test/gpt-5.6",
         &mut notices,
-    );
+    )
+    .1;
     assert_eq!(settings.idle_exit, Some(Duration::from_millis(9000)));
 
     let zero = rig.config(["session.idle_exit_ms=0"]);
     let mut notices = Vec::new();
-    let settings = wired_inputs(
+    let settings = crate::parts::reload_inputs(
         &zero,
         &rig.home,
         &project,
         &extensions,
         &model,
+        "test/gpt-5.6",
         &mut notices,
-    );
+    )
+    .1;
     assert_eq!(settings.idle_exit, Some(Duration::ZERO));
 }
