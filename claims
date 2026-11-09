@@ -280,3 +280,4 @@ crates/doors/src/session_tests.rs	fiber-3110	plan	2026-11-09T08:36:21Z	Amoghs-Ma
 crates/hub/src/fake_tests.rs	fiber-4445	plan	2026-11-09T08:43:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/keeper.rs	fiber-3891	plan	2026-11-09T08:44:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/idle_tests.rs	fiber-4223	plan	2026-11-09T08:46:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4477
+crates/tui/src/turn/crash_tests.rs	fiber-3896	plan	2026-11-09T08:59:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
