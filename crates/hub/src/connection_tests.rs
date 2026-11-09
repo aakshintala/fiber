@@ -822,6 +822,99 @@ fn hub_with_clock(
     Arc::new(crate::testkit::hub(dir, Arc::new(starter), timed))
 }
 
+/// A crashed-session socket that stops like a post-freeze keeper: drops
+/// the subscribe probe, and unlinks on the frozen stop line.
+fn spawn_keeper_stop(run: &Path, id: &contract::SessionId) {
+    let path = run.join(&id.0);
+    let listener = UnixListener::bind(&path).unwrap();
+    thread::spawn(move || {
+        for accepted in listener.incoming() {
+            let Ok(stream) = accepted else {
+                break;
+            };
+            let mut line = String::new();
+            match BufReader::new(&stream).read_line(&mut line) {
+                Ok(_) | Err(_) => {}
+            }
+            if line == "{\"shutdown\":true}\n" {
+                fs::remove_file(&path).unwrap_or(());
+                break;
+            }
+        }
+    });
+}
+
+#[test]
+fn stop_with_sessions_counts_a_stopped_keeper() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let keeper = contract::SessionId("s_0000000000000007".to_owned());
+    spawn_keeper_stop(&temp.dir.join("run"), &keeper);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, json!({"sessions_stopped": 0, "keepers_stopped": 1}));
+    assert!(
+        UnixStream::connect(temp.dir.join("run").join(&keeper.0)).is_err(),
+        "the keeper unlinked its socket"
+    );
+    assert!(matches!(
+        idle_until_signal(&hub),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn stop_with_sessions_names_the_session_and_keeper_survivors() {
+    // A strict session answers but never exits; a keeper-held socket
+    // accepts: the abort's probe names the session with the session part
+    // and the keeper with the keeper part.
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::strict(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the acknowledgement"));
+    let session = result
+        .get("session_id")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let keeper = contract::SessionId("s_0000000000000007".to_owned());
+    let dir = temp
+        .dir
+        .join("projects")
+        .join("-p")
+        .join("sessions")
+        .join(&keeper.0);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
+    let _keeper_socket = UnixListener::bind(temp.dir.join("run").join(&keeper.0)).unwrap();
+    // Stored before the stop is sent: the no-wait probe names everything
+    // connectable instead of running the loop.
+    hub.request_stop();
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_stop"));
+    assert_eq!(
+        message,
+        format!(
+            "Session {session} is still running.; keeper {} still running.",
+            keeper.0
+        )
+    );
+    assert!(matches!(
+        idle_until_signal(&hub),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
 #[test]
 fn stop_with_sessions_names_the_survivor_past_the_close_bound() {
     // A strict session answers `subscribe` and `close` but never exits:

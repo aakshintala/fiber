@@ -54,12 +54,29 @@ pub(crate) enum Outcome {
     /// running, and the stop answers `io_failed` instead of a count.
     ListFailed,
     /// The stop ran: the sessions whose sockets closed after their
-    /// `close` with `now` was accepted, in id order, and every listed
-    /// session neither confirmed nor skipped as refused, in id order.
+    /// `close` with `now` was accepted, in id order; the keepers whose
+    /// sockets closed after the frozen stop, in id order; every listed
+    /// session neither confirmed nor skipped as refused, in id order; and
+    /// every keeper-orbit id neither confirmed nor skipped, in id order.
     Listed {
         confirmed: Vec<SessionId>,
+        keepers: Vec<SessionId>,
         unconfirmed: Vec<SessionId>,
+        unconfirmed_keepers: Vec<SessionId>,
     },
+}
+
+/// The serving thread's running tally: every set holds ids in id order,
+/// and every worker records exactly once.
+#[derive(Default)]
+struct Tally {
+    /// Sessions whose sockets closed after their `close` with `now`.
+    confirmed: BTreeSet<String>,
+    /// Keepers whose sockets closed after the frozen stop.
+    keepers: BTreeSet<String>,
+    /// Sessions whose sockets refused or were absent, or closed before
+    /// their `close` was answered.
+    gone: BTreeSet<String>,
 }
 
 /// Shuts down every running session the hub knows of in `run/`, each
@@ -71,8 +88,7 @@ pub(crate) enum Outcome {
 /// socket that vanishes without one is gone, not confirmed.
 pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     let end = hub.clock.now() + SESSIONS_STOP_WITHIN;
-    let mut confirmed = BTreeSet::new();
-    let mut gone = BTreeSet::new();
+    let mut tally = Tally::default();
     zero_wait(hub, end);
     if hub.stop_requested() {
         return probe(hub);
@@ -90,13 +106,13 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     if hub.stop_requested() {
         return probe(hub);
     }
-    fan_out(hub, &first, end, &mut confirmed, &mut gone);
+    fan_out(hub, &first, end, &mut tally);
     if hub.stop_requested() || hub.clock.now() >= end {
-        return finish(first, Vec::new(), &confirmed, &gone);
+        return finish(hub, first, Vec::new(), &tally);
     }
     zero_wait(hub, end);
     if hub.stop_requested() {
-        return finish(first, Vec::new(), &confirmed, &gone);
+        return finish(hub, first, Vec::new(), &tally);
     }
     let second = match list(hub) {
         Ok(second) => second,
@@ -106,11 +122,11 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     };
     let fresh: Vec<SessionId> = second
         .iter()
-        .filter(|id| !confirmed.contains(&id.0))
+        .filter(|id| !tally.confirmed.contains(&id.0) && !tally.keepers.contains(&id.0))
         .cloned()
         .collect();
-    fan_out(hub, &fresh, end, &mut confirmed, &mut gone);
-    finish(first, second, &confirmed, &gone)
+    fan_out(hub, &fresh, end, &mut tally);
+    finish(hub, first, second, &tally)
 }
 
 /// Waits for no bind to be in flight, on the loop deadline: a starter
@@ -162,9 +178,9 @@ fn list(hub: &Hub) -> std::io::Result<Vec<SessionId>> {
 /// The no-wait probe for an abort before any listing ran: one
 /// non-blocking connect attempt per entry, with no readiness wait and no
 /// retry. Refused or absent is gone and skipped, as in the scan; anything
-/// else is named.
+/// else is named, keeper-held ids with the keeper part.
 fn probe(hub: &Hub) -> Outcome {
-    let mut unconfirmed = Vec::new();
+    let mut connectable = Vec::new();
     let ids = match list(hub) {
         Ok(ids) => ids,
         Err(_) => {
@@ -173,12 +189,15 @@ fn probe(hub: &Hub) -> Outcome {
     };
     for id in ids {
         if connect_now(hub, &id) {
-            unconfirmed.push(id);
+            connectable.push(id);
         }
     }
+    let (unconfirmed, unconfirmed_keepers) = split_unresolved(hub, connectable);
     Outcome::Listed {
         confirmed: Vec::new(),
+        keepers: Vec::new(),
         unconfirmed,
+        unconfirmed_keepers,
     }
 }
 
@@ -201,13 +220,7 @@ fn connect_now(hub: &Hub, id: &SessionId) -> bool {
 /// Stops every listed session in parallel, recording each outcome: the
 /// serving thread waits only for the records, the stop or the deadline,
 /// never for a worker.
-fn fan_out(
-    hub: &Arc<Hub>,
-    ids: &[SessionId],
-    end: Instant,
-    confirmed: &mut BTreeSet<String>,
-    gone: &mut BTreeSet<String>,
-) {
+fn fan_out(hub: &Arc<Hub>, ids: &[SessionId], end: Instant, tally: &mut Tally) {
     let shared = Arc::new(Mutex::new(Fanout {
         total: ids.len(),
         done: 0,
@@ -249,10 +262,13 @@ fn fan_out(
     for (id, outcome) in lock(&shared).outcomes.drain(..) {
         match outcome {
             SessionOutcome::Confirmed => {
-                confirmed.insert(id);
+                tally.confirmed.insert(id);
+            }
+            SessionOutcome::KeeperConfirmed => {
+                tally.keepers.insert(id);
             }
             SessionOutcome::Gone => {
-                gone.insert(id);
+                tally.gone.insert(id);
             }
             SessionOutcome::Unconfirmed => {}
         }
@@ -283,10 +299,15 @@ impl Fanout {
 enum SessionOutcome {
     /// Its socket closed after its `close` with `now` was accepted.
     Confirmed,
+    /// Its socket closed after the frozen stop was written: its keeper
+    /// stopped.
+    KeeperConfirmed,
     /// Its socket refused or was absent, or closed before its `close`
     /// was answered: already gone, skipped.
     Gone,
-    /// Neither: still running, or gone past the bound.
+    /// Neither: still running, or gone past the bound. The keeper leg's
+    /// timeouts and answers land here too: the finish split names a
+    /// still-held keeper with the keeper part.
     Unconfirmed,
 }
 
@@ -321,7 +342,11 @@ fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
     match read_ack(&mut read, &stream, hub, &subscribe_id, end) {
         Ack::Accepted => {}
         Ack::Rejected => return SessionOutcome::Unconfirmed,
-        Ack::Gone => return SessionOutcome::Gone,
+        // EOF without an answer is a keeper holding the crashed socket,
+        // or a session gone mid-handshake: the keeper leg tells them
+        // apart. (A refused or absent socket never reaches this read: it
+        // is gone at connect.)
+        Ack::Gone => return stop_keeper(hub, id, end),
         Ack::Unconfirmed => return SessionOutcome::Unconfirmed,
     }
     let close_id = support::mint("c_hub_stop_");
@@ -355,6 +380,69 @@ fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
             Err(_) => return SessionOutcome::Confirmed,
         }
     }
+}
+
+/// Stops one keeper: a fresh connection, the frozen stop line, then the
+/// socket's close. Only an observed close after the write confirms: a
+/// refused or failed write is a session gone mid-handshake, anything the
+/// holder writes back is a live session, and the bound leaves it
+/// unconfirmed. Every wait shares the loop deadline and ends on the stop.
+fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
+    let stream = match connect_session(hub, id, end) {
+        Connected::Stream(stream) => stream,
+        Connected::Gone => return SessionOutcome::Gone,
+        Connected::Unconfirmed => return SessionOutcome::Unconfirmed,
+    };
+    let Ok(read) = stream.try_clone() else {
+        return SessionOutcome::Unconfirmed;
+    };
+    let mut read = BufReader::new(read);
+    // The exact frozen bytes a newer Fiber writes an older keeper
+    // (`docs/invocation.md`, "Commands and flags").
+    let stop = serde_json::json!({"shutdown": true});
+    match write_line_bounded(&stream, &stop, hub, end) {
+        Wrote::Done => {}
+        Wrote::Gone => return SessionOutcome::Gone,
+        Wrote::Unconfirmed => return SessionOutcome::Unconfirmed,
+    }
+    loop {
+        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            // A keeper never writes: any line is a live session, still running.
+            Ok(Some(_)) => return SessionOutcome::Unconfirmed,
+            Ok(None) => return SessionOutcome::KeeperConfirmed,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                if !wait_ready(stream.as_fd(), PollFlags::IN, hub, end) {
+                    return SessionOutcome::Unconfirmed;
+                }
+            }
+            // A reset socket is closed: the keeper stopped.
+            Err(_) => return SessionOutcome::KeeperConfirmed,
+        }
+    }
+}
+
+/// Splits ids the stop left unresolved by who holds their session log:
+/// keeper-held ids are reported with the keeper part, the rest as
+/// sessions, each in the listing's order. Runs on the serving thread
+/// after the fan-out, so a keeper that stopped but whose worker has not
+/// recorded yet reads released — the same lateness a session close
+/// already has.
+fn split_unresolved(
+    hub: &Hub,
+    ids: impl IntoIterator<Item = SessionId>,
+) -> (Vec<SessionId>, Vec<SessionId>) {
+    let mut sessions = Vec::new();
+    let mut keepers = Vec::new();
+    for id in ids {
+        if log::find_session(&hub.home, &id)
+            .is_some_and(|(_, dir)| crate::resume::keeper_holds(&dir))
+        {
+            keepers.push(id);
+        } else {
+            sessions.push(id);
+        }
+    }
+    (sessions, keepers)
 }
 
 /// What one bounded connect found.
@@ -408,25 +496,39 @@ fn connect_session(hub: &Hub, id: &SessionId, end: Instant) -> Connected {
     }
 }
 
-/// Merges both listings: confirmed in id order, with every listed session
-/// neither confirmed nor skipped as refused unconfirmed in id order.
-fn finish(
-    first: Vec<SessionId>,
-    second: Vec<SessionId>,
-    confirmed: &BTreeSet<String>,
-    gone: &BTreeSet<String>,
-) -> Outcome {
+/// Merges both listings: confirmed sessions and keepers in id order,
+/// with every listed session neither confirmed nor skipped as refused
+/// split into sessions and still-held keepers, each in the listings'
+/// order. Keeper-orbit ids a worker resolved stay out of both either
+/// way.
+fn finish(hub: &Hub, first: Vec<SessionId>, second: Vec<SessionId>, tally: &Tally) -> Outcome {
     let mut seen = BTreeSet::new();
-    let mut unconfirmed = Vec::new();
+    let mut unresolved = Vec::new();
     for id in first.into_iter().chain(second) {
-        if !confirmed.contains(&id.0) && !gone.contains(&id.0) && seen.insert(id.0.clone()) {
-            unconfirmed.push(id);
+        if !tally.confirmed.contains(&id.0)
+            && !tally.keepers.contains(&id.0)
+            && !tally.gone.contains(&id.0)
+            && seen.insert(id.0.clone())
+        {
+            unresolved.push(id);
         }
     }
-    let confirmed = confirmed.iter().map(|id| SessionId(id.clone())).collect();
+    let (unconfirmed, unconfirmed_keepers) = split_unresolved(hub, unresolved);
+    let confirmed = tally
+        .confirmed
+        .iter()
+        .map(|id| SessionId(id.clone()))
+        .collect();
+    let keepers = tally
+        .keepers
+        .iter()
+        .map(|id| SessionId(id.clone()))
+        .collect();
     Outcome::Listed {
         confirmed,
+        keepers,
         unconfirmed,
+        unconfirmed_keepers,
     }
 }
 

@@ -10,7 +10,7 @@
 )]
 
 use std::fs;
-use std::io::{BufReader, Write};
+use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -123,13 +123,288 @@ fn listed(outcome: Outcome) -> (Vec<SessionId>, Vec<SessionId>) {
         Outcome::Listed {
             confirmed,
             unconfirmed,
+            ..
         } => (confirmed, unconfirmed),
+        Outcome::ListFailed => panic!("the listing succeeded"),
+    }
+}
+
+/// Splits a listed outcome with its keeper lists: the keeper tests assert
+/// every list, so a session misclassified as a keeper fails here.
+#[allow(
+    clippy::type_complexity,
+    reason = "test helper; the tuple is the outcome"
+)]
+fn listed_all(
+    outcome: Outcome,
+) -> (
+    Vec<SessionId>,
+    Vec<SessionId>,
+    Vec<SessionId>,
+    Vec<SessionId>,
+) {
+    match outcome {
+        Outcome::Listed {
+            confirmed,
+            keepers,
+            unconfirmed,
+            unconfirmed_keepers,
+        } => (confirmed, keepers, unconfirmed, unconfirmed_keepers),
         Outcome::ListFailed => panic!("the listing succeeded"),
     }
 }
 
 fn command_of(line: &str) -> Value {
     serde_json::from_str(line).unwrap()
+}
+
+/// The frozen stop line the hub writes, as the fake's policy matches it.
+const FROZEN_STOP: &str = "{\"shutdown\":true}\n";
+
+/// What a fake crashed-session socket does per connection: models a
+/// post-freeze keeper, which stops on the frozen line and unlinks.
+#[derive(Clone, Copy)]
+enum KeeperAfter {
+    /// Drop the subscribe probe; on the frozen line, unlink and stop
+    /// accepting, as a stopping keeper's exit does.
+    Stop,
+    /// Drop the subscribe probe, then hold the fresh connection open:
+    /// the close never comes.
+    Wedged,
+    /// Read the subscribe, then vanish before the fresh connection: the
+    /// gone race.
+    Vanish,
+    /// Drop the odd connections, and answer the even ones with a line and
+    /// hold them: a line is never a confirmation.
+    Answer,
+}
+
+/// A crashed session's dir with a keeper's lock label, as a takeover
+/// leaves it: the split reports the id with the keeper part.
+fn hold_keeper_label(temp: &Temp, id: &SessionId) {
+    let dir = temp
+        .dir
+        .join("projects")
+        .join("-p")
+        .join("sessions")
+        .join(&id.0);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
+}
+
+/// A fake keeper socket at `run/<id>`: every connection's raw line is
+/// recorded, in accept order.
+struct FakeKeeper {
+    lines: mpsc::Receiver<String>,
+}
+
+impl FakeKeeper {
+    fn spawn(run: &Path, id: &SessionId, after: KeeperAfter) -> Self {
+        let path = run.join(&id.0);
+        let (lines_tx, lines_rx) = mpsc::channel();
+        // Bound before the thread starts: the scan that follows finds a
+        // bound socket, never a half-spawned one.
+        let listener = UnixListener::bind(&path).unwrap();
+        thread::Builder::new()
+            .name("fake-keeper".to_owned())
+            .spawn(move || {
+                let mut connections = 0;
+                loop {
+                    let (mut stream, _) = match listener.accept() {
+                        Ok(accepted) => accepted,
+                        Err(_) => break,
+                    };
+                    connections += 1;
+                    let mut line = String::new();
+                    // Every prober writes first; the read ends at its line.
+                    let _ = BufReader::new(&stream).read_line(&mut line).unwrap_or(0);
+                    lines_tx.send(line.clone()).unwrap_or(());
+                    match after {
+                        KeeperAfter::Stop if line == FROZEN_STOP => {
+                            fs::remove_file(&path).unwrap();
+                            break;
+                        }
+                        KeeperAfter::Vanish if connections == 1 => {
+                            fs::remove_file(&path).unwrap();
+                            break;
+                        }
+                        KeeperAfter::Wedged if connections > 1 => {
+                            // Hold the fresh connection open past the test:
+                            // the close never comes.
+                            thread::park();
+                        }
+                        KeeperAfter::Answer if connections % 2 == 0 => {
+                            // A keeper never writes: any line proves the
+                            // holder is no keeper, so it never confirms.
+                            // The connection drops after the answer, so the
+                            // rescan's connections resolve the same way.
+                            stream
+                                .write_all(b"{\"unexpected\":\"line\"}\n")
+                                .unwrap_or(());
+                        }
+                        KeeperAfter::Stop
+                        | KeeperAfter::Wedged
+                        | KeeperAfter::Vanish
+                        | KeeperAfter::Answer => {}
+                    }
+                }
+            })
+            .unwrap();
+        Self { lines: lines_rx }
+    }
+
+    /// The recorded lines, in accept order: the subscribe probe, then the
+    /// fresh stop.
+    fn lines(&self) -> Vec<String> {
+        let deadline = Deadline::after(DEADLINE);
+        vec![
+            deadline.recv_or_fail(&self.lines, "the subscribe probe"),
+            deadline.recv_or_fail(&self.lines, "the fresh stop"),
+        ]
+    }
+}
+
+#[test]
+fn keeper_eof_after_subscribe_is_stopped_through_a_fresh_connection() {
+    let temp = Temp::new("ss-keeper-stop");
+    let id = SessionId(testkit::id(7));
+    let keeper = FakeKeeper::spawn(&temp.dir.join("run"), &id, KeeperAfter::Stop);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let outcome = join(stop_async(&hub));
+    let (confirmed, keepers, unconfirmed, unconfirmed_keepers) = listed_all(outcome);
+    assert!(confirmed.is_empty());
+    assert_eq!(keepers, vec![id.clone()]);
+    assert!(unconfirmed.is_empty());
+    assert!(unconfirmed_keepers.is_empty());
+    // The probe subscribes first; the fresh connection carries exactly the
+    // frozen stop line a newer Fiber writes an older keeper.
+    let lines = keeper.lines();
+    assert_eq!(command_of(&lines[0])["command"], "subscribe");
+    assert_eq!(lines[1], "{\"shutdown\":true}\n");
+    assert!(
+        UnixStream::connect(temp.run(&id)).is_err(),
+        "the keeper unlinked its socket"
+    );
+}
+
+#[test]
+fn keeper_that_never_closes_is_unconfirmed_past_the_bound() {
+    let temp = Temp::new("ss-keeper-hold");
+    let id = SessionId(testkit::id(8));
+    hold_keeper_label(&temp, &id);
+    let _keeper = FakeKeeper::spawn(&temp.dir.join("run"), &id, KeeperAfter::Wedged);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    // The hook records the loop thread before the stop is sent, so the
+    // advance below can name its wait: under load a worker's close-wait
+    // can park at the same bound.
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    *lock(&hub.on_fanout_wait) = Some(Box::new(move || {
+        waiting_tx.send(thread::current().id()).unwrap_or(());
+    }));
+    let rx = stop_async(&hub);
+    // The park is the signal: only now may the clock move past the end.
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    assert!(
+        temp.clock.await_parked(end, Deadline::after(DEADLINE)),
+        "the loop waits for the close"
+    );
+    let loop_thread = Deadline::after(DEADLINE)
+        .recv(&waiting_rx)
+        .unwrap_or_else(|_| panic!("the loop enters its fan-out wait"));
+    // Lands exactly on the end: passing a named park is an overshoot,
+    // and the loop finishes on `now >= end` either way.
+    temp.clock.advance_when_parked(
+        Some(end),
+        Some(loop_thread),
+        SESSIONS_STOP_WITHIN,
+        &Deadline::after(DEADLINE),
+    );
+    let outcome = join(rx);
+    let (confirmed, keepers, unconfirmed, unconfirmed_keepers) = listed_all(outcome);
+    assert!(confirmed.is_empty());
+    assert!(keepers.is_empty());
+    assert!(unconfirmed.is_empty());
+    assert_eq!(unconfirmed_keepers, vec![id.clone()]);
+    // Still running: its socket accepts, as a wedged keeper's does.
+    assert!(UnixStream::connect(temp.run(&id)).is_ok());
+}
+
+#[test]
+fn keeper_gone_before_the_stop_write_is_gone_not_confirmed() {
+    let temp = Temp::new("ss-keeper-vanish");
+    let id = SessionId(testkit::id(9));
+    let keeper = FakeKeeper::spawn(&temp.dir.join("run"), &id, KeeperAfter::Vanish);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let outcome = join(stop_async(&hub));
+    let (confirmed, keepers, unconfirmed, unconfirmed_keepers) = listed_all(outcome);
+    assert!(confirmed.is_empty());
+    assert!(keepers.is_empty());
+    assert!(unconfirmed.is_empty());
+    assert!(unconfirmed_keepers.is_empty());
+    // Only the subscribe probe arrived: the fresh connection never reached
+    // a socket, so no stop was written and nothing is confirmed.
+    let probe = Deadline::after(DEADLINE).recv_or_fail(&keeper.lines, "the subscribe probe");
+    assert_eq!(command_of(&probe)["command"], "subscribe");
+    // The fake exits after vanishing, so the channel is empty or
+    // disconnected: either way no second line arrived.
+    assert!(keeper.lines.try_recv().is_err());
+}
+
+#[test]
+fn keeper_line_after_the_stop_write_is_not_a_confirmation() {
+    let temp = Temp::new("ss-keeper-answer");
+    let id = SessionId(testkit::id(10));
+    let keeper = FakeKeeper::spawn(&temp.dir.join("run"), &id, KeeperAfter::Answer);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let outcome = join(stop_async(&hub));
+    let (confirmed, keepers, unconfirmed, unconfirmed_keepers) = listed_all(outcome);
+    assert!(confirmed.is_empty());
+    assert!(keepers.is_empty());
+    assert_eq!(unconfirmed, vec![id.clone()]);
+    assert!(unconfirmed_keepers.is_empty());
+    let lines = keeper.lines();
+    assert_eq!(command_of(&lines[0])["command"], "subscribe");
+    assert_eq!(lines[1], "{\"shutdown\":true}\n");
+}
+
+#[test]
+fn abort_before_any_listing_names_keeper_held_ids_with_the_keeper_part() {
+    let temp = Temp::new("ss-abort-keeper");
+    let live = SessionId(testkit::id(12));
+    let _held = UnixListener::bind(temp.run(&live)).unwrap();
+    let keeper = SessionId(testkit::id(13));
+    hold_keeper_label(&temp, &keeper);
+    let _keeper_socket = UnixListener::bind(temp.run(&keeper)).unwrap();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    // Stored before the loop lists: the no-wait probe names everything
+    // connectable, splitting keeper-held ids out.
+    hub.request_stop();
+    let outcome = join(stop_async(&hub));
+    let (confirmed, keepers, unconfirmed, unconfirmed_keepers) = listed_all(outcome);
+    assert!(confirmed.is_empty());
+    assert!(keepers.is_empty());
+    assert_eq!(unconfirmed, vec![live]);
+    assert_eq!(unconfirmed_keepers, vec![keeper]);
+}
+
+#[test]
+fn rescan_stops_a_keeper_started_mid_run() {
+    let temp = Temp::new("ss-keeper-rescan");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let id = SessionId(testkit::id(11));
+    let run = temp.dir.join("run");
+    let hooked = id.clone();
+    *lock(&hub.on_scan_listed) = Some(Box::new(move || {
+        // The keeper binds fully before the scan resumes: the rescan
+        // finds a stopping keeper, not a half-bound one.
+        FakeKeeper::spawn(&run, &hooked, KeeperAfter::Stop);
+    }));
+    let outcome = join(stop_async(&hub));
+    let (confirmed, keepers, unconfirmed, unconfirmed_keepers) = listed_all(outcome);
+    assert!(confirmed.is_empty());
+    assert_eq!(keepers, vec![id.clone()]);
+    assert!(unconfirmed.is_empty());
+    assert!(unconfirmed_keepers.is_empty());
 }
 
 #[test]

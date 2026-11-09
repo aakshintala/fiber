@@ -1419,12 +1419,13 @@ fn on_stop(
         }
         crate::sessions_stop::Outcome::Listed {
             confirmed,
+            keepers,
             unconfirmed,
-        } if unconfirmed.is_empty() => {
+            unconfirmed_keepers,
+        } if unconfirmed.is_empty() && unconfirmed_keepers.is_empty() => {
             let result = CommandResult::Stop {
                 sessions_stopped: confirmed.len(),
-                // Task 3 wires the confirmed keeper count here.
-                keepers_stopped: 0,
+                keepers_stopped: keepers.len(),
             };
             let result = serde_json::to_value(&result).unwrap_or(Value::Null);
             match web {
@@ -1439,9 +1440,11 @@ fn on_stop(
         }
         crate::sessions_stop::Outcome::Listed {
             confirmed: _,
+            keepers: _,
             unconfirmed,
+            unconfirmed_keepers,
         } => {
-            let message = unconfirmed_message(&unconfirmed);
+            let message = unconfirmed_message(&unconfirmed, &unconfirmed_keepers);
             match web {
                 Some(web) => drain_web(
                     hub,
@@ -1480,12 +1483,27 @@ fn stop_sessions(args: &Map<String, Value>) -> Result<Option<bool>, ()> {
 }
 
 /// What a partial sessions stop tells the asker: `io_failed` naming each
-/// session unconfirmed at the bound or the abort, in id order.
-fn unconfirmed_message(unconfirmed: &[SessionId]) -> String {
+/// session unconfirmed at the bound or the abort, in id order, with each
+/// unconfirmed keeper appended after a semicolon, in id order. With no
+/// session unconfirmed, the keepers take the leading part in the same
+/// singular/plural shape.
+fn unconfirmed_message(unconfirmed: &[SessionId], keepers: &[SessionId]) -> String {
     let ids: Vec<&str> = unconfirmed.iter().map(|id| id.0.as_str()).collect();
-    match ids.as_slice() {
+    let held: Vec<&str> = keepers.iter().map(|id| id.0.as_str()).collect();
+    if ids.is_empty() {
+        return match held.as_slice() {
+            [only] => format!("Keeper {only} is still running."),
+            _ => format!("Keepers {} are still running.", held.join(", ")),
+        };
+    }
+    let sessions = match ids.as_slice() {
         [only] => format!("Session {only} is still running."),
         _ => format!("Sessions {} are still running.", ids.join(", ")),
+    };
+    match held.as_slice() {
+        [] => sessions,
+        [only] => format!("{sessions}; keeper {only} still running."),
+        _ => format!("{sessions}; keepers {} still running.", held.join(", ")),
     }
 }
 
