@@ -1,5 +1,6 @@
 //! Tests for `/settings`: the tabs, the control each key's type gives it,
-//! where a change saves, the list sub-page, and when a write applies
+//! where a change saves, the list sub-page, the cross-tab search, and
+//! when a write applies
 //! (`docs/tui.md`, "Swapped views", `/settings`; `docs/configuration.md`,
 //! "When Fiber reads configuration"). Screens are drawn through the real
 //! frame renderer and compared whole.
@@ -2968,4 +2969,373 @@ fn a_narrow_tab_bar_drops_tabs_from_the_left_and_keeps_the_open_one() {
     assert_eq!(bar(21), " Sessions   Advanced ");
     // Narrower than the open tab alone, the open tab stays.
     assert_eq!(bar(3), " Advanced ");
+}
+
+// The cross-tab search (`docs/tui.md`, "Swapped views", `/settings`,
+// "Search").
+
+/// Opens a search for `query` from Appearance: `/`, then each of its
+/// characters.
+fn searched(fake: &Fake, query: &str) -> Settings {
+    let mut settings = open(fake);
+    one(&mut settings, fake, Key::Char('/'));
+    typed(&mut settings, fake, query);
+    settings
+}
+
+/// The open query's text.
+fn query_of(settings: &Settings) -> String {
+    settings
+        .search
+        .as_ref()
+        .map(|search| search.query.expand())
+        .unwrap_or_else(|| panic!("no search open"))
+}
+
+/// Asserts `name` draws dim as a tab annotation, ending at the frame's
+/// right edge.
+fn assert_annotation(settings: &Settings, width: u16, height: u16, name: &str) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(usize::from(width), usize::from(height), None);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let found = (0..height).find_map(|y| {
+        let line: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+        line.find(name)
+            .map(|byte| (u16::try_from(line[..byte].chars().count()).unwrap(), y))
+    });
+    let (x, y) = found.unwrap_or_else(|| panic!("no annotation {name:?}"));
+    assert!(
+        buf[(x, y)].modifier.contains(Modifier::DIM),
+        "{name} is not dim"
+    );
+    assert_eq!(
+        usize::from(x) + name.chars().count(),
+        usize::from(width),
+        "{name} is not at the right"
+    );
+}
+
+#[test]
+fn settings_search_matches_label_and_path_across_tabs() {
+    let fake = Fake::new(rows());
+    // `reviewer` matches the label, `reviewer.model` the key path: both
+    // land on the Permissions row from Appearance.
+    for query in ["reviewer", "reviewer.model"] {
+        let settings = searched(&fake, query);
+        let items = settings.items();
+        assert_eq!(items.len(), 1, "{query}");
+        assert!(
+            matches!(&items[0], super::Item::Key(at) if settings.rows[*at].key == "reviewer.model"),
+            "{query}: {items:?}"
+        );
+        assert_eq!(
+            settings.focus,
+            Some(super::Focus::Key("reviewer.model".to_owned())),
+            "{query}"
+        );
+        // The search holds the opening tab while its rows span tabs.
+        assert_eq!(settings.tab, SettingsTab::Appearance, "{query}");
+        let shown = screen(&settings);
+        assert_eq!(
+            row_of(&shown, "Reviewer model"),
+            "› Reviewer model Not set › Permissions",
+            "{query}"
+        );
+    }
+    expect(
+        &screen(&searched(&fake, "reviewer")),
+        r#"
+| Settings  /settings                                                 Esc returns
+|Changes save automatically
+|
+|/ reviewer
+|
+|› Reviewer model  Not set ›                                          Permissions
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|About reviewer.model.
+|reviewer.model · not set · changing reviewer.model needs a reload
+|←→ tab · / search · Enter change · Tab layer · Delete reset
+"#,
+    );
+}
+
+#[test]
+fn settings_search_matches_label_only_and_path_only_needles() {
+    let fake = Fake::new(rows());
+    // `terminal` is in the label alone; `attention.bell` in the path
+    // alone. Either side of the match going missing loses its needle.
+    for query in ["terminal", "attention.bell"] {
+        let settings = searched(&fake, query);
+        let items = settings.items();
+        assert_eq!(items.len(), 1, "{query}");
+        assert!(
+            matches!(&items[0], super::Item::Key(at) if settings.rows[*at].key == "tui.attention.bell"),
+            "{query}: {items:?}"
+        );
+        assert_eq!(
+            settings.focus,
+            Some(super::Focus::Key("tui.attention.bell".to_owned())),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn settings_search_matches_letter_activation_and_slash_empty_query() {
+    let fake = Fake::new(rows());
+    let mut settings = open(&fake);
+    one(&mut settings, &fake, Key::Char('r'));
+    assert!(settings.search.is_some());
+    assert_eq!(query_of(&settings), "r");
+    // A digit or other punctuation opens nothing.
+    for ch in ['3', '.', '-'] {
+        let mut plain = open(&fake);
+        one(&mut plain, &fake, Key::Char(ch));
+        assert!(plain.search.is_none(), "{ch}");
+    }
+    // `/` opens an empty query over every eligible row, in tab order:
+    // every tabbed key and every screen row, and no hidden instance.
+    let mut settings = tab(&fake, SettingsTab::Sessions);
+    one(&mut settings, &fake, Key::Char('/'));
+    assert_eq!(query_of(&settings), "");
+    assert_eq!(settings.items().len(), 21);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.hover".to_owned()))
+    );
+    // The opening tab stays put while the results span tabs.
+    assert_eq!(settings.tab, SettingsTab::Sessions);
+    let shown = screen(&settings);
+    assert!(shown.lines().any(|line| line == "/"), "{shown}");
+    // No tab bar: its names only return as dim annotations, one per row.
+    assert!(
+        !shown
+            .lines()
+            .any(|line| line.contains("Notifications   Models")),
+        "{shown}"
+    );
+    assert!(shown.contains("Permissions"), "{shown}");
+}
+
+#[test]
+fn settings_search_matches_case_insensitively_and_by_substring_with_backspace_and_paste() {
+    let fake = Fake::new(rows());
+    for query in ["REVIEWER", "eviewer"] {
+        let settings = searched(&fake, query);
+        assert_eq!(
+            settings.focus,
+            Some(super::Focus::Key("reviewer.model".to_owned())),
+            "{query}"
+        );
+    }
+    // Backspace shortens the query and restores the match.
+    let mut settings = searched(&fake, "reviewerx");
+    assert!(settings.items().is_empty());
+    one(&mut settings, &fake, Key::Backspace);
+    assert_eq!(query_of(&settings), "reviewer");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("reviewer.model".to_owned()))
+    );
+    // Backspace on an empty query keeps the search open.
+    let mut settings = open(&fake);
+    one(&mut settings, &fake, Key::Char('/'));
+    one(&mut settings, &fake, Key::Backspace);
+    assert_eq!(query_of(&settings), "");
+    assert_eq!(settings.items().len(), 21);
+    // A paste lands as one line: the newline and the tab go.
+    let mut settings = open(&fake);
+    one(&mut settings, &fake, Key::Char('/'));
+    edit(
+        &mut settings,
+        &fake,
+        Edit::Paste("reviewer.mo\n\tdel".to_owned()),
+    );
+    assert_eq!(query_of(&settings), "reviewer.model");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("reviewer.model".to_owned()))
+    );
+}
+
+#[test]
+fn settings_search_matches_screen_rows_by_label_and_covered_path() {
+    let fake = Fake::new(rows());
+    // `skills` matches the label; `skills.disabled` the covered path.
+    // Either way the Skills screen draws once, with no hidden key row
+    // doubling it.
+    for query in ["skills", "skills.disabled"] {
+        let settings = searched(&fake, query);
+        assert_eq!(
+            settings.items(),
+            vec![super::Item::Screen(super::Screen::Skills)],
+            "{query}"
+        );
+        assert_eq!(
+            settings.focus,
+            Some(super::Focus::Screen(super::Screen::Skills)),
+            "{query}"
+        );
+        let shown = screen(&settings);
+        assert!(
+            shown.lines().any(|line| line.contains("Open /skills")),
+            "{query}:\n{shown}"
+        );
+    }
+    assert_annotation(&searched(&fake, "skills"), 80, 24, "Sessions");
+    // Rules has no covered key path: only its label matches.
+    let settings = searched(&fake, "rules");
+    assert_eq!(
+        settings.items(),
+        vec![super::Item::Screen(super::Screen::Rules)]
+    );
+    assert_annotation(&settings, 80, 24, "Permissions");
+}
+
+#[test]
+fn settings_search_matches_zero_results_says_so_and_takes_no_row() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "zzz");
+    assert!(settings.items().is_empty());
+    assert_eq!(settings.focus, None);
+    let shown = screen(&settings);
+    assert!(
+        shown.contains("No settings match \u{201c}zzz\u{201d}."),
+        "{shown}"
+    );
+    assert!(shown.lines().any(|line| line == "/ zzz"), "{shown}");
+    assert!(!shown.contains("Notifications"), "{shown}");
+    // No row means no write, no reset, no request and no screen.
+    for key in [Key::Enter, Key::Char(' '), Key::Tab] {
+        assert!(matches!(one(&mut settings, &fake, key), Act::Stay));
+    }
+    assert!(matches!(
+        edit(&mut settings, &fake, Edit::Delete),
+        Act::Stay
+    ));
+    assert!(fake.writes().is_empty());
+    assert!(resets(&fake).is_empty());
+    assert!(settings.take_request().is_none());
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    // With no selected key Ctrl+G keeps its global-file fallback.
+    let act = one(&mut settings, &fake, Key::CtrlG);
+    assert!(
+        matches!(&act, Act::Open(path) if *path == fake.global),
+        "{act:?}"
+    );
+    expect(
+        &screen(&searched(&fake, "zzz")),
+        r#"
+| Settings  /settings                                                 Esc returns
+|Changes save automatically
+|
+|/ zzz
+|
+|  No settings match “zzz”.
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|←→ tab · / search · Enter change · Tab layer · Delete reset
+"#,
+    );
+}
+
+#[test]
+fn settings_search_matches_annotate_each_match_dim_at_the_right() {
+    let fake = Fake::new(rows());
+    let settings = searched(&fake, "sandbox");
+    assert_eq!(settings.items().len(), 2);
+    // The value keeps its layer tag beside the annotation.
+    let shown = screen(&settings);
+    assert!(
+        shown.contains("repository") && shown.contains("Permissions"),
+        "{shown}"
+    );
+    assert_eq!(
+        shown
+            .lines()
+            .filter(|line| line.ends_with("Permissions"))
+            .count(),
+        2,
+        "{shown}"
+    );
+    assert_annotation(&settings, 80, 24, "Permissions");
+}
+
+#[test]
+fn settings_search_matches_keep_layer_tag_and_clip_safely_when_narrow() {
+    let fake = Fake::new(rows());
+    let settings = searched(&fake, "sandbox");
+    // At 60 columns the value, its layer tag and the annotation fit.
+    let shown = drawn(&settings, None, 60, 24);
+    assert!(
+        shown.contains("repository") && shown.lines().any(|line| line.ends_with("Permissions")),
+        "{shown}"
+    );
+    assert_annotation(&settings, 60, 24, "Permissions");
+    // At 40 the annotation is cut, but the frame still draws and the
+    // focused row keeps its mark and identity.
+    let narrow = drawn(&settings, None, 40, 24);
+    assert_eq!(narrow.lines().count(), 24, "{narrow}");
+    assert!(narrow.lines().any(|line| line.starts_with("›")), "{narrow}");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+    );
+    // Wide characters in the query never break the no-match line.
+    let mut wide = open(&fake);
+    one(&mut wide, &fake, Key::Char('/'));
+    typed(&mut wide, &fake, "railé");
+    assert!(wide.items().is_empty());
+    let shown = screen(&wide);
+    assert_eq!(shown.lines().count(), 24, "{shown}");
+    assert!(
+        shown.contains("No settings match \u{201c}railé\u{201d}."),
+        "{shown}"
+    );
+    one(&mut wide, &fake, Key::Backspace);
+    assert_eq!(
+        wide.focus,
+        Some(super::Focus::Key("tui.rail.width".to_owned()))
+    );
+}
+
+#[test]
+fn settings_search_matches_draw_in_a_short_frame() {
+    let fake = Fake::new(rows());
+    let settings = searched(&fake, "reviewer");
+    let shown = drawn(&settings, None, 80, 12);
+    assert!(shown.lines().any(|line| line == "/ reviewer"), "{shown}");
+    assert!(!shown.contains("Notifications"), "{shown}");
+    assert!(shown.contains("Reviewer model"), "{shown}");
+    assert!(shown.contains("Permissions"), "{shown}");
 }
