@@ -818,10 +818,10 @@ fn process_event_stream_forwards_live_and_replays_durable_lines() {
         session.deliver_line(line);
     }
     // `docs/extensions.md`, "How an extension runs" (session order is kept, and a
-    // process extension keeps the same order, one item at a time); docs/events.md,
-    // `subscribe`/`history`: the fold sends before the stream goes live,
-    // in `seq` order. The live envelope arrives first, then the replayed
-    // pair, each exactly once.
+    // process extension keeps the same order, one item at a time);
+    // `docs/events.md`, "Command acknowledgements": the fold sends before the
+    // stream goes live, in `seq` order. The live envelope arrives first, then
+    // the replayed pair, each exactly once.
     let watched = marker.clone();
     fakes::wait_until(
         "the three forwarded lines",
