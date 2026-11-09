@@ -92,6 +92,68 @@ fn message_drain_keeps_other_deliveries_in_order() {
     assert!(matches!(deliveries[1], Delivery::Close(_)));
 }
 
+fn shell_started(id: &str) -> Delivery {
+    Delivery::ShellStarted(
+        contract::events::ShellCommandStarted {
+            command_id: contract::CommandId(id.into()),
+            command: "sleep 5".into(),
+        },
+        std::sync::Arc::new(std::sync::Mutex::new(contract::inbox::Handshake::Pending)),
+        Ack(Box::new(|_| {})),
+    )
+}
+
+fn shell_ended(id: &str) -> Delivery {
+    Delivery::Shell(
+        contract::events::ShellCommand {
+            command_id: Some(contract::CommandId(id.into())),
+            command: "sleep 5".into(),
+            output: String::new(),
+            artifact: None,
+            process: contract::shapes::Process {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+            },
+        },
+        Ack(Box::new(|_| {})),
+    )
+}
+
+#[test]
+fn message_drain_takes_a_shell_start_and_end_with_the_messages_in_arrival_order() {
+    let (tx, rx) = mpsc::channel();
+    let mut queue = Queue::new(rx);
+    let message = || crate::inbox::session_message::for_test("s_from", None, None, "c_1", "first");
+    tx.send(shell_started("c_a")).unwrap();
+    tx.send(Delivery::Cancelled).unwrap();
+    tx.send(Delivery::Message(message(), Ack(Box::new(|_| {}))))
+        .unwrap();
+    tx.send(Delivery::Close(Ack(Box::new(|_| {})))).unwrap();
+    tx.send(shell_ended("c_a")).unwrap();
+    let taken: Vec<&'static str> = queue
+        .take_messages()
+        .into_iter()
+        .map(|delivery| {
+            if matches!(delivery, Delivery::ShellStarted(..)) {
+                "started"
+            } else if matches!(delivery, Delivery::Message(..)) {
+                "message"
+            } else if matches!(delivery, Delivery::Shell(..)) {
+                "ended"
+            } else {
+                panic!("only a message or a driver shell line is taken early")
+            }
+        })
+        .collect();
+    assert_eq!(taken, ["started", "message", "ended"]);
+    // The held pair keeps its arrival order for the next drain.
+    let held: Vec<_> = queue.try_iter().collect();
+    assert_eq!(held.len(), 2);
+    assert!(matches!(held[0], Delivery::Cancelled));
+    assert!(matches!(held[1], Delivery::Close(_)));
+}
+
 #[test]
 fn try_recv_takes_held_before_receiver() {
     let (tx, rx) = mpsc::channel();

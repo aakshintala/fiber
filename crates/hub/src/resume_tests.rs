@@ -420,7 +420,7 @@ fn a_crashed_keeper_socket_is_replaced_by_a_resumed_session() {
                 self.dir.join("session.lock"),
                 format!("{}\n", std::process::id()),
             )?;
-            // docs/state.md, "What each part holds": the writer replaces
+            // `docs/state.md`, "What each part holds": the writer replaces
             // the crashed process's socket before binding its own.
             assert_eq!(
                 UnixStream::connect(&self.socket).unwrap_err().kind(),
@@ -1823,7 +1823,7 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
     let mut reader = BufReader::new(client_read);
     // One bound for the whole replay wait: the acknowledgement and the fold
     // marker are consecutive reads draining one stream (`docs/testing.md`,
-    // "Waits and timeouts"). docs/invocation.md:473 promises at `full` the
+    // "Waits and timeouts"). `docs/invocation.md`, "What each command does" promises at `full` the
     // client receives `stream_reopened` before the new fold, so the
     // acknowledgement-before-fold order below pins that promise.
     let replay_wait = Deadline::after(DEADLINE).start_wait(); // ruling: #3708
@@ -2014,7 +2014,7 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
     let mut reader = BufReader::new(client_read);
     // One bound for the whole reopening wait: the reopening and the fold
     // marker are consecutive reads draining one stream (`docs/testing.md`,
-    // "Waits and timeouts"). docs/invocation.md:473 promises at `full` the
+    // "Waits and timeouts"). `docs/invocation.md`, "What each command does" promises at `full` the
     // client receives `stream_reopened` before the new fold.
     let reopen_wait = Deadline::after(DEADLINE).start_wait(); // ruling: #3708
     let mut text =
@@ -3835,8 +3835,8 @@ fn a_malformed_full_subscribe_to_an_exited_delegate_is_refused() {
     assert!(starter.resumed().is_empty(), "no process starts");
 }
 
-/// `docs/invocation.md:710`, "Lifecycle": a `full` subscribe naming a delegate whose run has finished replays that run's log instead of opening the session: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it.
-/// `docs/invocation.md:1157`, "What the hub speaks": the replayed acknowledgement releases the queue, after the handover ahead is answered when exiting.
+/// `docs/invocation.md`, "Lifecycle": a `full` subscribe naming a delegate whose run has finished replays that run's log instead of opening the session: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it.
+/// `docs/invocation.md`, "What the hub speaks": the replayed acknowledgement releases the queue, after the handover ahead is answered when exiting.
 #[test]
 fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queue() {
     // The `Reroute` arm routes with `from` and `exited` set: the replay
@@ -4015,7 +4015,7 @@ fn a_cut_command_write_is_indeterminate_on_first_attach() {
         "The connection to the session failed while the command was being sent; the command may have run.",
         "{line}"
     );
-    // docs/invocation.md:368 promises one answer per command; the
+    // `docs/invocation.md`, "Driver commands" promises one answer per command; the
     // Lifecycle rule also says an indeterminate command is never delivered
     // again. No second answer may follow this refusal.
     client.assert_no_more("the cut command");
@@ -4062,7 +4062,7 @@ fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
     }));
     client.send("c_2", "reply");
     assert_eq!(client.acknowledged("the retried command's answer"), "c_2");
-    // docs/invocation.md:1148 promises a command is delivered once.
+    // `docs/invocation.md`, "What the hub speaks" promises a command is delivered once.
     assert_eq!(
         received(&starter)
             .iter()
@@ -4159,7 +4159,7 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     // Two lines arrived on the session, the subscribe and the torn
     // fragment: the bytes arrived once and were never delivered again.
     // Raw lines, not parsed ones: a mid-body fragment parses to nothing.
-    // docs/invocation.md:1148 promises a command is delivered once.
+    // `docs/invocation.md`, "What the hub speaks" promises a command is delivered once.
     let got = starter.received();
     assert_eq!(
         got.len(),
@@ -4178,7 +4178,7 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
             assert_eq!(got[1], "{\n", "only the first byte reached the session");
         }
     }
-    // Exactly one answer for the cut command (`docs/invocation.md:374-376`):
+    // Exactly one answer for the cut command (`docs/invocation.md`, "Driver commands"):
     // the relay left above, so the drain answered once and a second
     // answer would already be buffered; a non-blocking read finds
     // nothing more.

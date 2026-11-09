@@ -727,6 +727,7 @@ impl Shell {
                     from_spawn_reported(Ok(finished), limit, &parsed.command, report)
                 }
             },
+            Ok(command::Ran::Declined) => cancelled_before(),
             Err(err) => from_spawn(Err(err), limit, &parsed.command),
         };
         if output.process.is_some()

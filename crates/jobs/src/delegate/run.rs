@@ -50,6 +50,8 @@ fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
         | Kind::SteeringApplied
         | Kind::SteeringQueue
         | Kind::ShellCommand
+        | Kind::ShellCommandStarted
+        | Kind::ShellCommandDelta
         | Kind::DirectoryAdded
         | Kind::SessionNamed
         | Kind::Clients

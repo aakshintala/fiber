@@ -68,7 +68,7 @@ pub use temp_dir::TempDir;
 pub use wait_output::wait_output;
 pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
-pub use within::{MUST_SUCCEED_WITHIN, within};
+pub use within::{MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN, within};
 
 /// The check run's nonce for a child process: `("FIBER_CHECK_RUN", value)`
 /// when the test process carries it, and nothing otherwise, so a test that

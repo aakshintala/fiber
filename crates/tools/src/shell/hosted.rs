@@ -195,6 +195,12 @@ pub(super) fn execute(
             baseline: guard.as_ref().map(|guard| guard.dir.baseline.clone()),
         }),
     };
+    // Every check that can refuse the call has run: the person's command
+    // starts only if its start is recorded (`Emit::starting`).
+    if !emit.starting() {
+        drop(guard);
+        return Ok(Ran::Declined);
+    }
     let (sender, events) = std::sync::mpsc::channel();
     let started = host
         .start(spec, sender)

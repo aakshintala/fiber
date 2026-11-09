@@ -1,4 +1,4 @@
-//! Tests for the hub's socket (`docs/state.md`, "Sockets"): the single-hub
+//! Tests for the hub's socket (`docs/state.md`, "What each part holds"): the single-hub
 //! lock, stale removal, and the live-socket probe.
 
 #![allow(

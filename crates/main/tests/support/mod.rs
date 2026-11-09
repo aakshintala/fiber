@@ -1343,6 +1343,16 @@ pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
     let mut passed = Vec::new();
     let answer = loop {
         match client.next_through(&wait, what, &passed) {
+            // A shell run's own lines carry its command id too, and none of
+            // them is its answer.
+            Some(line)
+                if matches!(
+                    line.get("kind").and_then(Value::as_str),
+                    Some("shell_command_started" | "shell_command_delta" | "shell_command")
+                ) =>
+            {
+                passed.push(line);
+            }
             Some(line) if line["payload"]["command_id"] == id => break line,
             Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {}
             Some(line) => passed.push(line),
@@ -2758,16 +2768,10 @@ pub(crate) fn wait_for_refresh_exit(deadline: Deadline, pattern: &str) {
     panic!("waited until the deadline for the refresh child to exit: {pattern}");
 }
 
-/// How many inner budgets the released wait's outer receive allows: the
-/// outer bound outlasts an inner wait that restarts its own clock, so the
-/// inner wait expires first and the failure names the step that stalled
-/// (`docs/testing.md`, "Waits and timeouts").
-pub(crate) const OUTER_BUDGET_FACTOR: u32 = 3;
-
 /// Runs a held-then-released wait once, for the six tests on the
 /// entered/release skeleton: the waiter signals `entered`, the test runs
 /// `release`, and the released wait's
-/// report arrives first, under `inner * OUTER_BUDGET_FACTOR`, so a stall
+/// report arrives first, under `fakes::WHOLE_SUBSYSTEM_WITHIN`, so a stall
 /// fails naming `what`, the waiter's own step, with whether the waiter is
 /// still running. The inner deadline is made before the waiter spawns, so
 /// it expires first. A waiter panic is caught on the waiter thread and
@@ -2809,7 +2813,7 @@ pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
     release();
     // The released wait's report arrives first, under the outer bound, so a
     // stall fails naming the inner step: the inner deadline expires first.
-    match Deadline::after(inner * OUTER_BUDGET_FACTOR) // ruling: #4075
+    match Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN) // ruling: #4311
         .recv(&done)
     {
         Ok(outcome) => {
@@ -2823,12 +2827,12 @@ pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
         }
         Err(mpsc::RecvTimeoutError::Timeout) if waiter.is_finished() => {
             panic!(
-                "the waiter outlived three times its budget waiting for {what}: the waiter finished but sent no report"
+                "the waiter outlived twice its budget waiting for {what}: the waiter finished but sent no report"
             );
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             panic!(
-                "the waiter outlived three times its budget waiting for {what}: the waiter is still running at the outer timeout"
+                "the waiter outlived twice its budget waiting for {what}: the waiter is still running at the outer timeout"
             );
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
