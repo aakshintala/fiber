@@ -92,18 +92,16 @@ fn check_diff(diff: &str) -> Result<Vec<String>, String> {
             path = "";
             in_hunk = false;
         } else if line.starts_with("@@") {
-            let start = line
+            let Some(start) = line
                 .split_whitespace()
                 .nth(2)
-                .expect("Git hunk header has a new-line range")
-                .strip_prefix('+')
-                .expect("Git hunk new-line range starts with +")
-                .split(',')
-                .next()
-                .expect("Git hunk new-line range has a start");
-            new_line = start
-                .parse()
-                .expect("Git hunk new-line start is a valid line number");
+                .and_then(|range| range.strip_prefix('+'))
+                .and_then(|range| range.split(',').next())
+                .and_then(|start| start.parse().ok())
+            else {
+                continue;
+            };
+            new_line = start;
             in_hunk = true;
         } else if in_hunk {
             if let Some(added) = line.strip_prefix('+') {
