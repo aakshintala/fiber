@@ -389,7 +389,7 @@ impl Driven {
             tx.send(text).unwrap();
         });
         let deadline = setup.deadline;
-        first_line(deadline, &lines);
+        first_line(deadline, &lines, None);
         let client = Socket::connect(deadline, &setup.session_socket(&session));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
         // The startup every command needs: `clients` for the subscribe
