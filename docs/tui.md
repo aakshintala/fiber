@@ -1244,7 +1244,9 @@ arrived after `sessions` was sent.
 
 ### Turns
 
-- **One card per turn.** Only the person's prompt floats above its card,
+- **One card per turn.** Prompts render as Markdown like replies, except
+  headings retain their leading `#` marker. This applies to prompts in the
+  bubble and to labelled start/session messages in the card. Only the person's prompt floats above its card,
   after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
   of the width: the text padded one column on each side, a ▐ stripe in
   `accent` at its right edge, and "you 14:12" dim and right-aligned under it.

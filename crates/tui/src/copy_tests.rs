@@ -107,6 +107,42 @@ fn selecting_a_markdown_prompt_copies_its_rendered_text() {
         report(MouseKind::Release, col.saturating_add(3)),
         Effect::Copy("bold".to_owned())
     );
+
+    let mut fenced = attached(width, height);
+    fenced.on_line(turn_started("```rust\nlet x = 1;\n```"));
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&fenced, area, &mut buf, None);
+    let code_row = crate::view::text(&buf)
+        .lines()
+        .position(|line| line.contains("let x = 1;"))
+        .expect("rendered code row");
+    assert!(!targets.iter().any(|target| {
+        matches!(target.id, crate::mouse::TargetId::Line(_))
+            && usize::from(target.rect.y) == code_row
+    }));
+    let mut rows = crate::rows::Rows::default();
+    crate::bubble::rows("```rust\nlet x = 1;\n```", width, &mut rows);
+    let (drawn, metadata) = rows.into_parts();
+    assert!(drawn.iter().any(|(line, _)| line.to_string().contains("let x = 1;")));
+    assert!(metadata.iter().any(|mark| mark.decoration));
+
+    let mut linked = attached(width, height);
+    linked.set_opener(true);
+    linked.on_line(turn_started("[site](https://example.com)"));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&linked, area, &mut buf, None);
+    let link = linked
+        .visible_links(linked.conversation_area())
+        .into_iter()
+        .find(|link| link.url == "https://example.com")
+        .expect("prompt Markdown link");
+    let rect = link.rects.first().expect("link cells");
+    let id = crate::mouse::hit(&targets, rect.x, rect.y).expect("link target");
+    assert_eq!(
+        linked.on_click(id),
+        Effect::OpenLink("https://example.com".to_owned())
+    );
 }
 
 #[test]
