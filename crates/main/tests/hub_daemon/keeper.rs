@@ -1498,8 +1498,9 @@ fn keeper_handover_flood_exact_output_and_rss() {
     let mut identify = None;
     let mut handover = None;
     let mut reply = None;
+    let adopted_deadline = setup.deadline.within(fakes::WHOLE_SUBSYSTEM_WITHIN); // ruling: #4054
     let adopted = loop {
-        match deadline.recv_or_fail(&relay.events, "the held Adopted") {
+        match adopted_deadline.recv_or_fail(&relay.events, "the held Adopted") {
             RelayEvent::Identify { raw } => identify = Some(raw),
             RelayEvent::Handover { raw } => handover = Some(raw),
             RelayEvent::HandoverReply { raw, jobs } => reply = Some((raw, jobs)),
