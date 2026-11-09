@@ -3771,28 +3771,26 @@ fn settings_search_controls_pointer_and_wheel_follow_the_displayed_rows() {
         settings.focus,
         Some(super::Focus::Key("sandbox.allow_write".to_owned()))
     );
-    // A renderer-produced row click selects that row's identity.
+    // A renderer-produced row click selects that row's identity: the
+    // frame's row gives the click, and the renderer must carry a target
+    // for it.
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let frame = settings.frame(80, 24, None);
     let mut targets = Vec::new();
     render(&frame, area, &mut buf, &mut targets);
-    let y = (0..24u16)
-        .find(|y| {
-            (0..80u16)
-                .map(|x| buf[(x, *y)].symbol())
-                .collect::<String>()
-                .contains("[x] On")
-        })
-        .expect("no Sandbox row");
-    let spot = targets
+    let at = frame
+        .rows
         .iter()
-        .find_map(|target| match target.id {
-            TargetId::View(spot @ Spot::Row(_)) if target.rect.y == y => Some(spot),
-            _ => None,
-        })
-        .expect("no click target on the Sandbox row");
-    settings.click(spot, &ctx(&fake));
+        .position(|cells| cells.iter().any(|(text, _, _)| text.contains("[x] On")))
+        .expect("no Sandbox row");
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::View(Spot::Row(at))),
+        "no click target on the Sandbox row"
+    );
+    settings.click(Spot::Row(at), &ctx(&fake));
     assert_eq!(
         settings.focus,
         Some(super::Focus::Key("sandbox.enabled".to_owned()))
