@@ -271,12 +271,12 @@ fn shape_frame(buffer: &Buffer, top: Option<usize>, has_new: bool) -> FrameShape
                 });
             cells.push(ShapeCell::new(kind, wide, slot));
             x = x.saturating_add(1);
-            let mut rest = trailing.min(width.saturating_sub(x));
-            while rest > 0 {
-                cells.push(ShapeCell::new(ShapeKind::Continuation, false, slot));
-                x = x.saturating_add(1);
-                rest = rest.saturating_sub(1);
-            }
+            let rest = trailing.min(width.saturating_sub(x));
+            cells.extend(std::iter::repeat_n(
+                ShapeCell::new(ShapeKind::Continuation, false, slot),
+                usize::from(rest),
+            ));
+            x = x.saturating_add(rest);
         }
         rows.push(ShapeRow::new(cells));
     }
