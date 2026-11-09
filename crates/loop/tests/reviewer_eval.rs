@@ -17,8 +17,8 @@ mod support;
 
 use contract::events::{
     AskStep, DecidedBy, Decision, Event, EventKind, InputItem, PermissionRequested,
-    PermissionResolved, SessionStarted, ToolCallRequested, ToolCallStarted, TurnOutcome,
-    TurnStarted, Variables, VariablesSource,
+    PermissionResolved, ReviewedCall, ReviewerRef, SessionStarted, ToolCallRequested,
+    ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
@@ -34,12 +34,13 @@ use std::thread;
 use std::time::Duration;
 use support::review::{
     COMMITTED_SYNTHETIC_SESSIONS, EmbeddedSession, PERSON_INPUT_SESSION,
-    is_committed_synthetic_session, run_sampled, run_scan, run_synthetic_embedded,
+    is_committed_synthetic_session, run_reviewer_denies, run_sampled, run_scan,
+    run_synthetic_embedded,
 };
 use support::reviewer_eval::{
-    Allowlist, DropKind, ForeignInput, Label, Labels, MAX_SAMPLED, NativeLine, ReviewedItem,
-    ReviewedKind, SampleOpts, ScrubCtx, SecretClass, SetLine, Source, SourceKind, Unsupported,
-    declared_for, drop_kind, emit_line, foreign_to_label_input, parse_claude_file,
+    Allowlist, DropKind, ForeignInput, Label, Labels, MAX_SAMPLED, NativeLine, RecordedVerdict,
+    ReviewedItem, ReviewedKind, SampleOpts, ScrubCtx, SecretClass, SetLine, Source, SourceKind,
+    Unsupported, declared_for, drop_kind, emit_line, foreign_to_label_input, parse_claude_file,
     parse_claude_line, parse_line, parse_pi_file, parse_pi_line, parse_sample_flags, sample,
     scan_line, split_argv, validate_seeded,
 };
@@ -280,11 +281,146 @@ fn set_line_round_trips_with_added_folders_order() {
             family1: None,
             family2: None,
         },
+        recorded: None,
     };
     let text = emit_line(&line).unwrap();
     let back = parse_line(&text).unwrap();
     assert_eq!(back, line);
     assert_eq!(back.added_folders.len(), 2);
+}
+
+/// One set line carrying a full recorded reviewer verdict.
+fn recorded_set_line() -> SetLine {
+    SetLine {
+        id: "a_deny".to_owned(),
+        source: Source {
+            kind: SourceKind::Sampled,
+            session: "s_deny".to_owned(),
+            seq: Some(9),
+        },
+        tool: "shell".to_owned(),
+        arguments: json!({"command": "restart-service nightly"}),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: false,
+            paths: None,
+            confined: false,
+        },
+        hosts: None,
+        workspace: "$HOME/work/fiber".to_owned(),
+        added_folders: Vec::new(),
+        reviewed: vec![ReviewedItem {
+            kind: ReviewedKind::Call,
+            seq: None,
+            item: None,
+            action: Some("a_deny".to_owned()),
+            text: "Tool call: shell ...".to_owned(),
+        }],
+        labels: Labels {
+            family1: None,
+            family2: None,
+        },
+        recorded: Some(RecordedVerdict {
+            decision: Decision::Deny,
+            reason: Some("nightly runs need a person".to_owned()),
+            reviewer: Some(ReviewerRef {
+                model: "fake/reviewer".to_owned(),
+                stage: 2,
+            }),
+        }),
+    }
+}
+
+#[test]
+fn recorded_verdict_round_trips_with_full_fields() {
+    let line = recorded_set_line();
+    let text = emit_line(&line).unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["recorded"]["decision"], json!("deny"));
+    assert_eq!(
+        value["recorded"]["reason"],
+        json!("nightly runs need a person")
+    );
+    assert_eq!(
+        value["recorded"]["reviewer"]["model"],
+        json!("fake/reviewer")
+    );
+    assert_eq!(value["recorded"]["reviewer"]["stage"], json!(2));
+    let back = parse_line(&text).unwrap();
+    assert_eq!(back, line);
+}
+
+#[test]
+fn recorded_verdict_round_trips_when_absent() {
+    let mut line = recorded_set_line();
+    line.recorded = None;
+    let text = emit_line(&line).unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert!(value.get("recorded").is_none(), "{text}");
+    let back = parse_line(&text).unwrap();
+    assert_eq!(back, line);
+    assert_eq!(back.recorded, None);
+}
+
+#[test]
+fn recorded_verdict_stays_absent_on_committed_shape_lines() {
+    let line = json!({
+        "id": "a_01", "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "shell", "arguments": {}, "declared": {"effects": ["executes"], "reversible": false},
+        "workspace": "w", "added_folders": [], "reviewed": [],
+        "labels": {"family1": null, "family2": null},
+    });
+    assert_eq!(parse_line(&line.to_string()).unwrap().recorded, None);
+    let mut nulled = line.clone();
+    nulled["recorded"] = Value::Null;
+    assert_eq!(parse_line(&nulled.to_string()).unwrap().recorded, None);
+}
+
+#[test]
+fn recorded_verdict_rejects_bad_shapes() {
+    let line = json!({
+        "id": "a_01", "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "shell", "arguments": {}, "declared": {"effects": ["executes"], "reversible": false},
+        "workspace": "w", "added_folders": [], "reviewed": [],
+        "labels": {"family1": null, "family2": null},
+    });
+    let full = json!({
+        "decision": "deny",
+        "reason": "nightly runs need a person",
+        "reviewer": {"model": "fake/reviewer", "stage": 2},
+    });
+    let bad = |recorded: Value| {
+        let mut shaped = line.clone();
+        shaped["recorded"] = recorded;
+        shaped
+    };
+    let shape = |mut recorded: Value| {
+        if let Some(object) = recorded.as_object_mut() {
+            let template = full.as_object().unwrap();
+            for (key, value) in template {
+                object.entry(key.clone()).or_insert(value.clone());
+            }
+        }
+        recorded
+    };
+    for recorded in [
+        json!("deny"),
+        json!({"reason": null, "reviewer": null}),
+        shape(json!({"decision": null})),
+        shape(json!({"decision": "block"})),
+        shape(json!({"decision": "deny", "reason": 7})),
+        shape(json!({"decision": "deny", "reviewer": "fake/reviewer"})),
+        shape(json!({"decision": "deny", "reviewer": {"stage": 2}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer"}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": "2"}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 300}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 3}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 0}})),
+    ] {
+        let shaped = bad(recorded);
+        let problem = parse_line(&shaped.to_string()).unwrap_err();
+        assert!(problem.contains("review: bad set line"), "{problem}");
+    }
 }
 
 #[test]
@@ -492,6 +628,10 @@ fn sample_flags_parse_each_new_flag() {
         "p.jsonl",
         "--synthetic",
         "s-dir",
+        "--reviewer-denies",
+        "d1-dir",
+        "--reviewer-denies",
+        "d2-dir",
         "--scan",
         "calls.jsonl",
     ];
@@ -505,6 +645,10 @@ fn sample_flags_parse_each_new_flag() {
     assert_eq!(opts.import_claude, vec!["c.jsonl".to_owned()]);
     assert_eq!(opts.import_pi, vec!["p.jsonl".to_owned()]);
     assert_eq!(opts.synthetic, vec!["s-dir".to_owned()]);
+    assert_eq!(
+        opts.reviewer_denies,
+        vec!["d1-dir".to_owned(), "d2-dir".to_owned()]
+    );
     assert_eq!(opts.scan.as_deref(), Some("calls.jsonl"));
     assert!(rest.is_empty());
     assert!(opts.wants_sampled());
@@ -522,6 +666,7 @@ fn sample_flags_reject_bad_values() {
         vec!["--import-claude"],
         vec!["--import-pi"],
         vec!["--synthetic"],
+        vec!["--reviewer-denies"],
         vec!["--scan"],
     ] {
         let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
@@ -1156,7 +1301,17 @@ fn unused_sample_opts_default_is_quiet() {
         import_claude: Vec::new(),
         import_pi: Vec::new(),
         synthetic: Vec::new(),
+        reviewer_denies: Vec::new(),
         scan: None,
+    };
+    assert!(!opts.wants_sampled());
+}
+
+#[test]
+fn reviewer_denies_flag_alone_implies_no_sampled_emission() {
+    let opts = SampleOpts {
+        reviewer_denies: vec!["d-dir".to_owned()],
+        ..SampleOpts::default()
     };
     assert!(!opts.wants_sampled());
 }
@@ -1411,6 +1566,7 @@ fn emission_stores_every_field_from_the_replayed_source() {
             import_claude: Vec::new(),
             import_pi: Vec::new(),
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -1546,6 +1702,7 @@ fn emission_excludes_unreplayable_and_keeps_denial_effects() {
             import_claude: Vec::new(),
             import_pi: Vec::new(),
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -1596,6 +1753,7 @@ fn emission_carries_added_folders_per_cut_and_scrubs() {
             import_claude: Vec::new(),
             import_pi: Vec::new(),
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -1627,6 +1785,7 @@ fn emission_respects_the_sample_count() {
             import_claude: Vec::new(),
             import_pi: Vec::new(),
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -2110,6 +2269,7 @@ fn importer_rejects_a_native_file_outside_the_allowlist() {
             import_claude: Vec::new(),
             import_pi: vec![native.to_string_lossy().into_owned()],
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -2129,6 +2289,7 @@ fn scrub_context_values_alone_imply_emission() {
         import_claude: Vec::new(),
         import_pi: Vec::new(),
         synthetic: Vec::new(),
+        reviewer_denies: Vec::new(),
         scan: None,
     };
     assert!(opts.wants_sampled());
@@ -2322,6 +2483,7 @@ fn emission_excludes_calls_with_non_review_decisions() {
             import_claude: Vec::new(),
             import_pi: Vec::new(),
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -2395,6 +2557,7 @@ fn emission_matches_replay_on_contradictory_attribution() {
             import_claude: Vec::new(),
             import_pi: Vec::new(),
             synthetic: Vec::new(),
+            reviewer_denies: Vec::new(),
             scan: None,
         },
         Vec::new(),
@@ -2404,4 +2567,545 @@ fn emission_matches_replay_on_contradictory_attribution() {
     // the non-review mark, so the call is emitted, not skipped.
     assert_eq!(report.lines.len(), 1);
     assert_eq!(parse_line(&report.lines[0]).unwrap().id, "a_both");
+}
+
+/// Plain sampling options for the deny tests: no scrub, no cap flags.
+fn deny_opts() -> SampleOpts {
+    SampleOpts {
+        sample: None,
+        scrub: false,
+        home: None,
+        owner_name: None,
+        owner_email: None,
+        import_claude: Vec::new(),
+        import_pi: Vec::new(),
+        synthetic: Vec::new(),
+        reviewer_denies: Vec::new(),
+        scan: None,
+    }
+}
+
+/// A reviewer deny: stage 2, with the reviewer's model and `reason`.
+fn reviewer_denied(reason: Option<&str>) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Reviewer,
+        reason: reason.map(str::to_owned),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: Some(ReviewerRef {
+            model: "fake/reviewer".to_owned(),
+            stage: 2,
+        }),
+        hosts: None,
+    })
+}
+
+/// A reviewer deny carrying the blocked call's declared effects, with no
+/// start logged.
+fn reviewer_denied_carrying() -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: Some(ReviewedCall {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Executes],
+                reversible: false,
+                paths: None,
+                confined: false,
+            },
+            always_reviewed: false,
+            arguments: None,
+            changed_by: None,
+        }),
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Reviewer,
+        reason: Some("blocked without a start".to_owned()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: Some(ReviewerRef {
+            model: "fake/reviewer".to_owned(),
+            stage: 2,
+        }),
+        hosts: None,
+    })
+}
+
+/// A reviewer allow: the deny fold emits nothing for it.
+fn reviewer_allowed() -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Allow,
+        decided_by: DecidedBy::Reviewer,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: Some(ReviewerRef {
+            model: "fake/reviewer".to_owned(),
+            stage: 1,
+        }),
+        hosts: None,
+    })
+}
+
+/// A native resolution: the deny fold emits nothing for it.
+fn native_resolved(decided_by: DecidedBy, decision: Decision) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision,
+        decided_by,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+        hosts: None,
+    })
+}
+
+/// Folds the log through the reviewer's renderer up to and including the
+/// deny for `action`: the independent oracle for the deny snapshot.
+fn fold_until_deny(dir: &Path, action: &str) -> Vec<r#loop::Reviewed> {
+    let mut reviewed = Vec::new();
+    let mut summary = false;
+    for line in log_lines(dir) {
+        let envelope: contract::Envelope = serde_json::from_value(line).unwrap();
+        let event = contract::events::Event::from_envelope(&envelope).unwrap();
+        let Some(event) = event else {
+            continue;
+        };
+        if r#loop::summary_skips(&mut summary, &event) {
+            continue;
+        }
+        r#loop::render_reviewed(
+            &mut reviewed,
+            &event,
+            envelope.action_id.as_ref(),
+            envelope.seq,
+            &mut r#loop::PendingAsks::default(),
+        );
+        if envelope.kind() == EventKind::PermissionResolved
+            && envelope.action_id.as_ref().is_some_and(|id| id.0 == action)
+        {
+            break;
+        }
+    }
+    reviewed
+}
+
+// The deny tests below pin the `--reviewer-denies` output contract
+// (`docs/testing/fakes.md`, "Jigs"): one unlabelled sampled-kind line per
+// reviewer deny at the deny's seq, each reviewed prefix ending in the
+// entry's own call, no sample cap, the first deny per action winning,
+// and silence — not drops — for allows, native decisions, unreplayable
+// denies and calls without a decision.
+
+#[test]
+fn reviewer_denies_emit_deny_with_start_and_recorded_verdict() {
+    let home = "/test/home";
+    let fixture = Fixture::new("s_rd", &format!("{home}/work/fiber"));
+    let arguments = json!({"command": "cat /test/home/work/fiber/notes.txt"});
+    fixture.append(
+        &user_turn("read the notes under /test/home"),
+        Some("t_1"),
+        None,
+    );
+    fixture.append(&requested("shell", arguments), Some("t_1"), Some("a_deny"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_deny"),
+    );
+    fixture.append(
+        &reviewer_denied(Some("nightly runs need a person")),
+        Some("t_1"),
+        Some("a_deny"),
+    );
+    let mut opts = deny_opts();
+    opts.scrub = true;
+    opts.home = Some(home.to_owned());
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &opts,
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(report.dropped.is_empty());
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_deny");
+    assert_eq!(entry.source.kind, SourceKind::Sampled);
+    assert_eq!(
+        entry.source.session,
+        fixture
+            .dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    );
+    let deny_seq = log_lines(&fixture.dir)
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == json!("a_deny"))
+        .and_then(|line| line["seq"].as_u64())
+        .unwrap();
+    assert_eq!(entry.source.seq, Some(deny_seq));
+    assert_eq!(entry.tool, "shell");
+    assert_eq!(
+        entry.arguments,
+        json!({"command": "cat $HOME/work/fiber/notes.txt"})
+    );
+    assert_eq!(entry.workspace, "$HOME/work/fiber");
+    assert_eq!(entry.declared.paths, None);
+    assert_eq!(entry.labels.family1, None);
+    assert_eq!(entry.labels.family2, None);
+    let recorded = entry.recorded.unwrap();
+    assert_eq!(recorded.decision, Decision::Deny);
+    assert_eq!(
+        recorded.reason.as_deref(),
+        Some("nightly runs need a person")
+    );
+    let reviewer = recorded.reviewer.unwrap();
+    assert_eq!(reviewer.model, "fake/reviewer");
+    assert_eq!(reviewer.stage, 2);
+    let scrubbed: Vec<ReviewedItem> =
+        support::reviewer_eval::reviewed_items(&fold_until_deny(&fixture.dir, "a_deny"))
+            .into_iter()
+            .map(|item| ReviewedItem {
+                text: ctx().scrub_text(&item.text),
+                ..item
+            })
+            .collect();
+    assert_eq!(entry.reviewed, scrubbed);
+    assert_eq!(
+        entry
+            .reviewed
+            .last()
+            .and_then(|item| item.action.as_deref()),
+        Some("a_deny"),
+        "the snapshot ends with the entry's own call"
+    );
+    for item in &entry.reviewed {
+        assert!(
+            !item.text.contains("/test/home"),
+            "the prefix carries no raw home: {}",
+            item.text
+        );
+    }
+}
+
+#[test]
+fn reviewer_denies_emit_denial_carried_effects_without_start() {
+    let fixture = Fixture::new("s_rd_carry", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_carry"));
+    fixture.append(&reviewer_denied_carrying(), Some("t_1"), Some("a_carry"));
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(report.dropped.is_empty());
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_carry");
+    assert_eq!(entry.tool, "shell");
+    assert_eq!(entry.arguments, paris());
+    assert_eq!(entry.declared.effects, vec![Effect::Executes]);
+    let recorded = entry.recorded.unwrap();
+    assert_eq!(recorded.decision, Decision::Deny);
+    assert_eq!(recorded.reason.as_deref(), Some("blocked without a start"));
+}
+
+#[test]
+fn reviewer_denies_skip_non_deny_decisions() {
+    let fixture = Fixture::new("s_rd_quiet", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    let decisions = vec![
+        ("a_allow", reviewer_allowed()),
+        (
+            "a_person_allow",
+            native_resolved(DecidedBy::Person, Decision::Allow),
+        ),
+        (
+            "a_person_deny",
+            native_resolved(DecidedBy::Person, Decision::Deny),
+        ),
+        (
+            "a_budget_deny",
+            native_resolved(DecidedBy::Budget, Decision::Deny),
+        ),
+        (
+            "a_no_reviewer_deny",
+            native_resolved(DecidedBy::NoReviewer, Decision::Deny),
+        ),
+        ("a_deny", reviewer_denied(Some("kept"))),
+    ];
+    for (action, decision) in decisions {
+        fixture.append(&requested("shell", paris()), Some("t_1"), Some(action));
+        fixture.append(
+            &started(vec![Effect::Executes], false),
+            Some("t_1"),
+            Some(action),
+        );
+        fixture.append(&decision, Some("t_1"), Some(action));
+    }
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap();
+    // The replayable deny control proves the fold ran: only it emits.
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_deny");
+    assert_eq!(entry.recorded.unwrap().reason.as_deref(), Some("kept"));
+    assert!(report.dropped.is_empty());
+}
+
+#[test]
+fn reviewer_denies_exclude_unreplayable_denies_silently() {
+    let fixture = Fixture::new("s_rd_bare", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_bare"));
+    fixture.append(&reviewer_denied(None), Some("t_1"), Some("a_bare"));
+    fixture.append(&reviewer_denied_carrying(), Some("t_1"), Some("a_ghost"));
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_kept"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_kept"),
+    );
+    fixture.append(&reviewer_denied(Some("kept")), Some("t_1"), Some("a_kept"));
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap();
+    // The replayable deny control proves the fold ran: the two
+    // unreplayable denies stay silent while it emits.
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_kept");
+    assert!(report.dropped.is_empty());
+}
+
+#[test]
+fn reviewer_denies_drop_closed_classes_loudly() {
+    let fixture = Fixture::new("s_rd_drop", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    fixture.append(
+        &requested(
+            "shell",
+            json!({"command": "cat /home/u/.config/probe-keys/api-key"}),
+        ),
+        Some("t_1"),
+        Some("a_probe"),
+    );
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_probe"),
+    );
+    fixture.append(
+        &reviewer_denied(Some("blocked")),
+        Some("t_1"),
+        Some("a_probe"),
+    );
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(report.lines.is_empty());
+    assert_eq!(
+        report.dropped,
+        vec!["DROP probe-keys id=a_probe".to_owned()]
+    );
+}
+
+#[test]
+fn reviewer_denies_reject_dirs_outside_the_allowlist() {
+    let fixture = Fixture::new("s_rd_out", "/home/u/mycroft");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_out"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_out"),
+    );
+    fixture.append(&reviewer_denied(None), Some("t_1"), Some("a_out"));
+    let problem = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(problem.contains("/home/u/mycroft"), "{problem}");
+}
+
+#[test]
+fn reviewer_denies_skip_calls_without_a_decision() {
+    let fixture = Fixture::new("s_rd_empty", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_plain"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_plain"),
+    );
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_kept"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_kept"),
+    );
+    fixture.append(&reviewer_denied(Some("kept")), Some("t_1"), Some("a_kept"));
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap();
+    // The replayable deny control proves the fold ran: the call with no
+    // decision emits nothing while it emits.
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_kept");
+    assert!(report.dropped.is_empty());
+}
+
+#[test]
+fn reviewer_denies_keep_the_first_deny_per_action() {
+    let fixture = Fixture::new("s_rd_twice", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_twice"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_twice"),
+    );
+    fixture.append(
+        &reviewer_denied(Some("first")),
+        Some("t_1"),
+        Some("a_twice"),
+    );
+    fixture.append(
+        &reviewer_denied(Some("second")),
+        Some("t_1"),
+        Some("a_twice"),
+    );
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &deny_opts(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.recorded.unwrap().reason.as_deref(), Some("first"));
+}
+
+#[test]
+fn reviewer_denies_ignore_the_sample_cap() {
+    let fixture = Fixture::new("s_rd_cap", "/home/u/work/fiber");
+    fixture.append(&user_turn("go"), Some("t_1"), None);
+    for action in ["a_first", "a_second"] {
+        fixture.append(&requested("shell", paris()), Some("t_1"), Some(action));
+        fixture.append(
+            &started(vec![Effect::Executes], false),
+            Some("t_1"),
+            Some(action),
+        );
+        fixture.append(&reviewer_denied(None), Some("t_1"), Some(action));
+    }
+    let mut opts = deny_opts();
+    opts.sample = Some(1);
+    let report = run_reviewer_denies(
+        &[fixture.dir.to_string_lossy().into_owned()],
+        &opts,
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(report.lines.len(), 2);
+}
+
+/// The committed deny fixture through the built binary: the deny becomes
+/// the only line with its recorded verdict, the allow emits nothing, and
+/// the scan over the output stays clean.
+#[test]
+fn built_binary_reviewer_denies_emit_only_the_deny() {
+    let staged = fakes::TempDir::new("fiber-eval-reviewer-denies");
+    let session = staged.path().join("deny-and-allow");
+    fs::create_dir(&session).unwrap();
+    fs::write(
+        session.join("events.jsonl"),
+        include_str!("fixtures/reviewer_denies/deny-and-allow/events.jsonl"),
+    )
+    .unwrap();
+    let output = run_review(&[
+        "--reviewer-denies",
+        session.to_str().unwrap(),
+        "--scrub",
+        "--as-home",
+        "/synthetic/home",
+        "--owner-name",
+        "Synthetic Owner",
+        "--owner-email",
+        "owner@synthetic.example",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    let entry = parse_line(lines[0]).unwrap();
+    assert_eq!(entry.id, "a_deny");
+    assert_eq!(entry.source.seq, Some(4));
+    assert_eq!(entry.labels.family1, None);
+    assert_eq!(entry.labels.family2, None);
+    let recorded = entry.recorded.unwrap();
+    assert_eq!(recorded.decision, Decision::Deny);
+    assert_eq!(
+        recorded.reason.as_deref(),
+        Some("nightly runs need a person to approve")
+    );
+    let reviewer = recorded.reviewer.unwrap();
+    assert_eq!(reviewer.model, "synthetic/reviewer");
+    assert_eq!(reviewer.stage, 2);
+    assert!(
+        entry
+            .reviewed
+            .iter()
+            .all(|item| item.action.as_deref() != Some("a_allow")),
+        "the prefix at the deny holds no later call"
+    );
+    let file = staged.path().join("denies.jsonl");
+    fs::write(&file, format!("{}\n", lines[0])).unwrap();
+    let report = run_scan(&file, Vec::new(), Vec::new()).unwrap();
+    assert_eq!(report.clean.len(), 1);
+    assert!(report.dropped.is_empty());
+    let dir_rejected = run_review(&[
+        "--reviewer-denies",
+        session.to_str().unwrap(),
+        staged.path().to_str().unwrap(),
+    ]);
+    assert!(!dir_rejected.status.success(), "{dir_rejected:?}");
+    let stderr = String::from_utf8(dir_rejected.stderr).unwrap();
+    assert!(
+        stderr.contains("--reviewer-denies takes no session directory"),
+        "{stderr}"
+    );
 }
