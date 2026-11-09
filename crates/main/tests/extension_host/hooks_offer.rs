@@ -138,13 +138,114 @@ fn finish(hub: Arc<Mutex<Option<HubProc>>>, guard: SessionGuard, run: Run) {
 /// quits and waits for a clean exit, then reaps whatever remains. The
 /// first Ctrl+C clears the restored draft, so quitting takes three: the
 /// quit arm only starts from an empty draft.
-fn finish_home(hub: Arc<Mutex<Option<HubProc>>>, guard: SessionGuard, mut run: Run) {
+/// Assembles an exit-wait expiry report: the expiring wait's first line
+/// verbatim, then each capture section in order. Every section truncates
+/// with `...`, so a long capture never pushes the report's head out.
+fn exit_wait_report(first_line: &str, sections: &[&str]) -> String {
+    let mut message = first_line.to_owned();
+    for section in sections {
+        message.push('\n');
+        message.push_str(&hub_start::truncate_section(section));
+    }
+    message
+}
+
+fn finish_home(
+    setup: &support::Setup,
+    hub: Arc<Mutex<Option<HubProc>>>,
+    guard: SessionGuard,
+    mut run: Run,
+) {
     run.write(b"\x03\x03\x03\r");
-    let output = run.wait();
+    let output = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.wait())) {
+        Ok(output) => output,
+        Err(payload) => {
+            let threads = match hub.lock() {
+                Ok(slot) => match slot.as_ref() {
+                    Some(process) => hub_start::hub_threads(process.child.id()),
+                    None => String::from(
+                        "hub threads:\n(no hub pid under the handle: the starter never recorded one)",
+                    ),
+                },
+                Err(_) => String::from("hub threads:\n(the hub handle lock is poisoned)"),
+            };
+            let detail = hub_start::report(setup, None, "", &threads);
+            let socket = setup.hub_socket();
+            let socket = if socket.exists() {
+                format!("hub socket {}: still present", socket.display())
+            } else {
+                format!("hub socket {}: absent", socket.display())
+            };
+            let text = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned());
+            match text {
+                Some(text) => {
+                    let first = text.lines().next().unwrap_or("");
+                    panic!("{}", exit_wait_report(first, &[&detail, &socket]));
+                }
+                None => std::panic::resume_unwind(payload),
+            }
+        }
+    };
     assert_eq!(output.status.code(), Some(0));
     guard.wait_gone();
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
+}
+
+/// The exit-wait expiry report keeps the expiring wait's first line and
+/// appends every capture section, truncating only over-long ones: a
+/// missing `hub.log` stays missing, never empty.
+#[test]
+fn exit_wait_report_keeps_the_first_line_and_appends_truncated_sections() {
+    let first = "waited until the deadline for the hub process to exit";
+    let payload = format!("{first}\nwaited until the deadline for something else");
+    let line = payload.lines().next().unwrap();
+    assert_eq!(
+        line, first,
+        "the test drives the helper with the wait's first line"
+    );
+    let threads = "hub threads for pid 4242:\ntask 4242 wchan ep_poll";
+    let socket = "hub socket /tmp/fh/h/run/hub: still present";
+    let message = exit_wait_report(line, &[threads, "hub.log empty (0 bytes)", socket]);
+    assert!(
+        message.starts_with(first),
+        "the report keeps the wait's first line verbatim: {message}"
+    );
+    for section in [threads, "hub.log empty (0 bytes)", socket] {
+        assert!(
+            message.contains(section),
+            "the report appends every capture section: {message}"
+        );
+    }
+    let missing = exit_wait_report(line, &[threads, "hub.log missing", socket]);
+    assert!(
+        missing.contains("hub.log missing"),
+        "a missing hub.log reports missing: {missing}"
+    );
+    assert!(
+        !missing.contains("empty"),
+        "a missing hub.log never reads as empty: {missing}"
+    );
+    for (len, truncated) in [
+        (hub_start::CAPTURE_CHARS - 1, false),
+        (hub_start::CAPTURE_CHARS, false),
+        (hub_start::CAPTURE_CHARS + 1, true),
+    ] {
+        let long = "y".repeat(len);
+        let cut = exit_wait_report(line, &[&long]);
+        assert!(
+            cut.starts_with(first),
+            "a long section never pushes the report's head out (len {len})"
+        );
+        assert_eq!(
+            cut.ends_with("..."),
+            truncated,
+            "only an over-long section truncates (len {len})"
+        );
+    }
 }
 
 /// Lets the test's hub exit once its last client leaves, so the run's
@@ -358,7 +459,7 @@ fn declining_the_offer_starts_no_session_and_runs_no_hook() {
     assert_no_sessions(&setup, "the decline");
     assert_not_installed(&setup, "the decline");
     drop(server);
-    finish_home(hub, guard, run);
+    finish_home(&setup, hub, guard, run);
 }
 
 /// A blocking entry declared only by an override: no blocker in file
@@ -470,7 +571,7 @@ fn a_failing_install_replaces_the_offer_and_starts_nothing() {
     assert_no_sessions(&setup, "the failed install");
     assert_not_installed(&setup, "the failed install");
     drop(server);
-    finish_home(hub, guard, run);
+    finish_home(&setup, hub, guard, run);
 }
 
 /// Runs `fiber` with `args` in `setup` to completion.
@@ -616,7 +717,7 @@ fn an_unreadable_declaration_faults_the_query_leaving_the_refusal() {
     assert_not_installed(&setup, "the faulted query");
     fs::remove_dir_all(&lock).unwrap();
     drop(server);
-    finish_home(hub, guard, run);
+    finish_home(&setup, hub, guard, run);
 }
 
 /// Losing the hub while the install runs: the external clone enters the
