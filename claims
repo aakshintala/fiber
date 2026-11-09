@@ -364,3 +364,4 @@ crates/main/tests/tool_calls/sandbox.rs	fiber-3635	plan	2026-11-09T03:35:54Z	Amo
 crates/loop/src/lib.rs	fiber-3635	plan	2026-11-09T03:35:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/warm.rs	fiber-3635	plan	2026-11-09T03:35:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/sandbox.rs	fiber-3635	grant	2026-11-09T03:37:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/permissions/3635-sandbox-toggle-plan	
+crates/main/src/settings.rs	fiber-3635	grant	2026-11-09T03:37:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/permissions/3635-sandbox-toggle-plan	
