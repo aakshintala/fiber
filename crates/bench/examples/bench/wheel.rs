@@ -209,6 +209,8 @@ fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients

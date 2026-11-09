@@ -34,6 +34,9 @@ use crate::{Loop, Model};
 use fakes::Deadline;
 use log::Log;
 
+/// How long a test waits for an acknowledgement.
+const DEADLINE: Duration = Duration::from_secs(10);
+
 fn confirm() -> Interaction {
     Interaction::Confirm {
         prompt: "Deploy?".into(),
@@ -540,6 +543,106 @@ fn a_changed_suspendable_request_restarts_the_idle_deadline() {
     assert!(
         !wait(&mut looped, &mut suspend),
         "the deadline counts from the new request"
+    );
+}
+
+/// A driver shell line sent while a call runs is taken by the step's wait,
+/// not left to the step boundary: the held call's step writes the start and
+/// the end at once and answers each.
+#[test]
+fn the_held_wait_writes_a_sent_shell_start_and_its_end_while_the_call_runs() {
+    let (mut looped, home, inbox, clock) = suspendable_loop();
+    let wake = Arc::new(SharedWake::default());
+    let action = ActionId("a_1".into());
+    // The call is in flight and asks nothing: the step waits on the inbox
+    // alone, taking driver shell lines early.
+    let stream = Stream::new(Arc::clone(&wake), action.clone(), true);
+    let calls = [(&action, Some(&stream))];
+    let turn = TurnId("t_1".into());
+    let mut suspend = crate::interactions::Suspend::default();
+    let handshake = Arc::new(Mutex::new(contract::inbox::Handshake::Pending));
+    let (started_tx, started_rx) = mpsc::channel();
+    inbox
+        .send(Delivery::ShellStarted(
+            contract::events::ShellCommandStarted {
+                command_id: contract::CommandId("c_bang".into()),
+                command: "sleep 5".into(),
+            },
+            Arc::clone(&handshake),
+            contract::inbox::Ack(Box::new(move |answer| {
+                let _sent = started_tx.send(answer);
+            })),
+        ))
+        .unwrap();
+    looped
+        .wait_step(&wake, &calls, Some(clock.now()), &mut suspend, &turn)
+        .unwrap();
+    assert!(
+        matches!(
+            Deadline::after(DEADLINE)
+                .recv(&started_rx)
+                .expect("the start is answered"),
+            Ok(None)
+        ),
+        "the start is accepted while the call is held"
+    );
+    assert_eq!(
+        *handshake.lock().unwrap(),
+        contract::inbox::Handshake::Written
+    );
+    let kinds = |home: &fakes::TempDir| -> Vec<contract::events::EventKind> {
+        log::read(&home.path().join("s_test"))
+            .unwrap()
+            .into_iter()
+            .map(|line| line.kind())
+            .collect()
+    };
+    assert_eq!(
+        kinds(&home).last(),
+        Some(&contract::events::EventKind::ShellCommandStarted)
+    );
+
+    // The command ends while the call is still held: its end is written
+    // mid-step, not at the boundary.
+    let (ended_tx, ended_rx) = mpsc::channel();
+    inbox
+        .send(Delivery::Shell(
+            contract::events::ShellCommand {
+                command_id: Some(contract::CommandId("c_bang".into())),
+                command: "sleep 5".into(),
+                output: String::new(),
+                artifact: None,
+                process: contract::shapes::Process {
+                    exit_code: Some(0),
+                    signal: None,
+                    timed_out: false,
+                },
+            },
+            contract::inbox::Ack(Box::new(move |answer| {
+                let _sent = ended_tx.send(answer);
+            })),
+        ))
+        .unwrap();
+    looped
+        .wait_step(&wake, &calls, Some(clock.now()), &mut suspend, &turn)
+        .unwrap();
+    assert!(
+        matches!(
+            Deadline::after(DEADLINE)
+                .recv(&ended_rx)
+                .expect("the end is answered"),
+            Ok(None)
+        ),
+        "the end is accepted while the call is held"
+    );
+    let written = kinds(&home);
+    assert_eq!(
+        &written[written.len() - 2..],
+        [
+            contract::events::EventKind::ShellCommandStarted,
+            contract::events::EventKind::ShellCommand
+        ],
+        "the end is written once, after its start"
     );
 }
 

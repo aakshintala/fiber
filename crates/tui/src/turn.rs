@@ -884,6 +884,8 @@ pub(crate) fn fold_line(
         | EventKind::Moved
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients
@@ -1015,6 +1017,8 @@ fn fold_action(
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients
@@ -1105,6 +1109,8 @@ fn fold_action(
                 | EventKind::SteeringApplied
                 | EventKind::SteeringQueue
                 | EventKind::ShellCommand
+                | EventKind::ShellCommandStarted
+                | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
                 | EventKind::Clients
