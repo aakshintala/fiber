@@ -2720,3 +2720,166 @@ fn running_delegate_keeps_prior() {
     );
     live.finish();
 }
+
+/// A toggle carries reason `sandbox` with fresh shell bytes: on adds the
+/// confinement sentence to the sent definition, off removes it, and no
+/// stale bytes remain in the rebuilt preamble.
+#[cfg(target_os = "linux")]
+#[test]
+fn toggle_carries_reason_sandbox_with_fresh_shell_bytes() {
+    use serde_json::json;
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let server = fakes::ProviderServer::start([support::hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
+    live.toggle("sb_on", true);
+    assert_eq!(
+        live.notices("Sandbox on for this session until /reload.")
+            .len(),
+        1
+    );
+    let on_log = session_log(&setup, &id);
+    let on_built: Vec<&serde_json::Value> = on_log
+        .iter()
+        .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "sandbox")
+        .collect();
+    assert_eq!(
+        on_built.len(),
+        1,
+        "the toggle builds once with reason sandbox"
+    );
+    let on_shell = on_built[0]["payload"]["tools"]
+        .as_array()
+        .expect("tools are sent")
+        .iter()
+        .find(|tool| tool["name"] == "shell")
+        .expect("the shell is sent");
+    assert!(
+        on_shell["definition"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("confined"),
+        "the sent bytes carry the fresh on-state sentence"
+    );
+    live.toggle("sb_off", false);
+    assert_eq!(live.notices("Sandbox off for this session.").len(), 1);
+    let off_log = session_log(&setup, &id);
+    let off_built: Vec<&serde_json::Value> = off_log
+        .iter()
+        .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "sandbox")
+        .collect();
+    assert_eq!(off_built.len(), 2, "off rebuilds again with reason sandbox");
+    let off_shell = off_built[1]["payload"]["tools"]
+        .as_array()
+        .expect("tools are sent")
+        .iter()
+        .find(|tool| tool["name"] == "shell")
+        .expect("the shell is sent");
+    assert!(
+        !off_shell["definition"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("confined"),
+        "the sent bytes carry the fresh off-state bytes"
+    );
+    live.finish();
+}
+
+/// A reload that changes the effective sandbox setting writes one flip
+/// line and rebuilds with fresh shell bytes and reason `reload`.
+#[cfg(target_os = "linux")]
+#[test]
+fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
+    use serde_json::json;
+    use support::hello;
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let server = fakes::ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "sandbox": {"enabled": true}}),
+    );
+    send(&live.client, r#"{"id":"rl_on","command":"reload"}"#);
+    let reloaded = until_session(&live.client, "settings refresh", |line| {
+        line["kind"] == "reloaded"
+    });
+    live.taken.extend(reloaded);
+    // The flip notice follows `reloaded` and precedes the rebuilt build, so
+    // wait for the rebuild to make the flip observable.
+    let rebuilt = until_session(&live.client, "rebuild after reload", |line| {
+        line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload"
+    });
+    live.taken.extend(rebuilt);
+    assert!(
+        live.taken.iter().any(|line| line["kind"] == "reloaded"),
+        "the reload applies"
+    );
+    assert_eq!(
+        live.notices("Sandbox on after /reload.").len(),
+        1,
+        "the flip fires exactly once on effective change"
+    );
+    let on_log = session_log(&setup, &id);
+    let on_built: Vec<&serde_json::Value> = on_log
+        .iter()
+        .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload")
+        .collect();
+    assert!(!on_built.is_empty(), "the reload rebuilds");
+    let on_shell = on_built.last().unwrap()["payload"]["tools"]
+        .as_array()
+        .expect("tools are sent")
+        .iter()
+        .find(|tool| tool["name"] == "shell")
+        .expect("the shell is sent");
+    assert!(
+        on_shell["definition"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("confined"),
+        "the rebuilt bytes carry the fresh on-state sentence"
+    );
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "sandbox": {"enabled": false}}),
+    );
+    send(&live.client, r#"{"id":"rl_off","command":"reload"}"#);
+    let reloaded = until_session(&live.client, "settings refresh", |line| {
+        line["kind"] == "reloaded"
+    });
+    live.taken.extend(reloaded);
+    let rebuilt = until_session(&live.client, "rebuild after reload", |line| {
+        line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload"
+    });
+    live.taken.extend(rebuilt);
+    assert_eq!(
+        live.notices("Sandbox off after /reload.").len(),
+        1,
+        "off stages one flip line"
+    );
+    let off_log = session_log(&setup, &id);
+    let off_built: Vec<&serde_json::Value> = off_log
+        .iter()
+        .filter(|line| line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload")
+        .collect();
+    let off_shell = off_built.last().unwrap()["payload"]["tools"]
+        .as_array()
+        .expect("tools are sent")
+        .iter()
+        .find(|tool| tool["name"] == "shell")
+        .expect("the shell is sent");
+    assert!(
+        !off_shell["definition"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("confined"),
+        "the rebuilt bytes carry the fresh off-state bytes"
+    );
+    live.finish();
+}
