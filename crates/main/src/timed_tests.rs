@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use contract::diag::{Op, Timing};
+use contract::diag::{Op, Timing, TimingName};
 use contract::tool::Cancel;
 use fakes::Deadline;
 use fakes::Watchdog;
@@ -48,9 +48,9 @@ impl Drop for Scope {
 fn timing(probe: &Arc<Probe>) -> Timing {
     let probe = Arc::clone(probe);
     Arc::new(
-        move |op: Op, tool: Option<&str>, _started: Option<std::time::Instant>| {
+        move |op: Op, name: Option<TimingName>, _started: Option<std::time::Instant>| {
             assert_eq!(op, Op::PictureRun);
-            assert_eq!(tool, None);
+            assert_eq!(name, None);
             probe.calls.fetch_add(1, Ordering::SeqCst);
             Some(Box::new(Scope {
                 probe: Arc::clone(&probe),

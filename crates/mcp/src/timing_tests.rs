@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{Op, Timing};
+use contract::diag::{Op, Timing, TimingName};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
@@ -56,7 +56,7 @@ impl Capture {
 
     fn timing(self: &Arc<Self>) -> Timing {
         let me = Arc::clone(self);
-        Arc::new(move |op, tool, started| {
+        Arc::new(move |op, name, started| {
             // The attempt never stamps its start: the callable's own read
             // is the start, so a mutant that passes a stamp fails here.
             assert!(started.is_none(), "the connection guard starts unstamped");
@@ -69,7 +69,10 @@ impl Capture {
             let guard = Guard {
                 capture: Arc::clone(&me),
                 op,
-                tool: tool.map(str::to_owned),
+                tool: name.and_then(|name| match name {
+                    TimingName::Tool(tool) => Some(tool.to_owned()),
+                    TimingName::Job(_) => None,
+                }),
                 start,
             };
             Some(Box::new(guard) as Box<dyn Send>)
@@ -334,9 +337,9 @@ fn the_connection_ends_at_the_tool_list_before_prompts() {
     let timing: Timing = {
         let calls = Arc::clone(&calls);
         let at_drop = Arc::clone(&at_drop);
-        Arc::new(move |op, tool: Option<&str>, _started| {
+        Arc::new(move |op, name: Option<TimingName>, _started| {
             assert_eq!(op, Op::McpConnect);
-            assert_eq!(tool, None);
+            assert_eq!(name, None);
             *calls.lock().unwrap() += 1;
             Some(Box::new(BoundaryProbe {
                 dir: dir.clone(),
@@ -1274,9 +1277,9 @@ fn probing_timing(
     cell: Arc<Mutex<Option<Arc<Slot>>>>,
     free: Arc<Mutex<Vec<bool>>>,
 ) -> Timing {
-    Arc::new(move |op, tool: Option<&str>, _started| {
+    Arc::new(move |op, name: Option<TimingName>, _started| {
         assert_eq!(op, Op::McpConnect);
-        assert_eq!(tool, None);
+        assert_eq!(name, None);
         struct Probe {
             clock: Arc<FakeClock>,
             cell: Arc<Mutex<Option<Arc<Slot>>>>,

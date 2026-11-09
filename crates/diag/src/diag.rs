@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
-use contract::diag::{DebugLog, HttpRequest, Op, Timing};
+use contract::diag::{DebugLog, HttpRequest, Op, Timing, TimingName};
+use contract::{JobId, SessionId};
 use support::lock;
 
 pub use memory::{ResourcesSample, resources_sample};
@@ -129,15 +129,23 @@ struct AllocMetrics {
     live_delta_bytes: i64,
 }
 
+/// The one subject key of an `op_timing` line, serialized without a tag.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum TimingFields<'a> {
+    Tool { tool: &'a str },
+    Job { job: &'a str },
+}
+
 /// The `data` of an `op_timing` line: the operation, whole milliseconds,
-/// and the tool's name on a tool's timers. No other field is recorded,
-/// and never an argument, a path or any content.
+/// and one subject key, either the tool's name or the job id. No other
+/// field is recorded, and never an argument, a path or any content.
 #[derive(serde::Serialize)]
 struct TimingData<'a> {
     op: Op,
     ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool: Option<&'a str>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    subject: Option<TimingFields<'a>>,
     /// The operation's allocation metrics, present as one unit: an
     /// `alloc-stats` build only, and only when the timer ends on the
     /// thread that started it. Otherwise absent, never a partial set.
@@ -390,7 +398,8 @@ impl Diag {
 
     /// The callable form of [`timed`]: one level check inside, none
     /// before it, so restricted crates time through the seam without
-    /// depending on `log`.
+    /// depending on `log`. A tool name starts the timer under that name;
+    /// a job id is stamped onto the returned guard, whose line carries it.
     pub fn timings(&self) -> Timing {
         let level = self.level;
         let clock = Arc::clone(&self.clock);
@@ -398,9 +407,13 @@ impl Diag {
         let process = self.process;
         let rotate_at = self.rotate_at;
         let state = Arc::clone(&self.state);
-        Arc::new(move |op, tool, started| {
+        Arc::new(move |op, name, started| {
+            let subject = name.map(|name| match name {
+                TimingName::Tool(tool) => TimingSubject::Tool(tool.to_owned()),
+                TimingName::Job(job) => TimingSubject::Job(job.clone()),
+            });
             start_timer(
-                level, &clock, &logs, process, rotate_at, &state, op, tool, started,
+                level, &clock, &logs, process, rotate_at, &state, op, subject, started,
             )
             .map(|timer| Box::new(timer) as Box<dyn Send>)
         })
@@ -445,6 +458,13 @@ fn append_line<D: serde::Serialize>(
     append(file, logs, &bytes);
 }
 
+/// One owned subject for an operation's timer, so a guard cannot name
+/// both a tool and a job.
+enum TimingSubject {
+    Tool(String),
+    Job(JobId),
+}
+
 /// A started operation's guard. Dropping it writes one `op_timing` line
 /// with the whole milliseconds from `start` to the stamped end, or to
 /// the drop when never stopped: normal scope drop emits once, including
@@ -460,7 +480,7 @@ pub struct Timer {
     rotate_at: Option<u64>,
     state: Arc<Mutex<State>>,
     op: Op,
-    tool: Option<String>,
+    subject: Option<TimingSubject>,
     start: Instant,
     end: Option<Instant>,
     /// Dropped without a line when set: the operation's span is held
@@ -496,7 +516,7 @@ pub fn timed(diag: &Diag, op: Op, tool: Option<&str>, started: Option<Instant>) 
         diag.rotate_at,
         &diag.state,
         op,
-        tool,
+        tool.map(|tool| TimingSubject::Tool(tool.to_owned())),
         started,
     )
 }
@@ -512,7 +532,7 @@ fn start_timer(
     rotate_at: Option<u64>,
     state: &Arc<Mutex<State>>,
     op: Op,
-    tool: Option<&str>,
+    subject: Option<TimingSubject>,
     started: Option<Instant>,
 ) -> Option<Timer> {
     if level != Level::Debug {
@@ -532,7 +552,7 @@ fn start_timer(
         rotate_at,
         state: Arc::clone(state),
         op,
-        tool: tool.map(str::to_owned),
+        subject,
         start,
         end: None,
         disarmed: false,
@@ -645,7 +665,14 @@ impl Drop for Timer {
             data: Some(TimingData {
                 op: self.op,
                 ms,
-                tool: self.tool.as_deref(),
+                subject: self.subject.as_ref().map(|subject| match subject {
+                    TimingSubject::Tool(tool) => TimingFields::Tool {
+                        tool: tool.as_str(),
+                    },
+                    TimingSubject::Job(job) => TimingFields::Job {
+                        job: job.0.as_str(),
+                    },
+                }),
                 #[cfg(feature = "alloc-stats")]
                 alloc,
             }),
