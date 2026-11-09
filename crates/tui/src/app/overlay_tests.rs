@@ -5130,3 +5130,186 @@ fn a_delegate_resumed_in_a_descendant_draws_the_descendants_recipient_descriptio
     assert!(shown.contains("message  new"), "{shown}");
     assert!(!shown.contains("message  old"), "{shown}");
 }
+
+/// `turns` completed turns from `seq`, one reply each.
+fn replies(seq: &mut u64, turns: usize) -> Vec<Line> {
+    (0..turns)
+        .flat_map(|n| turn(seq, &format!("a_r{n}"), &format!("reply {n}")))
+        .collect()
+}
+
+/// The live pages as `(first_seq, last_seq)` pairs.
+fn page_seqs(app: &App) -> Vec<(u64, u64)> {
+    app.attached_screen()
+        .pages()
+        .index()
+        .pages()
+        .iter()
+        .map(|page| (page.first_seq.0, page.last_seq.0))
+        .collect()
+}
+
+/// A reopening with no overlay opens the pass: the replay folds into a
+/// second `Pages` and the live pages keep their lines.
+#[test]
+fn a_reopening_with_no_overlay_folds_the_replay_into_a_second_pages() {
+    let mut seq = 0u64;
+    let live = replies(&mut seq, 3);
+    let mut app = app();
+    for line in &live {
+        app.on_line(line.clone());
+    }
+    assert!(matches!(app.overlay, Overlay::None));
+    let before = page_seqs(&app);
+    let total = total_of(&app);
+    app.on_line(hub("stream_reopened", SESSION, Some(100)));
+    assert!(
+        matches!(
+            &app.overlay,
+            Overlay::Folding { session, held: true, busy: None, landing: false, .. }
+                if session == &id(SESSION)
+        ),
+        "the reopening opens a held fold with the busy left to the replay"
+    );
+    assert!(app.pass_open());
+    let mut replay = 0u64;
+    for line in replies(&mut replay, 3) {
+        app.on_line(line);
+    }
+    assert_eq!(page_seqs(&app), before, "the live pages are unchanged");
+    assert_eq!(total_of(&app), total);
+    assert!(
+        page_seqs(&app).iter().all(|(first, last)| first <= last),
+        "no live page is inverted"
+    );
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("the fold holds the replay");
+    };
+    assert_eq!(fold.index().total(), total, "the fold holds the replay");
+}
+
+/// The replay lands idle when it ends between turns, whatever the screen
+/// showed, and in seq order.
+#[test]
+fn the_replay_lands_idle_and_in_order_after_a_reopening() {
+    let mut seq = 0u64;
+    let mut app = app();
+    // The screen is mid-turn when the stream reopens.
+    for line in turn(&mut seq, "a_m", "reply").into_iter().take(1) {
+        app.on_line(line);
+    }
+    assert!(!idle(&app), "the live screen is busy");
+    let mut replay = 0u64;
+    let lines = replies(&mut replay, 3);
+    let last = replay - 1;
+    app.on_line(hub("stream_reopened", SESSION, Some(last)));
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the replay landed");
+    assert!(idle(&app), "the replayed turns completed");
+    let seqs = page_seqs(&app);
+    // docs/tui.md ("History and paging"): the replay arrives in `seq` order
+    // (docs/events.md, `history`) and the fold takes it in order, so the
+    // pages ascend.
+    assert!(
+        seqs.windows(2).all(|pair| pair[0].1 < pair[1].0),
+        "the pages ascend: {seqs:?}"
+    );
+    // docs/tui.md ("History and paging"): the pass ends when it folds the
+    // reopening's `last_seq`, so the landed pages end there.
+    assert_eq!(seqs.last().map(|(_, last)| *last), Some(last));
+}
+
+/// The replay lands busy when it ends mid-turn, on a screen that was idle.
+#[test]
+fn the_replay_lands_busy_when_it_ends_mid_turn_after_a_reopening() {
+    let mut seq = 0u64;
+    let mut app = app();
+    for line in replies(&mut seq, 2) {
+        app.on_line(line);
+    }
+    assert!(idle(&app));
+    let mut replay = 0u64;
+    let mut lines = replies(&mut replay, 2);
+    // `turn` numbers all six of its lines; only the first replays.
+    let last = replay;
+    lines.extend(turn(&mut replay, "a_open", "open").into_iter().take(1));
+    app.on_line(hub("stream_reopened", SESSION, Some(last)));
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the replay landed");
+    assert!(!idle(&app), "the replay ended inside a turn");
+}
+
+/// A landing after a reopening keeps the reader on the row they were on
+/// while the replay lands more rows above it.
+#[test]
+fn a_reopening_landing_keeps_the_readers_place() {
+    let mut seq = 0u64;
+    let all = replies(&mut seq, 22);
+    let last = seq - 1;
+    // The screen holds only the later lines, as an installed preview does.
+    let mut app = app();
+    for line in all.iter().skip(60) {
+        app.on_line(line.clone());
+    }
+    let before = total_of(&app);
+    let resident = app.attached_screen().pages().rows();
+    let start = before - resident.len();
+    app.jump(start + 20);
+    let anchor = app
+        .attached_screen()
+        .top()
+        .and_then(|top| app.attached_screen().pages().row_seq(top))
+        .unwrap_or_else(|| panic!("the reader sits on a row"));
+    app.on_line(hub("stream_reopened", SESSION, Some(last)));
+    for line in &all {
+        app.on_line(line.clone());
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the replay landed");
+    assert!(total_of(&app) > before, "the replay added rows above");
+    let after = app
+        .attached_screen()
+        .top()
+        .and_then(|top| app.attached_screen().pages().row_seq(top))
+        .unwrap_or_else(|| panic!("the reader still sits on a row"));
+    assert_eq!(after, anchor, "the same (session, seq, offset) row");
+}
+
+/// A reopening for a session that is not attached opens no fold: its
+/// lines would otherwise fold nowhere.
+#[test]
+fn a_reopening_for_another_session_with_no_overlay_stays_none() {
+    let mut app = app();
+    app.on_line(hub("stream_reopened", "s_bbbbbbbbbbbbbbbb", Some(50)));
+    assert!(matches!(app.overlay, Overlay::None));
+}
+
+/// A reopening without `last_seq` opens no pass, so no boundary would
+/// ever land a fold.
+#[test]
+fn a_reopening_without_last_seq_with_no_overlay_stays_none() {
+    let mut app = app();
+    app.on_line(hub("stream_reopened", SESSION, None));
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(!app.pass_open());
+}
+
+/// A session with no reopening folds its live lines in place.
+#[test]
+fn a_session_with_no_reopening_folds_live_lines_in_place() {
+    let mut seq = 0u64;
+    let mut app = app();
+    let mut totals = Vec::new();
+    for _ in 0..3 {
+        for line in turn(&mut seq, "a_m", "reply") {
+            app.on_line(line);
+        }
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(!app.pass_open());
+        totals.push(total_of(&app));
+    }
+    assert!(totals.windows(2).all(|pair| pair[0] < pair[1]));
+}
