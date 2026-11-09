@@ -9,10 +9,14 @@
 //! to the terminal is painted with the look's colours.
 
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
-use ratatui::buffer::{Buffer, Cell, CellWidth};
+use ratatui::buffer::{Buffer, Cell, CellDiffOption, CellWidth};
 use ratatui::layout::{Position, Rect, Size};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::{Terminal, TerminalOptions, Viewport};
+
+use contract::feedback::{
+    FrameShape, RING_DEPTH, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue, encode_cell,
+};
 
 use crate::app::App;
 use crate::look::{Appearance, Look};
@@ -33,6 +37,10 @@ pub(crate) struct Screen<B: Backend> {
     targets: Vec<Target>,
     /// The theme and colour depth frames are painted with.
     look: Look,
+    /// The last painted frames' shapes, oldest first, with the scroll
+    /// state that produced each one: always on, so a redraw bug arrives
+    /// with its evidence (`docs/tui.md`, "Feedback").
+    frames: Vec<FrameShape>,
 }
 
 impl<B: Backend> Screen<B> {
@@ -59,6 +67,7 @@ impl<B: Backend> Screen<B> {
             last: None,
             targets: Vec::new(),
             look: Look::default(),
+            frames: Vec::new(),
         })
     }
 
@@ -118,8 +127,23 @@ impl<B: Backend> Screen<B> {
                 frame.set_cursor_position(cursor);
             }
         })?;
+        // Shapes the painted copy, never the kept frame: the paint
+        // changes styles and blanks cells, so a pre-paint capture would
+        // report a frame that never appeared. The clone drops here.
+        let mut painted = next.0.clone();
+        look.paint(&mut painted);
+        let shape = shape_frame(&painted, app.top(), app.has_new());
+        self.frames.push(shape);
+        self.frames
+            .drain(..self.frames.len().saturating_sub(RING_DEPTH));
         self.last = Some(next);
         Ok(())
+    }
+
+    /// The ring's shapes, oldest first: the snapshot the feedback
+    /// worker carries into the report.
+    pub(crate) fn frame_shapes(&self) -> Vec<FrameShape> {
+        self.frames.clone()
     }
 
     /// Resizes the viewport; the next draw repaints it whole. The resize's
@@ -196,6 +220,102 @@ impl<B: Backend> Drop for Screen<B> {
     fn drop(&mut self) {
         self.terminal.show_cursor().unwrap_or(());
         self.terminal.backend_mut().flush().unwrap_or(());
+    }
+}
+
+/// One painted colour as a shape colour, over every variant, so no
+/// painted style is dropped on the way into the ring.
+fn shape_color(color: Color) -> ShapeColor {
+    match color {
+        Color::Reset => ShapeColor::Reset,
+        Color::Black => ShapeColor::Black,
+        Color::Red => ShapeColor::Red,
+        Color::Green => ShapeColor::Green,
+        Color::Yellow => ShapeColor::Yellow,
+        Color::Blue => ShapeColor::Blue,
+        Color::Magenta => ShapeColor::Magenta,
+        Color::Cyan => ShapeColor::Cyan,
+        Color::Gray => ShapeColor::Gray,
+        Color::DarkGray => ShapeColor::DarkGray,
+        Color::LightRed => ShapeColor::LightRed,
+        Color::LightGreen => ShapeColor::LightGreen,
+        Color::LightYellow => ShapeColor::LightYellow,
+        Color::LightBlue => ShapeColor::LightBlue,
+        Color::LightMagenta => ShapeColor::LightMagenta,
+        Color::LightCyan => ShapeColor::LightCyan,
+        Color::White => ShapeColor::White,
+        Color::Indexed(index) => ShapeColor::Indexed(index),
+        Color::Rgb(red, green, blue) => ShapeColor::Rgb(red, green, blue),
+    }
+}
+
+/// One painted cell's style: its foreground, background and underline
+/// colours mapped totally, its modifier bits passed through, and
+/// whether the diff omits it. Reads the symbol only for width and
+/// blankness, never to store or emit it.
+#[allow(
+    deprecated,
+    reason = "the diff still omits `skip` cells; reads it once at capture"
+)]
+fn style_value(cell: &Cell) -> (StyleValue, bool) {
+    let style = StyleValue {
+        fg: shape_color(cell.fg),
+        bg: shape_color(cell.bg),
+        ul: shape_color(cell.underline_color),
+        mods: cell.modifier.bits(),
+    };
+    let exempt = cell.diff_option == CellDiffOption::Skip || cell.skip;
+    (style, exempt)
+}
+
+/// One painted frame's shape: its geometry, the scroll state that
+/// produced it, and one shape row per buffer row. Every rendered row
+/// covers exactly its width: the walk emits at most the row's remaining
+/// width, so a huge forced width never overruns the row, and columns a
+/// wide lead covers are never read twice.
+fn shape_frame(buffer: &Buffer, top: Option<usize>, has_new: bool) -> FrameShape {
+    let width = buffer.area.width;
+    let height = buffer.area.height;
+    let mut palette: Vec<StyleValue> = Vec::new();
+    let mut rows: Vec<ShapeRow> = Vec::new();
+    for y in 0..height {
+        let mut cells: Vec<ShapeCell> = Vec::new();
+        let mut x: u16 = 0;
+        while x < width {
+            let index = usize::from(y)
+                .saturating_mul(usize::from(width))
+                .saturating_add(usize::from(x));
+            let Some(cell) = buffer.content.get(index) else {
+                break;
+            };
+            let (style, exempt) = style_value(cell);
+            let blank = cell.symbol().trim().is_empty();
+            let (kind, wide, trailing) = encode_cell(cell.cell_width(), blank, exempt);
+            let slot = palette
+                .iter()
+                .position(|entry| *entry == style)
+                .unwrap_or_else(|| {
+                    palette.push(style);
+                    palette.len().saturating_sub(1)
+                });
+            cells.push(ShapeCell::new(kind, wide, slot));
+            x = x.saturating_add(1);
+            let mut rest = trailing.min(width.saturating_sub(x));
+            while rest > 0 {
+                cells.push(ShapeCell::new(ShapeKind::Continuation, false, slot));
+                x = x.saturating_add(1);
+                rest = rest.saturating_sub(1);
+            }
+        }
+        rows.push(ShapeRow::new(cells));
+    }
+    FrameShape {
+        width,
+        height,
+        top,
+        has_new,
+        palette,
+        rows,
     }
 }
 

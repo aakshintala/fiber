@@ -4,8 +4,11 @@ use super::{Screen, SyncEmit, backend};
 use crate::app::App;
 use crate::keys::{Mouse, MouseKind};
 use crate::link::Line;
+use crate::look::{Look, ThemeSetting};
 use crate::mouse::Target;
+use crate::theme::Role;
 use contract::events::EventKind;
+use contract::feedback::{FrameShape, RING_DEPTH, ShapeColor, ShapeKind, StyleValue};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 
 #[test]
@@ -861,4 +864,540 @@ fn take_touched_consumes_the_mark() {
         .unwrap_or_else(|err| panic!("draw: {err}"));
     assert!(screen.take_touched(), "the frame wrote");
     assert!(!screen.take_touched(), "the mark is consumed");
+}
+
+// The frame-shape ring: painted shapes with the scroll state that
+// produced each one (`docs/tui.md`, "Feedback").
+
+// The look for `setting` on a terminal with `vars` set.
+fn look(setting: ThemeSetting, vars: &[(&str, &str)]) -> Look {
+    let vars: Vec<(String, String)> = vars
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    let (look, notice) = Look::new(setting, &|name| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    look
+}
+
+/// A screen at `width` by `height` with no frames captured.
+fn ring_screen(width: u16, height: u16) -> Screen<TestBackend> {
+    Screen::new(TestBackend::new(width, height), width, height)
+        .unwrap_or_else(|err| panic!("screen: {err}"))
+}
+
+/// An app with no session: following, with no new rows waiting.
+fn plain_app(width: u16, height: u16) -> App {
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(width, height);
+    app
+}
+
+/// Draws `paint` over `app` on `screen`: one captured frame per call.
+#[track_caller]
+fn draw(
+    screen: &mut Screen<TestBackend>,
+    app: &mut App,
+    paint: impl FnMut(
+        &App,
+        ratatui::layout::Rect,
+        &mut ratatui::buffer::Buffer,
+        Option<(u16, u16)>,
+    ) -> Vec<Target>,
+) {
+    screen
+        .draw_with(app, None, paint)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+}
+
+/// The shape the ring's newest frame must hold: the kept frame's
+/// buffer painted with the screen's look, shaped with the app's scroll
+/// state. Every ring test below ends on this recomputation.
+#[track_caller]
+fn painted_shape(screen: &Screen<TestBackend>, app: &App) -> FrameShape {
+    let (buffer, _) = screen.last().expect("a frame was drawn");
+    let mut painted = buffer.clone();
+    screen.look.paint(&mut painted);
+    super::shape_frame(&painted, app.top(), app.has_new())
+}
+
+/// The ring's newest frame equals its recomputed painted shape.
+#[track_caller]
+fn assert_round_trips(screen: &Screen<TestBackend>, app: &App) {
+    let shapes = screen.frame_shapes();
+    let newest = shapes.last().expect("the ring holds a frame");
+    assert_eq!(newest, &painted_shape(screen, app));
+}
+
+/// The foreground of the cell at (`col`, `row`) of the ring's newest
+/// frame.
+fn shaped_fg(screen: &Screen<TestBackend>, col: usize, row: usize) -> StyleValue {
+    let shapes = screen.frame_shapes();
+    let frame = shapes.last().expect("the ring holds a frame");
+    let cell = frame.rows[row].cells()[col];
+    frame.palette[cell.style()]
+}
+
+/// The ring starts empty: no frame drew yet.
+#[test]
+fn the_ring_starts_empty() {
+    let screen = ring_screen(80, 24);
+    assert!(screen.frame_shapes().is_empty());
+}
+
+/// The ring keeps the newest frames up to its depth, then drops the
+/// oldest exactly one per frame: 19 draws keep 19, 20 keep 20, and the
+/// 21st drops the first draw.
+#[test]
+fn the_ring_keeps_the_newest_twenty_frames() {
+    let mut screen = ring_screen(8, 1);
+    screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
+    let mut app = plain_app(8, 1);
+    assert_eq!(RING_DEPTH, 20);
+    for draw_at in 0..19 {
+        let marker = draw_at;
+        draw(&mut screen, &mut app, |_, _, buf, _| {
+            buf.set_string(0, 0, "x", ratatui::style::Style::new());
+            if let Some(cell) = buf.cell_mut((0, 0)) {
+                cell.set_fg(ratatui::style::Color::Rgb(marker, 0, 0));
+            }
+            Vec::new()
+        });
+        assert_round_trips(&screen, &app);
+    }
+    assert_eq!(screen.frame_shapes().len(), 19);
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "x", ratatui::style::Style::new());
+        if let Some(cell) = buf.cell_mut((0, 0)) {
+            cell.set_fg(ratatui::style::Color::Rgb(19, 0, 0));
+        }
+        Vec::new()
+    });
+    assert_eq!(screen.frame_shapes().len(), 20);
+    assert_eq!(
+        shaped_fg(&screen, 0, 0).fg,
+        ShapeColor::Rgb(19, 0, 0),
+        "20 draws keep all 20"
+    );
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "x", ratatui::style::Style::new());
+        if let Some(cell) = buf.cell_mut((0, 0)) {
+            cell.set_fg(ratatui::style::Color::Rgb(20, 0, 0));
+        }
+        Vec::new()
+    });
+    let shapes = screen.frame_shapes();
+    assert_eq!(shapes.len(), 20);
+    let oldest = shapes[0].rows[0].cells()[0];
+    assert_eq!(
+        shapes[0].palette[oldest.style()].fg,
+        ShapeColor::Rgb(1, 0, 0),
+        "the 21st draw drops exactly the first"
+    );
+    let frame = shapes.last().expect("the ring holds a frame");
+    let cell = frame.rows[0].cells()[0];
+    assert_eq!(frame.palette[cell.style()].fg, ShapeColor::Rgb(20, 0, 0));
+    assert_round_trips(&screen, &app);
+}
+
+/// A frame equal to the last writes nothing and records nothing.
+#[test]
+fn equal_frames_record_nothing() {
+    let mut screen = ring_screen(8, 1);
+    let mut app = plain_app(8, 1);
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "same", ratatui::style::Style::new());
+        Vec::new()
+    });
+    assert_eq!(screen.frame_shapes().len(), 1);
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "same", ratatui::style::Style::new());
+        Vec::new()
+    });
+    assert_eq!(
+        screen.frame_shapes().len(),
+        1,
+        "the equal frame recorded nothing"
+    );
+}
+
+/// A red cell and a blue cell land on distinct palette entries: two
+/// distinct colours never encode identically.
+#[test]
+fn red_and_blue_cells_land_on_distinct_palette_entries() {
+    let mut screen = ring_screen(8, 1);
+    screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
+    let mut app = plain_app(8, 1);
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "rb", ratatui::style::Style::new());
+        if let Some(cell) = buf.cell_mut((0, 0)) {
+            cell.set_fg(ratatui::style::Color::Red);
+        }
+        if let Some(cell) = buf.cell_mut((1, 0)) {
+            cell.set_fg(ratatui::style::Color::Blue);
+        }
+        Vec::new()
+    });
+    let red = shaped_fg(&screen, 0, 0);
+    let blue = shaped_fg(&screen, 1, 0);
+    assert_eq!(red.fg, ShapeColor::Red);
+    assert_eq!(blue.fg, ShapeColor::Blue);
+    assert_ne!(red, blue);
+    assert_round_trips(&screen, &app);
+}
+
+/// The diff options classify distinctly: `Skip` shapes exempt,
+/// `AlwaysUpdate` classifies normally, a forced width of 3 shapes a
+/// lead plus two continuations, and an emptied symbol shapes narrow
+/// blank. The covered cells under the forced width never surface. The
+/// deprecated `skip` flag exempts exactly like `Skip`.
+#[allow(
+    deprecated,
+    reason = "pins the legacy `skip` flag the capture still reads"
+)]
+#[test]
+fn diff_options_classify_distinctly() {
+    use ratatui::buffer::CellDiffOption;
+    let mut screen = ring_screen(8, 1);
+    screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
+    let mut app = plain_app(8, 1);
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "abcdef", ratatui::style::Style::new());
+        if let Some(cell) = buf.cell_mut((0, 0)) {
+            cell.set_diff_option(CellDiffOption::Skip);
+        }
+        if let Some(cell) = buf.cell_mut((1, 0)) {
+            cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+        }
+        if let Some(cell) = buf.cell_mut((2, 0)) {
+            cell.set_diff_option(CellDiffOption::ForcedWidth(
+                std::num::NonZeroU16::new(3).unwrap(),
+            ));
+        }
+        // Covered by the forced width: never read, so never shaped.
+        if let Some(cell) = buf.cell_mut((3, 0)) {
+            cell.set_fg(ratatui::style::Color::Red);
+            cell.set_diff_option(CellDiffOption::Skip);
+        }
+        if let Some(cell) = buf.cell_mut((4, 0)) {
+            cell.set_fg(ratatui::style::Color::Blue);
+            cell.set_diff_option(CellDiffOption::Skip);
+        }
+        if let Some(cell) = buf.cell_mut((5, 0)) {
+            cell.set_symbol("");
+        }
+        if let Some(cell) = buf.cell_mut((6, 0)) {
+            cell.set_skip(true);
+        }
+        Vec::new()
+    });
+    let shapes = screen.frame_shapes();
+    let frame = shapes.last().expect("the ring holds a frame");
+    let row = &frame.rows[0];
+    assert_eq!(row.cells().len(), 8, "every row covers exactly its width");
+    assert_eq!(row.cells()[0].kind(), ShapeKind::Exempt);
+    assert!(!row.cells()[0].wide());
+    assert_eq!(row.cells()[1].kind(), ShapeKind::Content);
+    assert!(!row.cells()[1].wide());
+    assert_eq!(row.cells()[2].kind(), ShapeKind::Content);
+    assert!(row.cells()[2].wide(), "the forced width leads wide");
+    assert_eq!(row.cells()[3].kind(), ShapeKind::Continuation);
+    assert_eq!(row.cells()[4].kind(), ShapeKind::Continuation);
+    assert_eq!(row.cells()[5].kind(), ShapeKind::Blank);
+    assert!(!row.cells()[5].wide(), "the emptied symbol is narrow");
+    assert_eq!(
+        row.cells()[6].kind(),
+        ShapeKind::Exempt,
+        "the legacy flag exempts like `Skip`"
+    );
+    for cell in row.cells() {
+        let style = frame.palette[cell.style()];
+        assert!(
+            !matches!(style.fg, ShapeColor::Red | ShapeColor::Blue),
+            "covered cells never surface: {style:?}"
+        );
+    }
+    assert_round_trips(&screen, &app);
+}
+
+/// A role-marker cell shapes as its painted colour with DIM, never the
+/// marker: the muted role under a fixed light look.
+#[test]
+fn a_role_marker_shapes_as_its_painted_colour_with_dim() {
+    let mut screen = ring_screen(8, 1);
+    screen.set_look(look(ThemeSetting::Light, &[("COLORTERM", "truecolor")]));
+    let mut app = plain_app(8, 1);
+    draw(&mut screen, &mut app, |_, _, buf, _| {
+        buf.set_string(0, 0, "m", ratatui::style::Style::new());
+        if let Some(cell) = buf.cell_mut((0, 0)) {
+            cell.set_fg(Role::Muted.color());
+        }
+        Vec::new()
+    });
+    assert!(screen.look.dim(Role::Muted), "muted draws dim");
+    let shaped = shaped_fg(&screen, 0, 0);
+    let painted = screen.look.colour(Role::Muted);
+    let expected = match painted {
+        ratatui::style::Color::Reset => ShapeColor::Reset,
+        ratatui::style::Color::Black => ShapeColor::Black,
+        ratatui::style::Color::Red => ShapeColor::Red,
+        ratatui::style::Color::Green => ShapeColor::Green,
+        ratatui::style::Color::Yellow => ShapeColor::Yellow,
+        ratatui::style::Color::Blue => ShapeColor::Blue,
+        ratatui::style::Color::Magenta => ShapeColor::Magenta,
+        ratatui::style::Color::Cyan => ShapeColor::Cyan,
+        ratatui::style::Color::Gray => ShapeColor::Gray,
+        ratatui::style::Color::DarkGray => ShapeColor::DarkGray,
+        ratatui::style::Color::LightRed => ShapeColor::LightRed,
+        ratatui::style::Color::LightGreen => ShapeColor::LightGreen,
+        ratatui::style::Color::LightYellow => ShapeColor::LightYellow,
+        ratatui::style::Color::LightBlue => ShapeColor::LightBlue,
+        ratatui::style::Color::LightMagenta => ShapeColor::LightMagenta,
+        ratatui::style::Color::LightCyan => ShapeColor::LightCyan,
+        ratatui::style::Color::White => ShapeColor::White,
+        ratatui::style::Color::Indexed(index) => ShapeColor::Indexed(index),
+        ratatui::style::Color::Rgb(red, green, blue) => ShapeColor::Rgb(red, green, blue),
+    };
+    assert_eq!(shaped.fg, expected);
+    assert_ne!(
+        shaped.fg,
+        ShapeColor::Indexed(Role::Muted as u8),
+        "the marker resolved, it never reaches the ring raw"
+    );
+    assert_ne!(
+        shaped.mods & ratatui::style::Modifier::DIM.bits(),
+        0,
+        "the dim role gains DIM"
+    );
+    assert_round_trips(&screen, &app);
+}
+
+/// A tinted half-block edge shapes blank with no colour and content in
+/// truecolour: the same render under both looks.
+#[test]
+fn no_color_blanks_half_block_edges() {
+    let edge = |_: &App,
+                _: ratatui::layout::Rect,
+                buf: &mut ratatui::buffer::Buffer,
+                _: Option<(u16, u16)>| {
+        buf.set_string(0, 0, "x", ratatui::style::Style::new());
+        if let Some(cell) = buf.cell_mut((0, 0)) {
+            cell.set_symbol("▄");
+            cell.set_fg(Role::Panel.color());
+        }
+        Vec::new()
+    };
+    assert!(Role::Panel.tint(), "the panel role is a tint");
+    let mut plain = ring_screen(8, 1);
+    plain.set_look(look(ThemeSetting::Dark, &[("NO_COLOR", "1")]));
+    let mut app = plain_app(8, 1);
+    draw(&mut plain, &mut app, edge);
+    let shapes = plain.frame_shapes();
+    let frame = shapes.last().expect("the ring holds a frame");
+    assert_eq!(frame.rows[0].cells()[0].kind(), ShapeKind::Blank);
+    let mut vivid = ring_screen(8, 1);
+    vivid.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
+    draw(&mut vivid, &mut app, edge);
+    let shapes = vivid.frame_shapes();
+    let frame = shapes.last().expect("the ring holds a frame");
+    assert_eq!(frame.rows[0].cells()[0].kind(), ShapeKind::Content);
+    assert_round_trips(&plain, &app);
+    assert_round_trips(&vivid, &app);
+}
+
+/// A session's stream: durable lines numbered from 0, one turn per
+/// message pair.
+struct Stream {
+    lines: Vec<contract::Envelope>,
+    seq: u64,
+    ts: u64,
+}
+
+impl Stream {
+    fn new() -> Self {
+        Self {
+            lines: Vec::new(),
+            seq: 0,
+            ts: 1_000,
+        }
+    }
+
+    fn line(&mut self, kind: &str, action: Option<&str>, payload: serde_json::Value) {
+        self.ts += 700;
+        self.seq += 1;
+        self.lines.push(contract::Envelope {
+            kind: EventKind::from_name(kind),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: self.ts,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: Some(contract::Seq(self.seq - 1)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        });
+    }
+
+    /// One turn: a prompt and one wrapped reply of several rows.
+    fn turn(&mut self, turn: usize) {
+        let message = format!("m{turn}");
+        self.line(
+            "turn_started",
+            None,
+            serde_json::json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}: look at the code")}]}]}),
+        );
+        self.line("step_started", None, serde_json::json!({}));
+        self.line(
+            "assistant_message_started",
+            Some(&message),
+            serde_json::json!({}),
+        );
+        let words = "the quick brown fox jumps over the lazy dog ".repeat(3);
+        self.line(
+            "text_completed",
+            Some(&message),
+            serde_json::json!({"text": format!("reply {turn}: {words}")}),
+        );
+        self.line(
+            "assistant_message_completed",
+            Some(&message),
+            serde_json::json!({"outcome": "completed"}),
+        );
+        self.line(
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        );
+    }
+}
+
+/// The durable lines in `range`, as `history` answers.
+fn history(
+    lines: &[contract::Envelope],
+    range: &std::ops::RangeInclusive<contract::Seq>,
+) -> Vec<contract::Envelope> {
+    lines
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .cloned()
+        .collect()
+}
+
+/// Loads every page the app needs from `lines`.
+fn frame(app: &mut App, lines: &[contract::Envelope]) {
+    while let Some((session, range)) = app.needs().first().cloned() {
+        app.load(&session, history(lines, &range));
+        assert_ne!(
+            app.needs().first(),
+            Some(&(session, range)),
+            "loading did not settle"
+        );
+    }
+}
+
+/// An app attached to `lines` at 80 by 24, every page loaded.
+fn scrolled_app(lines: &[contract::Envelope]) -> App {
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: contract::HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.set_size(80, 24);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    open(&mut app, lines);
+    app
+}
+
+/// Folds `lines` into `app`, a frame a line.
+fn open(app: &mut App, lines: &[contract::Envelope]) {
+    for line in lines {
+        app.on_line(Line::Session(line.clone()));
+        frame(app, lines);
+    }
+}
+
+/// A wheel step over the conversation: up scrolls up three rows, down
+/// scrolls down three.
+fn wheel(up: bool) -> Mouse {
+    Mouse {
+        kind: if up {
+            MouseKind::WheelUp
+        } else {
+            MouseKind::WheelDown
+        },
+        col: 10,
+        row: 5,
+    }
+}
+
+/// A known scroll sequence produces the expected shape frames: follow,
+/// up three, new output while scrolled, then down back to follow. Each
+/// frame carries the geometry and the scroll state that produced it.
+#[test]
+fn scroll_sequence_shapes_carry_the_scroll_state() {
+    let mut stream = Stream::new();
+    for turn in 0..30 {
+        stream.turn(turn);
+    }
+    let mut app = scrolled_app(&stream.lines);
+    assert!(
+        app.scroll().1 > 24,
+        "the session overflows the viewport: {:?}",
+        app.scroll()
+    );
+    let mut screen = ring_screen(80, 24);
+    let mut want: Vec<(Option<usize>, bool)> = Vec::new();
+    let mut recomputed: Vec<FrameShape> = Vec::new();
+    // Following: no top, nothing new.
+    assert_eq!((app.top(), app.has_new()), (None, false));
+    want.push((app.top(), app.has_new()));
+    draw(&mut screen, &mut app, crate::view::render);
+    recomputed.push(painted_shape(&screen, &app));
+    // Up three: the top pins a scrolled row.
+    app.on_wheel(&wheel(true));
+    assert!(app.top().is_some(), "the wheel scrolled up");
+    assert!(!app.has_new());
+    want.push((app.top(), app.has_new()));
+    draw(&mut screen, &mut app, crate::view::render);
+    recomputed.push(painted_shape(&screen, &app));
+    // New output while scrolled: the frame notes rows wait below.
+    let more = stream.lines.len();
+    stream.turn(30);
+    open(&mut app, &stream.lines[more..]);
+    assert!(app.top().is_some(), "the new output keeps the scroll");
+    assert!(app.has_new(), "new output while scrolled waits below");
+    want.push((app.top(), app.has_new()));
+    draw(&mut screen, &mut app, crate::view::render);
+    recomputed.push(painted_shape(&screen, &app));
+    // Down to the tail: following again.
+    for _ in 0..40 {
+        if app.top().is_none() {
+            break;
+        }
+        app.on_wheel(&wheel(false));
+    }
+    assert_eq!((app.top(), app.has_new()), (None, false));
+    want.push((app.top(), app.has_new()));
+    draw(&mut screen, &mut app, crate::view::render);
+    recomputed.push(painted_shape(&screen, &app));
+    let shapes = screen.frame_shapes();
+    assert_eq!(shapes.len(), want.len());
+    for (frame, (top, has_new)) in shapes.iter().zip(&want) {
+        assert_eq!(frame.width, 80);
+        assert_eq!(frame.height, 24);
+        assert_eq!(&frame.top, top);
+        assert_eq!(&frame.has_new, has_new);
+    }
+    assert_eq!(want[0], (None, false));
+    assert!(want[1].0.is_some());
+    assert!(want[2].0.is_some() && want[2].1);
+    assert_eq!(want[3], (None, false));
+    // The dumped ring equals the recomputed painted shapes.
+    assert_eq!(shapes, recomputed);
 }

@@ -3598,3 +3598,46 @@ fn attached_frame_is_discarded_without_a_stream() {
     // docs/state.md:432-435: an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
 }
+
+/// Typing `/feedback` plus Enter hands the writer the screen's ring:
+/// the snapshot the worker receives equals the ring as of the
+/// `Effect::Feedback` handling, with the typed description.
+#[test]
+fn feedback_hands_the_screen_ring_to_the_writer() {
+    use contract::feedback::FrameShape;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let done = crate::FeedbackDone {
+        path: PathBuf::from("/w/fiber-feedback-7.md"),
+        link: "https://example.test/new?title=x".to_owned(),
+    };
+    let (tx, rx) = mpsc::channel();
+    let writer: crate::WriteFeedback = Arc::new(
+        move |description: &str, session: Option<&contract::SessionId>, shapes: &[FrameShape]| {
+            tx.send((description.to_owned(), session.cloned(), shapes.to_vec()))
+                .unwrap_or_else(|err| panic!("record shapes: {err}"));
+            Ok(done.clone())
+        },
+    );
+    lp.app.set_feedback(Some(writer));
+    lp.screen
+        .draw(&mut lp.app, None)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    let want = lp.screen.frame_shapes();
+    assert!(!want.is_empty(), "the draw captured a frame");
+    let mut events: Vec<crate::keys::Event> = "/feedback hi"
+        .chars()
+        .map(|ch| crate::keys::Event::Key(crate::keys::Key::Char(ch)))
+        .collect();
+    events.push(crate::keys::Event::Key(crate::keys::Key::Enter));
+    assert_eq!(lp.handle_events_inner(events), None);
+    let (description, session, shapes) =
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "feedback shapes");
+    assert_eq!(description, "hi");
+    assert_eq!(
+        session,
+        Some(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+    );
+    assert_eq!(shapes, want);
+}
