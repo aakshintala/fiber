@@ -149,7 +149,12 @@ file's issue with its command and output; a file with no issue gets one.
 The issue is worked as one ticket: its pull request names the cause the
 file's flaky tests share, such as a fixture, a wait helper or a timing
 pattern, and fixes that, not one test at a time. It shows the whole file
-passing under repeated runs under load.
+passing 30 times under load, the count the CI `stress` job uses
+(`docs/ci.md`): `cargo nextest run --stress-count 30 -E
+'binary(=<target>)'`. Each attempt first prints its `cargo xtask threads`
+line, and an attempt counts only when the load it reports is at least the
+CPU count; an unloaded attempt is inconclusive and reruns, and a failure
+under any load is a failure. The pull request says how the load was made.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.

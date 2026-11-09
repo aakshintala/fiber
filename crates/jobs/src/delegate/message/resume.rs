@@ -210,6 +210,7 @@ impl DelegateMessage {
                 after,
                 None,
                 Some(self.registry.usage_forward()),
+                timing.clone(),
             );
             let runner = runner.with_worktree(recorded.as_ref().map(|record| {
                 super::super::run::WorktreeRun {

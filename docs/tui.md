@@ -1122,8 +1122,9 @@ install still running.
     config.").
   - **Search:** `/`, or typing a letter, opens a search across every tab.
     It matches labels and key paths, hides the tab bar and adds each
-    match's tab, dim, at the right. Esc clears the search; a second Esc
-    returns.
+    match's tab, dim, at the right. Esc clears the search. Focus stays on
+    the match it was on, in that match's tab; with no match, it goes back
+    to the row focused when the search opened. A second Esc returns.
   - **Footer:** "←→ tab · / search · Enter change · Tab layer · Delete
     reset", with the keys bold. Ctrl+G still opens the file; on a
     remote terminal it opens the hub's file instead ("Swapped views").
