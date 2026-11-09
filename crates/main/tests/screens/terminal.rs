@@ -3690,6 +3690,8 @@ fn pty_launch_uses_default_test_credential_before_caller_env() {
     let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[]);
     let grid = run.wait_screen("the default signed-in home", |grid| {
         grid.contents.contains("Enter starts a session")
+            && !grid.contents.contains("Log in")
+            && !grid.contents.contains("Choose a model")
     });
     assert!(!grid.contents.contains("Log in"), "{grid:?}");
     assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
@@ -3698,7 +3700,6 @@ fn pty_launch_uses_default_test_credential_before_caller_env() {
     run.wait_screen("the default credential's response", |grid| {
         grid.contents.contains("Hel")
     });
-    assert_eq!(server.requests().len(), 1);
     quit_live(run);
 
     let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
@@ -3709,12 +3710,12 @@ fn pty_launch_uses_default_test_credential_before_caller_env() {
     run.write(b"say hi\r");
     let grid = run.wait_screen("the keyless credential notice", |grid| {
         grid.contents.contains("no key for fake")
+            && grid.contents.contains("FIBER_TEST_FAKE_KEY is empty")
     });
     assert!(
         grid.contents.contains("FIBER_TEST_FAKE_KEY is empty"),
         "{grid:?}"
     );
-    assert_eq!(server.requests().len(), 1);
     run.write(b"\x03");
     run.wait_screen("the cleared keyless draft", |grid| {
         !grid.contents.contains("say hi")

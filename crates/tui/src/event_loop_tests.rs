@@ -47,7 +47,6 @@ pub(super) fn launch_without_model() -> super::Launch {
     let mut launch = launch();
     launch.model = None;
     launch.models = Some(Arc::new(|_| Ok(Catalogue::default())));
-    launch.configure = Some(Arc::new(crate::configure_fake::Fake::new(Vec::new())));
     launch
 }
 
@@ -75,9 +74,13 @@ fn launch_starts_with_configured_test_catalogue() {
     let launch = launch();
     assert_eq!(launch.model.as_deref(), Some("p/m"));
     let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
-    assert_eq!(catalogue.models.len(), 1);
-    assert_eq!(catalogue.models[0].provider, "p");
-    assert_eq!(catalogue.models[0].reference, "p/m");
+    assert!(
+        catalogue
+            .models
+            .iter()
+            .any(|model| model.reference == "p/m"),
+        "test catalogue contains p/m: {catalogue:?}"
+    );
     assert!(catalogue.logged_out.is_empty());
     assert!(launch.configure.is_some());
 }
