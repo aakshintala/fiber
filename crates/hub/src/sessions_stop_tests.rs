@@ -1365,3 +1365,102 @@ fn an_overlong_socket_path_never_confirms() {
         "a path no address holds never confirms"
     );
 }
+
+/// Runs the keepers stop on a thread: the receiver carries its outcome.
+fn keepers_async(hub: &Arc<Hub>, ids: Vec<SessionId>) -> mpsc::Receiver<KeepersOutcome> {
+    let (tx, rx) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::Builder::new()
+        .name("sessions-stop-keepers-test".to_owned())
+        .spawn(move || {
+            tx.send(stop_keepers(&hub, &ids)).unwrap_or(());
+        })
+        .unwrap();
+    rx
+}
+
+fn join_keepers(rx: mpsc::Receiver<KeepersOutcome>) -> KeepersOutcome {
+    Deadline::after(DEADLINE).recv_or_fail(&rx, "the keepers stop")
+}
+
+#[test]
+fn stop_keepers_confirms_an_eof_keeper_leaves_a_live_session_and_skips_a_gone_one() {
+    let temp = Temp::new("ss-keepers-mixed");
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let probe = starter.clone();
+    let live = start(&starter, 1);
+    let keeper = SessionId(testkit::id(2));
+    let fake = FakeKeeper::spawn(&temp.dir.join("run"), &keeper, KeeperAfter::Stop);
+    let gone = SessionId(testkit::id(3));
+    let hub = temp.hub(starter);
+    let outcome = join_keepers(keepers_async(
+        &hub,
+        vec![gone.clone(), keeper.clone(), live.clone()],
+    ));
+    assert_eq!(outcome.confirmed, vec![keeper.clone()]);
+    assert_eq!(outcome.live, vec![live.clone()]);
+    assert!(outcome.unconfirmed.is_empty());
+    // The keeper's probe subscribes first; the fresh connection carries
+    // exactly the frozen stop.
+    let lines = fake.lines();
+    assert_eq!(command_of(&lines[0])["command"], "subscribe");
+    assert_eq!(lines[1], FROZEN_STOP);
+    // The live session answered the verify and got nothing else: no
+    // close, no stop.
+    let conns = probe.received_by_connection();
+    assert_eq!(conns.len(), 1);
+    assert_eq!(conns[0].len(), 1);
+    assert_eq!(command_of(&conns[0][0])["command"], "subscribe");
+}
+
+#[test]
+fn stop_keepers_confirms_sibling_keepers_in_the_same_run() {
+    let temp = Temp::new("ss-keepers-siblings");
+    let first = SessionId(testkit::id(4));
+    let _first = FakeKeeper::spawn(&temp.dir.join("run"), &first, KeeperAfter::Stop);
+    let second = SessionId(testkit::id(5));
+    let _second = FakeKeeper::spawn(&temp.dir.join("run"), &second, KeeperAfter::Stop);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let outcome = join_keepers(keepers_async(&hub, vec![second.clone(), first.clone()]));
+    assert_eq!(outcome.confirmed, vec![first.clone(), second.clone()]);
+    assert!(outcome.live.is_empty());
+    assert!(outcome.unconfirmed.is_empty());
+}
+
+#[test]
+fn stop_keepers_leaves_a_wedged_keeper_unconfirmed_past_the_bound() {
+    let temp = Temp::new("ss-keepers-wedged");
+    let wedged = SessionId(testkit::id(6));
+    let _held = FakeKeeper::spawn(&temp.dir.join("run"), &wedged, KeeperAfter::Wedged);
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    // The hook records the serving thread before the bound is reached,
+    // so the advance below names its wait.
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    *lock(&hub.on_fanout_wait) = Some(Box::new(move || {
+        waiting_tx.send(thread::current().id()).unwrap_or(());
+    }));
+    let rx = keepers_async(&hub, vec![wedged.clone()]);
+    // The park is the signal: only now may the clock move past the end.
+    let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;
+    assert!(
+        temp.clock.await_parked(end, Deadline::after(DEADLINE)),
+        "the keepers wait parks at its bound"
+    );
+    let loop_thread = Deadline::after(DEADLINE)
+        .recv(&waiting_rx)
+        .unwrap_or_else(|_| panic!("the keepers loop enters its fan-out wait"));
+    // Lands exactly on the end: passing a named park is an overshoot,
+    // and the loop finishes on `now >= end` either way.
+    temp.clock.advance_when_parked(
+        Some(end),
+        Some(loop_thread),
+        KEEPERS_STOP_WITHIN,
+        &Deadline::after(DEADLINE),
+    );
+    let outcome = join_keepers(rx);
+    assert!(outcome.confirmed.is_empty());
+    assert!(outcome.live.is_empty());
+    assert_eq!(outcome.unconfirmed, vec![wedged.clone()]);
+    // Still running: its socket accepts, as a wedged keeper's does.
+    assert!(UnixStream::connect(temp.run(&wedged)).is_ok());
+}

@@ -1554,7 +1554,7 @@ fn probe_marks_an_answering_peer_a_session() {
     });
     let deadline = Deadline::after(fakes::deadline::WAIT);
     assert_eq!(
-        classify_sockets(home.temp.path()).unwrap(),
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
         vec![(SessionId(ID.into()), SocketClass::Session)]
     );
     peer.subscribed(&deadline);
@@ -1571,11 +1571,48 @@ fn probe_marks_an_accept_drop_peer_keeper_or_gone() {
     });
     let deadline = Deadline::after(fakes::deadline::WAIT);
     assert_eq!(
-        classify_sockets(home.temp.path()).unwrap(),
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
         vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
     );
     peer.subscribed(&deadline);
     peer.ended(&deadline);
+}
+
+#[test]
+fn probe_marks_an_accept_never_answer_peer_gone_only_past_its_bound() {
+    let home = Home::new();
+    // Accepts and reads the probe's subscribe, then never answers: the
+    // probe waits out its fake-clock bound instead of counting it.
+    let mut held = Peer::hold(&home, ID, false);
+    let wall = Deadline::after(fakes::deadline::WAIT);
+    let (done_tx, done_rx) = mpsc::channel();
+    let path = home.temp.path().to_owned();
+    let clock = home.clock.clone();
+    thread::spawn(move || {
+        let _ = done_tx.send(classify_sockets(&path, clock));
+    });
+    // Short of the bound the probe is still parked: nothing returns.
+    let bound = home.clock.now() + PROBE_DEADLINE;
+    home.clock.advance_when_parked(
+        Some(bound),
+        None,
+        PROBE_DEADLINE - Duration::from_millis(500),
+        &wall,
+    );
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the probe answered short of its bound"
+    );
+    // On the bound the accept reads as gone, never counted.
+    home.clock
+        .advance_when_parked(Some(bound), None, Duration::from_millis(500), &wall);
+    assert_eq!(
+        wall.recv_or_fail(&done_rx, "the probe past its bound")
+            .unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Gone)]
+    );
+    held.release();
+    held.ended(&wall);
 }
 
 #[test]
@@ -1584,7 +1621,7 @@ fn probe_marks_a_stale_socket_file_gone() {
     let stale = home.listener(ID);
     drop(stale);
     assert_eq!(
-        classify_sockets(home.temp.path()).unwrap(),
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
         vec![(SessionId(ID.into()), SocketClass::Gone)]
     );
 }
@@ -1599,7 +1636,7 @@ fn probe_skips_the_hub_entry() {
     });
     let deadline = Deadline::after(fakes::deadline::WAIT);
     assert_eq!(
-        classify_sockets(home.temp.path()).unwrap(),
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
         vec![(SessionId(ID.into()), SocketClass::Session)]
     );
     peer.subscribed(&deadline);

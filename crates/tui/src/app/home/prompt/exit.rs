@@ -5,6 +5,7 @@
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -204,7 +205,8 @@ impl App {
         let Some(home) = self.home.launch.fiber_home.as_deref() else {
             return Vec::new();
         };
-        doors::classify_sockets(home)
+        // Temporary: the hub feed's keepers line replaces this direct probe.
+        doors::classify_sockets(home, Arc::new(support::clock::System))
             .map(|probed| {
                 probed
                     .into_iter()

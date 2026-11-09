@@ -975,6 +975,158 @@ fn stop_with_sessions_names_the_survivor_past_the_close_bound() {
     ));
 }
 
+#[test]
+fn stop_keepers_confirms_a_named_keeper_and_keeps_running() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let keeper = contract::SessionId("s_0000000000000007".to_owned());
+    spawn_keeper_stop(&temp.dir.join("run"), &keeper);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_keepers",
+        "stop_keepers",
+        json!({"keepers": [keeper.0]}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_keepers");
+    assert_eq!(result, json!({"keepers_stopped": 1}));
+    // The hub keeps running and keeps admitting binds after answering.
+    assert!(!hub.sessions_stopping.load(Ordering::SeqCst));
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the start"));
+    assert!(result.get("session_id").is_some());
+}
+
+#[test]
+fn stop_keepers_leaves_a_live_session_running_and_reports_it() {
+    let temp = Temp::new();
+    let starter = FakeStarter::strict(&temp.dir);
+    let probe = starter.clone();
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the acknowledgement"));
+    let session = result
+        .get("session_id")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.send(&command(
+        "c_keepers",
+        "stop_keepers",
+        json!({"keepers": [session]}),
+    ));
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_keepers"));
+    assert_eq!(message, format!("Session {session} is still running."));
+    // The live session answered the verify and got nothing else.
+    assert!(
+        !probe
+            .received()
+            .iter()
+            .any(|line| line.contains("\"close\"")),
+        "a live session gets no close"
+    );
+    // The hub keeps running after refusing.
+    client.send(&command("c_status", "status", json!({})));
+    accepted(&client.next("the status"));
+}
+
+#[test]
+fn stop_keepers_refuses_a_misshaped_request() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    for (n, args) in [
+        json!({}),
+        json!({"keepers": null}),
+        json!({"keepers": "s_0000000000000007"}),
+        json!({"keepers": []}),
+        json!({"keepers": [1]}),
+        json!({"keepers": ["not-a-session"]}),
+        json!({"keepers": ["s_0000000000000007"], "future": 1}),
+        json!({"future": 1}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("c_bad_{n}");
+        client.send(&command(&id, "stop_keepers", args));
+        let (code, echoed, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments");
+        assert_eq!(echoed.as_deref(), Some(id.as_str()));
+    }
+    // The hub keeps running after every refusal.
+    client.send(&command("c_status", "status", json!({})));
+    accepted(&client.next("the status"));
+}
+
+#[test]
+fn stop_keepers_names_the_survivor_past_the_bound_and_keeps_running() {
+    use crate::fake::FakeKeeperProbe;
+
+    // Accepts and never answers: the verify subscribes, the stop
+    // writes, and the close never comes.
+    let temp = Temp::new();
+    let wedged = contract::SessionId("s_0000000000000007".to_owned());
+    let _held = FakeKeeperProbe::hold(&temp.dir, &wedged);
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let hub = hub_with_clock(
+        &temp.dir,
+        FakeStarter::bind_and_hold(&temp.dir),
+        Arc::clone(&clock),
+    );
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // The hook records the serving thread before the command is sent,
+    // so the advance below names its wait.
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    *hub.on_fanout_wait.lock().unwrap() = Some(Box::new(move || {
+        waiting_tx.send(thread::current().id()).unwrap_or(());
+    }));
+    client.send(&command(
+        "c_keepers",
+        "stop_keepers",
+        json!({"keepers": [wedged.0]}),
+    ));
+    // The fan-out wait parks at the bound with the keeper unconfirmed;
+    // expiring it names the survivor.
+    let bound = clock.origin() + crate::sessions_stop::KEEPERS_STOP_WITHIN;
+    assert!(
+        clock.await_parked(bound, fakes::Deadline::after(DEADLINE)),
+        "the keepers wait parks at its bound"
+    );
+    let loop_thread = Deadline::after(DEADLINE)
+        .recv(&waiting_rx)
+        .unwrap_or_else(|_| panic!("the keepers loop enters its fan-out wait"));
+    clock.advance_when_parked(
+        Some(bound),
+        Some(loop_thread),
+        crate::sessions_stop::KEEPERS_STOP_WITHIN,
+        &Deadline::after(DEADLINE),
+    );
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_keepers"));
+    assert_eq!(message, format!("Keeper {} is still running.", wedged.0));
+    // No stop was requested and none stored: the hub keeps running and
+    // keeps admitting binds after answering.
+    assert!(!hub.sessions_stopping.load(Ordering::SeqCst));
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the start"));
+    assert!(result.get("session_id").is_some());
+}
+
 /// A starter that holds each `start` at a gate, then runs the inner
 /// starter: the test stores the sessions-stop flag mid-bind.
 struct GateStarter {
@@ -2561,6 +2713,10 @@ fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
             left.get("payload"),
             Some(&json!({"session_id": id, "how": "crashed"}))
         );
+        // The snapshot always ends with the keepers line, empty here.
+        let keepers = client.next("the keepers line");
+        assert_eq!(keepers.get("kind"), Some(&json!("keepers")));
+        assert_eq!(keepers.get("payload"), Some(&json!({"keepers": []})));
         // A second `feed` replaces the first subscription.
     }
     drop(client);
@@ -2587,10 +2743,14 @@ fn dismiss_over_the_wire_drops_a_crashed_session_for_every_client() {
     let (code, echoed, _) = rejected(&client.next("the second dismissal"));
     assert_eq!(code, "stale_request");
     assert_eq!(echoed.as_deref(), Some("c_3"));
-    // A fresh feed is sent nothing for it: its acknowledgement, then the
-    // answer to the next command.
+    // A fresh feed is sent nothing for it: its acknowledgement, the
+    // empty keepers line closing the snapshot, then the answer to the
+    // next command.
     client.send(&command("c_4", "feed", json!({})));
     accepted(&client.next("the feed acknowledgement"));
+    let keepers = client.next("the keepers line");
+    assert_eq!(keepers.get("kind"), Some(&json!("keepers")));
+    assert_eq!(keepers.get("payload"), Some(&json!({"keepers": []})));
     client.send(&command("c_5", "status", json!({})));
     let (echoed, _) = accepted(&client.next("the status answer"));
     assert_eq!(echoed, "c_5");
@@ -3045,6 +3205,10 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     let (echoed, _) = accepted(&a.next("the feed acknowledgement"));
     assert_eq!(echoed, "c_1");
     assert_eq!(a.next("the snapshot status")["kind"], "session_status");
+    // The snapshot always ends with the keepers line, empty here.
+    let keepers = a.next("the keepers line");
+    assert_eq!(keepers["kind"], "keepers");
+    assert_eq!(keepers["payload"], json!({"keepers": []}));
     let mut b = Client::connect(&hub);
     b.hello();
     b.send(&command("c_1", "status", json!({})));

@@ -601,6 +601,7 @@ impl App {
                     | HubEventKind::DeviceChanged
                     | HubEventKind::CommandAccepted
                     | HubEventKind::CommandRejected
+                    | HubEventKind::Keepers
                     | HubEventKind::Unknown(_) => {}
                 }
             }

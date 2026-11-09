@@ -11,6 +11,7 @@ fn every_documented_hub_name_maps_to_its_member() {
         ("stream_reopened", HubEventKind::StreamReopened),
         ("command_accepted", HubEventKind::CommandAccepted),
         ("command_rejected", HubEventKind::CommandRejected),
+        ("keepers", HubEventKind::Keepers),
     ] {
         assert_eq!(HubEventKind::from(name.to_owned()), expected, "{name}");
     }
@@ -49,6 +50,7 @@ fn near_miss_spellings_never_alias_a_known_member() {
                 | HubEventKind::StreamReopened
                 | HubEventKind::CommandAccepted
                 | HubEventKind::CommandRejected
+                | HubEventKind::Keepers
         ));
     }
 }
@@ -75,6 +77,7 @@ fn every_documented_hub_name_round_trips_through_name() {
         "stream_reopened",
         "command_accepted",
         "command_rejected",
+        "keepers",
     ] {
         let kind = HubEventKind::from(name.to_owned());
         assert_eq!(kind.name(), name, "{name}");

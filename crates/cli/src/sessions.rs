@@ -415,6 +415,7 @@ fn matched(
         | HubEventKind::SessionLeft
         | HubEventKind::StreamClosed
         | HubEventKind::StreamReopened
+        | HubEventKind::Keepers
         | HubEventKind::Unknown(_) => None,
     }
 }

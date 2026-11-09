@@ -76,7 +76,9 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
-pub use crate::machine::{DeviceLogin, FileSearch, Machine, PruneFailure, PruneOutcome, ShowCode};
+pub use crate::machine::{
+    DeviceLogin, FileSearch, KeeperProbe, Machine, PruneFailure, PruneOutcome, ShowCode,
+};
 pub use crate::recent::{Left, RecentError, RecentRow, append, append_exited};
 pub use crate::spawn::{HUB_SESSION_MARKER, SpawnStarter};
 
@@ -223,6 +225,7 @@ pub fn serve(
     clock: Arc<dyn Clock>,
     environments: Arc<Environments>,
     machine: Arc<dyn Machine>,
+    keeper_probe: Option<Arc<dyn KeeperProbe>>,
 ) -> Result<i32, StartError> {
     let lock = match mode {
         Mode::OnDemand => match listen::lock(home)? {
@@ -293,12 +296,17 @@ pub fn serve(
         Mode::OnDemand => held,
     };
     let diag = diag.with_level(settings.level);
-    let hub = Arc::new(
-        Hub::new(home, fiber_version, starter, Arc::clone(&clock), diag)
-            .with_commit(fiber_commit)
-            .with_environments(Arc::clone(&environments))
-            .with_machine(machine),
-    );
+    let mut hub = Hub::new(home, fiber_version, starter, Arc::clone(&clock), diag)
+        .with_commit(fiber_commit)
+        .with_environments(Arc::clone(&environments))
+        .with_machine(machine);
+    if let Some(probe) = &keeper_probe {
+        hub = hub.with_keeper_probe(Arc::clone(probe));
+    }
+    let hub = Arc::new(hub);
+    if let Some(probe) = keeper_probe {
+        hub.feed.probe.get_or_init(|| probe);
+    }
     // The feed starts a rewound session even when no client relayed the
     // rewind: the callback holds the hub weakly, so nothing runs after
     // the hub drops, and the start runs on a thread of its own, never on

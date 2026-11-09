@@ -43,8 +43,14 @@ pub(crate) const SESSIONS_STOP_WITHIN: Duration = Duration::from_secs(10);
 
 /// How long one session's socket has to accept, within
 /// [`SESSIONS_STOP_WITHIN`]: the hub client's own bind wait, so a wedged
-/// session holds one session, never the stop.
-const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
+/// session holds one session, never the stop. The `stop_keepers`
+/// command shares it inside its own bound.
+pub(crate) const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long a `stop_keepers` command waits for every named keeper to
+/// confirm stopped: the serving thread's fan-out wait, with the connect
+/// bound inside it and the answer still to come.
+pub(crate) const KEEPERS_STOP_WITHIN: Duration = Duration::from_secs(10);
 
 /// What one sessions stop found: either the listing failed, or the
 /// stop ran over the listings. The lists exist only on the success
@@ -127,6 +133,177 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
         .collect();
     fan_out(hub, &fresh, end, &mut tally);
     finish(hub, first, second, &tally)
+}
+
+/// What stopping the named keepers found: every confirmed stop and
+/// every keeper neither confirmed nor skipped as gone, each in id
+/// order. Live sessions are reported apart: they were left running,
+/// never stopped.
+pub(crate) struct KeepersOutcome {
+    /// The keepers whose sockets closed after the frozen stop.
+    pub(crate) confirmed: Vec<SessionId>,
+    /// The named ids that answered the verify: live sessions.
+    pub(crate) live: Vec<SessionId>,
+    /// The named keepers neither confirmed nor skipped, in id order.
+    pub(crate) unconfirmed: Vec<SessionId>,
+}
+
+/// Stops exactly the named keepers through their stop, bounded by
+/// [`KEEPERS_STOP_WITHIN`]: one subscribe-first verify per id, then the
+/// frozen stop for keeper-or-gone sockets through the same transport
+/// the sessions stop uses. An answered subscribe is a live session:
+/// left running and reported, never stopped. A refused socket is gone
+/// and skipped. A keeper still silent past the bound is unconfirmed.
+/// The hub keeps running after answering: nothing is stored, and no
+/// stop is requested.
+pub(crate) fn stop_keepers(hub: &Arc<Hub>, ids: &[SessionId]) -> KeepersOutcome {
+    let end = hub.clock.now() + KEEPERS_STOP_WITHIN;
+    let shared = Arc::new(Mutex::new(KeeperFanout {
+        total: ids.len(),
+        done: 0,
+        outcomes: Vec::new(),
+    }));
+    for id in ids {
+        let hub = Arc::clone(hub);
+        let id = id.clone();
+        let name = id.0.clone();
+        let fallback = id.0.clone();
+        let recorded = Arc::clone(&shared);
+        let spawned = thread::Builder::new()
+            .name("hub-stop-keeper".to_owned())
+            .spawn(move || {
+                let outcome = stop_one_verified(&hub, &id, end);
+                lock(&recorded).record(name, outcome);
+                hub.tick.wake();
+            });
+        if spawned.is_err() {
+            lock(&shared).record(fallback, KeeperOutcome::Unconfirmed);
+        }
+    }
+    hub.tick.wait_for(&*hub.clock, &mut |now| {
+        if hub.stop_requested() {
+            return Wait::Done;
+        }
+        if lock(&shared).settled() {
+            return Wait::Done;
+        }
+        if now >= end {
+            return Wait::Done;
+        }
+        #[cfg(test)]
+        if let Some(hook) = lock(&hub.on_fanout_wait).take() {
+            hook();
+        }
+        Wait::Until(Some(end))
+    });
+    let mut confirmed = Vec::new();
+    let mut live = Vec::new();
+    let mut unconfirmed = Vec::new();
+    let mut recorded = BTreeSet::new();
+    for (id, outcome) in lock(&shared).outcomes.drain(..) {
+        recorded.insert(id.clone());
+        match outcome {
+            KeeperOutcome::Confirmed => confirmed.push(SessionId(id)),
+            KeeperOutcome::Live => live.push(SessionId(id)),
+            KeeperOutcome::Unconfirmed => unconfirmed.push(SessionId(id)),
+            KeeperOutcome::Gone => {}
+        }
+    }
+    // Every named id with no record by the bound reads Unconfirmed:
+    // past the bound, unreported means unconfirmed. A refused socket
+    // records Gone through the worker path, so gone ids stay skipped.
+    // A worker record arriving after this drain lands in this run's
+    // map only, which drops with it: never merged here or later.
+    for id in ids {
+        if !recorded.contains(&id.0) {
+            unconfirmed.push(id.clone());
+        }
+    }
+    confirmed.sort_by(|a, b| a.0.cmp(&b.0));
+    live.sort_by(|a, b| a.0.cmp(&b.0));
+    unconfirmed.sort_by(|a, b| a.0.cmp(&b.0));
+    KeepersOutcome {
+        confirmed,
+        live,
+        unconfirmed,
+    }
+}
+
+/// One named keeper's fan-out records: every worker records exactly
+/// once, so the serving thread's wait ends when `done` reaches `total`.
+#[derive(Default)]
+struct KeeperFanout {
+    total: usize,
+    done: usize,
+    outcomes: Vec<(String, KeeperOutcome)>,
+}
+
+impl KeeperFanout {
+    fn record(&mut self, id: String, outcome: KeeperOutcome) {
+        self.done += 1;
+        self.outcomes.push((id, outcome));
+    }
+
+    fn settled(&self) -> bool {
+        self.done >= self.total
+    }
+}
+
+/// What one named keeper's verify-and-stop found.
+enum KeeperOutcome {
+    /// Its socket closed after the frozen stop was written.
+    Confirmed,
+    /// Its subscribe was answered: a live session, left running.
+    Live,
+    /// Its socket refused or was absent: already gone, skipped.
+    Gone,
+    /// Neither: still silent past the bound, or gone past it.
+    Unconfirmed,
+}
+
+/// Verifies one named keeper, then stops it: the subscribe-first
+/// verify, then the frozen stop for keeper-or-gone sockets. The
+/// exchange follows the sessions stop's: bounded connect, `summary`
+/// subscribe first on every connection, then the keeper's own stop
+/// leg. Every wait shares the loop deadline and ends on the stop.
+fn stop_one_verified(hub: &Hub, id: &SessionId, end: Instant) -> KeeperOutcome {
+    let stream = match connect_session(hub, id, end) {
+        Connected::Stream(stream) => stream,
+        Connected::Gone => return KeeperOutcome::Gone,
+        Connected::Unconfirmed => return KeeperOutcome::Unconfirmed,
+    };
+    let Ok(read) = stream.try_clone() else {
+        return KeeperOutcome::Unconfirmed;
+    };
+    let mut read = BufReader::new(read);
+    let subscribe_id = support::mint("c_hub_stop_");
+    let subscribe = serde_json::json!({
+        "id": subscribe_id,
+        "command": "subscribe",
+        "args": { "level": "summary" },
+    });
+    match write_line_bounded(&stream, &subscribe, hub, end) {
+        Wrote::Done => {}
+        Wrote::Gone => return KeeperOutcome::Gone,
+        Wrote::Unconfirmed => return KeeperOutcome::Unconfirmed,
+    }
+    match read_ack(&mut read, &stream, hub, &subscribe_id, end) {
+        // A live session answers its subscribe: left running, never
+        // stopped.
+        Ack::Accepted => return KeeperOutcome::Live,
+        Ack::Rejected => return KeeperOutcome::Unconfirmed,
+        // EOF without an answer is a keeper holding the crashed socket,
+        // or a session gone mid-handshake: the stop leg tells them
+        // apart, as in the sessions stop. (A refused or absent socket
+        // never reaches this read: it is gone at connect.)
+        Ack::Gone => {}
+        Ack::Unconfirmed => return KeeperOutcome::Unconfirmed,
+    }
+    match stop_keeper(hub, id, end) {
+        SessionOutcome::KeeperConfirmed => KeeperOutcome::Confirmed,
+        SessionOutcome::Gone => KeeperOutcome::Gone,
+        SessionOutcome::Confirmed | SessionOutcome::Unconfirmed => KeeperOutcome::Unconfirmed,
+    }
 }
 
 /// Waits for no bind to be in flight, on the loop deadline: a starter

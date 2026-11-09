@@ -449,6 +449,13 @@ pub enum CommandResult {
         #[serde(default, skip_serializing_if = "is_zero")]
         keepers_stopped: usize,
     },
+    /// For `stop_keepers`, over the hub: the keepers that confirmed
+    /// stopped. An empty confirmed set with nothing unconfirmed answers
+    /// accepted zero.
+    StopKeepers {
+        /// The keepers that confirmed stopped.
+        keepers_stopped: usize,
+    },
     /// For `placeholder_env`, over the hub: the hub's captured values for
     /// the requested placeholder variable names. Absent names are omitted,
     /// never `null`, and the values are never logged.

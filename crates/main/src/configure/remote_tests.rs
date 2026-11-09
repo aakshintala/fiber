@@ -2224,6 +2224,92 @@ fn workspace_files_cap_at_10_mib() {
     assert_eq!(fs::read(&fresh).unwrap().len(), limit);
 }
 
+/// A bound socket that serves every connection until dropped: the
+/// live peer answers each subscribe with a status line, the keeper
+/// accepts and closes at once, so every probe sees the same answer.
+struct Served {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Served {
+    fn live(path: &Path) -> Self {
+        Self::serve(path, true)
+    }
+
+    fn keeper(path: &Path) -> Self {
+        Self::serve(path, false)
+    }
+
+    fn serve(path: &Path, answer: bool) -> Self {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            std::thread::Builder::new()
+                .name("seam-keepers-peer".to_owned())
+                .spawn(move || {
+                    use std::io::{BufRead, Write};
+                    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        let Ok((mut stream, _)) = listener.accept() else {
+                            std::thread::park_timeout(std::time::Duration::from_millis(10));
+                            continue;
+                        };
+                        if !answer {
+                            continue;
+                        }
+                        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).is_ok() {
+                            let _ = stream.write_all(b"{\"kind\":\"session_status\"}\n");
+                        }
+                    }
+                })
+                .unwrap()
+        };
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+#[test]
+fn seam_keepers_counts_only_keeper_or_gone() {
+    use hub::KeeperProbe;
+
+    // A hub-shape home: the seam probes the real doors classifier,
+    // never a stub.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let run = home.join("run");
+    fs::create_dir_all(&run).unwrap();
+    // Refused: listed but no listener, so the connect fails.
+    fs::write(run.join("s_0000000000000001"), "stale").unwrap();
+    // A live session answers the probe's subscribe.
+    let _live = Served::live(&run.join("s_0000000000000002"));
+    // A keeper accepts, then closes: EOF before any line.
+    let _keeper = Served::keeper(&run.join("s_0000000000000003"));
+    let seam = Seam::new(home.clone());
+    assert_eq!(
+        seam.keepers(&home, fakes::clock::FakeClock::new()),
+        vec![contract::SessionId("s_0000000000000003".to_owned())]
+    );
+}
+
 #[test]
 fn workspace_files_refuse_non_utf8_and_directories() {
     let dirs = Dirs::new();

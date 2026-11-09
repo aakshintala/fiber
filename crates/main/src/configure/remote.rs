@@ -326,6 +326,24 @@ impl hub::DeviceLogin for DeviceLogin {
         self.login.cancel();
     }
 }
+impl hub::KeeperProbe for Seam {
+    fn keepers(&self, home: &Path, clock: Arc<dyn Clock>) -> Vec<contract::SessionId> {
+        // The feed counts keepers, and the `stop_keepers` command stops
+        // them, through the one classifier: only keeper-or-gone sockets
+        // read as keepers, in id order.
+        doors::classify_sockets(home, clock)
+            .map(|probed| {
+                probed
+                    .into_iter()
+                    .filter_map(|(id, class)| {
+                        matches!(class, doors::SocketClass::KeeperOrGone).then_some(id)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 impl hub::Machine for Seam {
     fn import(
         &self,

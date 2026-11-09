@@ -236,6 +236,7 @@ fn a_running_session_is_found_at_start_and_its_status_relayed_byte_for_byte() {
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the session's status"), line);
     assert_eq!(entry_of(&feed, &id), Some("running"));
     stop_within(&feed);
@@ -252,6 +253,7 @@ fn a_socket_that_appears_after_start_is_found_after_one_scan() {
     // Exactly one period: the scan is due at, not after, it.
     advance_to_scan(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the late session's status"), line);
     stop_within(&feed);
 }
@@ -293,6 +295,7 @@ fn a_delegate_never_reaches_a_subscriber_and_is_not_connected_again() {
     assert!(!lock(&feed.state).tracked.contains_key(&delegate));
     let second = status_line(&top, &status("n2", "/w", "idle", None));
     session.say(&second);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the top-level status"), first);
     assert_eq!(sub.raw("the top-level change"), second);
     // A later scan leaves the delegate alone.
@@ -301,6 +304,14 @@ fn a_delegate_never_reaches_a_subscriber_and_is_not_connected_again() {
     assert!(!child.await_subscribed(2, Duration::ZERO));
     assert_eq!(entry_of(&feed, &delegate), None);
     stop_within(&feed);
+}
+
+/// The snapshot's closing keepers line, empty: no probe is set in
+/// these tests.
+fn assert_keepers_empty(sub: &mut Sub) {
+    let line = sub.next("the keepers line");
+    assert_eq!(line["kind"], "keepers");
+    assert_eq!(line["payload"], json!({"keepers": []}));
 }
 
 /// Runs session 1 to its socket's close, its log ending in `last` and its
@@ -316,6 +327,7 @@ fn leave(
     let (session, line) = running(temp, &id, state);
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the status"), line);
     if killed {
         session.kill();
@@ -393,6 +405,7 @@ fn a_session_whose_directory_is_gone_exited_and_leaves_nothing() {
     let (session, line) = running(&temp, &id, "waiting");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the status"), line);
     session.kill();
     sub.left(&id, "exited");
@@ -419,6 +432,7 @@ fn a_session_that_never_sent_a_status_gets_no_session_left() {
     let other = temp.session(2, "p", "turn_completed");
     let (_session, line) = running(&temp, &other, "idle");
     advance_to_scan(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the next session's status"), line);
     stop_within(&feed);
 }
@@ -461,6 +475,7 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
         .unwrap();
     let mut live = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut live);
     assert!(session.await_subscribed(1, DEADLINE));
     let name = "x".repeat(2_000);
     let count = 1_000;
@@ -518,6 +533,7 @@ fn a_stalled_subscriber_is_dropped_at_the_bound_and_a_live_one_keeps_every_line(
     let stalled_id = feed.subscribe(Arc::clone(&kept), stalled_closer).unwrap();
     // Live: drains each line before the next broadcast, in order.
     let mut live = Sub::new(&feed);
+    assert_keepers_empty(&mut live);
     let count = crate::feed::QUEUE + 2;
     for n in 0..count {
         let session = id(n as u64);
@@ -583,7 +599,16 @@ fn an_oversized_snapshot_arrives_whole_before_later_changes() {
             "snapshot line {n} in order"
         );
     }
-    // A later change follows the snapshot.
+    // The snapshot closes with the keepers line; a later change
+    // follows it.
+    {
+        let mut text = String::new();
+        read.read_line(&mut text)
+            .unwrap_or_else(|_| panic!("never received the keepers line"));
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(line["kind"], "keepers");
+        assert_eq!(line["payload"], json!({"keepers": []}));
+    }
     let later = id(count as u64);
     let line = status_line(&later, &status("n", "/w", "streaming", None));
     feed.on_line(&later, line.as_bytes(), None);
@@ -601,6 +626,8 @@ fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
     let mut first = Sub::new(&feed);
     let mut second = Sub::new(&feed);
     assert_eq!((first.id, second.id), (1, 2));
+    assert_keepers_empty(&mut first);
+    assert_keepers_empty(&mut second);
     let (done_tx, done_rx) = mpsc::channel();
     let ending = Arc::clone(&feed);
     let id = second.id;
@@ -675,6 +702,7 @@ fn a_snapshot_sends_left_sessions_before_running_ones() {
     assert_eq!(first["ts"], 2);
     sub.left(&crashed, "crashed");
     assert_eq!(sub.raw("the running status"), line);
+    assert_keepers_empty(&mut sub);
     stop_within(&feed);
 }
 
@@ -779,6 +807,7 @@ fn recent_answers_a_page_without_running_sessions() {
     let (_session, line) = running(&temp, &id(3), "idle");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the running status"), line);
     let ids = |page: Option<Value>| -> Vec<String> {
         page.unwrap()["sessions"]
@@ -972,6 +1001,10 @@ fn a_repeated_feed_replaces_the_snapshot_without_a_new_writer() {
         next_line(&mut read, "the first acknowledgement")["kind"],
         "command_accepted"
     );
+    assert_eq!(
+        next_line(&mut read, "the first snapshot keepers line")["payload"],
+        json!({"keepers": []})
+    );
     // A session arrives between the two feeds: its change reaches the
     // subscriber at once, and the replacement snapshot carries it again,
     // after the second acknowledgement.
@@ -998,6 +1031,10 @@ fn a_repeated_feed_replaces_the_snapshot_without_a_new_writer() {
     assert_eq!(
         next_line(&mut read, "the replacement snapshot")["session_id"],
         json!(session)
+    );
+    assert_eq!(
+        next_line(&mut read, "the replacement keepers line")["payload"],
+        json!({"keepers": []})
     );
     assert_eq!(Arc::strong_count(&writer), 2, "the test and its writer");
     // A third feed is still acknowledged: the socket never saw EOF.
@@ -1033,6 +1070,7 @@ fn stop_ends_every_thread_and_records_no_crash() {
     let (_session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the status"), line);
     // A writer the test keeps a handle on: its thread drops the other.
     let (kept, _kept_far) = UnixStream::pair().unwrap();
@@ -1074,6 +1112,7 @@ fn stop_returns_when_a_silent_session_stays_open() {
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
     // The status arrived, so the summary reader is tracked and reading.
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the status"), line);
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(&feed);
@@ -1207,6 +1246,7 @@ fn a_session_without_a_log_still_gets_its_crashed_row() {
     session.say(&line);
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the session's status"), line);
     session.close();
     sub.left(&id, "crashed");
@@ -1245,6 +1285,7 @@ fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the status"), line);
     // The followed run exits, and the resumed run has written past its
     // `fiber_exited` already.
@@ -1278,6 +1319,7 @@ fn an_exit_line_from_before_the_follow_is_not_the_followed_runs() {
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the status"), line);
     // The followed run writes no exit line.
     session.close();
@@ -1687,6 +1729,7 @@ fn a_feed_subscriber_alone_gets_no_attention() {
     let waiting = status_line(&id(1), &state_of("waiting", "r1", WALL));
     session.say(&streaming);
     session.say(&waiting);
+    assert_keepers_empty(&mut sub);
     assert_eq!(sub.raw("the streaming status"), streaming);
     assert_eq!(sub.raw("the waiting status"), waiting);
     stop_within(&feed);
@@ -1986,6 +2029,7 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     await_subscribed(1);
     let line = status_line(&id, &status("n", "/w", "idle", None));
     say(&line);
+    assert_keepers_empty(&mut first_sub);
     assert_eq!(first_sub.raw("the session's status"), line);
     assert_eq!(entry_of(&first, &id), Some("running"));
 
@@ -2013,6 +2057,7 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
             "the second hub lists the session"
         );
     }
+    assert_keepers_empty(&mut second_sub);
     assert_eq!(
         second_sub.raw("the session's status on the second hub"),
         again
@@ -2080,4 +2125,80 @@ fn a_repeated_feed_on_a_stalled_subscriber_shuts_its_connection_and_drops_the_re
     feed.unsubscribe(stalled_id);
     stop_within(&feed);
     assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
+}
+
+/// Asserts no line arrives within a beat: the scan published nothing.
+fn assert_silent(sub: &mut Sub, what: &str) {
+    sub.read
+        .get_mut()
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut text = String::new();
+    let read = sub.read.read_line(&mut text);
+    sub.read.get_mut().set_read_timeout(Some(DEADLINE)).unwrap();
+    assert!(
+        read.is_err() || text.is_empty(),
+        "an unexpected line {what}: {text}"
+    );
+}
+
+#[test]
+fn the_snapshot_ends_with_the_probe_keeper_set() {
+    use crate::fake::FakeKeeperProbe;
+
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp.dir);
+    let probe = Arc::new(FakeKeeperProbe::new(vec![]));
+    feed.probe
+        .get_or_init(|| Arc::clone(&probe) as Arc<dyn crate::KeeperProbe>);
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    // Empty still snapshots: one keepers line, always, even empty.
+    let keepers = sub.next("the empty keepers line");
+    assert_eq!(keepers["kind"], "keepers");
+    assert_eq!(keepers["payload"], json!({"keepers": []}));
+    // A scan publishes the new set, and a later subscriber snapshots
+    // it; an unchanged scan publishes nothing.
+    probe.set(vec![SessionId(id(1)), SessionId(id(2))]);
+    advance_to_scan(&feed, &clock);
+    let published = sub.next("the published keepers line");
+    assert_eq!(published["kind"], "keepers");
+    assert_eq!(published["payload"], json!({"keepers": [id(1), id(2)]}));
+    let mut late = Sub::new(&feed);
+    assert_eq!(
+        late.next("the snapshot keepers line")["payload"],
+        json!({"keepers": [id(1), id(2)]})
+    );
+    advance_to_scan(&feed, &clock);
+    assert_silent(&mut sub, "the unchanged scan");
+    stop_within(&feed);
+}
+
+#[test]
+fn a_scan_counts_only_confirmed_keepers_never_answer_excluded() {
+    use crate::fake::FakeKeeperProbe;
+
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp.dir);
+    // Accepts and never answers: the probe never confirms it, so no
+    // scan counts it.
+    let _held = FakeKeeperProbe::hold(&temp.dir, &SessionId(id(2)));
+    let probe = Arc::new(FakeKeeperProbe::new(vec![SessionId(id(1))]));
+    feed.probe
+        .get_or_init(|| Arc::clone(&probe) as Arc<dyn crate::KeeperProbe>);
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    // The subscribe-time snapshot predates the first scan: empty.
+    let snapshotted = sub.next("the snapshot keepers line");
+    assert_eq!(snapshotted["kind"], "keepers");
+    assert_eq!(snapshotted["payload"], json!({"keepers": []}));
+    // The first scan publishes the probe's set; the held socket that
+    // never answers is not in it.
+    let published = sub.next("the published keepers line");
+    assert_eq!(published["kind"], "keepers");
+    assert_eq!(published["payload"], json!({"keepers": [id(1)]}));
+    // A later scan keeps the set: still no line for the held socket.
+    advance_to_scan(&feed, &clock);
+    assert_silent(&mut sub, "the rescan");
+    stop_within(&feed);
 }

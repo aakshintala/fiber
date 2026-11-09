@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,8 +50,8 @@ pub fn session_entries(home: &Path) -> io::Result<Vec<SessionId>> {
     Ok(names)
 }
 
-/// How one `run/` entry answered the probe: the TUI stops keepers
-/// direct and closes sessions, so it must tell them apart with no hub.
+/// How one `run/` entry answered the probe: the hub counts keepers
+/// through this, and stops them through the same exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketClass {
     /// Answered the subscribe write: a live session.
@@ -59,35 +60,69 @@ pub enum SocketClass {
     /// session that died as the probe landed (a stop write then decides:
     /// it fails on a gone socket and stops a keeper).
     KeeperOrGone,
-    /// Refused or absent, or the subscribe write failed: nothing to stop.
+    /// Refused or absent, the subscribe write failed, or the accept
+    /// never answered within its [`PROBE_DEADLINE`] share: nothing to
+    /// count or stop.
     Gone,
 }
 
-/// Classifies every `run/` entry for the TUI: `session_entries` listed
-/// (so `hub` never appears), each probed with one connect, one summary
-/// subscribe write and one first-line read, no waits. A local socket
-/// refuses or accepts at once, and both a session's answer and a
-/// keeper's accept-drop arrive without waiting.
-pub fn classify_sockets(home: &Path) -> io::Result<Vec<(SessionId, SocketClass)>> {
+/// How long one entry's opening exchange (connect, subscribe write,
+/// first read) may take on the passed clock: a socket that accepts and
+/// never answers within its share reads as [`SocketClass::Gone`], never
+/// counted. The scanner thread's own wait, never the serving thread's.
+pub(crate) const PROBE_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Classifies every `run/` entry over one opening exchange each, on the
+/// passed clock: `session_entries` listed (so `hub` never appears),
+/// each probed with one connect, one summary subscribe write and one
+/// first-line read inside its own [`PROBE_DEADLINE`]. A refused or
+/// absent connect, a failed subscribe write, and an accept that never
+/// answers within its share are `Gone`.
+pub fn classify_sockets(
+    home: &Path,
+    clock: Arc<dyn Clock>,
+) -> io::Result<Vec<(SessionId, SocketClass)>> {
     let run = config::run_dir(home);
     let entries = session_entries(home)?;
     Ok(entries
         .into_iter()
         .map(|id| {
-            let class = probe_socket(&run.join(&id.0), &id);
+            let class = probe_socket(&run.join(&id.0), &id, &clock);
             (id, class)
         })
         .collect())
 }
 
-/// One entry's probe: a refused-or-absent connect is gone, as is a
-/// failed subscribe write (a session gone since the listing); EOF or
-/// reset before any line is keeper-or-gone; any first line is a live
-/// session's answer.
-fn probe_socket(path: &Path, id: &SessionId) -> SocketClass {
-    let Ok(mut stream) = UnixStream::connect(path) else {
-        return SocketClass::Gone;
+/// One entry's probe: the exchange shares one [`PROBE_DEADLINE`] on the
+/// passed clock. A refused-or-absent connect is gone, as is a failed
+/// subscribe write (a session gone since the listing); EOF or reset
+/// before any line is keeper-or-gone; any first line is a live
+/// session's answer; an accept still silent past the bound is gone.
+fn probe_socket(path: &Path, id: &SessionId, clock: &Arc<dyn Clock>) -> SocketClass {
+    use rustix::net::{SocketAddrUnix, sockopt};
+
+    let deadline = clock.now() + PROBE_DEADLINE;
+    let fd = match crate::hub::nonblocking_socket() {
+        Ok(fd) => fd,
+        Err(_) => return SocketClass::Gone,
     };
+    let addr = match SocketAddrUnix::new(path) {
+        Ok(addr) => addr,
+        Err(_) => return SocketClass::Gone,
+    };
+    match rustix::net::connect(&fd, &addr) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::INPROGRESS) => {
+            if !crate::hub::wait_ready(fd.as_fd(), PollFlags::OUT, &**clock, deadline, &mut || {}) {
+                return SocketClass::Gone;
+            }
+            if !matches!(sockopt::socket_error(&fd), Ok(Ok(()))) {
+                return SocketClass::Gone;
+            }
+        }
+        Err(_) => return SocketClass::Gone,
+    }
+    let mut stream = UnixStream::from(fd);
     let subscribed = crate::attach::send(
         &mut stream,
         id,
@@ -103,9 +138,23 @@ fn probe_socket(path: &Path, id: &SessionId) -> SocketClass {
         return SocketClass::Gone;
     }
     let mut reader = std::io::BufReader::new(stream);
-    match support::framing::read_line(&mut reader, MAX_LINE) {
-        Ok(Some(_)) => SocketClass::Session,
-        Ok(None) | Err(_) => SocketClass::KeeperOrGone,
+    loop {
+        match support::framing::read_line(&mut reader, MAX_LINE) {
+            Ok(Some(_)) => return SocketClass::Session,
+            Ok(None) => return SocketClass::KeeperOrGone,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if !crate::hub::wait_ready(
+                    reader.get_ref().as_fd(),
+                    PollFlags::IN,
+                    &**clock,
+                    deadline,
+                    &mut || {},
+                ) {
+                    return SocketClass::Gone;
+                }
+            }
+            Err(_) => return SocketClass::KeeperOrGone,
+        }
     }
 }
 

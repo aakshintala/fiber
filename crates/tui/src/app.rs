@@ -1853,6 +1853,7 @@ impl App {
                 }
                 Vec::new()
             }
+            HubEventKind::Keepers => Vec::new(),
             HubEventKind::DeviceChanged | HubEventKind::SessionLeft | HubEventKind::Unknown(_) => {
                 Vec::new()
             }

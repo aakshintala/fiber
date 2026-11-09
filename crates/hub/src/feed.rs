@@ -82,6 +82,9 @@ pub(crate) struct Feed {
     /// set once by the hub serving it: the rejoin sweep collects resumed
     /// sessions there. Never under the state lock.
     pub(crate) on_scan: OnceLock<ScanHook>,
+    /// The keepers of gone sessions on this hub's machine, probed each
+    /// scan: `None` counts none. Set once by the hub serving it.
+    pub(crate) probe: OnceLock<Arc<dyn crate::KeeperProbe>>,
     /// Tests only: parks the listing thread between its `done()` check and
     /// its park in `wait_for`, so the test lands a change inside that
     /// window: no outside seam lands a change deterministically there,
@@ -103,6 +106,9 @@ pub(super) struct SettlePause {
 struct State {
     stopped: bool,
     entries: BTreeMap<String, Entry>,
+    /// The keepers of gone sessions the probe confirmed, in id order:
+    /// published as one `keepers` line on change and in every snapshot.
+    keepers: Vec<SessionId>,
     /// Sessions with a live summary connection: the stream to shut, and
     /// the stop that ends its reader.
     tracked: BTreeMap<String, Tracked>,
@@ -170,6 +176,7 @@ impl Feed {
             scanner: Mutex::new(None),
             on_rewound: OnceLock::new(),
             on_scan: OnceLock::new(),
+            probe: OnceLock::new(),
             #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
@@ -261,8 +268,9 @@ impl Feed {
 
     /// The current snapshot as one line: every left session's last
     /// status and its `session_left`, then every running one's status,
-    /// each group in map order. One queue item however many sessions it
-    /// holds, never truncated: an oversized snapshot still subscribes.
+    /// each group in map order, then the `keepers` line, always, even
+    /// empty. One queue item however many sessions it holds, never
+    /// truncated: an oversized snapshot still subscribes.
     fn snapshot(&self, state: &State) -> Line {
         let mut bytes = Vec::new();
         for (id, entry) in &state.entries {
@@ -276,6 +284,7 @@ impl Feed {
                 bytes.extend_from_slice(&status.line);
             }
         }
+        bytes.extend_from_slice(&self.keepers_line(&state.keepers));
         Arc::from(bytes)
     }
 
@@ -393,8 +402,15 @@ impl Feed {
     }
 
     /// Connects to every session socket in `run/` not already followed,
-    /// and joins the threads that have ended.
+    /// joins the threads that have ended, and recounts the keepers of
+    /// gone sessions. The probe runs with no locks held; the set swaps
+    /// under the state lock and publishes on change.
     fn scan(self: &Arc<Self>) {
+        let keepers = self
+            .probe
+            .get()
+            .map(|probe| probe.keepers(&self.home, Arc::clone(&self.clock)))
+            .unwrap_or_default();
         let names: BTreeSet<String> = fs::read_dir(self.home.join("run"))
             .map(|dir| {
                 dir.filter_map(Result::ok)
@@ -420,9 +436,31 @@ impl Feed {
             self.follow(id);
         }
         self.scanned();
+        self.set_keepers(keepers);
         if let Some(on_scan) = self.on_scan.get() {
             on_scan(&names);
         }
+    }
+
+    /// Swaps in the probe's keeper set: on change, every subscriber gets
+    /// the whole set as one `keepers` line, through the `session_left`
+    /// fanout path. The probe ran with no locks held; the swap and the
+    /// queue hold the state lock only.
+    fn set_keepers(&self, keepers: Vec<SessionId>) {
+        if lock(&self.state).stopped {
+            return;
+        }
+        let line = self.keepers_line(&keepers);
+        let mut state = lock(&self.state);
+        if state.stopped || state.keepers == keepers {
+            return;
+        }
+        state.keepers = keepers;
+        let closers = state.fanout.broadcast(&line);
+        drop(state);
+        // Shut outside the state lock, as the status and left paths do:
+        // a shutdown unblocks a writer holding its mutex.
+        close_connections(closers, UnixStream::shutdown);
     }
 
     fn directory(&self, id: &str) -> Option<(String, PathBuf)> {
@@ -673,6 +711,28 @@ impl Feed {
         };
         // Losing the row loses only the listing; the log stays.
         recent::append(&self.home, &row).unwrap_or(());
+    }
+
+    /// A `keepers` hub line: the whole current set in id order, empty
+    /// when none. Ephemeral: a later set replaces it.
+    fn keepers_line(&self, keepers: &[SessionId]) -> Line {
+        let mut payload = Map::new();
+        payload.insert(
+            "keepers".to_owned(),
+            Value::Array(
+                keepers
+                    .iter()
+                    .map(|id| Value::String(id.0.clone()))
+                    .collect(),
+            ),
+        );
+        let line = HubLine {
+            kind: HubEventKind::Keepers,
+            ts: wall_ms(self.clock.wall()),
+            schema_version: SCHEMA_VERSION,
+            payload,
+        };
+        to_line(&line)
     }
 
     /// A `session_left` hub line for `id`.

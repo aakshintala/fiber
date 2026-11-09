@@ -59,6 +59,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::Call(_)
         | CommandResult::Hooks { .. }
         | CommandResult::Stop { .. } => None,
+        CommandResult::StopKeepers { .. } => None,
     }
 }
 
