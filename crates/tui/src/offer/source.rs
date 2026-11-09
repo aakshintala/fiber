@@ -70,6 +70,11 @@ impl Source {
         )
     }
 
+    /// The `offered_file` command id the source still waits on, if any.
+    pub(super) fn asked_id(&self) -> Option<&str> {
+        self.asked.as_deref()
+    }
+
     pub(crate) fn answered(&mut self, id: &str, text: String) -> bool {
         if self.asked.as_deref() != Some(id) {
             return false;

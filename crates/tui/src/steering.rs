@@ -357,6 +357,7 @@ impl App {
             &session,
             Command::Steer(super::commands::content_arg(&taken)),
         ));
+        self.outbox.wait(&id, super::Waiting::Steer);
         self.outbox.pending.insert(id, (Kind::Steer, taken));
         Effect::Send(lines)
     }

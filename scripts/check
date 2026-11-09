@@ -154,6 +154,8 @@ if [ "$scope" != platform ]; then
     cargo xtask must-succeed
     echo "== budget bounds"
     cargo xtask budget-bounds --base "$base"
+    echo "== narrating comments"
+    cargo xtask narrating-comments --base "$base"
     echo "== grid-read ratchet"
     # A grid read outside a wait observes a frame no wait settled, so the
     # frame it compares can differ from the waited one

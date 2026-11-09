@@ -2600,6 +2600,69 @@ fn a_job_stop_refusal_on_the_open_item_session_settles_its_tag() {
 }
 
 #[test]
+fn steer_answer_reaches_its_handler() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    app.draft.set("focus on the tests");
+    let out = match app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("Enter steers the delegate"),
+    };
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "steer");
+    let id = out[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Steer));
+    // The answer arrives on the delegate's session: the item arm
+    // settles the pending entry, and the wait settles with it, since
+    // the steer owns no handler of its own.
+    app.on_line(session_accepted(DELEGATE_A, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn steer_tag_is_gone_after_answer() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    app.on_line(session_line(
+        "steering_queue",
+        json!({"messages": [
+            {"content": [{"type": "text", "text": "one"}],
+                "source": "driver", "command_id": "c_1"}]}),
+    ));
+    app.select_steering(0);
+    let Effect::Send(lines) = app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()) else {
+        panic!("Enter amends");
+    };
+    assert_eq!(lines.len(), 2);
+    let lines: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert_eq!(lines[1]["command"], "steer");
+    let id = lines[1]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Steer));
+    app.on_line(session_accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
 fn a_job_input_refusal_on_another_session_settles_its_tag() {
     use crate::app::Waiting;
     let mut app = home();

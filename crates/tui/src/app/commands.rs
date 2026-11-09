@@ -943,10 +943,16 @@ impl App {
         self.forget_images();
         self.panel_state.reset();
         self.session_views_reset();
+        // Replacing the whole offer retires its source view's ask, and
+        // dropping the commands id forgets its wait.
+        if let Some(asked) = self.offer.source_asked() {
+            self.outbox.settled(&asked);
+        }
         self.offer = crate::offer::Offer::default();
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
     }
@@ -1037,7 +1043,11 @@ impl App {
     /// and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
-        self.completion.ask_commands(session)
+        let line = self.completion.ask_commands(session);
+        if let Some(id) = &self.completion.commands_id {
+            self.outbox.wait(id, super::outbox::Waiting::Commands);
+        }
+        line
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
@@ -1170,6 +1180,9 @@ impl App {
             };
         }
         let draft = std::mem::take(&mut self.draft);
+        if kind == Kind::Shell {
+            self.outbox.wait(&id, super::outbox::Waiting::Shell);
+        }
         match self.outbox.send(id, kind, draft, line) {
             Some(line) => Effect::Send(vec![line]),
             None => Effect::None,

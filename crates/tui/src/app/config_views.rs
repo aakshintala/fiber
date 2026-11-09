@@ -1121,6 +1121,15 @@ impl App {
                 return self.credential_line(envelope);
             }
             Some(
+                super::Waiting::Find
+                | super::Waiting::Commands
+                | super::Waiting::Model
+                | super::Waiting::Reply
+                | super::Waiting::OfferFile
+                | super::Waiting::Steer
+                | super::Waiting::Shell,
+            ) => {}
+            Some(
                 super::Waiting::Dismiss(_)
                 | super::Waiting::Fork
                 | super::Waiting::RewindHistory

@@ -746,6 +746,7 @@ impl App {
             Command::Steer(args),
         );
         let draft = std::mem::take(&mut self.draft);
+        self.outbox.wait(&id, super::Waiting::Steer);
         self.outbox.pending.insert(id, (Kind::Steer, draft));
         Some(Effect::Send(vec![line]))
     }

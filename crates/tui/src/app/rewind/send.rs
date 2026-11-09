@@ -244,6 +244,13 @@ impl App {
                 });
                 true
             }
+            Waiting::Find
+            | Waiting::Commands
+            | Waiting::Model
+            | Waiting::Reply
+            | Waiting::OfferFile
+            | Waiting::Steer
+            | Waiting::Shell => false,
             Waiting::Dismiss(_)
             | Waiting::RewindHistory
             | Waiting::ChangeWorkspace(_)
@@ -294,6 +301,13 @@ impl App {
     ) -> Option<Vec<String>> {
         match waiting {
             Waiting::Fork => {}
+            Waiting::Find
+            | Waiting::Commands
+            | Waiting::Model
+            | Waiting::Reply
+            | Waiting::OfferFile
+            | Waiting::Steer
+            | Waiting::Shell => return None,
             Waiting::RewindSend => {
                 if !self.rewind.send.matches() {
                     return None;
