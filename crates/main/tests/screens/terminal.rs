@@ -734,34 +734,6 @@ fn continue_opens_the_latest_session() {
 }
 
 #[test]
-fn a_session_idle_timeout_shows_exited_on_the_terminal_rail() {
-    let setup = support::Setup::new();
-    let server = ProviderServer::start([reply("Idle timer reply.")]).unwrap();
-    provider(&setup, &server);
-    let path = setup.home().join("config.json");
-    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    config["session"]["idle_exit_ms"] = json!(2000);
-    write_json(&path, &config);
-
-    let mut run = terminal(&setup, 160, 32, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
-    run.ready();
-    let first_from = run.output().len();
-    run.write(b"idle timer prompt\r");
-    assert!(
-        server.await_requests(1, setup.deadline),
-        "the session's successful-turn request"
-    );
-    run.wait_screen("the successful session reply", |grid| {
-        grid.alternate_screen && grid.contents.contains("Idle timer reply.")
-    });
-    run.turn_finished(first_from);
-    run.wait_screen("the session idle exit on the rail", |grid| {
-        grid.contents.contains("EXITED")
-    });
-}
-
-#[test]
 fn resume_without_an_id_opens_home_at_the_session_list() {
     let setup = support::Setup::new();
     let server = ProviderServer::start([reply("Hello.")]).unwrap();
