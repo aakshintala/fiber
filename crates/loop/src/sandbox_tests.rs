@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::SessionId;
@@ -24,6 +24,16 @@ const DEADLINE: Duration = Duration::from_secs(10);
 fn started_with_tools(
     tools: Vec<(String, Arc<dyn contract::tool::Tool>)>,
     dir: &str,
+) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    started_with_tools_and_rows(tools, dir, None)
+}
+
+/// The same loop with `/tools` publication wired to `rows`: `None`
+/// publishes nothing, as before.
+fn started_with_tools_and_rows(
+    tools: Vec<(String, Arc<dyn contract::tool::Tool>)>,
+    dir: &str,
+    rows: Option<crate::ToolRows>,
 ) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     let home = fakes::TempDir::new(dir);
     let workspace = home.path().join("workspace");
@@ -64,6 +74,10 @@ fn started_with_tools(
         None,
     )
     .unwrap();
+    let looped = match rows {
+        Some(rows) => looped.tool_rows(rows),
+        None => looped,
+    };
     let watched = log.watch();
     (looped, log, watched, home)
 }
@@ -308,6 +322,58 @@ fn started_with_shell(
         vec![("builtin".to_owned(), shell)],
         "fiber-loop-sandbox-seam",
     )
+}
+
+/// The seam's refresh target with `/tools` publication wired to `rows`.
+fn started_with_shell_and_rows(
+    enabled: Arc<std::sync::Mutex<bool>>,
+    rows: crate::ToolRows,
+) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    let shell: Arc<dyn contract::tool::Tool> = Arc::new(ToggleShell {
+        enabled: Arc::clone(&enabled),
+    });
+    started_with_tools_and_rows(
+        vec![("builtin".to_owned(), shell)],
+        "fiber-loop-sandbox-seam",
+        Some(rows),
+    )
+}
+
+/// The `/tools` rows the loop publishes, in publish order: the window
+/// test reads back what `publish_preamble_rows` declared.
+#[derive(Default)]
+struct Rows {
+    declare: Mutex<Vec<(String, Option<contract::events::ToolInfo>)>>,
+}
+
+impl Rows {
+    fn setter(rows: &Arc<Rows>) -> crate::ToolRows {
+        let declare_rows = Arc::clone(rows);
+        crate::ToolRows {
+            declare: Arc::new(move |name, info| {
+                declare_rows
+                    .declare
+                    .lock()
+                    .unwrap()
+                    .push((name.to_owned(), info));
+            }),
+            state: Arc::new(|_, _| {}),
+        }
+    }
+
+    /// The latest published `bytes` for `name`: what a `/tools` read
+    /// would answer right now.
+    fn bytes(&self, name: &str) -> u64 {
+        self.declare
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(seen, _)| seen.as_str() == name)
+            .and_then(|(_, info)| info.as_ref())
+            .expect("the row is declared")
+            .bytes
+    }
 }
 
 fn flipping_apply(
@@ -576,6 +642,75 @@ fn an_interleaved_flip_between_snapshot_and_publish_publishes_fresh_bytes() {
     // (`docs/events.md`, "`preamble_built`": the flip still builds once with reason
     // `sandbox`.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+}
+
+#[test]
+fn rows_answer_old_bytes_after_append_before_publish() {
+    let enabled = Arc::new(std::sync::Mutex::new(false));
+    let rows = Arc::new(Rows::default());
+    let (mut looped, _log, _watched, _home) =
+        started_with_shell_and_rows(Arc::clone(&enabled), Rows::setter(&rows));
+    let (apply, _) = flipping_apply(Arc::clone(&enabled));
+    looped.sandbox_apply = Some(apply);
+    // The first flip completes: its build is appended and its rows are
+    // published, so the second flip's window opens over known sizes.
+    let answer = admit(&mut looped, true);
+    assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+    let on_bytes = rows.bytes("shell");
+    assert!(
+        registered_description(&looped).contains("confined"),
+        "the first flip refreshes"
+    );
+    // Park the second flip's snapshot-to-publish window: the rows must
+    // still answer the first flip's bytes, and the second build must not
+    // be appended yet. The append (`Event::PreambleBuilt` in
+    // `crates/loop/src/turn.rs`) runs before `publish_preamble_rows` on
+    // the same thread with no hook between, so a reader can see the
+    // appended first build with these old rows: that gap is the window
+    // the `/tools` polls race across.
+    let log_dir = looped.log.dir().to_path_buf();
+    crate::turn::pause_sandbox_between_snapshot_and_publish(Box::new({
+        let rows = Arc::clone(&rows);
+        move || {
+            assert_eq!(
+                rows.bytes("shell"),
+                on_bytes,
+                "the rows lag the snapshot until the publish"
+            );
+            let built: Vec<String> = log::read(&log_dir)
+                .expect("the log reads mid-seam")
+                .into_iter()
+                .filter(|line| line.kind() == EventKind::PreambleBuilt)
+                .map(|line| {
+                    line.payload["reason"]
+                        .as_str()
+                        .expect("preamble_built carries a reason")
+                        .to_owned()
+                })
+                .collect();
+            assert_eq!(
+                built,
+                vec!["sandbox".to_owned()],
+                "the second build is not appended before the publish"
+            );
+        }
+    }));
+    let answer = admit(&mut looped, false);
+    assert!(
+        matches!(answer, Ok(None)),
+        "the flip back accepts: {answer:?}"
+    );
+    assert_eq!(
+        preamble_reasons(&looped),
+        vec!["sandbox".to_owned(), "sandbox".to_owned()]
+    );
+    let off_bytes = rows.bytes("shell");
+    assert_ne!(on_bytes, off_bytes, "the flip back republishes");
+    assert!(
+        !registered_description(&looped).contains("confined"),
+        "the flip back refreshes"
+    );
 }
 
 #[test]
