@@ -336,3 +336,7 @@ crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-Ma
 crates/main/tests/support/review_sweep.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/examples/review_sweep.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_host/review_sweep.rs	fiber-477	plan	2026-11-09T04:29:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/snapshots/tui__app__delegate_steering_tests__queued_delegate_steering.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_interrupted_with_steering_queued.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_turn_interrupted.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/snapshots/tui__app__interrupt_tests__delegate_turn_running.snap	fiber-4180	plan	2026-11-09T04:29:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
