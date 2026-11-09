@@ -3558,3 +3558,297 @@ fn settings_search_escape_reread_keeps_result_and_falls_back_without_it() {
     );
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
 }
+
+// Saving, editing and pointing from a search (`docs/tui.md`, "Swapped
+// views", `/settings`, "Search"): every control keeps the contract the
+// tabbed rows have, and the pointer, wheel and reread act on the rows
+// the search shows.
+
+#[test]
+fn settings_search_controls_save_through_the_existing_control_and_layer() {
+    let fake = Fake::new(rows());
+    // A filtered boolean flips in the layer its value comes from: unset
+    // lands on global first.
+    let mut settings = searched(&fake, "hover");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Global, "tui.hover", "false")]);
+    assert_eq!(query_of(&settings), "hover");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.hover".to_owned()))
+    );
+    assert_eq!(settings.said, ["Saved to global config.".to_owned()]);
+    // A filtered fixed row steps in the schema's order, as on its tab.
+    let mut settings = searched(&fake, "thinking");
+    one(&mut settings, &fake, Key::Char(' '));
+    assert_eq!(
+        writes(&fake),
+        [
+            w(Layer::Global, "tui.hover", "false"),
+            w(Layer::Global, "thinking", "\"off\"")
+        ]
+    );
+    assert_eq!(query_of(&settings), "thinking");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("thinking".to_owned()))
+    );
+}
+
+#[test]
+fn settings_search_controls_field_owns_its_keys_until_it_cancels() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "rail");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Field(_)));
+    // Letters, a slash and a paste land in the field, never the query.
+    typed(&mut settings, &fake, "ab");
+    one(&mut settings, &fake, Key::Char('/'));
+    edit(&mut settings, &fake, Edit::Paste("3".to_owned()));
+    let super::Mode::Field(field) = &settings.mode else {
+        panic!("no field");
+    };
+    assert_eq!(field.draft.expand(), "30ab/3");
+    assert_eq!(query_of(&settings), "rail");
+    assert!(fake.writes().is_empty());
+    // The field's own Esc writes nothing and keeps the search: the next
+    // Esc clears it onto the match, as the ruling says.
+    one(&mut settings, &fake, Key::Esc);
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert_eq!(query_of(&settings), "rail");
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.rail.width".to_owned()))
+    );
+}
+
+#[test]
+fn settings_search_controls_list_page_returns_to_the_searched_row() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "sandbox");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(
+        settings
+            .page
+            .as_ref()
+            .is_some_and(|page| page.key == "sandbox.allow_write")
+    );
+    // Esc closes the page, not the search: the row stays focused.
+    one(&mut settings, &fake, Key::Esc);
+    assert!(settings.page.is_none());
+    assert_eq!(query_of(&settings), "sandbox");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+    );
+    // A nested field's Esc steps come before the search's: field, then
+    // page, then the search itself.
+    one(&mut settings, &fake, Key::Enter);
+    one(&mut settings, &fake, Key::Enter);
+    assert!(
+        settings
+            .page
+            .as_ref()
+            .is_some_and(|page| page.field.is_some())
+    );
+    typed(&mut settings, &fake, "p");
+    one(&mut settings, &fake, Key::Esc);
+    assert!(
+        settings
+            .page
+            .as_ref()
+            .is_some_and(|page| page.field.is_none())
+    );
+    one(&mut settings, &fake, Key::Esc);
+    assert!(settings.page.is_none());
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Permissions);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+    );
+    assert!(fake.writes().is_empty());
+}
+
+#[test]
+fn settings_search_controls_model_picker_saves_to_the_captured_row() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "reviewer");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(settings.take_request(), Some(Request::Model));
+    assert_eq!(
+        settings.awaiting,
+        Some(("reviewer.model".to_owned(), Layer::Global))
+    );
+    assert!(fake.writes().is_empty());
+    assert!(settings.choose_model("a/b", &ctx(&fake)));
+    // The reference saves to the captured key and layer, never the
+    // origin row.
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "reviewer.model", "\"a/b\"")]
+    );
+    assert!(!settings.awaiting_model());
+    assert_eq!(query_of(&settings), "reviewer");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("reviewer.model".to_owned()))
+    );
+}
+
+#[test]
+fn settings_search_controls_dash_c_stays_read_only_and_delete_resets_the_match() {
+    let fake = Fake::new(with("tui.hover", value("\"true\""), "-c"));
+    let mut settings = open(&fake);
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "hover");
+    let shown = screen(&settings);
+    assert!(shown.contains("set by -c for this run"), "{shown}");
+    for key in [Key::Enter, Key::Char(' '), Key::Tab] {
+        assert!(matches!(one(&mut settings, &fake, key), Act::Stay));
+    }
+    assert!(matches!(
+        edit(&mut settings, &fake, Edit::Delete),
+        Act::Stay
+    ));
+    assert!(fake.writes().is_empty());
+    assert!(resets(&fake).is_empty());
+    assert!(settings.take_request().is_none());
+    assert!(!settings.awaiting_model());
+    // Delete resets the focused editable match, not the origin row.
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.hover");
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "rail");
+    assert!(matches!(
+        edit(&mut settings, &fake, Edit::Delete),
+        Act::Stay
+    ));
+    assert_eq!(
+        resets(&fake),
+        [(Layer::Project, "tui.rail.width".to_owned(), "30".to_owned())]
+    );
+    assert!(fake.writes().is_empty());
+    assert_eq!(query_of(&settings), "rail");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.rail.width".to_owned()))
+    );
+    // With no match Enter, Space, Tab and Delete change nothing and ask
+    // for no screen.
+    let mut settings = searched(&fake, "zzz");
+    for key in [Key::Enter, Key::Char(' '), Key::Tab] {
+        assert!(matches!(one(&mut settings, &fake, key), Act::Stay));
+    }
+    assert!(matches!(
+        edit(&mut settings, &fake, Edit::Delete),
+        Act::Stay
+    ));
+    assert!(fake.writes().is_empty());
+    assert_eq!(resets(&fake).len(), 1);
+    assert!(settings.take_request().is_none());
+}
+
+#[test]
+fn settings_search_controls_pointer_and_wheel_follow_the_displayed_rows() {
+    use crate::mouse::TargetId;
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "sandbox");
+    // Up and Down move by the displayed matching identity.
+    one(&mut settings, &fake, Key::Down);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("sandbox.enabled".to_owned()))
+    );
+    one(&mut settings, &fake, Key::Up);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+    );
+    // A renderer-produced row click selects that row's identity.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None);
+    let mut targets = Vec::new();
+    render(&frame, area, &mut buf, &mut targets);
+    let y = (0..24u16)
+        .find(|y| {
+            (0..80u16)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("[x] On")
+        })
+        .expect("no Sandbox row");
+    let spot = targets
+        .iter()
+        .find_map(|target| match target.id {
+            TargetId::View(spot @ Spot::Row(_)) if target.rect.y == y => Some(spot),
+            _ => None,
+        })
+        .expect("no click target on the Sandbox row");
+    settings.click(spot, &ctx(&fake));
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("sandbox.enabled".to_owned()))
+    );
+    // With more matches than fit, the wheel scrolls onto another
+    // displayed row: bounded, so a stuck wheel fails instead of hanging.
+    let mut tall = open(&fake);
+    one(&mut tall, &fake, Key::Char('/'));
+    let before = tall.focus.clone();
+    for _ in 0..40 {
+        tall.wheel(false, &ctx(&fake));
+        if tall.focus != before {
+            break;
+        }
+    }
+    assert_ne!(tall.focus, before);
+    assert!(
+        tall.items()
+            .iter()
+            .any(|item| tall.focus_of(*item) == tall.focus)
+    );
+    // A reread and a new size leave no stale target: the same identity
+    // stays focused and drawn with its mark.
+    settings.reread(&ctx(&fake));
+    assert_eq!(query_of(&settings), "sandbox");
+    let shown = drawn(&settings, None, 60, 10);
+    assert!(
+        shown
+            .lines()
+            .any(|line| line.starts_with("›") && line.contains("[x] On")),
+        "{shown}"
+    );
+    assert!(
+        shown
+            .lines()
+            .any(|line| !line.starts_with("›") && line.contains("writable")),
+        "{shown}"
+    );
+}
+
+#[test]
+fn settings_search_controls_ctrl_g_and_plain_keys_keep_their_routes() {
+    let fake = Fake::new(rows());
+    // Ctrl+G over a result opens that row's own file.
+    let mut settings = searched(&fake, "rail");
+    let act = one(&mut settings, &fake, Key::CtrlG);
+    assert!(
+        matches!(&act, Act::OpenLocal(Some(path)) if *path == file(Layer::Project)),
+        "{act:?}"
+    );
+    // Clearing restores ordinary keys: Left and Right switch tabs again.
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(settings.tab, SettingsTab::Notifications);
+    // The theme choices still open outside any search.
+    let themed = Settings::open_theme(&ctx(&fake), Vec::new());
+    assert!(matches!(themed.mode, super::Mode::Choices { .. }));
+}
