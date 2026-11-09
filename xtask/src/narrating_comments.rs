@@ -95,12 +95,15 @@ fn check_diff(diff: &str) -> Result<Vec<String>, String> {
             let start = line
                 .split_whitespace()
                 .nth(2)
-                .and_then(|range| range.strip_prefix('+'))
-                .and_then(|range| range.split(',').next())
-                .ok_or_else(|| format!("{path}: malformed git hunk"))?;
+                .expect("Git hunk header has a new-line range")
+                .strip_prefix('+')
+                .expect("Git hunk new-line range starts with +")
+                .split(',')
+                .next()
+                .expect("Git hunk new-line range has a start");
             new_line = start
                 .parse()
-                .map_err(|_| format!("{path}: malformed git hunk"))?;
+                .expect("Git hunk new-line start is a valid line number");
             in_hunk = true;
         } else if in_hunk {
             if let Some(added) = line.strip_prefix('+') {
