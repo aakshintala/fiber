@@ -792,6 +792,8 @@ fn feedback(
         clock: clock.as_ref(),
         doctor: &|| doctor_report(&home, &workspace, &version, clock.as_ref()),
         diagnostics: &|id| ::cli::diagnostics(&home, clock.as_ref(), id),
+        // The headless door draws no frames, so its ring is empty.
+        frames: &[],
     };
     match ::cli::write(&description, session.as_ref(), &context) {
         Ok(done) => {
@@ -1267,17 +1269,19 @@ fn terminal(
     // the launch directory, so a later `/feedback` reports the same
     // `doctor` output the headless door would.
     let feedback_report = std::sync::Arc::clone(&report);
-    let feedback: tui::WriteFeedback =
-        std::sync::Arc::new(move |description: &str, session: Option<&SessionId>| {
+    let feedback: tui::WriteFeedback = std::sync::Arc::new(
+        move |description: &str, session: Option<&SessionId>, shapes: &[tui::FrameShape]| {
             let context = ::cli::ReportContext {
                 version: &feedback_version,
                 cwd: &feedback_workspace,
                 clock: feedback_clock.as_ref(),
                 doctor: &|| feedback_report(),
                 diagnostics: &|id| ::cli::diagnostics(&feedback_home, feedback_clock.as_ref(), id),
+                frames: shapes,
             };
             ::cli::write(description, session, &context).map_err(|error| error.to_string())
-        });
+        },
+    );
     launch.feedback = Some(feedback);
     // The `/doctor` view's report reader: `cli::doctor`'s capture
     // behind the contract seam, beside the report writer. It shares the
