@@ -159,10 +159,12 @@ fn selecting_a_markdown_prompt_copies_its_rendered_text() {
             now,
         )
     };
-    let _ = fenced_report(MouseKind::Press(Button::Left), top_col, top as u16);
-    let _ = fenced_report(MouseKind::Drag(Button::Left), bottom_col, bottom as u16);
+    let top_row = u16::try_from(top).expect("top edge row");
+    let bottom_row = u16::try_from(bottom).expect("bottom edge row");
+    let _ = fenced_report(MouseKind::Press(Button::Left), top_col, top_row);
+    let _ = fenced_report(MouseKind::Drag(Button::Left), bottom_col, bottom_row);
     assert_eq!(
-        fenced_report(MouseKind::Release, bottom_col, bottom as u16),
+        fenced_report(MouseKind::Release, bottom_col, bottom_row),
         Effect::Copy("let x = 1;".to_owned())
     );
 
