@@ -6,7 +6,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::format::{width, wrap_joined};
-use crate::rows::{Join, RowText, Rows};
+use crate::rows::{RowText, Rows};
 use crate::surface;
 use crate::theme::Role;
 

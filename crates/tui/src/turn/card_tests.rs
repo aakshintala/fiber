@@ -202,10 +202,16 @@ fn a_prompt_renders_markdown_in_its_bubble() {
     let mut code = fresh();
     start(&mut code, "```rust\nlet x = 1;\n```");
     let (rows, _, _) = draw(&code.turns[0], WIDTH, Edges::BOTH);
-    assert!(rows.iter().any(|(line, _)| {
-        line.spans.iter().any(|span| span.style.bg == Some(Role::Code.color()))
-            && line.to_string().contains("let x = 1;")
-    }), "{:?}", shown_rows(&rows));
+    assert!(
+        rows.iter().any(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.style.bg == Some(Role::Code.color()))
+                && line.to_string().contains("let x = 1;")
+        }),
+        "{:?}",
+        shown_rows(&rows)
+    );
 }
 
 #[test]
@@ -1273,12 +1279,25 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
         !shown.iter().any(|row| row.contains("Fiber: quota notice")),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|row| row.contains("1. first")), "{shown:?}");
-    assert!(shown.iter().any(|row| row.contains("2. second")), "{shown:?}");
-    let bold = rows.iter().find(|(line, _)| line.to_string().contains("quota notice"))
+    assert!(
+        shown.iter().any(|row| row.contains("1. first")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("2. second")),
+        "{shown:?}"
+    );
+    let bold = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("quota notice"))
         .expect("formatted Fiber message");
-    assert!(bold.0.spans.iter().any(|span| span.content == "quota notice"
-        && span.style.add_modifier.contains(ratatui::style::Modifier::BOLD)));
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "quota notice"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
     assert_eq!(
         shown.iter().filter(|row| row.starts_with("you ")).count(),
         1,

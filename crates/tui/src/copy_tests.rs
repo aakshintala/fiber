@@ -124,7 +124,11 @@ fn selecting_a_markdown_prompt_copies_its_rendered_text() {
     let mut rows = crate::rows::Rows::default();
     crate::bubble::rows("```rust\nlet x = 1;\n```", width, &mut rows);
     let (drawn, metadata) = rows.into_parts();
-    assert!(drawn.iter().any(|(line, _)| line.to_string().contains("let x = 1;")));
+    assert!(
+        drawn
+            .iter()
+            .any(|(line, _)| line.to_string().contains("let x = 1;"))
+    );
     assert!(metadata.iter().any(|mark| mark.decoration));
 
     let mut linked = attached(width, height);
