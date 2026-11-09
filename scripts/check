@@ -201,8 +201,8 @@ crates/main/tests/providers/model_picker_name.rs 3
 crates/main/tests/providers/quota_fetch_session.rs 9
 crates/main/tests/screen_looks/approval_look.rs 53
 crates/main/tests/screen_looks/ask_user_form_look.rs 66
+crates/main/tests/screen_looks/compaction_look.rs 24
 crates/main/tests/screen_looks/group_look.rs 38
-crates/main/tests/screen_looks/handoff_look.rs 24
 crates/main/tests/screen_looks/hover_look.rs 9
 crates/main/tests/screen_looks/item_views_look.rs 31
 crates/main/tests/screen_looks/light_no_color_look.rs 61

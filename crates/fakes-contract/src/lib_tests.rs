@@ -29,7 +29,7 @@ fn no_note_has_no_note_or_notices() {
     let answer = crate::no_note();
     assert!(matches!(
         answer.outcome,
-        contract::hook::BeforeHandoffOutcome::NoNote
+        contract::hook::BeforeCompactionOutcome::NoNote
     ));
     assert!(answer.notices.is_empty());
 }

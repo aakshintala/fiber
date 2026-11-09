@@ -249,13 +249,13 @@ fn a_write_creates_the_global_file_sorted_with_a_two_space_indent() {
         &setup.workspace(),
         &key(),
         Layer::Global,
-        "handoff.tokens",
+        "compaction.tokens",
         json!(200000),
     )
     .unwrap();
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
-        "{\n  \"handoff\": {\n    \"tokens\": 200000\n  },\n  \"model\": \"openai/gpt-5.6\"\n}\n"
+        "{\n  \"compaction\": {\n    \"tokens\": 200000\n  },\n  \"model\": \"openai/gpt-5.6\"\n}\n"
     );
 }
 
@@ -264,14 +264,14 @@ fn a_write_keeps_every_key_it_does_not_touch() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"zeta": [3, 1], "handoff": {"nudge": false}, "alpha": {"keep": "me"}}"#,
+        r#"{"zeta": [3, 1], "compaction": {"nudge": false}, "alpha": {"keep": "me"}}"#,
     );
     set(
         &setup.home(),
         &setup.workspace(),
         &key(),
         Layer::Global,
-        "handoff.tokens",
+        "compaction.tokens",
         json!(5),
     )
     .unwrap();
@@ -280,7 +280,7 @@ fn a_write_keeps_every_key_it_does_not_touch() {
         concat!(
             "{\n",
             "  \"alpha\": {\n    \"keep\": \"me\"\n  },\n",
-            "  \"handoff\": {\n    \"nudge\": false,\n    \"tokens\": 5\n  },\n",
+            "  \"compaction\": {\n    \"nudge\": false,\n    \"tokens\": 5\n  },\n",
             "  \"zeta\": [\n    3,\n    1\n  ]\n",
             "}\n"
         )
@@ -318,7 +318,7 @@ fn a_write_of_the_wrong_type_is_refused_and_changes_nothing() {
         &setup.workspace(),
         &key(),
         Layer::Global,
-        "handoff.tokens",
+        "compaction.tokens",
         json!("many"),
     )
     .unwrap_err();
@@ -326,7 +326,7 @@ fn a_write_of_the_wrong_type_is_refused_and_changes_nothing() {
     assert_eq!(
         e.to_string(),
         format!(
-            "{}: `handoff.tokens` must be a whole number of zero or more.",
+            "{}: `compaction.tokens` must be a whole number of zero or more.",
             setup.global().display()
         )
     );
@@ -548,8 +548,8 @@ fn removing_an_extension_when_projects_is_not_a_directory_fails() {
 fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
     let setup = Setup::new();
     for (key, value) in [
-        ("handoff", json!(5)),
-        ("handoff", json!({"tokens": "many"})),
+        ("compaction", json!(5)),
+        ("compaction", json!({"tokens": "many"})),
         ("mcp", json!({"servers": {"gh": {"required": "yes"}}})),
         (
             "providers.x",
@@ -573,7 +573,7 @@ fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
         &setup.workspace(),
         &key(),
         Layer::Global,
-        "handoff",
+        "compaction",
         json!({"tokens": 5}),
     )
     .unwrap();
@@ -581,7 +581,7 @@ fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
         setup
             .load(&[])
             .unwrap()
-            .get("handoff.tokens", None)
+            .get("compaction.tokens", None)
             .unwrap()
             .0,
         json!(5)
@@ -721,7 +721,7 @@ fn set_writes_each_layer_s_file_sorted_and_keeps_other_keys() {
         &setup.workspace(),
         &key(),
         Layer::Global,
-        "handoff.tokens",
+        "compaction.tokens",
         json!(200000),
     )
     .unwrap();
@@ -730,7 +730,7 @@ fn set_writes_each_layer_s_file_sorted_and_keeps_other_keys() {
         &setup.workspace(),
         &key(),
         Layer::Project,
-        "handoff.tokens",
+        "compaction.tokens",
         json!(100),
     )
     .unwrap();
@@ -739,14 +739,14 @@ fn set_writes_each_layer_s_file_sorted_and_keeps_other_keys() {
         &setup.workspace(),
         &key(),
         Layer::Repository,
-        "handoff.tokens",
+        "compaction.tokens",
         json!(50),
     )
     .unwrap();
     for file in [setup.global(), setup.project(), setup.repository()] {
         let text = fs::read_to_string(&file).unwrap();
         assert!(
-            text.contains("\"handoff\": {\n    \"tokens\""),
+            text.contains("\"compaction\": {\n    \"tokens\""),
             "{file:?}: {text:?}"
         );
         assert!(text.contains("\"model\": \""), "{file:?}: {text:?}");
@@ -755,7 +755,7 @@ fn set_writes_each_layer_s_file_sorted_and_keeps_other_keys() {
         setup
             .load(&[])
             .unwrap()
-            .get("handoff.tokens", None)
+            .get("compaction.tokens", None)
             .unwrap()
             .0,
         json!(100),
@@ -887,6 +887,38 @@ fn set_of_an_unknown_key_is_refused_and_writes_nothing() {
     }
 }
 
+/// The retired name for `compaction.tokens` gets no alias: `set` refuses
+/// it as it refuses any key this Fiber does not know.
+#[test]
+fn set_of_the_retired_name_is_refused_and_writes_nothing() {
+    for layer in [Layer::Global, Layer::Project, Layer::Repository] {
+        let setup = Setup::new();
+        setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            layer,
+            "handoff.tokens",
+            json!(200000),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{layer:?}");
+        assert!(e.to_string().contains("`handoff.tokens`"), "{layer:?}: {e}");
+        assert!(
+            e.to_string().contains("this Fiber does not know it"),
+            "{layer:?}: {e}"
+        );
+        assert_eq!(
+            fs::read_to_string(setup.global()).unwrap(),
+            r#"{"model": "a/b"}"#,
+            "{layer:?}"
+        );
+        assert!(!setup.project().exists(), "{layer:?}");
+        assert!(!setup.repository().exists(), "{layer:?}");
+    }
+}
+
 #[test]
 fn set_of_a_repo_settable_key_at_the_repository_layer_is_written() {
     let setup = Setup::new();
@@ -895,13 +927,13 @@ fn set_of_a_repo_settable_key_at_the_repository_layer_is_written() {
         &setup.workspace(),
         &key(),
         Layer::Repository,
-        "handoff.tokens",
+        "compaction.tokens",
         json!(50),
     )
     .unwrap();
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(setup.repository()).unwrap()).unwrap();
-    assert_eq!(written, json!({"handoff": {"tokens": 50}}));
+    assert_eq!(written, json!({"compaction": {"tokens": 50}}));
 }
 
 #[test]
@@ -912,7 +944,7 @@ fn set_of_a_wrongly_typed_value_is_config_invalid_and_writes_nothing() {
         &setup.workspace(),
         &key(),
         Layer::Project,
-        "handoff.tokens",
+        "compaction.tokens",
         json!("many"),
     )
     .unwrap_err();
@@ -1074,7 +1106,7 @@ fn set_returns_the_file_it_wrote_for_each_layer() {
             &setup.workspace(),
             &key(),
             layer,
-            "handoff.tokens",
+            "compaction.tokens",
             json!(7),
         )
         .unwrap();

@@ -2060,13 +2060,13 @@ impl contract::hook::Hooks for CountingHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         // Never consulted: a shutdown runs no hook.
-        contract::hook::BeforeHandoffAnswer {
-            outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+        contract::hook::BeforeCompactionAnswer {
+            outcome: contract::hook::BeforeCompactionOutcome::NoNote,
             notices: Vec::new(),
         }
     }

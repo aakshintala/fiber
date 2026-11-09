@@ -106,7 +106,7 @@ fn the_questions_go_to_the_driver() {
     assert_eq!(
         output.control,
         Some(Control {
-            handoff: None,
+            compact: None,
             questions: Some(asked),
             skill: None,
             name: None,

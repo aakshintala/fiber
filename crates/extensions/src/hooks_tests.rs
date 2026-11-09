@@ -4399,7 +4399,7 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
         "before_model_call",
         "after_tool",
         "turn_end",
-        "before_handoff",
+        "before_compaction",
     ];
     let mut last = 0;
     for point in &points {

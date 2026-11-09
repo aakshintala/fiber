@@ -48,7 +48,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Sandbox(..)
         | Delivery::AddDirectory(..)
         | Delivery::Message(..)
-        | Delivery::Handoff(..)
+        | Delivery::Compaction(..)
         | Delivery::Model(..)
         | Delivery::Reload(..)
         | Delivery::McpReconnect(..)

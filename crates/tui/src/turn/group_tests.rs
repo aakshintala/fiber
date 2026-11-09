@@ -3578,7 +3578,7 @@ fn kinds_count_each_built_in_under_its_own_field() {
         call(7, "delegate_models", json!({})),
         call(8, "session_list", json!({})),
         call(9, "session_search", json!({"query": "q"})),
-        call(10, "handoff", json!({})),
+        call(10, "compact", json!({})),
         call(11, "name_session", json!({"name": "n"})),
         call(12, "ask_user", json!({"questions": [{}]})),
     ];

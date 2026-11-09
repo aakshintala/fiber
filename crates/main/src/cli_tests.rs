@@ -1127,14 +1127,14 @@ fn parses_argv_into_its_invocation() {
                 "config",
                 "set",
                 "--project",
-                "handoff.tokens",
+                "compaction.tokens",
                 "200000",
             ],
             Invocation::Run(
                 Some(Commands::Config(ConfigCommands::Set {
                     project: true,
                     repo: false,
-                    key: "handoff.tokens".to_owned(),
+                    key: "compaction.tokens".to_owned(),
                     value: "200000".to_owned(),
                 })),
                 TopLevel::default(),

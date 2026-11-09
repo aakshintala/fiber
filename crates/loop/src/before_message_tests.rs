@@ -236,10 +236,10 @@ impl Hooks for FakeHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -869,7 +869,7 @@ fn the_hook_sees_a_skill_command_before_expansion_and_its_rewrite_expands() {
             InputItem::Message { content, .. } => text_of(content),
             InputItem::ShellCommand { .. }
             | InputItem::Jobs { .. }
-            | InputItem::Handoff { .. }
+            | InputItem::Compaction { .. }
             | InputItem::Rewind { .. }
             | InputItem::Unknown => panic!("a message item"),
         })

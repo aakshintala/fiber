@@ -5,7 +5,7 @@ expression: "drawn(&settings, Some(180_000), 80, 24)"
  Settings  /settings                                                 Esc returns
   key                                value                    layer
   diagnostics.level                  info                     default
-› handoff.tokens                     400000                   default
+› compaction.tokens                  400000                   default
   model                              a/b                      global
   providers.openai.credentials.work  command op               global
   repository_extensions              unset                    default
@@ -24,5 +24,5 @@ expression: "drawn(&settings, Some(180_000), 80, 24)"
 
 
 
-changing handoff.tokens needs a reload (~180k tokens)
+changing compaction.tokens needs a reload (~180k tokens)
 Ctrl+G opens the file

@@ -405,7 +405,7 @@ pub(crate) trait ProcessHostServices: Send + Sync {
 /// wired them. Without a session, service-backed calls fail exactly as
 /// the Lua half fails without one. The session installs the late-bound
 /// services (model, delegate, driver) after the child spawns, before any
-/// session dispatches to it; the mutexes hold that handoff.
+/// session dispatches to it; the mutexes hold that compaction.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct NativeHostServices {
     /// Emits the session-visible lines: exec, status, widget, message,

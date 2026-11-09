@@ -1,4 +1,4 @@
-//! The CONNECT protocol handoff (`docs/testing.md`, "Fakes"): dialling
+//! The CONNECT protocol transfer (`docs/testing.md`, "Fakes"): dialling
 //! within the trust boundary, the bounded 200 handshake, and stop-aware
 //! tunnel transport in both directions. Registration is atomic with the
 //! shutdown check, so a shutdown racing it still reaps both copies.

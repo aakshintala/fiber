@@ -7,7 +7,7 @@
 //! `user` line's text is the person's message, an `assistant` line's text
 //! is the pending reply, a `tool_use`/`toolcall` block is the effectful
 //! call, a result block is stripped, and a `summary`/`compaction` line acts
-//! as a handoff. A line carrying conversation the pinned shapes do not
+//! as a compaction. A line carrying conversation the pinned shapes do not
 //! cover is a hard error naming the file and line, so native-shape drift
 //! surfaces at lane-build time instead of silently skipping calls. Lines
 //! carrying no conversation skip.
@@ -898,7 +898,7 @@ pub(crate) enum NativeLine {
     },
     /// A tool result: stripped before any prompt is built.
     Result,
-    /// A compaction marker: the fold acts as a handoff.
+    /// A compaction marker: the fold acts as a compaction.
     Compaction,
     /// A line carrying no conversation.
     Skip,
@@ -1681,7 +1681,7 @@ impl FileFold {
         self.reviewed.clone()
     }
 
-    /// Acts as a handoff: keeps every earlier person message, each with the
+    /// Acts as a compaction: keeps every earlier person message, each with the
     /// reply it answered, and drops every call. A held reply with no person
     /// message after it answers nothing, so it goes with the calls.
     fn compact(&mut self) {

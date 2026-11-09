@@ -920,9 +920,9 @@ fn a_backwards_clock_contributes_zero() {
         .now()
         .checked_add(Duration::from_secs(1))
         .expect("one second ahead");
-    drop(timed(&diag, Op::TurnHandoff, None, Some(start)).expect("debug guard"));
+    drop(timed(&diag, Op::TurnCompaction, None, Some(start)).expect("debug guard"));
     let line = op_line(&home, "hub.log");
-    assert_eq!(line["data"]["op"], "turn.handoff");
+    assert_eq!(line["data"]["op"], "turn.compaction");
     assert_eq!(line["data"]["ms"], 0);
 }
 
@@ -985,7 +985,7 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (ToolRun, "tool.run"),
         (TurnRequest, "turn.request"),
         (TurnModelCall, "turn.model_call"),
-        (TurnHandoff, "turn.handoff"),
+        (TurnCompaction, "turn.compaction"),
         (McpConnect, "mcp.connect"),
         (JobsStart, "jobs.start"),
         (WorktreeCreate, "worktree.create"),

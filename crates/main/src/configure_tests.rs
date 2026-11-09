@@ -66,14 +66,14 @@ fn settings_reads_the_session_workspaces_project_layer() {
     let dirs = Dirs::new();
     let (one, two) = (dirs.workspace("one"), dirs.workspace("two"));
     assert_ne!(dirs.project_file(&one), dirs.project_file(&two));
-    write(&dirs.project_file(&one), r#"{"handoff": {"tokens": 1}}"#);
-    write(&dirs.project_file(&two), r#"{"handoff": {"tokens": 2}}"#);
+    write(&dirs.project_file(&one), r#"{"compaction": {"tokens": 1}}"#);
+    write(&dirs.project_file(&two), r#"{"compaction": {"tokens": 2}}"#);
     let seam = Seam::new(dirs.home());
-    let first = row(&seam, &one, "handoff.tokens");
+    let first = row(&seam, &one, "compaction.tokens");
     assert_eq!(first.value, Shown::Value("1".to_owned()));
     assert_eq!(first.layer, "project");
     assert_eq!(first.file, Some(dirs.project_file(&one)));
-    let second = row(&seam, &two, "handoff.tokens");
+    let second = row(&seam, &two, "compaction.tokens");
     assert_eq!(second.value, Shown::Value("2".to_owned()));
     assert_eq!(second.scope, WriteScope::Any { repo: true });
 }
@@ -82,7 +82,7 @@ fn settings_reads_the_session_workspaces_project_layer() {
 fn a_default_row_names_no_file() {
     let dirs = Dirs::new();
     let seam = Seam::new(dirs.home());
-    let tokens = row(&seam, &dirs.workspace("one"), "handoff.tokens");
+    let tokens = row(&seam, &dirs.workspace("one"), "compaction.tokens");
     assert_eq!(
         (tokens.value, tokens.layer.as_str(), tokens.file),
         (Shown::Value("400000".to_owned()), "default", None)
@@ -156,7 +156,7 @@ fn set_writes_the_layers_file_as_config_set_does() {
     let one = dirs.workspace("one");
     let seam = Seam::new(dirs.home());
     let saved = seam
-        .set(&one, Layer::Project, "handoff.tokens", "200000")
+        .set(&one, Layer::Project, "compaction.tokens", "200000")
         .unwrap_or_else(|e| panic!("set: {e}"));
     assert_eq!(saved.file, dirs.project_file(&one));
     assert!(saved.warnings.is_empty());
@@ -164,13 +164,16 @@ fn set_writes_the_layers_file_as_config_set_does() {
         &fs::read_to_string(dirs.project_file(&one)).unwrap_or_else(|e| panic!("read: {e}")),
     )
     .unwrap_or_else(|e| panic!("json: {e}"));
-    assert_eq!(written, serde_json::json!({"handoff": {"tokens": 200000}}));
+    assert_eq!(
+        written,
+        serde_json::json!({"compaction": {"tokens": 200000}})
+    );
     let saved = seam
         .set(&one, Layer::Global, "tui.theme", "\"light\"")
         .unwrap_or_else(|e| panic!("set: {e}"));
     assert_eq!(saved.file, dirs.home().join("config.json"));
     let repo = seam
-        .set(&one, Layer::Repository, "handoff.tokens", "5")
+        .set(&one, Layer::Repository, "compaction.tokens", "5")
         .unwrap_or_else(|e| panic!("set: {e}"));
     assert_eq!(repo.file, one.join(".fiber").join("config.json"));
 }
@@ -669,7 +672,7 @@ fn project_key_resolves_once_per_workspace() {
     let workspace = dirs.workspace("one");
     write(
         &dirs.project_file(&workspace),
-        r#"{"handoff": {"tokens": 1}}"#,
+        r#"{"compaction": {"tokens": 1}}"#,
     );
     let seam = Seam::new(dirs.home());
     let first = seam
@@ -688,7 +691,7 @@ fn project_key_resolves_once_per_workspace() {
         .unwrap_or_else(|e| panic!("key: {}", e.message));
     assert_eq!(first, second);
     // The settings read goes through the same cached key.
-    let tokens = row(&seam, &workspace, "handoff.tokens");
+    let tokens = row(&seam, &workspace, "compaction.tokens");
     assert_eq!(tokens.value, Shown::Value("1".to_owned()));
     assert_eq!(tokens.file, Some(before));
 }

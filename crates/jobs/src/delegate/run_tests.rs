@@ -1024,7 +1024,7 @@ fn kills(pgid: u32) -> usize {
 #[test]
 fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
     within(
-        "worktree handoff",
+        "worktree transfer",
         Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             for acknowledged in [true, false] {

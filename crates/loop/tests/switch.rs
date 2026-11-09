@@ -23,7 +23,9 @@ use contract::provider::Provider;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
-use r#loop::{HandoffSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
+use r#loop::{
+    CompactionSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable,
+};
 
 use support::{
     DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, allow, assert_kinds, delivery, kinds,
@@ -88,7 +90,7 @@ fn prepare_to(
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: NEW_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: no_reviewer(),
                 web_search: Hosted::Keep,
                 notice: None,
@@ -493,7 +495,7 @@ fn run_switch_case(case: &Case) {
                     cache_lifetime: CacheLifetime::OneHour,
                     context_window: fakes::CONTEXT_WINDOW,
                     addendum: None,
-                    handoff: HandoffSettings::default(),
+                    compaction: CompactionSettings::default(),
                     reviewer: no_reviewer(),
                     web_search: Hosted::Keep,
                     notice: None,
@@ -1230,7 +1232,7 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: no_reviewer(),
                 web_search: Hosted::Keep,
                 notice: None,
@@ -1276,7 +1278,7 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: Ok(Reviewer {
                 provider: Arc::clone(&review_provider) as Arc<dyn Provider>,
                 model: model_of(NEW_MODEL),
@@ -1378,7 +1380,7 @@ fn prepare_hosted(
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: no_reviewer(),
             web_search: hosted(),
             notice: None,
@@ -1538,7 +1540,7 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: Ok(Reviewer {
                 provider: Arc::clone(&provider) as Arc<dyn Provider>,
                 model: model_of(NEW_MODEL),
@@ -1588,7 +1590,7 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: no_reviewer(),
             web_search: Hosted::Withdraw("web_search".into()),
             notice: None,
@@ -1642,7 +1644,7 @@ fn two_switches_apply_in_order_with_one_rebuild() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: no_reviewer(),
                 web_search: Hosted::Keep,
                 notice: None,
@@ -1709,7 +1711,7 @@ fn a_notice_is_written_after_model_changed() {
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: no_reviewer(),
             web_search: Hosted::Keep,
             notice: Some(Notice {
@@ -1771,7 +1773,7 @@ fn a_switch_replaces_the_reviewer() {
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: Ok(Reviewer {
                 provider: Arc::clone(&review_handle) as Arc<dyn Provider>,
                 model: model_of("fake/reviewer-2"),
@@ -1954,7 +1956,7 @@ fn resume_interleaving_holds_arrival_order() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: no_reviewer(),
                 web_search: Hosted::Keep,
                 notice: None,
@@ -2109,7 +2111,7 @@ fn prepare_reading(provider: Arc<ScriptedProvider>, read: std::path::PathBuf) ->
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             reviewer: no_reviewer(),
             web_search: Hosted::Keep,
             notice: None,
@@ -2267,7 +2269,7 @@ fn prepare_keeping_model(provider: Arc<ScriptedProvider>, seen: Seen) -> Prepare
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: no_reviewer(),
                 web_search: Hosted::Keep,
                 notice: None,
@@ -2594,7 +2596,7 @@ fn run_deferred_case(case: &DeferredCase) {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: no_reviewer(),
                 web_search: Hosted::Keep,
                 notice: None,

@@ -18,7 +18,7 @@ fn the_case_config_is_written_whole_into_a_missing_home() {
     let root = fakes::TempDir::new("fiber-case-config");
     let home = root.path().join("home");
     assert!(!home.exists(), "the home starts missing");
-    let config = json!({"handoff": {"tokens": 5}, "model": "a/b"});
+    let config = json!({"compaction": {"tokens": 5}, "model": "a/b"});
     let file = home.join("config.json");
     write_config(&file, &config).unwrap();
     let text = fs::read_to_string(&file).unwrap();

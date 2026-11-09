@@ -124,7 +124,7 @@ impl SkillSet {
     }
 
     /// The given inputs with the set's current disabled list applied:
-    /// what a fresh opening message collects, so a handoff sizes its
+    /// what a fresh opening message collects, so a compaction sizes its
     /// notices by the model's current window, not the set's startup
     /// snapshot (`docs/system-prompt.md`, "Size").
     pub(crate) fn with_disabled(&self, inputs: &PromptInputs) -> PromptInputs {
