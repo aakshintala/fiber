@@ -119,9 +119,6 @@ pub(crate) fn launch(
         // always safe to delete (`docs/state.md`, `docs/tui.md`,
         // "Images").
         images: config::images_cache_dir(home),
-        // `/close all` probes Fiber home's `run/` for keepers
-        // (`docs/tui.md`, "Quit").
-        fiber_home: Some(home.to_path_buf()),
         // `tui.inline_images`, defaulting to on in the config schema
         // (`docs/configuration.md`, "Keys").
         inline_images: on(config, "tui.inline_images"),

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/quit_tests.rs
-assertion_line: 380
 expression: "screen(&app, 80, 24)"
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -9,18 +8,18 @@ expression: "screen(&app, 80, 24)"
 ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
 w +  2 live · $0.00
-⌥1 ● fix the parse▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄      WORKING  0s ✕
-    s_aaaaaaaaaaaa
-⌥2 ● fix the parse  Close all                             ✕        WORKING  0s ✕
-    s_bbbbbbbbbbbb
-                    2 sessions, 2 working, 0 open elsewhere
+⌥1 ● fix the ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ WORKING  0s ✕
+    s_aaaaaaa
+⌥2 ● fix the   Close all                                       ✕   WORKING  0s ✕
+    s_bbbbbbb
+               2 sessions, 2 working, 0 open elsewhere, 1 keeper
 
-                    › Enter  close all
-                      Esc    cancel
+               › Enter  close all
+                 Esc    cancel
 
-                    click a choice
+               click a choice
 
-                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › /close all█
 ▌

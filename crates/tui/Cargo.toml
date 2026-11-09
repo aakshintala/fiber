@@ -9,7 +9,6 @@ publish.workspace = true
 base64.workspace = true
 contract = { path = "../contract" }
 diag = { path = "../diag" }
-doors = { path = "../doors" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 ignore.workspace = true
 pulldown-cmark.workspace = true

@@ -11,12 +11,7 @@ use contract::clock::Clock;
 use contract::events::ImportedNames;
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
-use std::thread;
-use std::time::Duration;
+use std::path::PathBuf;
 
 /// The launch home opens: local /w with no model chip.
 pub(super) fn launch() -> Launch {
@@ -1454,169 +1449,168 @@ fn quit_close_session_answer_settles_its_tag() {
     assert_eq!(app.outbox.waiting(id), None);
 }
 
-/// A temp fiber home with its `run/` directory: keepers bind under it.
-fn keeper_home() -> (fakes::TempDir, PathBuf) {
-    let home = fakes::TempDir::new("tui-close-all-keepers");
-    let run = home.path().join("run");
-    std::fs::create_dir_all(&run).unwrap();
-    (home, run)
+/// A hub `keepers` line naming `ids`: what the feed publishes for the
+/// keepers of gone sessions.
+fn keepers(ids: &[&str]) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: HubEventKind::Keepers,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"keepers": ids})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
 }
 
-/// The launch probing `home` for keepers.
-fn launch_with(home: &Path) -> Launch {
-    let mut launch = launch();
-    launch.fiber_home = Some(home.to_path_buf());
-    launch
-}
-
-/// Binds `run/<id>` and serves the open probe on a thread: reads the
-/// subscribe line, then shuts down with no answer, like a keeper
-/// dropping a probe line. Returns the listener, which the test keeps:
-/// dropping it before Enter makes the keeper vanish. The channels
-/// fire when the probe landed and the thread ended, both under the
-/// test's deadline.
-fn serve_probe(run: &Path, id: &str) -> (UnixListener, Receiver<()>, Receiver<()>) {
-    let listener = UnixListener::bind(run.join(id)).unwrap();
-    let serving = listener.try_clone().unwrap();
-    let (probed_tx, probed) = mpsc::channel();
-    let (ended_tx, ended) = mpsc::channel();
-    thread::spawn(move || {
-        let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
-        let (stream, _) = serving.accept().unwrap();
-        let timeout = deadline.left().max(Duration::from_millis(1));
-        stream.set_read_timeout(Some(timeout)).unwrap();
-        let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line).unwrap();
-        let line: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(line["command"], "subscribe");
-        probed_tx.send(()).unwrap();
-        stream.shutdown(std::net::Shutdown::Both).unwrap();
-        ended_tx.send(()).unwrap();
-    });
-    (listener, probed, ended)
-}
-
-/// Catches the Enter stop on `listener`: accepts one connection, reads
-/// its line and reports the bytes. The stop needs no answer.
-fn catch_stop(listener: &UnixListener) -> Receiver<Vec<u8>> {
-    let serving = listener.try_clone().unwrap();
-    let (stopped_tx, stopped) = mpsc::channel();
-    thread::spawn(move || {
-        let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
-        let (stream, _) = serving.accept().unwrap();
-        let timeout = deadline.left().max(Duration::from_millis(1));
-        // macOS rejects setsockopt with EINVAL once the writer closed;
-        // the bytes below already arrived then, so the bound is moot.
-        match stream.set_read_timeout(Some(timeout)) {
-            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
-            other => other.unwrap(),
-        }
-        let mut line = Vec::new();
-        BufReader::new(&stream)
-            .read_until(b'\n', &mut line)
-            .unwrap();
-        stopped_tx.send(line).unwrap();
-    });
-    stopped
+/// The `stop_keepers` line among the outgoing commands: the ticket
+/// promises one hub command naming the counted keepers
+/// (`docs/tui.md`, "Quit").
+fn keeper_stops(lines: Vec<Value>) -> Vec<Value> {
+    lines
+        .into_iter()
+        .filter(|line| line["command"] == "stop_keepers")
+        .collect()
 }
 
 #[test]
 fn close_all_with_no_live_session_but_a_keeper_opens_the_question() {
-    let (_home, run) = keeper_home();
-    let (_listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
-    let mut app = home_with(80, 24, launch_with(_home.path()));
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
-    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    // No live session, one keeper the feed counted: no notice, the
+    // question opens instead (`docs/tui.md`, "Quit").
+    assert!(app.on_line(keepers(&["s_cccccccccccccccc"])).is_empty());
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(app.quit_open());
-    // `docs/tui.md`, "Quit": no live session, one keeper of a gone
-    // session; no notice, the question opens instead.
     assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
     assert_eq!(app.notice(), None);
-    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
-    deadline.recv_or_fail(&ended, "keeper saw the probe close");
 }
 
 #[test]
-fn close_all_counts_keepers_beside_sessions() {
-    let (_home, run) = keeper_home();
-    let (_first, first_probed, first_ended) = serve_probe(&run, "s_cccccccccccccccc");
-    let (_second, second_probed, second_ended) = serve_probe(&run, "s_dddddddddddddddd");
-    let mut app = home_with(80, 24, launch_with(_home.path()));
+fn close_all_counts_folded_keepers_beside_sessions() {
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
-    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert!(
+        app.on_line(keepers(&["s_cccccccccccccccc", "s_dddddddddddddddd"]))
+            .is_empty()
+    );
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // `docs/tui.md`, "Quit": one live session working, two keepers.
     assert_eq!(app.close_all_question(), Some((1, 1, 0, 2)));
-    deadline.recv_or_fail(&first_probed, "first keeper read the probe");
-    deadline.recv_or_fail(&second_probed, "second keeper read the probe");
-    deadline.recv_or_fail(&first_ended, "first keeper saw the probe close");
-    deadline.recv_or_fail(&second_ended, "second keeper saw the probe close");
 }
 
 #[test]
-fn enter_stops_the_counted_keeper_direct_and_closes_the_session() {
-    let (_home, run) = keeper_home();
-    let (listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
-    let mut app = home_with(80, 24, launch_with(_home.path()));
+fn enter_sends_the_counted_keepers_stop_and_closes_the_session() {
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
-    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert!(app.on_line(keepers(&["s_cccccccccccccccc"])).is_empty());
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert_eq!(app.close_all_question(), Some((1, 1, 0, 1)));
-    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
-    deadline.recv_or_fail(&ended, "keeper saw the probe close");
-    let stopped = catch_stop(&listener);
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
     // The session closes as today...
     let lines = commands(lines);
-    assert_closes(&closes(lines), &["s_aaaaaaaaaaaaaaaa"]);
-    // ...and the keeper got the frozen stop, byte-identical to what
-    // `fiber stop` writes (`docs/invocation.md`, "Commands and flags").
-    assert_eq!(
-        deadline.recv_or_fail(&stopped, "keeper got its stop"),
-        b"{\"shutdown\":true}\n"
-    );
+    assert_closes(&closes(lines.clone()), &["s_aaaaaaaaaaaaaaaa"]);
+    // ...and the counted keepers go out as one hub command, never as
+    // session lines.
+    let stops = keeper_stops(lines);
+    assert_eq!(stops.len(), 1);
+    assert_eq!(stops[0]["args"], json!({"keepers": ["s_cccccccccccccccc"]}));
     assert_eq!(app.close_all_question(), None);
 }
 
 #[test]
-fn enter_skips_a_keeper_that_vanished() {
-    let (_home, run) = keeper_home();
-    let (listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
-    let mut app = home_with(80, 24, launch_with(_home.path()));
+fn enter_with_only_keepers_sends_only_their_stop() {
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
-    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert!(app.on_line(keepers(&["s_cccccccccccccccc"])).is_empty());
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter stops the keepers");
+    };
+    let lines = commands(lines);
+    assert!(closes(lines.clone()).is_empty());
+    let stops = keeper_stops(lines);
+    assert_eq!(stops.len(), 1);
+    assert_eq!(stops[0]["args"], json!({"keepers": ["s_cccccccccccccccc"]}));
+    assert_eq!(app.close_all_question(), None);
+}
+
+#[test]
+fn enter_with_no_keepers_ever_folded_sends_closes_alone() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    // The hub never named a keeper: the unknown set reads empty, so
+    // the hub gets no `stop_keepers` line at all.
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    assert_closes(&closes(lines.clone()), &["s_aaaaaaaaaaaaaaaa"]);
+    assert!(keeper_stops(lines).is_empty());
+    assert_eq!(app.close_all_question(), None);
+}
+
+#[test]
+fn a_malformed_keepers_line_keeps_the_current_set() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    assert!(app.on_line(keepers(&["s_cccccccccccccccc"])).is_empty());
+    // Not an id: the fold keeps the counted set, never clears it, so
+    // Enter still names the counted keeper, never the malformed one.
+    assert!(app.on_line(keepers(&["nope"])).is_empty());
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
-    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
-    deadline.recv_or_fail(&ended, "keeper saw the probe close");
-    drop(listener);
     let clock = fakes::clock::FakeClock::new();
-    // Nothing still live and the keeper gone: nothing goes out, the
-    // question closes, and the draft stays for a retry.
-    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
-    assert_eq!(app.close_all_question(), None);
-    assert_eq!(app.draft(), "/close all");
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter stops the keepers");
+    };
+    let stops = keeper_stops(commands(lines));
+    assert_eq!(stops.len(), 1);
+    assert_eq!(stops[0]["args"], json!({"keepers": ["s_cccccccccccccccc"]}));
+}
+
+#[test]
+fn a_rejected_keeper_stop_keeps_the_sessions_and_names_the_refusal() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(app.on_line(keepers(&["s_cccccccccccccccc"])).is_empty());
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let stops = keeper_stops(commands(lines));
+    assert_eq!(stops.len(), 1);
+    let id = stops[0]["id"].as_str().unwrap().to_owned();
+    // The hub refuses the keeper stop: the sessions stay open with
+    // the terminal, and the refusal names its sessions and keepers.
+    let message = "Keeper s_cccccccccccccccc is still running.";
+    assert!(app.on_line(rejected(&id, "io_failed", message)).is_empty());
+    assert_eq!(app.notice(), Some(message));
+    assert!(!app.quit_open());
+    assert!(app.session().is_none());
 }
 
 #[test]
 fn close_all_with_the_link_down_and_a_keeper_opens_nothing() {
-    let (_home, run) = keeper_home();
-    let (_listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
-    let mut app = home_with(80, 24, launch_with(_home.path()));
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(app.on_line(keepers(&["s_cccccccccccccccc"])).is_empty());
     app.disconnected();
-    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(!app.quit_open());
     assert_eq!(app.close_all_question(), None);
     assert_eq!(app.draft(), "/close all");
-    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
-    deadline.recv_or_fail(&ended, "keeper saw the probe close");
 }

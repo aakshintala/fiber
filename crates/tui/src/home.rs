@@ -190,11 +190,6 @@ impl LaunchLocation {
 /// shared by local and remote terminals.
 #[derive(Default)]
 pub struct Launch {
-    /// Fiber home: its `run/` holds the local session and keeper
-    /// sockets (`docs/state.md`, "What each part holds"). `None`
-    /// without a boot (jigs, tests that need no keepers), where
-    /// `/close all` counts no keepers.
-    pub fiber_home: Option<PathBuf>,
     /// The launch workspace or listed hub.
     pub location: LaunchLocation,
     /// Where the terminal opens (`docs/invocation.md`, "Commands and flags").
@@ -552,6 +547,11 @@ pub(crate) struct Sessions {
     /// The last row of the unscoped `recent` pages: `page_recent` sends
     /// its id as `before`. Scoped folds and pages never move it.
     unscoped_last: Option<SessionId>,
+    /// The keepers the hub's feed counted, in id order: `None` until the
+    /// first `keepers` line arrives, so no feed reads as no keepers the
+    /// way an old hub's silence does. The close-all question counts and
+    /// stops exactly this set.
+    pub(crate) keepers: Option<Vec<SessionId>>,
 }
 
 /// One project's live sessions and loaded exited sessions, in display order.
@@ -1164,6 +1164,17 @@ pub(crate) fn title(row: &Row) -> String {
     } else {
         crate::text::controls_to_space(&row.name)
     }
+}
+
+/// Whether `id` has a session socket's shape: `s_` plus sixteen
+/// lowercase hex digits, the minted id form the hub counts and stops.
+pub(crate) fn valid_session_id(id: &str) -> bool {
+    id.strip_prefix("s_").is_some_and(|hex| {
+        hex.len() == 16
+            && hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 /// The sessions a hub refusal names: every `s_` and 16 lowercase hex

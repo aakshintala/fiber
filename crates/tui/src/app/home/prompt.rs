@@ -28,15 +28,19 @@ mod hooks_offer;
 
 use delete::DeleteCommand;
 
-/// A stop, delete or import waiting for its answer: a refusal becomes
-/// the row's note and a notice, an accepted delete drops the row, an
-/// accepted import closes the first-run offer.
+/// A stop, delete, keeper-stop or import waiting for its answer: a
+/// refusal becomes the row's note and a notice, an accepted delete
+/// drops the row, an accepted import closes the first-run offer, an
+/// accepted keeper-stop changes nothing.
 pub(super) enum Ask {
     /// A `close` with `now` for a live row: stopping one session.
     Stop(SessionId),
     /// A `delete` for an exited row, cascading when the question named
     /// the sessions it would remove.
     Delete(SessionId),
+    /// A `stop_keepers` for the close-all question's counted keepers: a
+    /// hub command answered once, never resent, never on a session line.
+    Keepers,
     /// An `import` from the first-run offer, carrying its source: a hub command answered
     /// once, never resent, never on a session line.
     Import { source: String },
@@ -578,6 +582,17 @@ impl App {
             // The hub answers an import, never a session line: the
             // hub fold takes the ask there, so nothing lands here.
             Ask::Import { .. } => Vec::new(),
+            // A keeper-stop refusal names its sessions and keepers in
+            // the hub's message, beside the stop refusal above: the
+            // open ones stay, and the terminal stays open with them.
+            Ask::Keepers => {
+                if !accepted {
+                    let code = refusal_code(payload);
+                    let message = refusal(payload);
+                    self.notices.push(code, message);
+                }
+                Vec::new()
+            }
             Ask::Stop(session) => {
                 if !accepted {
                     let code = refusal_code(payload);

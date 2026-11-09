@@ -1322,3 +1322,33 @@ fn status_left_and_remove_leave_every_stored_total_untouched() {
     sessions.remove(&SessionId("s_a".into()));
     assert_eq!(sessions.total_for(PROJECT), Some(5));
 }
+
+#[test]
+fn keeper_ids_hold_sixteen_lowercase_hex_digits() {
+    // docs/tui.md, "Quit": the feed names session ids; anything else
+    // never lands in the counted set.
+    assert!(crate::home::valid_session_id("s_cccccccccccccccc"));
+    assert!(!crate::home::valid_session_id("s_ccccccccccccccc"));
+    assert!(!crate::home::valid_session_id("s_ccccccccccccccccc"));
+    assert!(!crate::home::valid_session_id("s_CCCCCCCCCCCCCCCC"));
+    assert!(!crate::home::valid_session_id("c_cccccccccccccccc"));
+    assert!(!crate::home::valid_session_id(""));
+}
+
+#[test]
+fn the_close_all_count_line_names_all_four_numbers() {
+    // docs/tui.md, "Quit": the keeper part appends, singular then
+    // plural, and no keepers keeps today's string.
+    assert_eq!(
+        crate::home::close_all_count(0, 0, 0, 0),
+        "0 sessions, 0 working, 0 open elsewhere"
+    );
+    assert_eq!(
+        crate::home::close_all_count(2, 1, 0, 1),
+        "2 sessions, 1 working, 0 open elsewhere, 1 keeper"
+    );
+    assert_eq!(
+        crate::home::close_all_count(0, 0, 0, 2),
+        "0 sessions, 0 working, 0 open elsewhere, 2 keepers"
+    );
+}
