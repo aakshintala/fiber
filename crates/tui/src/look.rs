@@ -7,6 +7,8 @@ use std::ops::RangeInclusive;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
+use contract::feedback::ShapeColor;
+
 use crate::theme::{ROLES, Rgb, Role, Shade, Theme};
 
 /// Black text on a light bar: the overlay selection bar's text and the
@@ -441,6 +443,34 @@ impl Look {
             if dimmed {
                 cell.modifier.insert(Modifier::DIM);
             }
+        }
+    }
+
+    /// One painted colour as a shape colour, over every variant, so no
+    /// painted style is dropped on the way into the ring (`docs/tui.md`,
+    /// "Slash commands"). Sits beside the paint pass: only the theme
+    /// and the look hold a `Color` (`docs/tui.md`, "Themes").
+    pub(crate) fn shape_color(color: Color) -> ShapeColor {
+        match color {
+            Color::Reset => ShapeColor::Reset,
+            Color::Black => ShapeColor::Black,
+            Color::Red => ShapeColor::Red,
+            Color::Green => ShapeColor::Green,
+            Color::Yellow => ShapeColor::Yellow,
+            Color::Blue => ShapeColor::Blue,
+            Color::Magenta => ShapeColor::Magenta,
+            Color::Cyan => ShapeColor::Cyan,
+            Color::Gray => ShapeColor::Gray,
+            Color::DarkGray => ShapeColor::DarkGray,
+            Color::LightRed => ShapeColor::LightRed,
+            Color::LightGreen => ShapeColor::LightGreen,
+            Color::LightYellow => ShapeColor::LightYellow,
+            Color::LightBlue => ShapeColor::LightBlue,
+            Color::LightMagenta => ShapeColor::LightMagenta,
+            Color::LightCyan => ShapeColor::LightCyan,
+            Color::White => ShapeColor::White,
+            Color::Indexed(index) => ShapeColor::Indexed(index),
+            Color::Rgb(red, green, blue) => ShapeColor::Rgb(red, green, blue),
         }
     }
 

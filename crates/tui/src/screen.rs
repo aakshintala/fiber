@@ -11,11 +11,11 @@
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell, CellDiffOption, CellWidth};
 use ratatui::layout::{Position, Rect, Size};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use contract::feedback::{
-    FrameShape, RING_DEPTH, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue, encode_cell,
+    FrameShape, RING_DEPTH, ShapeCell, ShapeKind, ShapeRow, StyleValue, encode_cell,
 };
 
 use crate::app::App;
@@ -223,32 +223,6 @@ impl<B: Backend> Drop for Screen<B> {
     }
 }
 
-/// One painted colour as a shape colour, over every variant, so no
-/// painted style is dropped on the way into the ring.
-fn shape_color(color: Color) -> ShapeColor {
-    match color {
-        Color::Reset => ShapeColor::Reset,
-        Color::Black => ShapeColor::Black,
-        Color::Red => ShapeColor::Red,
-        Color::Green => ShapeColor::Green,
-        Color::Yellow => ShapeColor::Yellow,
-        Color::Blue => ShapeColor::Blue,
-        Color::Magenta => ShapeColor::Magenta,
-        Color::Cyan => ShapeColor::Cyan,
-        Color::Gray => ShapeColor::Gray,
-        Color::DarkGray => ShapeColor::DarkGray,
-        Color::LightRed => ShapeColor::LightRed,
-        Color::LightGreen => ShapeColor::LightGreen,
-        Color::LightYellow => ShapeColor::LightYellow,
-        Color::LightBlue => ShapeColor::LightBlue,
-        Color::LightMagenta => ShapeColor::LightMagenta,
-        Color::LightCyan => ShapeColor::LightCyan,
-        Color::White => ShapeColor::White,
-        Color::Indexed(index) => ShapeColor::Indexed(index),
-        Color::Rgb(red, green, blue) => ShapeColor::Rgb(red, green, blue),
-    }
-}
-
 /// One painted cell's style: its foreground, background and underline
 /// colours mapped totally, its modifier bits passed through, and
 /// whether the diff omits it. Reads the symbol only for width and
@@ -259,9 +233,9 @@ fn shape_color(color: Color) -> ShapeColor {
 )]
 fn style_value(cell: &Cell) -> (StyleValue, bool) {
     let style = StyleValue {
-        fg: shape_color(cell.fg),
-        bg: shape_color(cell.bg),
-        ul: shape_color(cell.underline_color),
+        fg: Look::shape_color(cell.fg),
+        bg: Look::shape_color(cell.bg),
+        ul: Look::shape_color(cell.underline_color),
         mods: cell.modifier.bits(),
     };
     let exempt = cell.diff_option == CellDiffOption::Skip || cell.skip;
