@@ -946,15 +946,11 @@ fn keeper_handover_flood_exact_output_and_rss() {
     // Three phases of 24 MiB each: before the crash, while only the keeper
     // is there, and after the resume holds the job.
     let mut second = None;
-    let mut second_gate = None;
     let fixture = fixture_for(|marker, ready, gate| {
         let dir = ready.path().parent().unwrap().to_path_buf();
         let phase_two = dir.join("phase-two");
         fs::create_dir_all(&phase_two).unwrap();
         second = Some(fakes::children::Ready::new(&phase_two));
-        let release = phase_two.join("release.fifo");
-        fakes::fifo(&release);
-        second_gate = Some(release.clone());
         let script = dir.join("flood.sh");
         fs::write(
             &script,
@@ -966,19 +962,17 @@ echo $$ > {first}
 cat {gate}
 while [ $i -lt 48 ]; do emit $i; i=$((i+1)); done
 echo $$ > {next}
-cat {release}
 while [ $i -lt 72 ]; do emit $i; i=$((i+1)); done
 "#,
                 first = ready.path().display(),
                 gate = gate.display(),
                 next = second.as_ref().unwrap().path().display(),
-                release = release.display(),
             ),
         )
         .unwrap();
         format!("sh {} {marker}", script.display())
     });
-    let (second, second_gate) = (second.unwrap(), second_gate.unwrap());
+    let second = second.unwrap();
     let setup = &fixture.setup;
     let id = fixture.id.as_str();
     // Phase one is all in the file before the crash: what a live session was
@@ -1036,7 +1030,6 @@ while [ $i -lt 72 ]; do emit $i; i=$((i+1)); done
     // the bound is on what the flood adds, as for a foreground flood.
     let before = peak_rss_kib(pid);
     // Phase three reaches the file only through the session.
-    release(&second_gate, setup.deadline);
     let ended = session_dir(setup, id);
     fakes::wait_until(
         "the flood's ending",

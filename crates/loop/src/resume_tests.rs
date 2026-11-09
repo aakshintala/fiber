@@ -85,7 +85,7 @@ fn folded() -> (fakes::TempDir, Resumed) {
     (root, folded)
 }
 
-fn orphans(folded: &Resumed) -> Vec<&str> {
+fn orphans(folded: &Resumed) -> std::collections::BTreeSet<&str> {
     folded
         .orphans
         .iter()
@@ -96,10 +96,13 @@ fn orphans(folded: &Resumed) -> Vec<&str> {
 #[test]
 fn keeper_resume_removes_only_the_named_orphan_candidates() {
     let (_root, mut folded) = folded();
-    assert_eq!(orphans(&folded), ["j_run", "j_kept", "j_again"]);
+    assert_eq!(
+        orphans(&folded),
+        ["j_run", "j_kept", "j_again"].into_iter().collect()
+    );
     folded.keep_jobs(&[JobId("j_kept".into())]);
     // The unaccounted job is still orphaned, in its place.
-    assert_eq!(orphans(&folded), ["j_run", "j_again"]);
+    assert_eq!(orphans(&folded), ["j_run", "j_again"].into_iter().collect());
 }
 
 #[test]
@@ -108,9 +111,15 @@ fn keeper_resume_ignores_jobs_that_are_not_candidates() {
     // An ended job, and one the log never had: nothing to remove, nothing
     // invented.
     folded.keep_jobs(&[JobId("j_done".into()), JobId("j_unknown".into())]);
-    assert_eq!(orphans(&folded), ["j_run", "j_kept", "j_again"]);
+    assert_eq!(
+        orphans(&folded),
+        ["j_run", "j_kept", "j_again"].into_iter().collect()
+    );
     folded.keep_jobs(&[]);
-    assert_eq!(orphans(&folded), ["j_run", "j_kept", "j_again"]);
+    assert_eq!(
+        orphans(&folded),
+        ["j_run", "j_kept", "j_again"].into_iter().collect()
+    );
 }
 
 #[test]
@@ -120,7 +129,7 @@ fn keeper_resume_removes_a_reopened_job_once_and_keeps_the_rest_of_the_fold() {
     let window = folded.window;
     let workspace = folded.workspace.clone();
     folded.keep_jobs(&[JobId("j_again".into()), JobId("j_run".into())]);
-    assert_eq!(orphans(&folded), ["j_kept"]);
+    assert_eq!(orphans(&folded), ["j_kept"].into_iter().collect());
     // The replay, the delegate sessions and the window are untouched.
     assert_eq!(folded.end, end);
     assert_eq!(folded.window, window);
@@ -128,5 +137,5 @@ fn keeper_resume_removes_a_reopened_job_once_and_keeps_the_rest_of_the_fold() {
     assert!(folded.delegate_sessions.is_empty());
     // Keeping a job twice is the same as once.
     folded.keep_jobs(&[JobId("j_again".into())]);
-    assert_eq!(orphans(&folded), ["j_kept"]);
+    assert_eq!(orphans(&folded), ["j_kept"].into_iter().collect());
 }

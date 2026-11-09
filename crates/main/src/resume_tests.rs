@@ -279,11 +279,7 @@ fn keeper_schema_version_refusal_names_the_keepers_version() {
     // attaching: the lock is held through the resume's failed open.
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let _keeper = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
-    let mut attached = 0;
-    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
-        attached += 1;
-        7
-    });
+    let (result, attached) = bounded_open(home.path().to_path_buf(), sessions, id.clone(), clock);
     assert_eq!(result.err(), Some(1), "a refused resume exits 1");
     assert_eq!(attached, 0, "a keeper-held lock never attaches");
     // The refusal built from that version names the keeper's version.
@@ -1059,6 +1055,43 @@ fn scripted_keeper(
     })
 }
 
+fn bounded_open(
+    home: PathBuf,
+    sessions: PathBuf,
+    id: SessionId,
+    clock: Arc<dyn Clock>,
+) -> (Result<(Log, Option<crate::keeper::Handover>), i32>, usize) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let (send, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut attached = 0;
+        let opened = super::open_or_attach(&home, &sessions, id, clock, |_| {
+            attached += 1;
+            7
+        });
+        let _ = send.send((opened, attached));
+    });
+    fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&result)
+        .expect("open_or_attach completes before its deadline")
+}
+
+fn bounded_keeper_join(
+    keeper: std::thread::JoinHandle<(Vec<String>, Option<Log>)>,
+) -> (Vec<String>, Option<Log>) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let (send, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(keeper.join());
+    });
+    fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&result)
+        .expect("scripted keeper exits before its deadline")
+        .expect("scripted keeper does not panic")
+}
+
 fn resume_fixture(name: &str) -> (fakes::TempDir, PathBuf, SessionId, PathBuf) {
     let home = fakes::TempDir::under(Path::new("/tmp"), name);
     let sessions = home.path().join("sessions");
@@ -1072,12 +1105,9 @@ fn resume_fixture(name: &str) -> (fakes::TempDir, PathBuf, SessionId, PathBuf) {
 fn a_readable_keeper_hands_over_instead_of_refusing() {
     let (home, sessions, id, dir) = resume_fixture("main-resume-handover");
     let keeper = scripted_keeper(home.path(), &sessions, &id, Keeper::Hands);
-    let mut attached = 0;
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let opened = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
-        attached += 1;
-        7
-    });
+    let (opened, called) = bounded_open(home.path().to_path_buf(), sessions, id.clone(), clock);
+    let attached = called;
     let Ok((log, Some(handover))) = opened else {
         panic!("a keeper that answers as the session hands the log over")
     };
@@ -1089,7 +1119,7 @@ fn a_readable_keeper_hands_over_instead_of_refusing() {
     // The kernel names the keeper's process: here, the scripted one in-process.
     assert_eq!(handover.pid(), support::peer::Pid(std::process::id()));
     drop((log, handover));
-    let (seen, _held) = keeper.join().unwrap();
+    let (seen, _held) = bounded_keeper_join(keeper);
     assert_eq!(
         seen,
         [
@@ -1105,16 +1135,12 @@ fn a_keeper_that_answers_for_another_session_is_refused_and_keeps_the_lock() {
     let keeper = scripted_keeper(home.path(), &sessions, &id, Keeper::Mistaken);
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let before = log::read(&dir).unwrap().len();
-    let mut attached = 0;
-    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
-        attached += 1;
-        7
-    });
+    let (result, attached) = bounded_open(home.path().to_path_buf(), sessions, id.clone(), clock);
     assert_eq!(result.err(), Some(1));
     assert_eq!(attached, 0);
     // Only the identity was asked for: no handover was requested, so the
     // keeper released nothing and still holds the log.
-    let (seen, _held) = keeper.join().unwrap();
+    let (seen, _held) = bounded_keeper_join(keeper);
     assert_eq!(seen, [r#"{"identify":"s_0123456789abcdef"}"#]);
     assert_eq!(log::lock_label(&dir).as_deref(), Some("keeper 4242"));
     assert_eq!(log::read(&dir).unwrap().len(), before, "nothing appended");
@@ -1126,15 +1152,11 @@ fn a_lock_another_writer_takes_first_is_refused_held_and_the_connection_ends() {
     let keeper = scripted_keeper(home.path(), &sessions, &id, Keeper::Beaten);
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let before = log::read(&dir).unwrap().len();
-    let mut attached = 0;
-    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
-        attached += 1;
-        7
-    });
+    let (result, attached) = bounded_open(home.path().to_path_buf(), sessions, id.clone(), clock);
     assert_eq!(result.err(), Some(1));
     assert_eq!(attached, 0, "no attach to a lock only a keeper released");
     // The keeper saw both requests and then the end of the connection.
-    let (seen, _held) = keeper.join().unwrap();
+    let (seen, _held) = bounded_keeper_join(keeper);
     assert_eq!(seen.len(), 2);
     assert_eq!(log::lock_label(&dir).as_deref(), Some("other 1"));
     assert_eq!(log::read(&dir).unwrap().len(), before, "nothing appended");
