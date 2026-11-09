@@ -643,22 +643,6 @@ impl PanelState {
             .and_then(|delegate| delegate.trigger_at)
     }
 
-    /// The automatic compaction point in force for the delegate, by the
-    /// attached rule: the latest own `preamble_built`'s, known off when
-    /// that build sets none, or unknown when the delegate logged no own
-    /// `preamble_built`.
-    pub(crate) fn delegate_compaction_for(&self, session: &SessionId) -> Compaction {
-        self.delegate_for(session)
-            .map(
-                |delegate| match (delegate.window.is_some(), delegate.trigger_at) {
-                    (true, Some(point)) => Compaction::At(point),
-                    (true, None) => Compaction::Off,
-                    (false, _) => Compaction::Unknown,
-                },
-            )
-            .unwrap_or(Compaction::Unknown)
-    }
-
     /// The delegate's latest `preamble_built`'s budget, in US dollars;
     /// `None` when it set none.
     pub(crate) fn delegate_budget_for(&self, session: &SessionId) -> Option<f64> {
