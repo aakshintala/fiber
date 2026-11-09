@@ -7700,6 +7700,8 @@ struct Starting {
     ending: Ending,
     /// Whether `run` got past the start hook.
     started: AtomicBool,
+    /// Whether the emitter asked for paced output when `run` ran.
+    paced: AtomicBool,
 }
 
 impl Starting {
@@ -7709,6 +7711,7 @@ impl Starting {
             deltas,
             ending,
             started: AtomicBool::new(false),
+            paced: AtomicBool::new(false),
         })
     }
 
@@ -7718,6 +7721,10 @@ impl Starting {
 
     fn started(&self) -> bool {
         self.started.load(Ordering::SeqCst)
+    }
+
+    fn paced(&self) -> bool {
+        self.paced.load(Ordering::SeqCst)
     }
 }
 
@@ -7760,6 +7767,7 @@ impl Tool for Starting {
             };
         }
         self.started.store(true, Ordering::SeqCst);
+        self.paced.store(emit.paced(), Ordering::SeqCst);
         for text in &self.deltas {
             emit.emit(&Event::ToolCallDelta(contract::events::Progress {
                 text: Some((*text).to_owned()),
@@ -7894,6 +7902,10 @@ fn a_sent_driver_shell_waits_for_its_start_line_then_streams_to_every_client() {
             assert_eq!(ended.command_id, Some(CommandId("c_bang".into())));
             assert_eq!(ended.command, "sleep 60");
             assert!(stub.started());
+            assert!(
+                stub.paced(),
+                "the driver shell streams paced output as `job_delta` is"
+            );
             let wait = Deadline::after(DEADLINE);
             let mut deltas = 0;
             while deltas < 2 {

@@ -2053,6 +2053,52 @@ fn an_answered_shell_command_marks_new_lines_while_scrolled_up() {
     assert!(app.has_new());
 }
 
+#[test]
+fn a_shell_delta_marks_new_lines_while_scrolled_up() {
+    // A streamed delta changes no card: only the live row marks the
+    // scroll, so `&=` in its place would leave it unmarked.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    for n in 0..30 {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("hi {n}")));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_key(Key::PageUp, now);
+    assert!(app.top().is_some());
+    assert!(!app.has_new());
+    app.on_line(shell_delta("c_1", "a\n"));
+    assert!(app.has_new());
+}
+
+#[test]
+fn a_settled_live_row_marks_new_lines_while_scrolled_up() {
+    // Settling a live row changes no card either: only the settle marks
+    // the scroll, so `&=` in its place would leave it unmarked.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    for n in 0..30 {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("hi {n}")));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_line(shell_delta("c_1", "up\n"));
+    app.on_key(Key::PageUp, now);
+    assert!(app.top().is_some());
+    assert!(!app.has_new());
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "fiber_started",
+        serde_json::json!({"version": "0.0.1", "resumed": true}),
+        None,
+    ));
+    assert!(app.has_new());
+}
+
 /// A hub `stream_closed` for `session`.
 fn stream_closed(session: &str) -> Line {
     Line::Hub(contract::HubLine {

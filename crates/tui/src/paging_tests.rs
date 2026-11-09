@@ -6726,3 +6726,66 @@ fn a_reload_merge_keeps_one_live_row_per_id() {
     assert_eq!(fold.shells.get(3).map(|run| run.0), Some(1 + len));
     assert_eq!(fold.shells.get(3).map(|run| run.1), Some(summaries));
 }
+
+/// A reload merge drops a live row on the first page past the carried
+/// run: below `len` carries, at `len` does not (`*page < len`).
+#[test]
+fn a_reload_merge_drops_a_live_row_on_the_first_dropped_page() {
+    let (mut preview, mut fold, len, _summaries) = carry_edge();
+    for (id, page) in [("c_keep", 0), ("c_seam", len)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shell_runs.insert(
+            id.to_owned(),
+            super::ShellRun::new(preview.shells.len(), crate::shell::live_head(id, true)),
+        );
+        preview.shells_running.insert(preview.shells.len());
+        preview
+            .shells
+            .push((page, 0, crate::shell::live_head(id, true), false));
+    }
+    preview.carry_chain(&mut fold);
+    assert!(
+        !fold.shell_runs.contains_key("c_seam"),
+        "a run on page len is dropped"
+    );
+    assert!(fold.shell_runs.contains_key("c_keep"));
+    assert_eq!(fold.shells.len(), 1);
+}
+
+/// A reload merge renumbers a carried run past a dropped row: the third
+/// row's run moves from slot 2 to slot 1, keeping its new slot.
+#[test]
+fn a_reload_merge_renumbers_a_carried_run_past_a_dropped_row() {
+    let (mut preview, mut fold, _len, _summaries) = carry_edge();
+    for (id, page) in [("c_first", 0), ("c_dropped", 9), ("c_moved", 1)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shell_runs.insert(
+            id.to_owned(),
+            super::ShellRun::new(preview.shells.len(), crate::shell::live_head(id, true)),
+        );
+        preview.shells_running.insert(preview.shells.len());
+        preview
+            .shells
+            .push((page, 0, crate::shell::live_head(id, true), false));
+    }
+    preview.carry_chain(&mut fold);
+    assert!(!fold.shell_runs.contains_key("c_dropped"));
+    assert_eq!(fold.shell_runs.get("c_first").map(|run| run.slot), Some(0));
+    assert_eq!(
+        fold.shell_runs.get("c_moved").map(|run| run.slot),
+        Some(1),
+        "the carried run keeps its new slot, not its old one"
+    );
+    let mut running: Vec<usize> = fold.shells_running.iter().copied().collect();
+    running.sort_unstable();
+    assert_eq!(running, vec![0, 1]);
+    assert_eq!(fold.shells.len(), 2);
+}
