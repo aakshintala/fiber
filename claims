@@ -284,3 +284,5 @@ crates/tui/src/turn/crash_tests.rs	fiber-3896	plan	2026-11-09T08:59:05Z	Amoghs-M
 crates/main/tests/hub_daemon/keeper.rs	fiber-3893	plan	2026-11-09T09:01:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/examples/review.rs	fiber-4460	plan	2026-11-09T09:03:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/support/review.rs	fiber-4460	plan	2026-11-09T09:03:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/stop.rs	fiber-3897	plan	2026-11-09T09:08:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/stop_tests.rs	fiber-3897	plan	2026-11-09T09:08:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
