@@ -1578,6 +1578,74 @@ fn probe_marks_an_accept_drop_peer_keeper_or_gone() {
     peer.ended(&deadline);
 }
 
+/// A reset peer reads as gone without waiting: the reset is an error, not
+/// a silent socket, so the probe answers at once instead of parking to its
+/// bound. Linux-only: macOS delivers a reset as EOF, which reads as gone
+/// through the no-data arm without tripping the error arm.
+#[cfg(target_os = "linux")]
+#[test]
+fn probe_marks_a_reset_peer_keeper_or_gone_without_waiting() {
+    let home = Home::new();
+    let listener = home.listener(ID);
+    let (reset_tx, reset) = mpsc::channel();
+    thread::spawn(move || {
+        let wall = Deadline::after(fakes::deadline::WAIT);
+        listener.set_nonblocking(true).unwrap();
+        let (stream, _) = loop {
+            assert!(
+                !wall.left().is_zero(),
+                "the probe connects within the deadline"
+            );
+            let mut fds = [PollFd::new(&listener, PollFlags::IN)];
+            let bound = rustix::event::Timespec::try_from(wall.left()).unwrap();
+            rustix::event::poll(&mut fds, Some(&bound)).unwrap();
+            // Readiness can race a reset before the accept: poll again
+            // while the deadline holds it.
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(error) => panic!("accepting the probe: {error}"),
+            }
+        };
+        // macOS inherits the listener's nonblocking mode; peer I/O must
+        // block up to its socket timeout, not fail before the client writes.
+        stream.set_nonblocking(false).unwrap();
+        let timeout = wall.left().max(Duration::from_millis(1));
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        // The probe's subscribe synchronizes the reset: the peer answers
+        // nothing after it, so the reset is the first thing the probe's
+        // read can see and no partial line races it.
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let command: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(command["command"], "subscribe");
+        // Dropping a linger-zero socket resets the connection, as in
+        // hub's reset_loopback: the probe's next read fails outright.
+        rustix::net::sockopt::set_socket_linger(&stream, Some(Duration::ZERO)).unwrap();
+        drop(stream);
+        reset_tx.send(()).unwrap_or(());
+    });
+    let wall = Deadline::after(fakes::deadline::WAIT);
+    let (done_tx, done_rx) = mpsc::channel();
+    let path = home.temp.path().to_owned();
+    let clock = home.clock.clone();
+    thread::spawn(move || {
+        done_tx.send(classify_sockets(&path, clock)).unwrap();
+    });
+    // The reset fails the read outright, so the probe answers without
+    // waiting out its bound. A mutant that waits out every error instead
+    // sees the reset's error readiness and reads the same failure again,
+    // parking past the wall deadline and failing here.
+    wall.recv_or_fail(&reset, "the peer resets its socket");
+    assert_eq!(
+        wall.recv_or_fail(&done_rx, "the probe past its reset peer")
+            .unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
+    );
+}
+
 #[test]
 fn probe_marks_an_accept_never_answer_peer_gone_only_past_its_bound() {
     let home = Home::new();

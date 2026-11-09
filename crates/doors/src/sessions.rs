@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -93,13 +93,25 @@ pub fn classify_sockets(
         .collect())
 }
 
+/// Finishes a queued connect: waits out the bind, then reads the
+/// deferred error. Exempt: AF_UNIX connects never return EINPROGRESS on
+/// Linux, so no test stages the wait (as in
+/// `hub::sessions_stop::transport::start_connect`).
+#[cfg_attr(false, mutants::skip)]
+fn finish_connect(fd: BorrowedFd, clock: &Arc<dyn Clock>, deadline: Instant) -> bool {
+    if !crate::hub::wait_ready(fd, PollFlags::OUT, &**clock, deadline, &mut || {}) {
+        return false;
+    }
+    matches!(rustix::net::sockopt::socket_error(fd), Ok(Ok(())))
+}
+
 /// One entry's probe: the exchange shares one [`PROBE_DEADLINE`] on the
 /// passed clock. A refused-or-absent connect is gone, as is a failed
 /// subscribe write (a session gone since the listing); EOF or reset
 /// before any line is keeper-or-gone; any first line is a live
 /// session's answer; an accept still silent past the bound is gone.
 fn probe_socket(path: &Path, id: &SessionId, clock: &Arc<dyn Clock>) -> SocketClass {
-    use rustix::net::{SocketAddrUnix, sockopt};
+    use rustix::net::SocketAddrUnix;
 
     let deadline = clock.now() + PROBE_DEADLINE;
     let fd = match crate::hub::nonblocking_socket() {
@@ -113,10 +125,7 @@ fn probe_socket(path: &Path, id: &SessionId, clock: &Arc<dyn Clock>) -> SocketCl
     match rustix::net::connect(&fd, &addr) {
         Ok(()) => {}
         Err(rustix::io::Errno::INPROGRESS) => {
-            if !crate::hub::wait_ready(fd.as_fd(), PollFlags::OUT, &**clock, deadline, &mut || {}) {
-                return SocketClass::Gone;
-            }
-            if !matches!(sockopt::socket_error(&fd), Ok(Ok(()))) {
+            if !finish_connect(fd.as_fd(), clock, deadline) {
                 return SocketClass::Gone;
             }
         }
