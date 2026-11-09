@@ -221,6 +221,9 @@ fn tokens_estimates_bytes_from_the_first_requests_input() {
 
 #[test]
 fn a_usage_before_any_preamble_leaves_the_next_build_waiting() {
+    // 4455 plant: a deliberate head failure proving the base rerun executes.
+    let plant = 1;
+    assert_eq!(plant, 2, "4455 plant: deliberate head failure");
     assert_tokens(
         vec![
             own_usage("g_0"),
