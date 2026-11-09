@@ -1211,8 +1211,9 @@ fn section(saved: &str) -> String {
 fn frame_shapes_round_trip_through_write_byte_for_byte() {
     // `docs/user/reporting.md`, "Diagnostics" plus `docs/invocation.md`, "Commands and flags"
     // (shapes of the last 20 painted frames, per cell width class/style/blank plus geometry,
-    // at most 20): the section renders the ring deterministically, oldest
-    // first, so the byte-for-byte pin proves the renderer, not an event order.
+    // at most 20; kept frames oldest first, one `frame i/n` block per frame in ring order):
+    // the section renders the ring deterministically in that documented order, so the
+    // byte-for-byte pin proves the renderer, not an event order.
     let root = fakes::TempDir::new("fiber-feedback-shapes");
     let clock = FakeClock::new();
     let doctor = || Ok(DOCTOR.to_owned());

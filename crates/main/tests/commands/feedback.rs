@@ -628,8 +628,8 @@ fn headless_report_holds_the_empty_ring_notice() {
 /// the written shapes section parses back to the seed, proving the
 /// door passes the slice through.
 // `docs/user/reporting.md`, "Diagnostics" plus `docs/invocation.md`, "Commands and flags" (shapes of the last
-// 20 painted frames with scroll state, at most 20): with 2 frames the whole
-// seed survives in order, oldest first.
+// 20 painted frames with scroll state, at most 20; kept frames oldest first, one `frame i/n`
+// block per frame in ring order): with 2 frames the whole seed survives in that documented order.
 #[test]
 fn seeded_shapes_section_parses_back_to_the_seed() {
     use contract::feedback::{FrameShape, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue};

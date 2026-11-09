@@ -125,8 +125,9 @@ fn shape_cells_round_trip_through_the_constructor() {
 #[test]
 fn shape_rows_hold_their_cells_in_order() {
     // `docs/user/reporting.md`, "Diagnostics" (per cell its width class, style and whether
-    // it is blank, plus the frame geometry): a row holds its cells in column
-    // order by construction, so the report can place each cell.
+    // it is blank, plus the frame geometry; kept frames oldest first, one `frame i/n`
+    // block per frame in ring order): a row holds its cells in column order by
+    // construction, so the report can place each cell in that documented per-row order.
     let cells = vec![
         ShapeCell::new(ShapeKind::Content, false, 1),
         ShapeCell::new(ShapeKind::Continuation, false, 1),
