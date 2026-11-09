@@ -1663,6 +1663,67 @@ pub(crate) fn run_synthetic(
     })
 }
 
+/// One embedded synthetic fixture session for the converter's test seam:
+/// the committed session name plus its `events.jsonl` bytes, compiled in
+/// with `include_str!`.
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddedSession {
+    /// The committed session name, stored as the entry source.
+    pub(crate) name: &'static str,
+    /// The session's `events.jsonl` bytes.
+    pub(crate) events: &'static str,
+}
+
+/// The committed `review_person_input/` session name the converter's test
+/// seam accepts beside the consent sessions.
+pub(crate) const PERSON_INPUT_SESSION: &str = "review_person_input";
+
+/// Converts embedded synthetic fixture sessions to unlabelled
+/// synthetic-kind lines: the converter's test seam. Each session stages
+/// under its committed name in a temporary directory and folds through the
+/// shared emission with a synthetic counter, so tests compile the fixture
+/// inputs in (`docs/testing.md`, "What a test asserts") instead of reading
+/// the fixture directories at run time. The name allowlist accepts only
+/// the committed sessions — an untracked name is rejected with an error
+/// naming it, so only the committed sessions convert.
+pub(crate) fn run_synthetic_embedded(
+    sessions: &[EmbeddedSession],
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = ScrubCtx {
+        home: String::new(),
+        owner_name: String::new(),
+        owner_email: String::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    let home = fakes::TempDir::new("fiber-eval-synthetic");
+    for session in sessions {
+        if !is_committed_synthetic_session(session.name) && session.name != PERSON_INPUT_SESSION {
+            return Err(format!(
+                "review: --synthetic takes only the committed fixture sessions, not {}",
+                session.name
+            ));
+        }
+        home.write(&format!("{}/events.jsonl", session.name), session.events);
+        let dir = home.path().join(session.name);
+        let mut seq = 0u64;
+        fold_and_emit(&dir, &ctx, &mut entries, &mut dropped, Some(&mut seq))?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
+    })
+}
+
 /// Pushes one folded native file's entries, dropping entries the closed
 /// classes match and counting unsupported tools.
 fn push_foreign(
