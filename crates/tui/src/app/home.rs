@@ -1031,7 +1031,7 @@ impl App {
                     // and it fills the `/` list now.
                     if accepted
                         && self.gated(&envelope.session_id)
-                        && self.completion.awaits(id)
+                        && answer.waiting == Some(super::Waiting::Commands)
                         && let Some(answer) =
                             super::read!(envelope, contract::events::CommandAccepted)
                     {
