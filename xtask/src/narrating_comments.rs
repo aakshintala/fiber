@@ -95,14 +95,10 @@ fn check_diff(diff: &str) -> Result<Vec<String>, String> {
             new_line = line
                 .split_whitespace()
                 .nth(2)
-                .expect("git emits a new-file hunk range")
-                .strip_prefix('+')
-                .expect("git emits a new-file hunk range")
-                .split(',')
-                .next()
-                .expect("git emits a new-file hunk start")
-                .parse()
-                .expect("git emits a numeric new-file hunk start");
+                .and_then(|range| range.strip_prefix('+'))
+                .and_then(|range| range.split(',').next())
+                .and_then(|start| start.parse().ok())
+                .unwrap_or_default();
             in_hunk = true;
         } else if in_hunk {
             if let Some(added) = line.strip_prefix('+') {
