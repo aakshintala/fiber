@@ -2418,6 +2418,41 @@ fn delegate_fold_close_keeps_figures_but_restores_the_parent() {
     );
 }
 
+/// A second delegate's first line never inherits the first delegate's
+/// cached status: with only its own preamble folded the card reads
+/// unknown figures, never the other session's model, context or spend
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_fold_second_session_starts_from_unknown() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model"));
+    app.on_line(delegate_preamble(DELEGATE, "two/model"));
+    app.close_item();
+    delegate_job(&mut app, "j_2", DELEGATE_B, "fiber");
+    open_job(&mut app, "j_2");
+    let other = contract::SessionId(DELEGATE_B.to_owned());
+    assert_eq!(followed(&app), Some(other.clone()));
+    // Its first line is a preamble: the status stays unknown, not the
+    // first delegate's, while its own preamble's model lands.
+    app.on_line(delegate_preamble(DELEGATE_B, "other/model"));
+    assert_eq!(app.panel_state().delegate_status_for(&other), None);
+    assert_eq!(
+        app.panel_state().delegate_model_for(&other),
+        Some("other/model")
+    );
+    // ... until its own status lands.
+    app.on_line(delegate_status(DELEGATE_B, "/other", "other/model"));
+    assert_eq!(
+        app.panel_state()
+            .delegate_status_for(&other)
+            .map(|status| status.workspace.as_str()),
+        Some("/other")
+    );
+}
+
 /// A resume of the open job clears its stale figures; resuming another
 /// job while its view is open leaves them intact.
 #[test]

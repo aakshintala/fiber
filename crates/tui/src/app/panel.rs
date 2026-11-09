@@ -427,6 +427,12 @@ impl PanelState {
     /// fold, so its lines never touch these figures (`docs/tui.md`,
     /// "Swapped views").
     pub(crate) fn fold_delegate(&mut self, envelope: &Envelope) {
+        // The fold is keyed to one delegate session: a new session starts
+        // from unknown, never inheriting the previous session's cached
+        // status, model, context or spend (`docs/tui.md`, "Swapped views").
+        if self.delegate.session.as_ref() != Some(&envelope.session_id) {
+            self.clear_delegate();
+        }
         self.delegate.session = Some(envelope.session_id.clone());
         let delegate = &mut self.delegate;
         match envelope.kind() {
