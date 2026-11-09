@@ -827,7 +827,7 @@ fn a_cap_sized_output_without_a_marker_parks() {
 /// `output` through `wait` with no deadline and the reader ended (unless
 /// noted): the result is immediate, so no thread or clock advance is
 /// needed. Only the small result is compared, never the megabytes of input
-/// (`docs/testing.md`, "A test on a large value").
+/// (`docs/testing.md`, "What a test asserts").
 fn wait_once(
     output: Vec<u8>,
     reader_done: bool,
