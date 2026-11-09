@@ -74,6 +74,42 @@ fn click(app: &mut App, col: u16, row: u16) -> Effect {
 const TWO_BLOCKS: &str = "```rust\nlet a = 1;\n```\n\ntext\n\n```sh\necho b\n```";
 
 #[test]
+fn selecting_a_markdown_prompt_copies_its_rendered_text() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let (width, height) = (60, 12);
+    let mut app = attached(width, height);
+    app.on_line(turn_started("**bold**"));
+    let row = row_of(&app, width, height, "bold").expect("rendered prompt");
+    let col = crate::view::text(&{
+        let area = ratatui::layout::Rect::new(0, 0, width, height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        buf
+    })
+    .lines()
+    .find_map(|line| {
+        line.find("bold")
+            .map(|at| u16::try_from(at).expect("column"))
+    })
+    .expect("bold column");
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut report = |kind, col| {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), col);
+    let _ = report(MouseKind::Drag(Button::Left), col.saturating_add(3));
+    assert_eq!(
+        report(MouseKind::Release, col.saturating_add(3)),
+        Effect::Copy("bold".to_owned())
+    );
+}
+
+#[test]
 fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
     let mut app = with_reply(40, 20, TWO_BLOCKS);
     let first = row_of(&app, 40, 20, "rust").expect("first header");

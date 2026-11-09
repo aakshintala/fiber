@@ -22,6 +22,38 @@ fn bubbled(text: &str, columns: u16) -> (Vec<String>, Vec<RowText>) {
 }
 
 #[test]
+fn markdown_in_bubbles_keeps_bold_style_and_heading_marker() {
+    let mut out = Rows::default();
+    rows("**bold**\n\n# comment", 40, &mut out);
+    let (lines, marks) = out.into_parts();
+    let bold = lines
+        .iter()
+        .find(|(line, _)| line.to_string().contains("bold"))
+        .expect("bold row");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "bold"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
+    assert!(
+        lines
+            .iter()
+            .any(|(line, _)| line.to_string().contains("# comment"))
+    );
+    assert_eq!(lines.len(), marks.len());
+    let mut code = Rows::default();
+    rows("```rust\nlet x = 1;\n```", 40, &mut code);
+    let (code_rows, _) = code.into_parts();
+    assert!(
+        code_rows
+            .iter()
+            .all(|(line, _)| width(&line.to_string()) <= 28)
+    );
+}
+
+#[test]
 fn bubble_has_edges_and_a_right_stripe() {
     let (shown, texts) = bubbled("hi", 80);
     assert_eq!(shown, ["▄▄▄▄▄", " hi ▐", "▀▀▀▀▀"]);

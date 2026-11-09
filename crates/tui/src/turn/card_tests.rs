@@ -171,6 +171,30 @@ fn turn() -> Option<ratatui::style::Color> {
 }
 
 #[test]
+fn a_prompt_renders_markdown_in_its_bubble() {
+    let mut cards = fresh();
+    start(&mut cards, "**bold**\n\n1. one\n2. two\n\n# comment");
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("1. one")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("# comment")),
+        "{shown:?}"
+    );
+    let bold = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("bold"))
+        .expect("bold");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "bold"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
+}
+
+#[test]
 fn the_card_is_a_turn_surface_below_the_bubble() {
     // The bubble and its time row float above the card after a blank
     // row; the card's body sits on the turn tint between half-block

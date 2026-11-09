@@ -495,19 +495,19 @@ fn message_rows(
         },
     );
     if !text.trim().is_empty() {
-        let style = if muted {
-            Style::default().add_modifier(Modifier::DIM)
+        if out.is_count_only() {
+            let counted = crate::markdown::render_prompt_count(text, width);
+            out.push_counted(counted.rows, &[]);
         } else {
-            Style::default()
-        };
-        for (row, join) in crate::format::wrap_joined(text, usize::from(width)) {
-            out.push_text(
-                (Line::from(Span::styled(row, style)), None),
-                crate::rows::RowText {
-                    join,
-                    ..crate::rows::RowText::plain()
-                },
-            );
+            let rendered = crate::markdown::render_prompt(text, width);
+            for (mut line, mark) in rendered.lines.into_iter().zip(rendered.text) {
+                if muted {
+                    for span in &mut line.spans {
+                        span.style = span.style.add_modifier(Modifier::DIM);
+                    }
+                }
+                out.push_text((line, None), mark);
+            }
         }
     }
     super::images::steer_rows(&message.images, width, layout, out);
