@@ -1329,22 +1329,40 @@ struct EmitCtx<'a> {
     added_folders: &'a [String],
 }
 
+/// Which line the shared emission fold prints for one trigger: the
+/// sampled call's own identity, the synthetic fixture identity, or the
+/// denied call's line with its recorded verdict.
+enum EmitMode<'a> {
+    /// The sampled call's own identity, with no recorded verdict.
+    Sampled,
+    /// The synthetic identity (`{session}-{n}` with a synthetic source
+    /// triple), with no recorded verdict.
+    Synthetic(&'a mut u64),
+    /// The denied call's own id with a sampled source at the deny's seq,
+    /// carrying the deny's recorded verdict.
+    Deny(&'a PermissionResolved),
+}
+
 /// Folds one session directory's chain through the reviewer's renderer and
-/// emits one label-input line per replayable call: the emission both the
-/// sampler and the synthetic converter share. A reviewed call without its
-/// start or its denial carrying its declared effects is unreplayable and
-/// excluded, while the denial-carries-effects case stays replayable through
-/// `started_from` and is kept. With a synthetic `counter` the line takes
-/// the synthetic identity (`{session}-{n}` with a synthetic source triple)
-/// and skips the drop classes, for the committed fixtures that carry no
-/// owner data; without one it takes the sampled identity and drops raw
-/// entries the closed classes match before placeholder substitution.
+/// emits one label-input line per trigger: the emission the sampler, the
+/// synthetic converter and the reviewer-deny mode share. A reviewed call
+/// without its start or its denial carrying its declared effects is
+/// unreplayable and excluded, while the denial-carries-effects case stays
+/// replayable through `started_from` and is kept. With a synthetic
+/// `counter` the line takes the synthetic identity (`{session}-{n}` with
+/// a synthetic source triple) and skips the drop classes, for the
+/// committed fixtures that carry no owner data; without one it takes the
+/// sampled identity and drops raw entries the closed classes match before
+/// placeholder substitution. With `denies_only` the trigger is a reviewer
+/// deny instead of a requested call: reviewer allows and native decisions
+/// emit nothing, and the first deny per action id wins.
 fn fold_and_emit(
     dir: &Path,
     ctx: &ScrubCtx,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
     mut synthetic: Option<&mut u64>,
+    denies_only: bool,
 ) -> Result<(), String> {
     let (workspace, chain) = load_chain(dir)?;
     let index = Driver::index_chain(&chain)?;
@@ -1383,7 +1401,35 @@ fn fold_and_emit(
             envelope.seq,
             &mut asks,
         );
-        if let Event::ToolCallRequested(call) = event
+        if denies_only {
+            if let Event::PermissionResolved(resolved) = event
+                && resolved.decision == Decision::Deny
+                && resolved.decided_by == DecidedBy::Reviewer
+                && let Some(action) = envelope.action_id.clone()
+                && seen.insert(action.0.clone())
+            {
+                let emit = EmitCtx {
+                    dir,
+                    session: &session,
+                    workspace: &workspace,
+                    ctx,
+                    index: &index,
+                    reviewed: &reviewed,
+                    added_folders: &added_folders,
+                };
+                if let Some(indexed) = emit.index.calls.get(&action.0) {
+                    emit_sampled_call(
+                        &emit,
+                        envelope,
+                        &action,
+                        &indexed.call,
+                        lines,
+                        dropped,
+                        EmitMode::Deny(&resolved),
+                    )?;
+                }
+            }
+        } else if let Event::ToolCallRequested(call) = event
             && call.ran_by.is_none()
             && call.provider_item.is_none()
             && let Some(action) = envelope.action_id.clone()
@@ -1398,26 +1444,25 @@ fn fold_and_emit(
                 reviewed: &reviewed,
                 added_folders: &added_folders,
             };
-            emit_sampled_call(
-                &emit,
-                envelope,
-                &action,
-                &call,
-                lines,
-                dropped,
-                synthetic.as_deref_mut(),
-            )?;
+            let mode = match synthetic.as_deref_mut() {
+                Some(counter) => EmitMode::Synthetic(counter),
+                None => EmitMode::Sampled,
+            };
+            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped, mode)?;
         }
     }
     Ok(())
 }
 
-/// Emits one requested call's label-input line, or nothing when the call
-/// is not a review request or is unreplayable. With a `synthetic` emission
-/// counter the line instead takes the synthetic identity (`{session}-{n}`
-/// with a synthetic source triple): the committed fixtures carry no owner
-/// data, so no entry meets a drop class and their controls stay the block
-/// side.
+/// Emits one trigger's label-input line, or nothing when the call is not
+/// a review request or is unreplayable. With the synthetic mode the line
+/// instead takes the synthetic identity (`{session}-{n}` with a synthetic
+/// source triple): the committed fixtures carry no owner data, so no entry
+/// meets a drop class and their controls stay the block side. With the deny
+/// mode the line carries the deny's recorded verdict beside the null
+/// labels. A deny for an action with no indexed request, or with neither a
+/// start nor denial-carried effects, is unreplayable and excluded; a raw
+/// entry the closed classes match is dropped loudly.
 fn emit_sampled_call(
     emit: &EmitCtx<'_>,
     envelope: &contract::Envelope,
@@ -1425,7 +1470,7 @@ fn emit_sampled_call(
     call: &ToolCallRequested,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
-    synthetic: Option<&mut u64>,
+    mode: EmitMode<'_>,
 ) -> Result<(), String> {
     let judged = emit.index.review.contains(&id.0);
     if emit.index.nonreview.contains(&id.0) && !judged {
@@ -1449,9 +1494,9 @@ fn emit_sampled_call(
         },
     };
     let paths = started.declared.paths.clone().unwrap_or_default();
-    let is_synthetic = synthetic.is_some();
-    let (id, source) = match synthetic {
-        Some(counter) => {
+    let is_synthetic = matches!(mode, EmitMode::Synthetic(_));
+    let (id, source, recorded) = match mode {
+        EmitMode::Synthetic(counter) => {
             *counter += 1;
             (
                 format!("{}-{counter}", emit.session),
@@ -1460,15 +1505,30 @@ fn emit_sampled_call(
                     session: emit.session.to_owned(),
                     seq: Some(*counter),
                 },
+                None,
             )
         }
-        None => (
+        EmitMode::Sampled => (
             id.0.clone(),
             Source {
                 kind: SourceKind::Sampled,
                 session: emit.session.to_owned(),
                 seq: envelope.seq.map(|seq| seq.0),
             },
+            None,
+        ),
+        EmitMode::Deny(resolved) => (
+            id.0.clone(),
+            Source {
+                kind: SourceKind::Sampled,
+                session: emit.session.to_owned(),
+                seq: envelope.seq.map(|seq| seq.0),
+            },
+            Some(RecordedVerdict {
+                decision: resolved.decision,
+                reason: resolved.reason.clone(),
+                reviewer: resolved.reviewer.clone(),
+            }),
         ),
     };
     if !is_synthetic && let Some(kind) = drop_kind(&arguments, &paths) {
@@ -1476,7 +1536,7 @@ fn emit_sampled_call(
         return Ok(());
     }
     let snapshot = reviewed_items(emit.reviewed);
-    let entry = foreign_to_label_input(ForeignInput {
+    let mut entry = foreign_to_label_input(ForeignInput {
         id: &id,
         tool: &call.name,
         arguments: &arguments,
@@ -1488,6 +1548,7 @@ fn emit_sampled_call(
         source,
         ctx: emit.ctx,
     });
+    entry.recorded = recorded;
     let line = emit_line(&entry).map_err(|error| {
         format!(
             "review: {}: cannot print call {id}: {error}",
@@ -1516,7 +1577,7 @@ pub(crate) fn run_sampled(
         for workspace in segment_workspaces(dir)? {
             Allowlist::check_chain(std::slice::from_ref(&workspace))?;
         }
-        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None)?;
+        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None, false)?;
     }
     for path in &opts.import_claude {
         let path = Path::new(path);
@@ -1648,7 +1709,14 @@ pub(crate) fn run_synthetic(
     for dir in dirs {
         let dir = check_synthetic_dir(Path::new(dir))?;
         let mut seq = 0u64;
-        fold_and_emit(&dir, &ctx, &mut entries, &mut dropped, Some(&mut seq))?;
+        fold_and_emit(
+            &dir,
+            &ctx,
+            &mut entries,
+            &mut dropped,
+            Some(&mut seq),
+            false,
+        )?;
     }
     for line in &entries {
         writeln!(out, "{line}")
@@ -1709,7 +1777,14 @@ pub(crate) fn run_synthetic_embedded(
         home.write(&format!("{}/events.jsonl", session.name), session.events);
         let dir = home.path().join(session.name);
         let mut seq = 0u64;
-        fold_and_emit(&dir, &ctx, &mut entries, &mut dropped, Some(&mut seq))?;
+        fold_and_emit(
+            &dir,
+            &ctx,
+            &mut entries,
+            &mut dropped,
+            Some(&mut seq),
+            false,
+        )?;
     }
     for line in &entries {
         writeln!(out, "{line}")
@@ -1746,148 +1821,11 @@ fn push_foreign(
     Ok(())
 }
 
-/// Emits one reviewer deny's line: the denied call's action id, the
-/// sampled source at the deny's seq, the reviewed prefix as of the deny,
-/// null labels and the recorded verdict. A deny for an action with no
-/// indexed request, or with neither a start nor denial-carried effects,
-/// is unreplayable and excluded; a raw entry the closed classes match is
-/// dropped loudly.
-fn emit_deny(
-    emit: &EmitCtx<'_>,
-    envelope: &contract::Envelope,
-    id: &ActionId,
-    resolved: &PermissionResolved,
-    lines: &mut Vec<String>,
-    dropped: &mut Vec<String>,
-) -> Result<(), String> {
-    let Some(indexed) = emit.index.calls.get(&id.0) else {
-        return Ok(());
-    };
-    let Some(started) = indexed.started.clone() else {
-        return Ok(());
-    };
-    let arguments = match started.arguments.clone() {
-        Some(rewritten) => Value::Object(rewritten),
-        None => match indexed.call.arguments.clone() {
-            Value::Object(arguments) => Value::Object(arguments),
-            Value::Null
-            | Value::Bool(_)
-            | Value::Number(_)
-            | Value::String(_)
-            | Value::Array(_) => Value::Object(Map::new()),
-        },
-    };
-    let paths = started.declared.paths.clone().unwrap_or_default();
-    if let Some(kind) = drop_kind(&arguments, &paths) {
-        dropped.push(format!("DROP {} id={}", kind.name(), id.0));
-        return Ok(());
-    }
-    let snapshot = reviewed_items(emit.reviewed);
-    let mut entry = foreign_to_label_input(ForeignInput {
-        id: &id.0,
-        tool: &indexed.call.name,
-        arguments: &arguments,
-        declared: &started.declared,
-        hosts: None,
-        reviewed: snapshot,
-        workspace: emit.workspace,
-        added_folders: emit.added_folders,
-        source: Source {
-            kind: SourceKind::Sampled,
-            session: emit.session.to_owned(),
-            seq: envelope.seq.map(|seq| seq.0),
-        },
-        ctx: emit.ctx,
-    });
-    entry.recorded = Some(RecordedVerdict {
-        decision: Decision::Deny,
-        reason: resolved.reason.clone(),
-        reviewer: resolved.reviewer.clone(),
-    });
-    let line = emit_line(&entry).map_err(|error| {
-        format!(
-            "review: {}: cannot print call {}: {error}",
-            emit.dir.display(),
-            id.0,
-        )
-    })?;
-    lines.push(line);
-    Ok(())
-}
-
-/// Folds one session directory's chain through the reviewer's renderer
-/// and emits one unlabelled line per reviewer deny at the deny's
-/// position: allows, person and other native decisions emit nothing, and
-/// the first deny per action id wins. The fold shares the sampler's
-/// renderer, index and drop path; unlike the sampler it applies no cap.
-fn fold_denies_and_emit(
-    dir: &Path,
-    ctx: &ScrubCtx,
-    lines: &mut Vec<String>,
-    dropped: &mut Vec<String>,
-) -> Result<(), String> {
-    let (workspace, chain) = load_chain(dir)?;
-    let index = Driver::index_chain(&chain)?;
-    let session = dir
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let mut reviewed: Vec<Reviewed> = Vec::new();
-    let mut asks = PendingAsks::default();
-    let mut added_folders: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut summary = false;
-    for (position, item) in chain.iter().enumerate() {
-        let envelope = &item.envelope;
-        let event = Event::from_envelope(envelope).map_err(|error| {
-            format!(
-                "review: {} {}: a {} payload that does not parse: {error}",
-                item.dir.display(),
-                describe(envelope, position),
-                envelope.kind().name(),
-            )
-        })?;
-        let Some(event) = event else {
-            continue;
-        };
-        if r#loop::summary_skips(&mut summary, &event) {
-            continue;
-        }
-        if let Event::DirectoryAdded(added) = &event {
-            added_folders.push(added.path.clone());
-        }
-        render_reviewed(
-            &mut reviewed,
-            &event,
-            envelope.action_id.as_ref(),
-            envelope.seq,
-            &mut asks,
-        );
-        if let Event::PermissionResolved(resolved) = event
-            && resolved.decision == Decision::Deny
-            && resolved.decided_by == DecidedBy::Reviewer
-            && let Some(action) = envelope.action_id.clone()
-            && seen.insert(action.0.clone())
-        {
-            let emit = EmitCtx {
-                dir,
-                session: &session,
-                workspace: &workspace,
-                ctx,
-                index: &index,
-                reviewed: &reviewed,
-                added_folders: &added_folders,
-            };
-            emit_deny(&emit, envelope, &action, &resolved, lines, dropped)?;
-        }
-    }
-    Ok(())
-}
-
 /// Runs the reviewer-deny emission: one unlabelled sampled-kind line per
 /// reviewer deny in the session directories, unsampled and uncapped, with
-/// the recorded verdict beside the null labels. Every history segment's
-/// workspace passes the closed allowlist before anything is emitted.
+/// the recorded verdict beside the null labels. The shared fold runs in
+/// deny mode; every history segment's workspace passes the closed
+/// allowlist before anything is emitted.
 pub(crate) fn run_reviewer_denies(
     dirs: &[String],
     opts: &SampleOpts,
@@ -1902,7 +1840,7 @@ pub(crate) fn run_reviewer_denies(
         for workspace in segment_workspaces(dir)? {
             Allowlist::check_chain(std::slice::from_ref(&workspace))?;
         }
-        fold_denies_and_emit(dir, &ctx, &mut entries, &mut dropped)?;
+        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None, true)?;
     }
     for line in &entries {
         writeln!(out, "{line}")

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use contract::events::{Decision, ReviewerRef};
 use contract::shapes::{DeclaredEffects, Effect};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// How many label inputs the set keeps: the first entries in emission order.
@@ -151,14 +152,18 @@ pub(crate) struct Source {
 
 /// A reviewer decision recorded beside a set line, so the sweep can
 /// report disagreement per line: the decision, the reason it carried and
-/// the reviewer that decided.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// the reviewer that decided. The serde shape is the wire shape, so the
+/// set-line emitter and parser round-trip through `to_value`/`from_value`
+/// (`Decision` already serializes as `allow`/`deny`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RecordedVerdict {
     /// The recorded decision.
     pub decision: Decision,
     /// Why, in words, when the decision carried one.
+    #[serde(default)]
     pub reason: Option<String>,
     /// The reviewer that decided, when the decision named one.
+    #[serde(default)]
     pub reviewer: Option<ReviewerRef>,
 }
 
@@ -411,85 +416,29 @@ fn set_line_value(entry: &SetLine) -> Value {
     Value::Object(map)
 }
 
-/// Prints one recorded reviewer verdict: the decision word, the reason
-/// or null, and the reviewer object or null.
+/// Prints one recorded reviewer verdict through its serde shape: the
+/// decision word, the reason or null, and the reviewer object or null.
 fn recorded_value(recorded: &RecordedVerdict) -> Value {
-    let decision = match recorded.decision {
-        Decision::Allow => "allow",
-        Decision::Deny => "deny",
-    };
-    let reviewer = match &recorded.reviewer {
-        Some(reviewer) => {
-            let mut map = Map::new();
-            map.insert("model".to_owned(), Value::String(reviewer.model.clone()));
-            map.insert("stage".to_owned(), Value::Number(reviewer.stage.into()));
-            Value::Object(map)
-        }
-        None => Value::Null,
-    };
-    let mut map = Map::new();
-    map.insert("decision".to_owned(), Value::String(decision.to_owned()));
-    map.insert(
-        "reason".to_owned(),
-        recorded.reason.clone().map_or(Value::Null, Value::String),
-    );
-    map.insert("reviewer".to_owned(), reviewer);
-    Value::Object(map)
+    serde_json::to_value(recorded).expect("a recorded verdict serializes")
 }
 
-/// Parses one recorded reviewer verdict: absent or null reads as no
-/// verdict, anything else must carry a known decision word, a
-/// string-or-null reason and a null-or-shaped reviewer whose stage is 1
-/// or 2 (`docs/events.md`, `permission_resolved`).
+/// Parses one recorded reviewer verdict through its serde shape: absent
+/// or null reads as no verdict (see `parse_line`), anything else must
+/// parse, and a named reviewer must carry stage 1 or 2 (`docs/events.md`,
+/// `permission_resolved`). Every rejection keeps the `bad set line`
+/// prefix.
 fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
-    let decision = match value.get("decision").and_then(Value::as_str) {
-        Some("allow") => Decision::Allow,
-        Some("deny") => Decision::Deny,
-        _ => {
-            return Err(format!(
-                "review: bad set line {id}: the recorded decision is not allow or deny"
-            ));
-        }
-    };
-    let reason = match value.get("reason") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(reason)) => Some(reason.clone()),
-        Some(_) => {
-            return Err(format!(
-                "review: bad set line {id}: the recorded reason is not a string"
-            ));
-        }
-    };
-    let reviewer = match value.get("reviewer") {
-        None | Some(Value::Null) => None,
-        Some(reviewer) => {
-            let model = reviewer
-                .get("model")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    format!("review: bad set line {id}: the recorded reviewer names no model")
-                })?
-                .to_owned();
-            let stage = reviewer
-                .get("stage")
-                .and_then(Value::as_u64)
-                .and_then(|stage| u8::try_from(stage).ok())
-                .ok_or_else(|| {
-                    format!("review: bad set line {id}: the recorded reviewer names no stage")
-                })?;
-            if !(1..=2).contains(&stage) {
-                return Err(format!(
-                    "review: bad set line {id}: the recorded reviewer stage is not 1 or 2"
-                ));
-            }
-            Some(ReviewerRef { model, stage })
-        }
-    };
-    Ok(RecordedVerdict {
-        decision,
-        reason,
-        reviewer,
-    })
+    let recorded: RecordedVerdict = serde_json::from_value(value.clone()).map_err(|error| {
+        format!("review: bad set line {id}: the recorded verdict does not parse: {error}")
+    })?;
+    if let Some(reviewer) = &recorded.reviewer
+        && !(1..=2).contains(&reviewer.stage)
+    {
+        return Err(format!(
+            "review: bad set line {id}: the recorded reviewer stage is not 1 or 2"
+        ));
+    }
+    Ok(recorded)
 }
 
 /// Parses one committed set line, rejecting empty ids and tools.

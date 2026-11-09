@@ -1674,6 +1674,7 @@ dependencies = [
  "log 0.0.0",
  "proptest",
  "rustix",
+ "serde",
  "serde_json",
  "similar",
  "support",
