@@ -13,10 +13,10 @@ use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::steering::Steering;
 use super::{App, Effect, Kind, Phase, mint, session_command};
-use crate::home::Level;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
+use contract::commands::SubscribeLevel;
 
 pub(crate) mod keys;
 
@@ -507,15 +507,15 @@ impl App {
             return Effect::None;
         }
         match self.subscribed_level(session) {
-            None | Some(Level::Summary) => {
+            None | Some(SubscribeLevel::Summary) => {
                 self.items.wants.remove(session);
-                Effect::Send(vec![self.subscribe(session, Level::Full)])
+                Effect::Send(vec![self.subscribe(session, SubscribeLevel::Full)])
             }
-            Some(Level::Full) => {
+            Some(SubscribeLevel::Full) => {
                 self.items.wants.remove(session);
                 Effect::Send(vec![
-                    self.subscribe(session, Level::Summary),
-                    self.subscribe(session, Level::Full),
+                    self.subscribe(session, SubscribeLevel::Summary),
+                    self.subscribe(session, SubscribeLevel::Full),
                 ])
             }
         }

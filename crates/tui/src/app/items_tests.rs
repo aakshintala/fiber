@@ -18,9 +18,9 @@ use super::testkit::{
     DELEGATE_A, SESSION, ack_all, commands, complete, home, job_started, live, mark_tty, open,
     opened, opened_item, session_accepted, session_line, start_delegate, start_job, subscribes,
 };
-use crate::home::Level;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
+use contract::commands::SubscribeLevel;
 
 const DELEGATE_B: &str = "s_eeeeeeeeeeeeeeee";
 
@@ -643,7 +643,7 @@ fn a_summary_held_then_a_full_refused_shows_the_message() {
     );
     assert_eq!(
         app.subscribed_level(&SessionId(DELEGATE_A.to_owned())),
-        Some(Level::Summary)
+        Some(SubscribeLevel::Summary)
     );
 }
 

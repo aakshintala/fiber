@@ -5,8 +5,8 @@ use contract::SessionId;
 use serde_json::json;
 
 use super::{App, Effect, Kind, mint, session_command};
-use crate::home::Level;
 use crate::input::Draft;
+use contract::commands::SubscribeLevel;
 
 /// A `/clear` start waiting for its answer: the cleared session, the
 /// credential its args named, and whether its close goes with `now`.
@@ -169,7 +169,7 @@ impl App {
             .insert(id.clone(), Kind::Command, Draft::default());
         self.outbox.wait(&id, super::outbox::Waiting::ClearClose);
         vec![
-            self.subscribe(&session, Level::Full),
+            self.subscribe(&session, SubscribeLevel::Full),
             self.ask_commands(&session),
             close,
         ]

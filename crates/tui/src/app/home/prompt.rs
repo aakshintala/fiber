@@ -9,13 +9,14 @@ use serde_json::{Map, Value, json};
 use super::super::reconnect::UNANSWERED;
 use super::super::{App, Effect, Kind, mint, session_command};
 use super::{refusal, refusal_code};
-use crate::home::{Level, Spot, State, dependents};
+use crate::home::{Spot, State, dependents};
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::SubscribeLevel;
 use contract::events::CommandAccepted;
 
 mod exit;
@@ -282,7 +283,7 @@ impl App {
         let session = row.id.clone();
         let mut lines = Vec::new();
         if self.subscribed_level(&session).is_none() {
-            lines.push(self.subscribe(&session, Level::Summary));
+            lines.push(self.subscribe(&session, SubscribeLevel::Summary));
         }
         let id = mint();
         lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());

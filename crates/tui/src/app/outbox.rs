@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 
-use contract::commands::{Command, CommandLine};
+use contract::commands::{Command, CommandLine, SubscribeLevel};
 use contract::{CommandId, SessionId};
 use serde_json::{Value, json};
 
@@ -84,7 +84,7 @@ pub(crate) enum Waiting {
     /// A home `subscribe` for a session's level.
     Subscribe {
         session: SessionId,
-        level: crate::home::Level,
+        level: SubscribeLevel,
     },
     /// A `close` with `now` stopping a live row.
     Stop,

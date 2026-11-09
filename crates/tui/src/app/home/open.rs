@@ -5,12 +5,13 @@
 use serde_json::Value;
 
 use super::super::outbox::Outbox;
-use super::super::{App, Effect, Phase, Waiting, mint, session_command};
+use super::super::{App, Effect, Phase, Waiting, mint, session_command, session_line};
 use super::{refusal, refusal_code};
-use crate::home::{Level, Subs};
+use crate::home::Subs;
 use crate::keyset::Context;
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::{Command, SubscribeArgs, SubscribeLevel};
 
 /// This connection's subscriptions: the level per session, the session
 /// opening and the lowering lines reconciliation queued.
@@ -29,7 +30,10 @@ pub(super) struct Subscriptions {
 
 /// The last `Subscribe` tag out for `session`, in send order: its id and
 /// level.
-fn last_subscribe<'a>(outbox: &'a Outbox, session: &SessionId) -> Option<(&'a str, Level)> {
+fn last_subscribe<'a>(
+    outbox: &'a Outbox,
+    session: &SessionId,
+) -> Option<(&'a str, SubscribeLevel)> {
     outbox
         .tags()
         .filter_map(|(id, waiting)| {
@@ -50,14 +54,14 @@ fn last_subscribe<'a>(outbox: &'a Outbox, session: &SessionId) -> Option<(&'a st
 impl Subscriptions {
     /// The level a new subscribe for `session` must differ from: the
     /// last subscribe out for it, else the accepted one.
-    pub(super) fn expected(&self, outbox: &Outbox, session: &SessionId) -> Option<Level> {
+    pub(super) fn expected(&self, outbox: &Outbox, session: &SessionId) -> Option<SubscribeLevel> {
         last_subscribe(outbox, session)
             .map(|(_, level)| level)
             .or_else(|| self.levels.accepted_level(session))
     }
 
     /// Records `level` as accepted for `session`.
-    pub(super) fn accept(&mut self, session: SessionId, level: Level) {
+    pub(super) fn accept(&mut self, session: SessionId, level: SubscribeLevel) {
         self.levels.accept(session, level);
     }
 
@@ -75,7 +79,7 @@ impl Subscriptions {
     /// `summary`.
     pub(super) fn pending_summary(&self, outbox: &Outbox, session: &SessionId) -> Option<String> {
         last_subscribe(outbox, session)
-            .filter(|(_, level)| *level == Level::Summary)
+            .filter(|(_, level)| *level == SubscribeLevel::Summary)
             .map(|(id, _)| id.to_owned())
     }
 
@@ -191,22 +195,18 @@ impl Opening {
 /// `null`: an absent label leaves the key out.
 pub(super) fn subscribe_line(
     session: &SessionId,
-    level: Level,
+    level: SubscribeLevel,
     credential: Option<&str>,
 ) -> (String, String) {
     let id = mint();
-    let name = match level {
-        Level::Summary => "summary",
-        Level::Full => "full",
-    };
-    let mut args = serde_json::json!({"level": name});
-    if let (Some(credential), Some(object)) = (credential, args.as_object_mut()) {
-        object.insert(
-            "credential".to_owned(),
-            Value::String(credential.to_owned()),
-        );
-    }
-    let line = session_command(&id, "subscribe", session, Some(args)).to_string();
+    let line = session_line(
+        &id,
+        session,
+        Command::Subscribe(SubscribeArgs {
+            level,
+            credential: credential.map(str::to_owned),
+        }),
+    );
     (id, line)
 }
 
@@ -214,7 +214,11 @@ impl App {
     /// A `subscribe` line for `session` at `level`, tagged as sent: the
     /// expected level is the last one tagged, so no path sends a
     /// subscribe at the level already held or asked for.
-    pub(in crate::app) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
+    pub(in crate::app) fn subscribe(
+        &mut self,
+        session: &SessionId,
+        level: SubscribeLevel,
+    ) -> String {
         let (id, line) = subscribe_line(session, level, None);
         self.outbox.wait(
             &id,
@@ -229,7 +233,7 @@ impl App {
     /// The level this connection holds or asks for `session` at, if any:
     /// a delegate is subscribed once per attachment (`docs/invocation.md`,
     /// `subscribe`).
-    pub(in crate::app) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
+    pub(in crate::app) fn subscribed_level(&self, session: &SessionId) -> Option<SubscribeLevel> {
         self.home.subs.expected(&self.outbox, session)
     }
 
@@ -262,14 +266,14 @@ impl App {
         };
         self.home.came_from = Some(session.clone());
         let lowers = self.outbox.is_up()
-            && self.home.subs.expected(&self.outbox, &session) == Some(Level::Full)
+            && self.home.subs.expected(&self.outbox, &session) == Some(SubscribeLevel::Full)
             && self
                 .home
                 .sessions
                 .row(&session)
                 .is_some_and(|row| row.left.is_none());
         if lowers {
-            Effect::Send(vec![self.subscribe(&session, Level::Summary)])
+            Effect::Send(vec![self.subscribe(&session, SubscribeLevel::Summary)])
         } else {
             Effect::None
         }
@@ -398,7 +402,7 @@ impl App {
                 .row(session)
                 .is_some_and(|row| row.left.is_none());
         if lowers {
-            let line = self.subscribe(session, Level::Summary);
+            let line = self.subscribe(session, SubscribeLevel::Summary);
             self.home.subs.outbox.push(line);
         }
     }
@@ -566,13 +570,13 @@ impl App {
             self.home.subs.opening = None;
             return None;
         }
-        let (id, line) = subscribe_line(&session, Level::Full, None);
+        let (id, line) = subscribe_line(&session, SubscribeLevel::Full, None);
         self.home.subs.raise(id.clone());
         self.outbox.wait(
             &id,
             Waiting::Subscribe {
                 session: session.clone(),
-                level: Level::Full,
+                level: SubscribeLevel::Full,
             },
         );
         if due.is_some() {

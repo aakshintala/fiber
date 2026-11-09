@@ -15,7 +15,7 @@ use contract::SessionId;
 use serde_json::Value;
 
 use super::{App, Link, Phase};
-use crate::home::Level;
+use contract::commands::SubscribeLevel;
 
 /// The delay after the first failure; each later one doubles it.
 const FIRST: Duration = Duration::from_millis(500);
@@ -132,7 +132,7 @@ impl App {
         let mut subscribed: Vec<SessionId> = Vec::new();
         for (session, line) in self.outbox.reconnect_lines() {
             if attached.as_ref() != Some(&session) && !subscribed.contains(&session) {
-                lines.push(self.subscribe(&session, Level::Summary));
+                lines.push(self.subscribe(&session, SubscribeLevel::Summary));
                 subscribed.push(session);
             }
             lines.push(line);

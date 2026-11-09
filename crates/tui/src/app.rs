@@ -22,7 +22,6 @@ use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
-use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
 use crate::install_worker::HooksJob;
@@ -31,6 +30,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Pages};
+use contract::commands::SubscribeLevel;
 use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
@@ -1836,7 +1836,7 @@ impl App {
     fn started(&mut self, session: SessionId, draft: Draft) -> Vec<String> {
         self.attach(session.clone());
         vec![
-            self.subscribe(&session, Level::Full),
+            self.subscribe(&session, SubscribeLevel::Full),
             self.ask_commands(&session),
             self.first_prompt(&session, draft),
         ]

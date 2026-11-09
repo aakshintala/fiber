@@ -16,10 +16,10 @@ use serde_json::Value;
 use super::Rewind;
 use super::view::{EnterAction, Vis};
 use crate::app::{App, Effect, Waiting, history_args, mint, session_command};
-use crate::home::Level;
 use crate::keys::Key;
 use crate::link::history_answer;
 use crate::swapped::Spot;
+use contract::commands::SubscribeLevel;
 
 /// A `rewind` request waiting for its answer. The outbox `RewindSend`
 /// tag is the sole record of its command id.
@@ -336,7 +336,10 @@ impl App {
         let new = new_session_id.clone();
         // A new attachment asks the new session's commands, as a clear
         // `start` accept does for its session.
-        let lines = vec![self.subscribe(&new, Level::Full), self.ask_commands(&new)];
+        let lines = vec![
+            self.subscribe(&new, SubscribeLevel::Full),
+            self.ask_commands(&new),
+        ];
         self.attach(new);
         self.close_session_view();
         self.outbox.settled(&accepted.command_id.0);

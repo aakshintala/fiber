@@ -2,9 +2,10 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    HomeScreen, Left, Level, ListLine, Row, Sessions, State, Subs, delete_line, dependents,
-    from_status, glyph, line, line_with, opening, quit_count, recent_rows,
+    HomeScreen, Left, ListLine, Row, Sessions, State, Subs, delete_line, dependents, from_status,
+    glyph, line, line_with, opening, quit_count, recent_rows,
 };
+use contract::commands::SubscribeLevel;
 use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
@@ -906,23 +907,29 @@ fn accept_holds_the_level_for_its_session_only() {
     let other = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     assert_eq!(subs.accepted_level(&session()), None);
     assert!(!subs.full(&session()));
-    subs.accept(session(), Level::Summary);
-    assert_eq!(subs.accepted_level(&session()), Some(Level::Summary));
+    subs.accept(session(), SubscribeLevel::Summary);
+    assert_eq!(
+        subs.accepted_level(&session()),
+        Some(SubscribeLevel::Summary)
+    );
     assert!(!subs.full(&session()));
-    subs.accept(session(), Level::Full);
-    assert_eq!(subs.accepted_level(&session()), Some(Level::Full));
+    subs.accept(session(), SubscribeLevel::Full);
+    assert_eq!(subs.accepted_level(&session()), Some(SubscribeLevel::Full));
     assert!(subs.full(&session()));
     assert_eq!(subs.accepted_level(&other), None);
     assert!(!subs.full(&other));
-    subs.accept(session(), Level::Summary);
+    subs.accept(session(), SubscribeLevel::Summary);
     assert!(!subs.full(&session()));
 }
 
 #[test]
 fn opening_from_each_level() {
-    assert_eq!(opening(None).to_vec(), vec![Level::Summary]);
-    assert_eq!(opening(Some(Level::Summary)).to_vec(), vec![]);
-    assert_eq!(opening(Some(Level::Full)).to_vec(), vec![Level::Summary]);
+    assert_eq!(opening(None).to_vec(), vec![SubscribeLevel::Summary]);
+    assert_eq!(opening(Some(SubscribeLevel::Summary)).to_vec(), vec![]);
+    assert_eq!(
+        opening(Some(SubscribeLevel::Full)).to_vec(),
+        vec![SubscribeLevel::Summary]
+    );
 }
 
 #[test]

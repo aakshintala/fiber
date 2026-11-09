@@ -6,11 +6,12 @@ use serde_json::{Value, json};
 
 use super::super::super::{App, Effect, Phase, mint, session_command};
 use super::{Ask, Prompt};
-use crate::home::{Level, QuitChoice, Spot, State};
+use crate::home::{QuitChoice, Spot, State};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::SubscribeLevel;
 
 impl App {
     /// Quits, asking first while sessions work: with no session working
@@ -359,7 +360,7 @@ impl App {
         let mut pairs = Vec::new();
         for session in sessions {
             if self.subscribed_level(session).is_none() {
-                lines.push(self.subscribe(session, Level::Summary));
+                lines.push(self.subscribe(session, SubscribeLevel::Summary));
             }
             let id = mint();
             lines.push(

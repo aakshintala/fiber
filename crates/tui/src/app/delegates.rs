@@ -10,7 +10,7 @@ use contract::events::EventKind;
 use serde_json::Value;
 
 use super::App;
-use crate::home::Level;
+use contract::commands::SubscribeLevel;
 
 impl App {
     /// The wheel over the panel at screen `row`: the Delegates card's rows
@@ -130,7 +130,7 @@ impl App {
             // a row cached before a reconnect never outlives the
             // re-subscribe (`docs/events.md`, `session_status`).
             self.delegate_rows.remove(&session);
-            send.push(self.subscribe(&session, Level::Summary));
+            send.push(self.subscribe(&session, SubscribeLevel::Summary));
         }
         send
     }
