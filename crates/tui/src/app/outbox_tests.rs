@@ -4,12 +4,13 @@
 
 use std::path::PathBuf;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::super::{App, Effect};
 use super::{Kind, Link, Outbox, RecentAsk, Waiting};
 use crate::app::testkit::{SESSION, hello, now};
 use crate::input::Draft;
+use contract::commands::{Command, CommandLine, ContentArgs};
 
 #[test]
 fn wait_then_settled_returns_the_tag_once() {
@@ -120,7 +121,11 @@ fn up() -> Outbox {
 
 /// A `prompt` line for [`SESSION`] with `id`.
 fn prompt_line(id: &str) -> String {
-    super::session_command(id, "prompt", &contract::SessionId(SESSION.to_owned()), None).to_string()
+    super::session_line(
+        id,
+        &contract::SessionId(SESSION.to_owned()),
+        Command::Prompt(ContentArgs { content: vec![] }),
+    )
 }
 
 #[test]
@@ -198,7 +203,7 @@ fn answered_closes_pending_and_drops_kept() {
 }
 
 #[test]
-fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
+fn wrote_keeps_session_lines_but_not_subscribe_or_start() {
     let mut outbox = up();
     let session = contract::SessionId(SESSION.to_owned());
     outbox.wrote(&prompt_line("c_1"));
@@ -207,7 +212,11 @@ fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
     outbox.wrote(&prompt_line("c_1"));
     assert_eq!(outbox.kept.len(), 1);
     // A second command is kept behind the first, in write order.
-    let steer = super::session_command("c_5", "steer", &session, None).to_string();
+    let steer = super::session_line(
+        "c_5",
+        &session,
+        Command::Steer(ContentArgs { content: vec![] }),
+    );
     outbox.wrote(&steer);
     // `subscribe` and `commands` go out afresh on a reconnect.
     outbox.wrote(&super::session_command("c_2", "subscribe", &session, None).to_string());
@@ -221,6 +230,41 @@ fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
         outbox.reconnect_lines(),
         vec![(session.clone(), prompt_line("c_1")), (session, steer)]
     );
+}
+
+#[test]
+fn session_line_round_trips_a_line_with_args_and_one_without() {
+    use contract::commands::SentPart;
+    let session = contract::SessionId(SESSION.to_owned());
+    let with_args = Command::Prompt(ContentArgs {
+        content: vec![SentPart::Text {
+            text: "hi".to_owned(),
+        }],
+    });
+    for (id, command) in [("c_1", with_args), ("c_2", Command::Cancel)] {
+        let line = super::session_line(id, &session, command.clone());
+        let mut value: Value =
+            serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+        // The injected top-level `session_id` is not a `CommandLine`
+        // key, so it comes out before the line parses as one.
+        let session_id = value
+            .as_object_mut()
+            .and_then(|map| map.remove("session_id"))
+            .and_then(|id| id.as_str().map(str::to_owned))
+            .unwrap_or_else(|| panic!("a session_id: {line}"));
+        assert_eq!(session_id, SESSION);
+        let parsed: CommandLine =
+            serde_json::from_value(value).unwrap_or_else(|err| panic!("{line}: {err}"));
+        assert_eq!(parsed.id, contract::CommandId(id.to_owned()));
+        assert_eq!(parsed.command, command);
+    }
+    // A hand-built line with a wrong key is refused once the injected
+    // `session_id` is removed.
+    let mut bad = json!({"id": "c_9", "command": "cancel", "bogus": true});
+    bad.as_object_mut()
+        .unwrap_or_else(|| panic!("an object"))
+        .remove("session_id");
+    assert!(serde_json::from_value::<CommandLine>(bad).is_err());
 }
 
 /// An app with no home, before the hub connects.

@@ -103,7 +103,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
-pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command, session_line};
 pub(crate) use select::SurfaceId;
 pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;

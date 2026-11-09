@@ -9,7 +9,8 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 
-use contract::SessionId;
+use contract::commands::{Command, CommandLine};
+use contract::{CommandId, SessionId};
 use serde_json::{Value, json};
 
 use crate::import_report::ImportSource;
@@ -363,6 +364,23 @@ pub(crate) fn session_command(
         object.insert("args".to_owned(), args);
     }
     line
+}
+
+/// A command line for a session: `command` serialized as a
+/// [`CommandLine`] with `session_id` beside `id`, `command` and `args`,
+/// written as one JSON object line (`docs/invocation.md`, "The command
+/// line"). Key order is not a wire rule: the hub and the readers parse by
+/// key. The fallback never fires for typed structs.
+pub(crate) fn session_line(id: &str, session: &SessionId, command: Command) -> String {
+    let mut line = serde_json::to_value(CommandLine {
+        id: CommandId(id.to_owned()),
+        command,
+    })
+    .unwrap_or(Value::Null);
+    if let Some(object) = line.as_object_mut() {
+        object.insert("session_id".to_owned(), Value::String(session.0.clone()));
+    }
+    line.to_string()
 }
 
 /// The `history` args for `segment`'s window, read under the serving
