@@ -1338,7 +1338,8 @@ fn section(saved: &str) -> String {
 fn frame_shapes_round_trip_through_write() {
     // `docs/user/reporting.md`, "Diagnostics" (kept frames oldest first, one `frame i/n` block
     // per frame in ring order) plus `docs/invocation.md`, "Commands and flags" (each row lists
-    // its cells in column order, left to right): the dump parses back into the seed frames,
+    // its cells in column order, left to right; rows run top to bottom; palette entries appear
+    // in first-appearance order, numbered from 0): the dump parses back into the seed frames,
     // so the round trip proves the values survive in that documented order, not exact bytes.
     let root = fakes::TempDir::new("fiber-feedback-shapes");
     let clock = FakeClock::new();
