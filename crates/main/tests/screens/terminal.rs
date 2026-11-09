@@ -3112,7 +3112,8 @@ fn credential_provider_pair(setup: &support::Setup, server: &ProviderServer) {
 
 #[test]
 fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
-    let setup = support::Setup::new();
+    // The credential-pair extension supplies both providers and the selected model.
+    let setup = support::Setup::without_provider();
     let server = ProviderServer::start([
         calls_echo_hi(),
         hello(),
