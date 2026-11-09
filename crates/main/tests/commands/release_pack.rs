@@ -768,14 +768,18 @@ fn macos_samples_parse_to_bytes() {
 
 /// T6: the fixture end to end and the binary-level reinstall proof. A
 /// fixture release holds the T2-packed archives served over loopback
-/// HTTP: the target archive carries the real `fiber` binary, so
-/// `scripts/install.sh --base-url` installs it and its `release-install`
-/// stages the docs and every top-level archive directory as a first-party
-/// extension, with the full-SHA record. No `git` and no network beyond
-/// the fixture take part.
+/// HTTP: the target archive carries a checked-in stub `fiber` that runs
+/// the built binary supplied through the fixture environment, so `scripts/install.sh --base-url` installs it and its
+/// `release-install` stages the docs and every top-level archive
+/// directory as a first-party extension, with the full-SHA record. No
+/// `git` and no network beyond the fixture take part.
 ///
 /// The version the binaries under test were built as.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The most the fixture's target archive may hold. The checked-in stub
+/// keeps the archive small across `tar` implementations.
+const TARGET_ARCHIVE_LIMIT: u64 = 64 * 1024;
 
 /// The release target `scripts/install.sh` picks on this host.
 fn host_target() -> &'static str {
@@ -824,6 +828,10 @@ impl Release {
             .env_clear()
             .envs(fakes::check_run())
             .env("PATH", "/usr/bin:/bin")
+            .env(
+                "FIBER_RELEASE_PACK_REAL_BINARY",
+                env!("CARGO_BIN_EXE_fiber"),
+            )
             .env("HOME", self.setup.root.path())
             .env("TMPDIR", self.root("tmp"))
             .env("FIBER_HOME", self.setup.home())
@@ -866,9 +874,9 @@ impl Release {
 
     /// Packs a fixture release with the T2 script and serves it from
     /// `release/download/v<version>/`: the target archive carries the
-    /// real `fiber` binary, the docs archive a README, and the extensions
-    /// archive one provider and one extension with manifests at this
-    /// binary's version.
+    /// checked-in stub `fiber`, the docs archive a README, and
+    /// the extensions archive one provider and one extension with
+    /// manifests at this binary's version.
     #[track_caller]
     fn serve() -> Self {
         let setup = support::Setup::new();
@@ -903,11 +911,10 @@ impl Release {
         );
         release.write("tree/docs/README.md", b"fixture docs");
         release.write("tree/docs/guide.md", b"guide");
-        fs::copy(
-            PathBuf::from(env!("CARGO_BIN_EXE_fiber")),
-            release.root("tree/bin/fiber"),
-        )
-        .unwrap();
+        release.write(
+            "tree/bin/fiber",
+            include_bytes!("../fixtures/release_pack/fiber"),
+        );
         fs::set_permissions(
             release.root("tree/bin/fiber"),
             fs::Permissions::from_mode(0o755),
@@ -922,6 +929,15 @@ impl Release {
             let run = release.run(&script(), &args, &[]);
             assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
         }
+        let target_size =
+            fs::metadata(release.root(&format!("out/fiber-{}.tar.gz", host_target())))
+                .unwrap()
+                .len();
+        assert!(
+            target_size < TARGET_ARCHIVE_LIMIT,
+            "the target archive is {target_size} bytes, over {TARGET_ARCHIVE_LIMIT}: \
+             the fixture packs a stub, not the built binary"
+        );
         let mut files = std::collections::HashMap::new();
         for name in [
             format!("fiber-{}.tar.gz", host_target()),
