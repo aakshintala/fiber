@@ -1053,11 +1053,32 @@ install still running.
     - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
     - A key with a fixed set of values (`thinking`, `cache.lifetime`,
       `diagnostics.level`, `tui.theme`) steps to the next value. For
-      `tui.theme`, each step previews the theme live.
+      `tui.theme`, each step previews the theme live. An unset key shows
+      "Default"; the first step writes the first value, and steps wrap in
+      the schema's order. Delete returns it to unset.
     - A model reference ends in " ›" and opens the model picker; its
       choice saves to the row's key.
-    - A list (`sandbox.allow_write`, `scoped_models`, `tui.panel.cards`)
-      ends in " ›" and opens a sub-page to add, remove and reorder entries.
+    - A list (`sandbox.allow_write`, `scoped_models`, `tui.panel.cards`,
+      `repository_extensions`) ends in " ›" and opens a sub-page of its own,
+      one list per screen, titled with the key's label. It uses the controls
+      `/settings` already has and saves on every change.
+      - Rows: one per entry, in order, then a last row "+ Add". An empty
+        list shows only "+ Add".
+      - Enter on "+ Add" opens an empty field, and Enter on an entry opens a
+        field holding its text. These are the free-text fields: Enter saves
+        and Esc cancels. A value the type check rejects keeps the field
+        open, with the error under it.
+      - Delete removes the focused entry. ⌥↑ and ⌥↓ move it one place.
+      - A `repository_extensions` entry shows its `path` as its text, then
+        `[x] required` or `[ ] required`. Enter edits the path, and Space
+        flips `required`. A new entry starts with `required` off.
+      - Each add, edit, remove, reorder or flip saves the whole list at once,
+        through the same path as `fiber config set`, to the layer the value
+        comes from (Saving). Nothing waits to be saved.
+      - With no field open, Esc returns to `/settings` with the list row
+        focused.
+      - The footer is "Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back",
+        with the keys bold.
     - A number or free text opens a field in place of the value. Enter
       saves it and Esc cancels.
 
@@ -1067,7 +1088,10 @@ install still running.
     from, or to global when no layer sets it. Tab moves the focused value
     to the next layer the key allows (global, project, repository), and
     Delete removes the override so the inherited value applies. On a
-    remote terminal, `tui.*` keys offer only the client's global layer.
+    remote terminal, `tui.*` keys offer only the client's global layer. A
+    key set by `-c` for this run is read-only here: its row says where it
+    comes from ("set by -c for this run") and Enter, Tab and Delete do
+    nothing on it.
   - **Under the list:** the focused key's description, then its key path,
     where it is set and when a change applies ("tui.reduced_motion · set
     in global · Applies when the terminal starts again."), dim. After a

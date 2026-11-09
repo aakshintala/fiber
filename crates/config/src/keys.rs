@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use contract::ErrorCode;
 use contract::ThinkingLevel;
 use contract::events::Notice;
-use contract::settings::{SettingsMetadata, SettingsTab};
+use contract::settings::{SettingControl, SettingsMetadata, SettingsTab};
 
 use crate::Source;
 use crate::error::ConfigError;
@@ -24,6 +24,13 @@ use crate::secret::CredentialSource;
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
     Str,
+    /// A model reference string: `model`, `reviewer.model`. Accepts what
+    /// `Str` does; the settings view picks it from the model picker.
+    Model,
+    /// A theme name string: `tui.theme`. Accepts what `Str` does, so a
+    /// theme file's name passes; the settings view steps through the
+    /// themes it can find.
+    Theme,
     Bool,
     /// A whole number of zero or more.
     Count,
@@ -57,7 +64,7 @@ pub(crate) enum Kind {
 impl Kind {
     pub(crate) fn accepts(self, value: &Value) -> bool {
         match self {
-            Self::Str => value.is_string(),
+            Self::Str | Self::Model | Self::Theme => value.is_string(),
             Self::Bool => value.is_boolean(),
             Self::Count => value.is_u64(),
             Self::CountBelow(ceiling) => value.as_u64().is_some_and(|n| n < ceiling),
@@ -109,9 +116,32 @@ impl Kind {
         }
     }
 
+    /// How `/settings` edits a value of this type. Exhaustive, so a new
+    /// kind cannot reach the view without a control.
+    pub(crate) fn control(self) -> SettingControl {
+        match self {
+            Self::Str | Self::Duration => SettingControl::Text,
+            Self::Model => SettingControl::Model,
+            Self::Theme => SettingControl::Theme,
+            Self::Bool => SettingControl::Boolean,
+            Self::Count | Self::CountBelow(_) | Self::Number => SettingControl::Number,
+            Self::OneOf(allowed) => {
+                SettingControl::Fixed(allowed.iter().map(|name| (*name).to_owned()).collect())
+            }
+            Self::StrList => SettingControl::StringList,
+            Self::RepositoryExtensions => SettingControl::RepositoryExtensions,
+            Self::StrOrStrList
+            | Self::Role
+            | Self::EnvMap
+            | Self::BoolMap
+            | Self::Credential
+            | Self::RequestTags => SettingControl::Json,
+        }
+    }
+
     pub(crate) fn expected(self) -> String {
         match self {
-            Self::Str => "a string".into(),
+            Self::Str | Self::Model | Self::Theme => "a string".into(),
             Self::Bool => "true or false".into(),
             Self::Count => "a whole number of zero or more".into(),
             Self::CountBelow(ceiling) => format!("a whole number less than {ceiling}"),
@@ -284,8 +314,8 @@ const fn entry_replaced(path: &'static str, kind: Kind, metadata: SettingsMetada
 }
 
 use Kind::{
-    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Number, OneOf,
-    RepositoryExtensions, RequestTags, Role, Str, StrList, StrOrStrList,
+    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Model, Number,
+    OneOf, RepositoryExtensions, RequestTags, Role, Str, StrList, StrOrStrList, Theme,
 };
 
 /// Metadata for a key `/settings` lists on `tab`.
@@ -331,7 +361,7 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         "model",
-        Str,
+        Model,
         YES,
         None,
         tabbed(
@@ -428,7 +458,7 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         "reviewer.model",
-        Str,
+        Model,
         NO,
         None,
         tabbed(
@@ -1017,7 +1047,7 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         "tui.theme",
-        Str,
+        Theme,
         NO,
         None,
         tabbed(

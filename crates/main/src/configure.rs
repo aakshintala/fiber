@@ -103,12 +103,17 @@ impl Seam {
 
     /// The configuration `workspace`'s project and repository give.
     fn load(&self, workspace: &Path) -> Result<Config, ConfigureError> {
+        self.load_with(workspace, &[])
+    }
+
+    /// The same with the run's `-c` `overrides`, in order.
+    fn load_with(&self, workspace: &Path, overrides: &[String]) -> Result<Config, ConfigureError> {
         let project = self.project_key(workspace).map_err(from_failure)?;
         Config::load(Sources {
             home: self.home.clone(),
             workspace: workspace.to_path_buf(),
             project,
-            overrides: Vec::new(),
+            overrides: overrides.to_vec(),
         })
         .map_err(from_config)
     }
@@ -251,6 +256,8 @@ fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
         layer,
         file,
         scope,
+        presentation: info.presentation,
+        control: info.control,
     }
 }
 
@@ -280,8 +287,12 @@ impl tui::Configure for Seam {
         install::provider(self, workspace, provider, clock)
     }
 
-    fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {
-        let config = self.load(workspace)?;
+    fn settings(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<SettingRow>, ConfigureError> {
+        let config = self.load_with(workspace, overrides)?;
         Ok(config
             .settings()
             .into_iter()
@@ -306,6 +317,46 @@ impl tui::Configure for Seam {
         )
         .map_err(from_failure)?;
         Ok(Saved { file, warnings })
+    }
+
+    fn reset(
+        &self,
+        workspace: &Path,
+        layer: Layer,
+        key: &str,
+        expected: &str,
+    ) -> Result<Saved, ConfigureError> {
+        let expected: serde_json::Value =
+            serde_json::from_str(expected).map_err(|_| ConfigureError {
+                code: contract::ErrorCode::InvalidArguments,
+                message: "The expected value is not JSON.".to_owned(),
+            })?;
+        // The project is resolved afresh, as `set` does, so a workspace
+        // whose repository changed resets under its current key.
+        let (_, project) =
+            ::cli::project_of(&self.home, workspace).map_err(|error| from_failure(error.into()))?;
+        let reset = config::reset(
+            &self.home,
+            workspace,
+            &project,
+            layer_to(layer),
+            key,
+            &expected,
+        )
+        .map_err(from_config)?;
+        match reset {
+            config::Reset::Removed(file) | config::Reset::Absent(file) => Ok(Saved {
+                file,
+                warnings: Vec::new(),
+            }),
+            config::Reset::Changed(file) => Err(ConfigureError {
+                code: contract::ErrorCode::StaleRequest,
+                message: format!(
+                    "{key} changed in {} since it was read; nothing was removed.",
+                    file.display()
+                ),
+            }),
+        }
     }
 
     fn global_file(&self) -> PathBuf {

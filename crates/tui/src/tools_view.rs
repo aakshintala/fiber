@@ -397,6 +397,7 @@ impl Tools {
         };
         Frame {
             joins: Vec::new(),
+            chrome: None,
             title: "Tools".to_owned(),
             command: "/tools".to_owned(),
             rows,
