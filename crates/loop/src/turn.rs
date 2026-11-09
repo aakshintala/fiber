@@ -198,7 +198,7 @@ impl Loop {
 
     /// Builds the preamble without writing an opening or running the
     /// post-offer load, so a reload can build before the first turn.
-    pub(crate) fn build_preamble(&mut self) -> Result<(), Error> {
+    fn build_preamble(&mut self) -> Result<(), Error> {
         if let Some(notice) = self.construct_preamble()? {
             self.append_early(&Event::Notice(notice))?;
         }
