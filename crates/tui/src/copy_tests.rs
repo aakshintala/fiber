@@ -130,6 +130,41 @@ fn selecting_a_markdown_prompt_copies_its_rendered_text() {
             .any(|(line, _)| line.to_string().contains("let x = 1;"))
     );
     assert!(metadata.iter().any(|mark| mark.decoration));
+    let screen = crate::view::text(&buf);
+    let screen_rows: Vec<_> = screen.lines().collect();
+    let top = screen_rows[..code_row]
+        .iter()
+        .rposition(|line| line.contains('▄'))
+        .expect("code slab's top edge");
+    let top_col =
+        u16::try_from(screen_rows[top].find('▄').expect("top edge cell")).expect("top edge column");
+    let bottom = code_row.saturating_add(1).saturating_add(
+        screen_rows[code_row.saturating_add(1)..]
+            .iter()
+            .position(|line| line.contains('▀'))
+            .expect("code slab's bottom edge"),
+    );
+    let bottom_col = u16::try_from(screen_rows[bottom].rfind('▀').expect("bottom edge cell"))
+        .expect("bottom edge column");
+    assert!(top < code_row && code_row < bottom);
+    let mut fenced_pointer = Pointer::default();
+    let mut fenced_report = |kind, col, row| {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&fenced, area, &mut buf, None);
+        fenced.on_mouse(
+            &Mouse { kind, col, row },
+            &targets,
+            &mut fenced_pointer,
+            true,
+            now,
+        )
+    };
+    let _ = fenced_report(MouseKind::Press(Button::Left), top_col, top as u16);
+    let _ = fenced_report(MouseKind::Drag(Button::Left), bottom_col, bottom as u16);
+    assert_eq!(
+        fenced_report(MouseKind::Release, bottom_col, bottom as u16),
+        Effect::Copy("let x = 1;".to_owned())
+    );
 
     let mut linked = attached(width, height);
     linked.set_opener(true);
