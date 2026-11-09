@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::{Value, json};
 
-use super::{App, Effect, Target, Waiting, mint};
+use super::{App, Effect, Target, Waiting};
 use crate::event_loop::kitty_writer;
 use crate::image;
 
@@ -107,7 +107,7 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let command_id = mint();
+        let command_id = support::mint("c_");
         let line = json!({
             "id": command_id,
             "command": "read_file",
@@ -452,7 +452,7 @@ impl App {
             if retained.contains(&fetch.id) {
                 continue;
             }
-            let command_id = mint();
+            let command_id = support::mint("c_");
             let line = serde_json::json!({
                 "id": command_id.clone(),
                 "command": "read_file",
@@ -574,7 +574,7 @@ impl App {
             if self.screen.pages().image_failed(&part.session, &part.path) {
                 continue;
             }
-            let command_id = mint();
+            let command_id = support::mint("c_");
             let line = json!({
                 "id": command_id,
                 "command": "read_file",

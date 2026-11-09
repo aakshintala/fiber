@@ -19,7 +19,7 @@ use contract::events::{
     SessionStarted, SessionState, SessionStatus, ToolCallCompleted, Ui, UsageRecorded,
 };
 
-use super::{App, Effect, Kind, mint};
+use super::{App, Effect, Kind};
 use crate::context_view::Compaction;
 use crate::input::Draft;
 use crate::shell;
@@ -939,7 +939,7 @@ impl App {
             return None;
         }
         let session = self.session()?.clone();
-        let id = mint();
+        let id = support::mint("c_");
         let line =
             shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false).to_string();
         self.panel_state.due = false;
@@ -988,7 +988,7 @@ impl App {
                 let Some((session, _)) = self.command_session() else {
                     return Effect::None;
                 };
-                let id = mint();
+                let id = support::mint("c_");
                 let line = shell::command(&id, &session, "git --no-optional-locks status", false)
                     .to_string();
                 let mut draft = Draft::default();

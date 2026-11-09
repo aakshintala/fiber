@@ -3,7 +3,7 @@
 //! accepted switch can write the global label.
 
 use super::{App, Effect, Open};
-use crate::app::{Kind, mint, session_command};
+use crate::app::{Kind, session_command};
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
@@ -246,7 +246,7 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(&id, "credentials", &session, None).to_string();
         self.outbox
             .pending
@@ -319,7 +319,7 @@ impl App {
             return Vec::new();
         };
         self.say_cache_rebuild(Some(&label) != labels.credential.as_ref());
-        let id = mint();
+        let id = support::mint("c_");
         let line =
             session_command(&id, "credential", &session, Some(json!({"label":label}))).to_string();
         self.outbox

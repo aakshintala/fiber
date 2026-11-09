@@ -217,7 +217,7 @@ impl App {
         if paths.is_empty() {
             return Effect::None;
         }
-        let id = super::mint();
+        let id = support::mint("c_");
         let line = shell::command(
             &id,
             &session,
@@ -844,7 +844,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
-        let id = super::mint();
+        let id = support::mint("c_");
         let line = shell::command(
             &id,
             &session,
@@ -1167,7 +1167,7 @@ impl App {
         if !self.connected() {
             return Effect::None;
         }
-        let id = super::mint();
+        let id = support::mint("c_");
         let line = super::session_command(&id, "hooks", &session, None).to_string();
         self.outbox.wait(&id, super::Waiting::Hooks);
         self.session_views.hooks_request = Some(id);

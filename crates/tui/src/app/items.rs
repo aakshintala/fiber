@@ -12,7 +12,7 @@ use contract::shapes::ProviderFailure;
 use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::steering::Steering;
-use super::{App, Effect, Kind, Phase, mint, session_command};
+use super::{App, Effect, Kind, Phase, session_command};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
@@ -624,7 +624,7 @@ impl App {
         }
         let session = session.clone();
         let job_id = open.job_id.clone();
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(
             &id,
             "job_stop",
@@ -681,7 +681,7 @@ impl App {
     /// view does not own input.
     fn item_job_send(&mut self, text: String) -> Option<Effect> {
         let (session, job_id) = self.item_job_target()?;
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(
             &id,
             "job_input",
@@ -736,7 +736,7 @@ impl App {
         if self.steering.is_selected() {
             return Some(self.amend());
         }
-        let id = mint();
+        let id = support::mint("c_");
         let args = super::commands::content_arg(&self.draft);
         let line = session_command(&id, "steer", &delegate.session, Some(args)).to_string();
         let draft = std::mem::take(&mut self.draft);

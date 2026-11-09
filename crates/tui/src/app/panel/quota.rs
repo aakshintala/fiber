@@ -9,7 +9,7 @@ use crate::view::panel::{Card, cards};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, QuotaInfo};
 use serde_json::json;
 
-use super::super::{App, Effect, mint, session_command};
+use super::super::{App, Effect, session_command};
 
 /// The cache age in `docs/tools.md`, "Fetching".
 const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
@@ -196,7 +196,7 @@ impl App {
             return None;
         }
         let session = self.session()?.clone();
-        let id = CommandId(mint());
+        let id = CommandId(support::mint("c_"));
         let line = session_command(&id.0, "quota", &session, None).to_string();
         self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Asked(id);
@@ -234,7 +234,7 @@ impl App {
             return None;
         }
         let session = self.session()?.clone();
-        let id = CommandId(mint());
+        let id = CommandId(support::mint("c_"));
         let line =
             session_command(&id.0, "quota", &session, Some(json!({"fetch": true}))).to_string();
         self.outbox.wait(&id.0, super::super::Waiting::Quota);

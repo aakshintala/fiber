@@ -236,7 +236,7 @@ impl App {
                 ),
             );
         }
-        let id = super::mint();
+        let id = support::mint("c_");
         let line =
             super::session_command(&id, "model", &session, Some(command_args(&choice))).to_string();
         self.outbox.pending.insert(

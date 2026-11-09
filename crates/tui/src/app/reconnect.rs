@@ -150,7 +150,7 @@ impl App {
             return Vec::new();
         }
         self.reconnect.sessions_due = false;
-        let id = super::mint();
+        let id = support::mint("c_");
         self.outbox.wait(&id, super::outbox::Waiting::Sessions);
         self.reconnect.fresh.clear();
         vec![serde_json::json!({"id": id, "command": "sessions"}).to_string()]

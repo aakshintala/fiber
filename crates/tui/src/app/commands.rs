@@ -10,7 +10,7 @@ use contract::SessionId;
 use contract::events::CommandAccepted;
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, Surface, mint, session_command};
+use super::{App, Effect, Kind, Link, Phase, Surface, session_command};
 use crate::editor::{OpenFile, Target};
 use crate::import_report::ImportSource;
 use crate::input::Draft;
@@ -970,7 +970,7 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return (Effect::None, None);
         };
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(&id, command, &session, args).to_string();
         let draft = std::mem::take(&mut self.draft);
         self.outbox.insert(id.clone(), kind, draft);
@@ -983,7 +983,7 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let id = mint();
+        let id = support::mint("c_");
         let lines =
             vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
         // Home has a fresh draft: a rejected `close` gives only its notice.
@@ -1114,7 +1114,7 @@ impl App {
         if self.steering.is_selected() {
             return self.amend();
         }
-        let id = mint();
+        let id = support::mint("c_");
         let args = content_arg(&self.draft);
         let shell = (!has_image).then(|| shell::parse(&text)).flatten();
         let (kind, line) = match (&self.phase, shell) {
@@ -1168,7 +1168,7 @@ impl App {
     /// after its `subscribe` so the session counts this terminal before
     /// the prompt. A rejection returns the draft to an empty box.
     pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
-        let id = mint();
+        let id = support::mint("c_");
         let args = content_arg(&draft);
         let line = session_command(&id, "prompt", session, Some(args)).to_string();
         self.outbox.insert(id, Kind::Prompt, draft);
@@ -1201,7 +1201,7 @@ impl App {
 
     /// One `cancel` of `session`'s turn, settled by its answer.
     fn send_cancel(&mut self, session: &SessionId) -> Effect {
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(&id, "cancel", session, None).to_string();
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])

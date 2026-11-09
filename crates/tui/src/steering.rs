@@ -14,7 +14,7 @@
 
 use contract::events::SteeringQueue;
 
-use super::{App, Effect, Kind, mint, session_command};
+use super::{App, Effect, Kind, session_command};
 use crate::ext::{PromptImage, QueuedImage, SteeringMessage};
 use crate::input::Draft;
 use crate::keys::Key;
@@ -348,7 +348,7 @@ impl App {
         let Effect::Send(mut lines) = self.steer_drop(vec![row]) else {
             return Effect::None;
         };
-        let id = mint();
+        let id = support::mint("c_");
         let taken = std::mem::take(&mut self.draft);
         self.draft.put_back(stash);
         lines.push(
@@ -377,7 +377,7 @@ impl App {
         let lines = rows
             .into_iter()
             .map(|row| {
-                let id = mint();
+                let id = support::mint("c_");
                 let args = json!({ "command_id": row });
                 let line = session_command(&id, "steer_drop", &session, Some(args));
                 self.outbox

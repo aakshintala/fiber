@@ -4,7 +4,7 @@ use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::json;
 
-use super::{App, Effect, Kind, mint, session_command};
+use super::{App, Effect, Kind, session_command};
 use crate::input::Draft;
 use contract::commands::SubscribeLevel;
 
@@ -107,7 +107,7 @@ impl App {
                 object.insert("continues".to_owned(), json!(old.0.clone()));
             }
         }
-        let id = mint();
+        let id = support::mint("c_");
         self.panel_state.note_start(&args);
         let line = json!({"id": id, "command": "start", "args": args}).to_string();
         self.draft.clear();
@@ -157,7 +157,7 @@ impl App {
         self.panel_state.carry_clear_credential(pending.credential);
         self.attached_screen_mut().clear();
         self.attach(session.clone());
-        let id = mint();
+        let id = support::mint("c_");
         let close = session_command(
             &id,
             "close",

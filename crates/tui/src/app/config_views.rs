@@ -464,7 +464,7 @@ impl App {
         args: Option<Value>,
     ) -> Option<(String, String)> {
         let (session, _) = self.command_session()?;
-        let id = super::mint();
+        let id = support::mint("c_");
         let line = super::session_command(&id, command, &session, args).to_string();
         Some((id, line))
     }

@@ -7,7 +7,6 @@
 //! with `App`, which owns the queue, the offer, the phase and the draft.
 
 use std::collections::HashMap;
-use std::hash::{BuildHasher, RandomState};
 
 use contract::commands::{Command, CommandLine, SubscribeLevel};
 use contract::{CommandId, SessionId};
@@ -342,14 +341,6 @@ impl Outbox {
     pub(crate) fn is_kept(&self, id: &str) -> bool {
         self.kept.iter().any(|kept| kept.id == id)
     }
-}
-
-/// A new command id from random bytes, as `doors::mint` makes one: `c_`
-/// and 16 hex digits. `tui` keeps its own copy because it may not depend on
-/// `doors`. `RandomState` seeds its keys from the operating system's
-/// randomness.
-pub(crate) fn mint() -> String {
-    format!("c_{:016x}", RandomState::new().hash_one(()))
 }
 
 /// A command for a session: `session_id` beside `id`, `command` and `args`.

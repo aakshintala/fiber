@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::super::outbox::Outbox;
-use super::super::{App, Effect, Phase, Waiting, mint, session_command, session_line};
+use super::super::{App, Effect, Phase, Waiting, session_line};
 use super::{refusal, refusal_code};
 use crate::home::Subs;
 use crate::keyset::Context;
@@ -198,7 +198,7 @@ pub(super) fn subscribe_line(
     level: SubscribeLevel,
     credential: Option<&str>,
 ) -> (String, String) {
-    let id = mint();
+    let id = support::mint("c_");
     let line = session_line(
         &id,
         session,

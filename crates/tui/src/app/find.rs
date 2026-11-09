@@ -11,7 +11,7 @@ use contract::ErrorCode;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::{App, Effect, Target, history_args, mint, session_command};
+use super::{App, Effect, Target, history_args, session_command};
 use crate::keys::{Edit, Key};
 use crate::link::history_answer;
 use crate::logical;
@@ -507,7 +507,7 @@ impl App {
             return;
         }
         let to = from.saturating_add(HISTORY_LINES - 1).min(last);
-        let id = mint();
+        let id = support::mint("c_");
         // An ancestor page's window rides the serving session's chain
         // read: the command stays routed to the serving session, and
         // the args name the page's segment.

@@ -5,7 +5,7 @@
 use contract::SessionId;
 use contract::events::{CommandAccepted, CommandResult};
 
-use super::{App, Effect, mint, session_command};
+use super::{App, Effect, session_command};
 use crate::completion_rows::Completions;
 use crate::keys::Key;
 use crate::slash;
@@ -63,7 +63,7 @@ impl Completion {
     /// `reloaded`; its answer, and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(&id, "commands", session, None).to_string();
         self.slash_rows = slash::rows(&[]);
         self.extensions.clear();

@@ -5,7 +5,7 @@ use contract::Envelope;
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandRejected};
 
-use super::{App, Effect, Kind, mint, read, session_command};
+use super::{App, Effect, Kind, read, session_command};
 use crate::approvals::form::Spot;
 use crate::approvals::{PanelKey, Queue};
 use crate::input::Draft;
@@ -40,7 +40,7 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let id = mint();
+        let id = support::mint("c_");
         let Some(line) = make(&mut self.queue, &id) else {
             return Effect::None;
         };
@@ -152,7 +152,7 @@ impl App {
         let Some(session) = self.queue.declined(&id) else {
             return Vec::new();
         };
-        let cancel = mint();
+        let cancel = support::mint("c_");
         let line = session_command(&cancel, "cancel", &session, None).to_string();
         self.outbox
             .pending

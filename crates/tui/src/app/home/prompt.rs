@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use super::super::reconnect::UNANSWERED;
-use super::super::{App, Effect, Kind, mint, session_command};
+use super::super::{App, Effect, Kind, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Spot, State, dependents};
 use crate::input::Draft;
@@ -285,7 +285,7 @@ impl App {
         if self.subscribed_level(&session).is_none() {
             lines.push(self.subscribe(&session, SubscribeLevel::Summary));
         }
-        let id = mint();
+        let id = support::mint("c_");
         lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
         self.home
             .questions
@@ -432,7 +432,7 @@ impl App {
         // and a swallowed press would read as a dead key. The held
         // line goes out with the hello pass, and the answer folds as
         // usual; a rejection returns an empty draft, keeping the box.
-        let command = mint();
+        let command = support::mint("c_");
         let line = json!({
             "id": command,
             "command": "import",
@@ -642,7 +642,7 @@ impl App {
 
 /// Builds the existing delete command line and its correlation id.
 fn delete_line(id: &SessionId, expect: Option<&[SessionId]>) -> (String, String) {
-    let command = mint();
+    let command = support::mint("c_");
     let line = match expect {
         None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
         Some(expect) => json!({

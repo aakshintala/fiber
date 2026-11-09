@@ -23,7 +23,7 @@ use super::call_view_rows::{
     Row, RowsInput, Source, build_frame, build_rows, edge_anchor_row, highlight_rows, row_text,
     shown_height, window,
 };
-use super::{App, Effect, Target, mint, session_command};
+use super::{App, Effect, Target, session_command};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::swapped::{Frame, List, Spot};
@@ -695,7 +695,7 @@ impl App {
             view.queue_wanted(height);
             let offset = view.pager.queued.pop_front()?;
             let path = view.artifact.clone()?;
-            let id = mint();
+            let id = support::mint("c_");
             view.pager.request = Some((id.clone(), offset));
             self.outbox.wait(&id, super::Waiting::ArtifactPage);
             session_command(

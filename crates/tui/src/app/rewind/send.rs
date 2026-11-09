@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::Rewind;
 use super::view::{EnterAction, Vis};
-use crate::app::{App, Effect, Waiting, history_args, mint, session_command};
+use crate::app::{App, Effect, Waiting, history_args, session_command};
 use crate::keys::Key;
 use crate::link::history_answer;
 use crate::swapped::Spot;
@@ -140,7 +140,7 @@ impl App {
         self.outbox.forget(&Waiting::RewindHistory);
         self.outbox.forget(&Waiting::RewindSend);
         self.rewind = Rewind::open(session.clone());
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(
             &id,
             "history",
@@ -184,7 +184,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Vec::new();
         };
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(&id, "history", &session, Some(args));
         self.outbox.wait(&id, Waiting::RewindHistory);
         self.rewind.fold.begin_wait(self.motion().now_instant());
@@ -358,7 +358,7 @@ impl App {
         let Some(serving) = self.session().cloned() else {
             return Effect::None;
         };
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(
             &id,
             "rewind",
@@ -588,7 +588,7 @@ impl App {
             summarise: self.rewind.send.summarise(),
         })
         .unwrap_or(Value::Null);
-        let id = mint();
+        let id = support::mint("c_");
         let line = session_command(&id, "rewind", &serving, Some(args));
         self.outbox.wait(&id, Waiting::RewindSend);
         self.rewind.send.begin();

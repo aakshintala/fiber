@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::super::{App, Effect, Phase, mint, session_command};
+use super::super::super::{App, Effect, Phase, session_command};
 use super::{Ask, Prompt};
 use crate::home::{QuitChoice, Spot, State};
 use crate::keys::Key;
@@ -362,7 +362,7 @@ impl App {
             if self.subscribed_level(session).is_none() {
                 lines.push(self.subscribe(session, SubscribeLevel::Summary));
             }
-            let id = mint();
+            let id = support::mint("c_");
             lines.push(
                 session_command(&id, "close", session, Some(json!({"now": true}))).to_string(),
             );
