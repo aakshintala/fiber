@@ -284,6 +284,8 @@ impl Loop {
             thinking: self.prompt.thinking,
             deferred,
         });
+        #[cfg(test)]
+        pause_preamble_for_test();
         self.publish_preamble_rows(dropped.as_deref());
         // The scope ends with the installation, before the opening: the
         // opening and its notices are session content, not the build.
@@ -506,6 +508,34 @@ pub(crate) fn pause_sandbox_between_snapshot_and_publish(paused: Box<dyn FnOnce(
 #[cfg(test)]
 fn pause_sandbox_for_test() {
     SANDBOX_SEAM_PAUSE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test-only pause between the `PreambleBuilt` append and the `/tools`
+    /// rows publish, so a test can read the rows after the new event is
+    /// appended but before `publish_preamble_rows` refreshes them.
+    static PREAMBLE_APPEND_PUBLISH_PAUSE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Parks the next `PreambleBuilt` append-to-publish window on `paused`: it
+/// runs after the append and before the publish, on the loop thread.
+#[cfg(test)]
+pub(crate) fn pause_preamble_between_append_and_publish(paused: Box<dyn FnOnce()>) {
+    PREAMBLE_APPEND_PUBLISH_PAUSE.with(|hook| {
+        *hook.borrow_mut() = Some(paused);
+    });
+}
+
+/// Runs the append-to-publish parked pause, if any, then clears it.
+#[cfg(test)]
+fn pause_preamble_for_test() {
+    PREAMBLE_APPEND_PUBLISH_PAUSE.with(|hook| {
         if let Some(paused) = hook.borrow_mut().take() {
             paused();
         }

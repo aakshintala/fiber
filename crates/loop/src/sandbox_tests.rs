@@ -25,16 +25,6 @@ fn started_with_tools(
     tools: Vec<(String, Arc<dyn contract::tool::Tool>)>,
     dir: &str,
 ) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
-    started_with_tools_and_rows(tools, dir, None)
-}
-
-/// The same loop with `/tools` publication wired to `rows`: `None`
-/// publishes nothing, as before.
-fn started_with_tools_and_rows(
-    tools: Vec<(String, Arc<dyn contract::tool::Tool>)>,
-    dir: &str,
-    rows: Option<crate::ToolRows>,
-) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     let home = fakes::TempDir::new(dir);
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -74,10 +64,6 @@ fn started_with_tools_and_rows(
         None,
     )
     .unwrap();
-    let looped = match rows {
-        Some(rows) => looped.tool_rows(rows),
-        None => looped,
-    };
     let watched = log.watch();
     (looped, log, watched, home)
 }
@@ -321,21 +307,6 @@ fn started_with_shell(
     started_with_tools(
         vec![("builtin".to_owned(), shell)],
         "fiber-loop-sandbox-seam",
-    )
-}
-
-/// The seam's refresh target with `/tools` publication wired to `rows`.
-fn started_with_shell_and_rows(
-    enabled: Arc<std::sync::Mutex<bool>>,
-    rows: crate::ToolRows,
-) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
-    let shell: Arc<dyn contract::tool::Tool> = Arc::new(ToggleShell {
-        enabled: Arc::clone(&enabled),
-    });
-    started_with_tools_and_rows(
-        vec![("builtin".to_owned(), shell)],
-        "fiber-loop-sandbox-seam",
-        Some(rows),
     )
 }
 
@@ -648,35 +619,39 @@ fn an_interleaved_flip_between_snapshot_and_publish_publishes_fresh_bytes() {
 fn rows_answer_old_bytes_after_append_before_publish() {
     let enabled = Arc::new(std::sync::Mutex::new(false));
     let rows = Arc::new(Rows::default());
-    let (mut looped, _log, _watched, _home) =
-        started_with_shell_and_rows(Arc::clone(&enabled), Rows::setter(&rows));
+    let (looped, _log, _watched, _home) = started_with_shell(Arc::clone(&enabled));
+    let mut looped = looped.tool_rows(Rows::setter(&rows));
     let (apply, _) = flipping_apply(Arc::clone(&enabled));
     looped.sandbox_apply = Some(apply);
     // The first flip completes: its build is appended and its rows are
     // published, so the second flip's window opens over known sizes.
     let answer = admit(&mut looped, true);
     assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
+    // changed the setting.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
     let on_bytes = rows.bytes("shell");
     assert!(
         registered_description(&looped).contains("confined"),
         "the first flip refreshes"
     );
-    // Park the second flip's snapshot-to-publish window: the rows must
-    // still answer the first flip's bytes, and the second build must not
-    // be appended yet. The append (`Event::PreambleBuilt` in
-    // `crates/loop/src/turn.rs`) runs before `publish_preamble_rows` on
-    // the same thread with no hook between, so a reader can see the
-    // appended first build with these old rows: that gap is the window
-    // the `/tools` polls race across.
+    // Park the second flip's append-to-publish window: the new build is
+    // already appended when the rows still answer the first flip's bytes.
+    // The append (`Event::PreambleBuilt` in `crates/loop/src/turn.rs`)
+    // runs before `publish_preamble_rows` on the same thread, so a reader
+    // in that gap sees the new event with stale rows: that gap is the
+    // window the `/tools` polls race across.
     let log_dir = looped.log.dir().to_path_buf();
-    crate::turn::pause_sandbox_between_snapshot_and_publish(Box::new({
+    let saw_window = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    crate::turn::pause_preamble_between_append_and_publish(Box::new({
         let rows = Arc::clone(&rows);
+        let saw_window = Arc::clone(&saw_window);
         move || {
+            saw_window.store(true, std::sync::atomic::Ordering::SeqCst);
             assert_eq!(
                 rows.bytes("shell"),
                 on_bytes,
-                "the rows lag the snapshot until the publish"
+                "the rows still answer the old size after the append"
             );
             let built: Vec<String> = log::read(&log_dir)
                 .expect("the log reads mid-seam")
@@ -689,10 +664,12 @@ fn rows_answer_old_bytes_after_append_before_publish() {
                         .to_owned()
                 })
                 .collect();
+            // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
+            // changed the setting.)
             assert_eq!(
                 built,
-                vec!["sandbox".to_owned()],
-                "the second build is not appended before the publish"
+                vec!["sandbox".to_owned(), "sandbox".to_owned()],
+                "the new build is appended before the publish"
             );
         }
     }));
@@ -701,6 +678,12 @@ fn rows_answer_old_bytes_after_append_before_publish() {
         matches!(answer, Ok(None)),
         "the flip back accepts: {answer:?}"
     );
+    assert!(
+        saw_window.load(std::sync::atomic::Ordering::SeqCst),
+        "the append-to-publish window ran"
+    );
+    // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
+    // changed the setting.)
     assert_eq!(
         preamble_reasons(&looped),
         vec!["sandbox".to_owned(), "sandbox".to_owned()]
