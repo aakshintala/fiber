@@ -171,8 +171,6 @@ docs/events.md	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aa
 docs/tui.md	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/contract/src/events_tests.rs	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/tui/src/shell_tests.rs	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
-.github/workflows/ci.yml	fiber-4301	plan	2026-11-09T18:55:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md	fiber-4301	plan	2026-11-09T18:55:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/keeper.rs	fiber-4054	plan	2026-11-09T18:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4440
 crates/contract/src/keeper_tests.rs	fiber-4054	plan	2026-11-09T18:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4440
 crates/jobs/src/keeper.rs	fiber-4054	plan	2026-11-09T18:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4440
