@@ -174,13 +174,6 @@ scripts/test-bug-red	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Us
 scripts/test-bug-red-cargo	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality/lints.md	fiber-4143	plan	2026-11-08T22:37:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4441
 docs/ci.md	fiber-4143	plan	2026-11-08T22:37:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4441
-crates/contract/src/diag.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
-crates/contract/src/diag_tests.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
-crates/jobs/src/delegate/run.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
-crates/jobs/src/delegate.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
-crates/jobs/src/delegate/message/resume.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
-crates/jobs/src/delegate/run_tests.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
-docs/state.md	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
 crates/tui/src/running_view.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/running_view_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/session_views_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -202,17 +195,6 @@ crates/main/tests/delegation/ask_worktree.rs	fiber-4443	plan	2026-11-08T23:18:37
 crates/main/tests/providers/databricks.rs	fiber-4443	plan	2026-11-08T23:18:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/placeholders.rs	fiber-4443	plan	2026-11-08T23:18:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/timing_tests.rs	fiber-4443	plan	2026-11-08T23:18:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/diag/src/diag.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/diag/src/diag_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/doors/src/isolation/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/extensions/tests/provider_diagnostics.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/jobs/src/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/src/timed_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/mcp/src/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/net/src/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/provider/src/http_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/job_timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/picture_timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/narrating_comments.rs	fiber-4143	plan	2026-11-08T23:35:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/xtask/4143-narrating-comments-lint	
 xtask/src/narrating_comments_tests.rs	fiber-4143	plan	2026-11-08T23:35:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/xtask/4143-narrating-comments-lint	
 xtask/tests/narrating_comments.rs	fiber-4143	plan	2026-11-08T23:35:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/xtask/4143-narrating-comments-lint	
