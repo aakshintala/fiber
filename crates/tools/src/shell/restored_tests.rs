@@ -270,6 +270,33 @@ fn an_exit_queued_before_the_run_is_reported() {
 }
 
 #[test]
+fn outputs_queued_before_the_run_show_as_one_delta() {
+    let (run, mut case) = run_for("restored-burst", "j_burst", b"", false, false);
+    let events = take_events(&mut case);
+    events.send(out("first\n")).unwrap();
+    events.send(out("second\n")).unwrap();
+    events.send(exit(0)).unwrap();
+    drop(events);
+    assert!(run.run().is_none(), "a reported exit returns no report");
+    // What was already queued goes out together: one burst shows once.
+    let deltas: Vec<String> = case
+        .emit
+        .events()
+        .into_iter()
+        .filter_map(|event| {
+            if let Event::JobDelta(delta) = event {
+                delta.progress.text
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(deltas, ["first\nsecond\n"], "one burst shows once");
+    let completed = deadline().recv_or_fail(&case.completions, "the ending");
+    assert_eq!(completed.status, Outcome::Completed);
+}
+
+#[test]
 fn closed_events_return_the_uncalled_end() {
     let (run, mut case) = run_for("restored-lost", "j_lost", b"kept\n", false, false);
     drop(take_events(&mut case));
@@ -298,8 +325,10 @@ fn closed_events_return_the_uncalled_end() {
 fn dropping_before_the_run_reports_nothing() {
     let (run, case) = run_for("restored-unstarted", "j_drop", b"kept\n", false, false);
     drop(run);
+    // The channel stays open: the uncalled report was forgotten, never
+    // dropped, so the registry's drop guard cannot record it.
     assert!(
-        case.completions.try_recv().is_err(),
+        matches!(case.completions.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "an unstarted run reports nothing"
     );
 }
@@ -322,8 +351,10 @@ fn revoking_while_blocked_reports_nothing() {
             .is_none(),
         "a revoked run returns no report"
     );
+    // The channel stays open: the uncalled report was forgotten, never
+    // dropped, so the registry's drop guard cannot record it.
     assert!(
-        case.completions.try_recv().is_err(),
+        matches!(case.completions.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "a revoked run reports nothing"
     );
     assert_eq!(std::fs::read(&case.output).unwrap(), b"kept\n");
