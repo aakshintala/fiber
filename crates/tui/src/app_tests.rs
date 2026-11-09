@@ -1747,15 +1747,19 @@ fn a_prompt_answer_with_a_shell_shaped_result_shows_nothing() {
     let mut app = app();
     attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
     let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    // The `!!` draws its running row when it is sent; no answer but its
+    // own adds another.
+    let running = vec!["! ls", "only you see this", "running"];
+    assert_eq!(texts(&app), running);
     let line = one_line(send(&mut app, "hello", now));
     app.on_line(accepted(
         &id_of(&line),
         Some(serde_json::json!({"output": "a",
             "process": {"exit_code": 0, "timed_out": false}})),
     ));
-    assert!(app.lines().is_empty());
+    assert_eq!(texts(&app), running);
     app.on_line(accepted(&id, None));
-    assert!(app.lines().is_empty());
+    assert_eq!(texts(&app), running);
 }
 
 #[test]
@@ -2045,6 +2049,52 @@ fn an_answered_shell_command_marks_new_lines_while_scrolled_up() {
         &id,
         Some(serde_json::json!({"output": "a",
             "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert!(app.has_new());
+}
+
+#[test]
+fn a_shell_delta_marks_new_lines_while_scrolled_up() {
+    // A streamed delta changes no card: only the live row marks the
+    // scroll, so `&=` in its place would leave it unmarked.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    for n in 0..30 {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("hi {n}")));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_key(Key::PageUp, now);
+    assert!(app.top().is_some());
+    assert!(!app.has_new());
+    app.on_line(shell_delta("c_1", "a\n"));
+    assert!(app.has_new());
+}
+
+#[test]
+fn a_settled_live_row_marks_new_lines_while_scrolled_up() {
+    // Settling a live row changes no card either: only the settle marks
+    // the scroll, so `&=` in its place would leave it unmarked.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    for n in 0..30 {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("hi {n}")));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_line(shell_delta("c_1", "up\n"));
+    app.on_key(Key::PageUp, now);
+    assert!(app.top().is_some());
+    assert!(!app.has_new());
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "fiber_started",
+        serde_json::json!({"version": "0.0.1", "resumed": true}),
+        None,
     ));
     assert!(app.has_new());
 }
@@ -2774,4 +2824,250 @@ fn shell_cap_screen_more_row() {
     shell_run(&mut small, 20);
     assert_eq!(texts(&small), shell_rows_want(20, &["exit 0"]));
     assert!(small.targets().is_empty());
+}
+
+/// A `shell_command_started` line for `id`.
+fn shell_started(id: &str, command: &str) -> Line {
+    session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command_started",
+        serde_json::json!({"command_id": id, "command": command}),
+        None,
+    )
+}
+
+/// A `shell_command_delta` line for `id`.
+fn shell_delta(id: &str, text: &str) -> Line {
+    session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command_delta",
+        serde_json::json!({"command_id": id, "text": text}),
+        None,
+    )
+}
+
+/// A `shell_command` line for `id` that exited 0 with `output`.
+fn shell_ended(id: Option<&str>, command: &str, output: &str) -> Line {
+    let mut payload = serde_json::json!({"command": command, "output": output,
+        "process": {"exit_code": 0, "timed_out": false}});
+    if let (Some(id), Some(object)) = (id, payload.as_object_mut()) {
+        object.insert("command_id".to_owned(), serde_json::json!(id));
+    }
+    session_line("s_aaaaaaaaaaaaaaaa", "shell_command", payload, None)
+}
+
+const SENT_NOTE: &str = "sent with your next prompt";
+
+/// A `!` run's row starts with its start line, grows with its deltas and
+/// ends as one row when its `shell_command` lands.
+#[test]
+fn a_started_run_is_a_live_row_that_its_end_replaces() {
+    // Order: the row shows the head, then the output so far, then `running`,
+    // and the ending replaces it (`docs/tui.md`, "The input box"; `docs/events.md`,
+    // "`shell_command_started`": a client folds it as a live row).
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(shell_started("c_1", "srv"));
+    assert_eq!(texts(&app), vec!["! srv", SENT_NOTE, "running"]);
+    app.on_line(shell_delta("c_1", "a\n"));
+    app.on_line(shell_delta("c_1", "b\n"));
+    assert_eq!(texts(&app), vec!["! srv", SENT_NOTE, "a", "b", "running"]);
+    app.on_line(shell_ended(Some("c_1"), "srv", "a\nb\nc\n"));
+    assert_eq!(
+        texts(&app),
+        vec!["! srv", SENT_NOTE, "a", "b", "c", "exit 0"]
+    );
+}
+
+/// A `shell_command` without a `command_id` adds a row of its own, as an
+/// older log's does, beside a live row it does not name.
+#[test]
+fn a_shell_command_without_an_id_adds_a_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_line(shell_ended(None, "old", "x\n"));
+    assert_eq!(
+        texts(&app),
+        vec![
+            "! srv", SENT_NOTE, "running", "! old", SENT_NOTE, "x", "exit 0"
+        ]
+    );
+}
+
+/// A `shell_command` whose start this terminal never saw adds its row.
+#[test]
+fn an_end_with_no_start_adds_its_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(shell_ended(Some("c_9"), "srv", "x\n"));
+    assert_eq!(texts(&app), vec!["! srv", SENT_NOTE, "x", "exit 0"]);
+}
+
+/// The side panel's `!!git` commands stream deltas under ids that never
+/// had a live row: they add nothing.
+#[test]
+fn a_delta_for_an_id_without_a_row_adds_nothing() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(shell_delta("c_panel", "On branch main\n"));
+    assert!(app.lines().is_empty());
+}
+
+/// A new process for the session ends the runs the last one left
+/// running, with the output they had and no ending.
+#[test]
+fn a_new_process_settles_a_live_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_line(shell_delta("c_1", "up\n"));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "fiber_started",
+        serde_json::json!({"version": "0.0.1", "resumed": true}),
+        None,
+    ));
+    assert_eq!(texts(&app), vec!["! srv", SENT_NOTE, "up"]);
+}
+
+/// A process that exits ends the runs it left running too.
+#[test]
+fn an_exiting_process_settles_a_live_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(shell_started("c_1", "srv"));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "fiber_exited",
+        serde_json::json!({"exit_code": 0, "usage": {}}),
+        None,
+    ));
+    assert_eq!(texts(&app), vec!["! srv", SENT_NOTE]);
+}
+
+/// A `!!` submit draws its row at once; its answer replaces the row and
+/// its refusal replaces it with the error row.
+#[test]
+fn a_show_only_submit_is_a_live_row_until_it_is_answered() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!git status", now)));
+    assert_eq!(
+        texts(&app),
+        vec!["! git status", "only you see this", "running"]
+    );
+    app.on_line(shell_delta(&id, "On branch main\n"));
+    assert_eq!(
+        texts(&app),
+        vec![
+            "! git status",
+            "only you see this",
+            "On branch main",
+            "running"
+        ]
+    );
+    app.on_line(accepted(
+        &id,
+        Some(serde_json::json!({"output": "On branch main\nclean\n",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert_eq!(
+        texts(&app),
+        vec![
+            "! git status",
+            "only you see this",
+            "On branch main",
+            "clean",
+            "exit 0"
+        ]
+    );
+}
+
+#[test]
+fn a_refused_show_only_submit_replaces_its_live_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    assert_eq!(texts(&app), vec!["! ls", "only you see this", "running"]);
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "no"}),
+        None,
+    ));
+    assert_eq!(texts(&app), vec!["! ls", "busy: no"]);
+}
+
+/// A spawn that fails after the start line is written ends with a
+/// `shell_command` of `invalid_arguments: <message>`. Every client draws
+/// the one row, and the sender draws its refusal's error row whichever of
+/// the two arrives first.
+#[test]
+fn a_spawn_failure_end_draws_its_row() {
+    for message in [
+        "No such file or directory (os error 2)",
+        "hosted call call_1: the keeper refused to start it",
+    ] {
+        let end = |id: &str| {
+            session_line(
+                "s_aaaaaaaaaaaaaaaa",
+                "shell_command",
+                serde_json::json!({"command_id": id, "command": "cmd",
+                    "output": format!("invalid_arguments: {message}"),
+                    "process": {"timed_out": false}}),
+                None,
+            )
+        };
+        let now = fakes::clock::FakeClock::new().now();
+
+        // Another client: no pending command.
+        let mut other = app();
+        attach(&mut other, now, "s_aaaaaaaaaaaaaaaa");
+        other.on_line(shell_started("c_1", "cmd"));
+        assert_eq!(texts(&other), vec!["! cmd", SENT_NOTE, "running"]);
+        other.on_line(end("c_1"));
+        assert_eq!(
+            texts(&other),
+            vec![
+                "! cmd".to_owned(),
+                SENT_NOTE.to_owned(),
+                format!("invalid_arguments: {message}")
+            ]
+        );
+
+        // The sender: the refusal first, then the end line, and the reverse.
+        let refusal = |id: &str| {
+            session_line(
+                "s_aaaaaaaaaaaaaaaa",
+                "command_rejected",
+                serde_json::json!({"command_id": id, "code": "invalid_arguments",
+                    "message": message}),
+                None,
+            )
+        };
+        let want = vec!["! cmd".to_owned(), format!("invalid_arguments: {message}")];
+        for refusal_first in [true, false] {
+            let mut sender = app();
+            attach(&mut sender, now, "s_aaaaaaaaaaaaaaaa");
+            let id = id_of(&one_line(send(&mut sender, "!cmd", now)));
+            sender.on_line(shell_started(&id, "cmd"));
+            if refusal_first {
+                sender.on_line(refusal(&id));
+                sender.on_line(end(&id));
+            } else {
+                sender.on_line(end(&id));
+                sender.on_line(refusal(&id));
+            }
+            assert_eq!(texts(&sender), want, "refusal first: {refusal_first}");
+        }
+    }
 }

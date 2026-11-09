@@ -79,6 +79,7 @@ fn extension_usage_carries_its_line() {
         | crate::inbox::Delivery::ExtensionLog(_)
         | crate::inbox::Delivery::Cancelled
         | crate::inbox::Delivery::Sandbox(..)
+        | crate::inbox::Delivery::ShellStarted(..)
         | crate::inbox::Delivery::Shell(..) => {
             panic!("ExtensionUsage carries its line")
         }

@@ -11,7 +11,7 @@ use contract::shapes::Failure;
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
     /// `FIBER_HOME` is too long for `run/hub` to fit the platform's socket
-    /// path (`docs/state.md`, "Sockets").
+    /// path (`docs/state.md`, "What each part holds").
     #[error("FIBER_HOME is too long for the hub's socket path, which must fit in {max} bytes.")]
     HomeTooLong {
         /// The longest socket path the platform binds.

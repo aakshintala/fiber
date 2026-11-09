@@ -591,8 +591,7 @@ pub(crate) fn drain(
         if present && !client_gone {
             // The refusal stays queued until its answer is written, so a
             // later command's acknowledgement on another relay cannot be
-            // forwarded first (`docs/invocation.md:1107-1112`,
-            // "Commands keep their order"): `refuse` writes the answer
+            // forwarded first (`docs/invocation.md`, "What the hub speaks"): `refuse` writes the answer
             // before `order.done` clears it.
             for (session, id) in &partial {
                 refuse(

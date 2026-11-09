@@ -1280,8 +1280,10 @@ arrived after `sessions` was sent.
 
 ### Turns
 
-- **One card per turn.** Only the person's prompt floats above its card,
-  after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
+- **One card per turn.** Prompts render as Markdown like replies, except
+  headings retain their leading `#` marker. This applies to prompts in the
+  bubble and to labelled start/session messages in the card. Only the
+  person's prompt floats above its card, after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
   of the width: the text padded one column on each side, a ▐ stripe in
   `accent` at its right edge, and "you 14:12" dim and right-aligned under it.
   A blank row separates the bubble from the card. The card is a `turn` slab
@@ -2225,6 +2227,13 @@ through the `input_status` slot ("Extension seams").
   notice. A run's output shows at most 20 lines, then a "N more lines"
   row; clicking it, or Enter on it, opens the rest in place, and again
   closes it.
+  While it runs, the row shows the output so far, then `running`, dim in
+  `attention`, where the ending will go; the ending replaces it. A `!`
+  row appears once the session records the command's start, which comes
+  before the command runs: at once, during a turn's tool calls too, and
+  as a model response ends when one is streaming. A `!!` row appears
+  when it is sent. A run whose session ended before its end was written
+  shows no ending.
 
 ### Bindings
 

@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, EventKind, Notice, SessionNamed,
-    SessionStatus, ShellCommand, SteeringQueue, TurnStarted,
+    SessionStatus, ShellCommand, ShellCommandDelta, ShellCommandStarted, SteeringQueue,
+    TurnStarted,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
@@ -30,7 +31,7 @@ use crate::keys::Edit;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
-use crate::window::{Applied, Pages};
+use crate::window::{Applied, Ended, Pages};
 use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
@@ -1970,7 +1971,12 @@ impl App {
                 if let Some(row) = row {
                     let session = session.or_else(|| self.session().cloned());
                     if let Some(session) = session {
-                        self.fold_pages(&session).add_shell(Some(row));
+                        let pages = self.fold_pages(&session);
+                        // The run's own row, when it drew one, becomes the
+                        // error row; a refusal before any start adds it.
+                        if !pages.end_shell(id, row.clone()) {
+                            pages.add_shell(Some(row));
+                        }
                     }
                 }
             }
@@ -1993,6 +1999,25 @@ impl App {
         };
         self.open_import_report(source, imported.clone(), left_behind.clone());
         true
+    }
+
+    /// A run ended with `item`, when it has one: the live row of `id`
+    /// becomes `item`, a row that already ended keeps its ending, and a
+    /// run with no row of its own, or no id, adds its row. Whether the
+    /// pages changed.
+    fn shell_ended(&mut self, session: &SessionId, id: Option<&str>, item: Option<String>) -> bool {
+        let Some(item) = item else {
+            return false;
+        };
+        let pages = self.fold_pages(session);
+        let Some(id) = id else {
+            return pages.add_shell(Some(item));
+        };
+        match pages.end_live_shell(id, item.clone()) {
+            Ended::Replaced => true,
+            Ended::Already => false,
+            Ended::None => pages.add_shell(Some(item)),
+        }
     }
 
     /// Settles an accepted command through its pending entry: the entry
@@ -2225,6 +2250,8 @@ impl App {
                 | EventKind::SteeringApplied
                 | EventKind::SteeringQueue
                 | EventKind::ShellCommand
+                | EventKind::ShellCommandStarted
+                | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
                 | EventKind::Clients
@@ -2333,6 +2360,8 @@ impl App {
                 | EventKind::SteeringApplied
                 | EventKind::SteeringQueue
                 | EventKind::ShellCommand
+                | EventKind::ShellCommandStarted
+                | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
                 | EventKind::Clients
@@ -2459,16 +2488,39 @@ impl App {
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
                         .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
-                    changed |= !kept && self.fold_pages(&envelope.session_id).add_shell(item);
+                    let id = accepted.command_id.0;
+                    changed |= !kept && self.shell_ended(&envelope.session_id, Some(&id), item);
                 }
             }
             EventKind::ShellCommand => {
                 if let Some(ran) = read!(envelope, ShellCommand) {
+                    let id = ran.command_id.as_ref().map(|id| id.0.as_str());
+                    changed |=
+                        !kept && self.shell_ended(&envelope.session_id, id, Some(shell::ran(&ran)));
+                }
+            }
+            // A `!` run draws from the line that records its start, in
+            // every client, before the command runs.
+            EventKind::ShellCommandStarted => {
+                if let Some(started) = read!(envelope, ShellCommandStarted) {
+                    let head = shell::live_head(&started.command, true);
                     changed |= !kept
                         && self
                             .fold_pages(&envelope.session_id)
-                            .add_shell(Some(shell::ran(&ran)));
+                            .start_shell(&started.command_id.0, head);
                 }
+            }
+            EventKind::ShellCommandDelta => {
+                if let Some(delta) = read!(envelope, ShellCommandDelta) {
+                    changed |= self
+                        .fold_pages(&envelope.session_id)
+                        .stream_shell(&delta.command_id.0, &delta.text);
+                }
+            }
+            // The next process, or this one's exit, ends the runs the last
+            // left running: their ending was never written.
+            EventKind::FiberStarted | EventKind::FiberExited => {
+                changed |= !kept && self.fold_pages(&envelope.session_id).settle_shells();
             }
             EventKind::CommandRejected => {
                 if let Some(rejected) = read!(envelope, CommandRejected)
@@ -2529,9 +2581,7 @@ impl App {
                     self.fold_attached_queue(&queue);
                 }
             }
-            EventKind::FiberStarted
-            | EventKind::FiberExited
-            | EventKind::SessionStarted
+            EventKind::SessionStarted
             | EventKind::Rewound
             | EventKind::Moved
             | EventKind::StepStarted
@@ -2692,6 +2742,8 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients

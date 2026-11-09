@@ -2984,7 +2984,25 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
     // fresh sizes; the catalogue re-derivation drops and adds no row.
     // `docs/tools.md`, "Tool search": `tool_search` appears only with a deferred
     // tool.)
-    let off_rows = live.tools_rows("tools_rl_off");
+    // The rebuilt build lands ahead of the refreshed rows, so a single read
+    // can still answer pre-reload sizes: poll the `tools` answer until the
+    // shell bytes move off the on-state value. Each attempt sends under its
+    // own command id so the match is that attempt's answer, never the first
+    // read's. One deadline bounds the whole wait (`docs/testing.md`, "Waits
+    // and timeouts").
+    let fresh_rows = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut attempt = 0;
+    let off_rows = loop {
+        attempt += 1;
+        let rows = live.tools_rows(&format!("tools_rl_off_fresh_{attempt}"));
+        if row_bytes(&rows, "shell") != on_row_bytes {
+            break rows;
+        }
+        assert!(
+            !fresh_rows.left().is_zero(),
+            "the /tools rows refresh after the reload: shell still answers {on_row_bytes}"
+        );
+    };
     let off_names = row_names(&off_rows);
     assert_eq!(
         on_names, off_names,

@@ -1,5 +1,5 @@
 //! Starting the session a `rewound` or `moved` line names
-//! (`docs/invocation.md`, "`rewind` starts a new session process"): the
+//! (`docs/invocation.md`, "What each command does"): the
 //! relay starts it when it carries an accepted `rewind` or
 //! `change_workspace`, and the feed starts it when a followed session's
 //! socket closes on a log ending `rewound` or `moved`, so a transition no

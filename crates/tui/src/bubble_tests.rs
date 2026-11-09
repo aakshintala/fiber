@@ -22,7 +22,44 @@ fn bubbled(text: &str, columns: u16) -> (Vec<String>, Vec<RowText>) {
 }
 
 #[test]
+fn markdown_in_bubbles_keeps_bold_style_and_heading_marker() {
+    let mut out = Rows::default();
+    rows("**bold**\n\n# comment", 40, &mut out);
+    let (lines, marks) = out.into_parts();
+    let bold = lines
+        .iter()
+        .find(|(line, _)| line.to_string().contains("bold"))
+        .expect("bold row");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "bold"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
+    assert!(
+        lines
+            .iter()
+            .any(|(line, _)| line.to_string().contains("# comment"))
+    );
+    assert_eq!(lines.len(), marks.len());
+    let mut code = Rows::default();
+    rows("```rust\nlet x = 1;\n```", 40, &mut code);
+    let (code_rows, _) = code.into_parts();
+    assert!(
+        code_rows
+            .iter()
+            .all(|(line, _)| width(&line.to_string()) <= 28)
+    );
+}
+
+#[test]
 fn bubble_has_edges_and_a_right_stripe() {
+    assert_eq!(
+        crate::markdown::render("hi", 54),
+        crate::markdown::render_prompt("hi", 54),
+        "plain prompt rows match the reply renderer"
+    );
     let (shown, texts) = bubbled("hi", 80);
     assert_eq!(shown, ["▄▄▄▄▄", " hi ▐", "▀▀▀▀▀"]);
     assert_eq!(texts.len(), 3);
@@ -46,10 +83,11 @@ fn bubble_has_edges_and_a_right_stripe() {
         Some(Some(Role::Prompt.color()))
     );
     let text = &edge[1].spans;
-    assert_eq!(text.len(), 2);
-    assert_eq!(text[1].content, "▐");
-    assert_eq!(text[1].style.fg, Some(Role::Accent.color()));
-    assert_eq!(text[1].style.bg, Some(Role::Prompt.color()));
+    assert!(text.iter().any(|span| span.content == "hi"));
+    let stripe = text.last().expect("the stripe is last");
+    assert_eq!(stripe.content, "▐");
+    assert_eq!(stripe.style.fg, Some(Role::Accent.color()));
+    assert_eq!(stripe.style.bg, Some(Role::Prompt.color()));
 }
 
 #[test]
@@ -124,15 +162,20 @@ fn wide_glyphs_at_narrow_widths() {
 fn continuation_rows_join_as_the_wrap_broke_them() {
     use Join::{Break, Wrap, WrapSpace};
     // 72% of 14 is 10 columns, 7 inside the pads and the stripe.
+    assert_eq!(
+        crate::markdown::render("hello world abcdefghij", 7),
+        crate::markdown::render_prompt("hello world abcdefghij", 7),
+        "plain prompt rows match the reply renderer"
+    );
     let (shown, texts) = bubbled("hello world abcdefghij", 14);
     assert_eq!(
         shown,
         [
             "▄▄▄▄▄▄▄▄▄▄",
             " hello   ▐",
-            " world   ▐",
-            " abcdefg ▐",
-            " hij     ▐",
+            " world a ▐",
+            " bcdefgh ▐",
+            " ij      ▐",
             "▀▀▀▀▀▀▀▀▀▀"
         ]
     );
@@ -146,7 +189,7 @@ fn continuation_rows_join_as_the_wrap_broke_them() {
             (Break, 0, 0),
             (Break, 1, 2),
             (WrapSpace, 1, 2),
-            (WrapSpace, 1, 2),
+            (Wrap, 1, 2),
             (Wrap, 1, 2),
             (Break, 0, 0),
         ]

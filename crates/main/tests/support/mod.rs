@@ -1343,6 +1343,16 @@ pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
     let mut passed = Vec::new();
     let answer = loop {
         match client.next_through(&wait, what, &passed) {
+            // A shell run's own lines carry its command id too, and none of
+            // them is its answer.
+            Some(line)
+                if matches!(
+                    line.get("kind").and_then(Value::as_str),
+                    Some("shell_command_started" | "shell_command_delta" | "shell_command")
+                ) =>
+            {
+                passed.push(line);
+            }
             Some(line) if line["payload"]["command_id"] == id => break line,
             Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {}
             Some(line) => passed.push(line),
@@ -2064,15 +2074,23 @@ pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The first stdout line, waited for under the test's [`Deadline`].
+/// The first stdout line, waited for under the test's [`Deadline`]. With a
+/// [`Diag`], expiry panics with the #3325 dump; without one it panics with
+/// the receive error rendered into the wait text.
 #[track_caller]
-pub(crate) fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
-    serde_json::from_str(
-        &deadline
-            .recv(stdout)
-            .expect("waited until the deadline for fiber_started"),
-    )
-    .unwrap()
+pub(crate) fn first_line(
+    deadline: Deadline,
+    stdout: &mpsc::Receiver<String>,
+    diag: Option<&Diag>,
+) -> Value {
+    let line = match (deadline.recv(stdout), diag) {
+        (Ok(line), _) => line,
+        (Err(mpsc::RecvTimeoutError::Timeout), Some(diag)) => {
+            panic!("{}", diag.report("fiber_started", &[]))
+        }
+        (Err(error), _) => panic!("waited until the deadline for fiber_started: {error:?}"),
+    };
+    serde_json::from_str(&line).unwrap()
 }
 
 /// The event kinds of a turn answered by [`hello`].

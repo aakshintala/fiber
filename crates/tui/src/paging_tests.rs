@@ -15,7 +15,7 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
-use super::{Delegates, Draw, Folded, Pages, Part, fold as fold_with, shell_target};
+use super::{Delegates, Draw, Ended, Folded, Pages, Part, fold as fold_with, shell_target};
 use crate::app::{App, Effect, Target};
 use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
@@ -6478,4 +6478,314 @@ fn shell_cap_carry() {
         "the carried run answers"
     );
     assert_eq!(fold.shells.get(2).map(|run| run.3), Some(false));
+}
+
+/// A `!` run's live row, started under `id`.
+fn live_pages(id: &str, command: &str) -> Pages {
+    let mut pages = Pages::new(80);
+    assert!(pages.start_shell(id, crate::shell::live_head(command, true)));
+    pages
+}
+
+/// A live row shows its head, the output so far, then `running`; each
+/// change invalidates the page's search text.
+#[test]
+fn a_live_shell_row_shows_its_output_then_running() {
+    // Order: the row shows its head, the output so far, then `running`
+    // (`docs/tui.md`, "The input box": while it runs, the row shows the output so
+    // far, then `running`; `docs/events.md`, "`shell_command_started`").
+    let mut pages = live_pages("c_1", "srv");
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "running"]
+    );
+    let clock = pages.index().clock();
+    assert!(pages.stream_shell("c_1", "one\n"));
+    assert!(pages.stream_shell("c_1", "two\n\n"));
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "one", "two", "running"]
+    );
+    assert!(
+        pages.index().clock() >= clock + 2,
+        "each delta invalidates the page"
+    );
+}
+
+/// `running` is `attention`, dim, and only the last line of the row.
+#[test]
+fn the_running_line_is_dim_attention() {
+    let mut pages = live_pages("c_1", "srv");
+    assert!(pages.stream_shell("c_1", "one"));
+    let part = pages.part(0).expect("open page");
+    let (rows, _, _, _) = pages.draw_data(0, part, Draw::Shown);
+    let drawn: Vec<(String, ratatui::style::Style)> = rows
+        .into_iter()
+        .map(|(line, _)| (line.to_string(), line.style))
+        .collect();
+    let plain = ratatui::style::Style::default();
+    assert_eq!(
+        drawn,
+        vec![
+            ("! srv".to_owned(), plain),
+            (SENT.to_owned(), plain),
+            ("one".to_owned(), plain),
+            (
+                "running".to_owned(),
+                crate::theme::style(crate::theme::Role::Attention)
+                    .add_modifier(ratatui::style::Modifier::DIM)
+            ),
+        ]
+    );
+}
+
+/// A second live row for an id is refused, so one id never draws twice.
+#[test]
+fn a_second_live_row_for_an_id_is_refused() {
+    let mut pages = live_pages("c_1", "srv");
+    assert!(!pages.start_shell("c_1", crate::shell::live_head("srv", true)));
+    assert_eq!(pages.shells.len(), 1);
+    assert!(pages.start_shell("c_2", crate::shell::live_head("srv", true)));
+    assert_eq!(pages.shells.len(), 2);
+}
+
+/// An end replaces the live row and keeps its id: a second end for the
+/// id changes nothing, and a refusal replaces even the ended row.
+#[test]
+fn an_end_replaces_the_live_row_and_keeps_its_id() {
+    let mut pages = live_pages("c_1", "srv");
+    assert!(pages.stream_shell("c_1", "partial\n"));
+    let ended = "! srv\nsent with your next prompt\nfull\nexit 0".to_owned();
+    assert_eq!(pages.end_live_shell("c_1", ended), Ended::Replaced);
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "full", "exit 0"]
+    );
+    assert!(
+        !pages.stream_shell("c_1", "late\n"),
+        "an ended row streams no more"
+    );
+
+    let clock = pages.index().clock();
+    let other = "! srv\nsent with your next prompt\nother\nexit 1".to_owned();
+    assert_eq!(pages.end_live_shell("c_1", other), Ended::Already);
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "full", "exit 0"]
+    );
+    assert_eq!(pages.index().clock(), clock, "nothing changed");
+
+    assert!(pages.end_shell("c_1", "! srv\nbusy: no".to_owned()));
+    assert_eq!(shell_texts(&pages, Draw::Shown), vec!["! srv", "busy: no"]);
+    assert_eq!(pages.shells.len(), 1, "one row throughout");
+}
+
+/// A refusal ends a row that is still live, whichever order it arrives.
+#[test]
+fn a_refusal_replaces_a_live_row() {
+    let mut pages = live_pages("c_1", "srv");
+    assert!(pages.end_shell("c_1", "! srv\nbusy: no".to_owned()));
+    assert_eq!(shell_texts(&pages, Draw::Shown), vec!["! srv", "busy: no"]);
+    assert_eq!(
+        pages.end_live_shell("c_1", "! srv\nsent with your next prompt".to_owned()),
+        Ended::Already,
+        "the refusal wins over a later end"
+    );
+    assert_eq!(shell_texts(&pages, Draw::Shown), vec!["! srv", "busy: no"]);
+}
+
+/// An id with no row ends nothing and the caller adds a row.
+#[test]
+fn an_end_for_an_unknown_id_adds_nothing() {
+    let mut pages = live_pages("c_1", "srv");
+    assert_eq!(
+        pages.end_live_shell("c_9", "! other".to_owned()),
+        Ended::None
+    );
+    assert!(!pages.end_shell("c_9", "! other".to_owned()));
+    assert_eq!(pages.shells.len(), 1);
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "running"]
+    );
+}
+
+/// A delta for an id with no live row changes no revision.
+#[test]
+fn a_delta_for_an_unknown_id_changes_nothing() {
+    let mut pages = live_pages("c_1", "srv");
+    let clock = pages.index().clock();
+    assert!(!pages.stream_shell("c_9", "stray\n"));
+    assert_eq!(pages.index().clock(), clock);
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "running"]
+    );
+}
+
+/// Settling drops `running` and keeps the output; a second settle has
+/// nothing to do.
+#[test]
+fn settling_drops_running_and_keeps_the_output() {
+    let mut pages = live_pages("c_1", "srv");
+    assert!(pages.stream_shell("c_1", "kept\n"));
+    assert!(pages.start_shell("c_2", crate::shell::live_head("two", true)));
+    assert_eq!(
+        pages.end_live_shell(
+            "c_2",
+            "! two\nsent with your next prompt\nexit 0".to_owned()
+        ),
+        Ended::Replaced
+    );
+    let clock = pages.index().clock();
+    assert!(pages.settle_shells());
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        vec!["! srv", SENT, "kept", "! two", SENT, "exit 0"]
+    );
+    assert!(pages.index().clock() > clock, "the page's text changed");
+    let clock = pages.index().clock();
+    assert!(!pages.settle_shells());
+    assert_eq!(pages.index().clock(), clock);
+    assert!(
+        !pages.stream_shell("c_1", "after\n"),
+        "a settled row is done"
+    );
+}
+
+/// A row that ran for hours keeps the newest 64 KiB it streamed.
+#[test]
+fn streamed_text_past_the_cap_keeps_the_newest() {
+    let mut pages = live_pages("c_1", "srv");
+    assert!(pages.stream_shell("c_1", "oldest\n"));
+    assert!(pages.stream_shell("c_1", &"x".repeat(support::pace::HELD_MAX)));
+    assert!(pages.stream_shell("c_1", "\nnewest"));
+    let text = pages.shells.first().map(|run| run.2.clone()).unwrap();
+    let head = crate::shell::live_head("srv", true);
+    assert!(
+        text.len() <= head.len() + 1 + support::pace::HELD_MAX,
+        "{} bytes",
+        text.len()
+    );
+    assert!(text.ends_with("\nnewest"));
+    assert!(!text.contains("oldest"));
+    assert!(text.starts_with(&head));
+}
+
+/// A reload merge keeps one live row per id: the preview's row for a run
+/// on a carried page, and the fold's for its own pages.
+#[test]
+fn a_reload_merge_keeps_one_live_row_per_id() {
+    let (mut preview, mut fold, len, summaries) = carry_edge();
+    // The carried ancestor page holds a live row for `c_dup` and one for
+    // `c_anc`; the fold has its own row for `c_dup` and one for `c_new`.
+    for (id, page) in [("c_dup", 0), ("c_anc", 1)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shell_runs.insert(
+            id.to_owned(),
+            super::ShellRun::new(preview.shells.len(), crate::shell::live_head(id, true)),
+        );
+        preview.shells_running.insert(preview.shells.len());
+        preview
+            .shells
+            .push((page, 0, crate::shell::live_head(id, true), false));
+    }
+    for id in ["c_dup", "c_new"] {
+        fold.shell_index
+            .entry((1, 0))
+            .or_default()
+            .push(fold.shells.len());
+        fold.shell_runs.insert(
+            id.to_owned(),
+            super::ShellRun::new(fold.shells.len(), crate::shell::live_head(id, true)),
+        );
+        fold.shells_running.insert(fold.shells.len());
+        fold.shells
+            .push((1, 0, crate::shell::live_head(id, true), false));
+    }
+    preview.carry_chain(&mut fold);
+    let mut ids: Vec<(&str, usize)> = fold
+        .shell_runs
+        .iter()
+        .map(|(id, run)| (id.as_str(), run.slot))
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![("c_anc", 1), ("c_dup", 0), ("c_new", 3)]);
+    let mut running: Vec<usize> = fold.shells_running.iter().copied().collect();
+    running.sort_unstable();
+    assert_eq!(
+        running,
+        vec![0, 1, 3],
+        "the duplicate's second row does not run"
+    );
+    assert_eq!(fold.shells.len(), 4);
+    assert_eq!(fold.shells.get(3).map(|run| run.0), Some(1 + len));
+    assert_eq!(fold.shells.get(3).map(|run| run.1), Some(summaries));
+}
+
+/// A reload merge drops a live row on the first page past the carried
+/// run: below `len` carries, at `len` does not (`*page < len`).
+#[test]
+fn a_reload_merge_drops_a_live_row_on_the_first_dropped_page() {
+    let (mut preview, mut fold, len, _summaries) = carry_edge();
+    for (id, page) in [("c_keep", 0), ("c_seam", len)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shell_runs.insert(
+            id.to_owned(),
+            super::ShellRun::new(preview.shells.len(), crate::shell::live_head(id, true)),
+        );
+        preview.shells_running.insert(preview.shells.len());
+        preview
+            .shells
+            .push((page, 0, crate::shell::live_head(id, true), false));
+    }
+    preview.carry_chain(&mut fold);
+    assert!(
+        !fold.shell_runs.contains_key("c_seam"),
+        "a run on page len is dropped"
+    );
+    assert!(fold.shell_runs.contains_key("c_keep"));
+    assert_eq!(fold.shells.len(), 1);
+}
+
+/// A reload merge renumbers a carried run past a dropped row: the third
+/// row's run moves from slot 2 to slot 1, keeping its new slot.
+#[test]
+fn a_reload_merge_renumbers_a_carried_run_past_a_dropped_row() {
+    let (mut preview, mut fold, _len, _summaries) = carry_edge();
+    for (id, page) in [("c_first", 0), ("c_dropped", 9), ("c_moved", 1)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shell_runs.insert(
+            id.to_owned(),
+            super::ShellRun::new(preview.shells.len(), crate::shell::live_head(id, true)),
+        );
+        preview.shells_running.insert(preview.shells.len());
+        preview
+            .shells
+            .push((page, 0, crate::shell::live_head(id, true), false));
+    }
+    preview.carry_chain(&mut fold);
+    assert!(!fold.shell_runs.contains_key("c_dropped"));
+    assert_eq!(fold.shell_runs.get("c_first").map(|run| run.slot), Some(0));
+    assert_eq!(
+        fold.shell_runs.get("c_moved").map(|run| run.slot),
+        Some(1),
+        "the carried run keeps its new slot, not its old one"
+    );
+    let mut running: Vec<usize> = fold.shells_running.iter().copied().collect();
+    running.sort_unstable();
+    assert_eq!(running, vec![0, 1]);
+    assert_eq!(fold.shells.len(), 2);
 }

@@ -430,7 +430,7 @@ impl App {
     /// Opening closes the other views and search first, so drawing,
     /// scrolling and focus act on the shown transcript with no per-call
     /// routing.
-    pub(super) fn open_item(&mut self, job: &JobId) -> Effect {
+    pub(crate) fn open_item(&mut self, job: &JobId) -> Effect {
         let Some(record) = self.items.jobs.get(job).cloned() else {
             return Effect::None;
         };
@@ -845,6 +845,8 @@ impl App {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients

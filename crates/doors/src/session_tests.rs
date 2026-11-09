@@ -2119,7 +2119,8 @@ fn stopped_before_start_answer(
         command: "true".to_owned(),
         send: false,
     };
-    let running = crate::shell::start(&gate, &args).expect("the driver shell is wired");
+    let running = crate::shell::start(&gate, &contract::CommandId("c_test".into()), &args, None)
+        .expect("the driver shell is wired");
     let (ready_tx, ready_rx) = mpsc::channel();
     let (go_tx, go_rx) = mpsc::channel();
     let (answer_tx, answer_rx) = mpsc::channel();
@@ -2685,7 +2686,9 @@ fn abandon_unregisters_a_driver_shell_that_never_ran() {
         command: "true".to_owned(),
         send: false,
     };
-    let Some(running) = crate::shell::start(&gate, &command) else {
+    let Some(running) =
+        crate::shell::start(&gate, &contract::CommandId("c_test".into()), &command, None)
+    else {
         panic!("the driver shell passed its checks");
     };
     assert_eq!(gate.shells.running_len(), 1);
@@ -7675,5 +7678,603 @@ fn a_session_wired_check_is_the_check_the_import_runs() {
         "{report:?}"
     );
     assert!(!fiber_home.join("skills/review/SKILL.md").exists());
+    close_within(opened.session, opened.log);
+}
+
+/// What a [`Starting`] stub returns once it is allowed to start.
+enum Ending {
+    /// A process that exits 0.
+    Exits,
+    /// No process and this failure: a spawn that failed.
+    SpawnFails(&'static str),
+    /// A process whose output spilled to a partial file that cannot be
+    /// removed.
+    SpillUnremovable(std::path::PathBuf),
+}
+
+/// A driver shell that asks to start, as the shell tool does, then streams
+/// its deltas and ends as `ending` says.
+struct Starting {
+    asks: bool,
+    deltas: Vec<&'static str>,
+    ending: Ending,
+    /// Whether `run` got past the start hook.
+    started: AtomicBool,
+    /// Whether the emitter asked for paced output when `run` ran.
+    paced: AtomicBool,
+}
+
+impl Starting {
+    fn new(asks: bool, deltas: Vec<&'static str>, ending: Ending) -> Arc<Self> {
+        Arc::new(Self {
+            asks,
+            deltas,
+            ending,
+            started: AtomicBool::new(false),
+            paced: AtomicBool::new(false),
+        })
+    }
+
+    fn exits(deltas: Vec<&'static str>) -> Arc<Self> {
+        Self::new(true, deltas, Ending::Exits)
+    }
+
+    fn started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+
+    fn paced(&self) -> bool {
+        self.paced.load(Ordering::SeqCst)
+    }
+}
+
+fn exit_zero() -> Process {
+    Process {
+        exit_code: Some(0),
+        signal: None,
+        timed_out: false,
+    }
+}
+
+impl Tool for Starting {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        emit: &dyn Emit,
+    ) -> Output {
+        if self.asks && !emit.starting() {
+            // The tool's own shape for a call cancelled before it started.
+            return Output {
+                content: vec![ContentPart::Text {
+                    text: "Cancelled before it started.\n".to_owned(),
+                }],
+                ..Output::default()
+            };
+        }
+        self.started.store(true, Ordering::SeqCst);
+        self.paced.store(emit.paced(), Ordering::SeqCst);
+        for text in &self.deltas {
+            emit.emit(&Event::ToolCallDelta(contract::events::Progress {
+                text: Some((*text).to_owned()),
+                details: None,
+            }));
+        }
+        match &self.ending {
+            Ending::Exits => Output {
+                content: vec![ContentPart::Text {
+                    text: "done\n".to_owned(),
+                }],
+                process: Some(exit_zero()),
+                ..Output::default()
+            },
+            Ending::SpawnFails(message) => Output {
+                error: Some(contract::shapes::Failure {
+                    code: ErrorCode::InvalidArguments,
+                    message: (*message).to_owned(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                ..Output::default()
+            },
+            Ending::SpillUnremovable(missing) => Output {
+                process: Some(exit_zero()),
+                spilled: Some(contract::tool::Spilled {
+                    head: "head".to_owned(),
+                    tail: "tail".to_owned(),
+                    head_bytes: 4,
+                    tail_bytes: 4,
+                    removed: 8,
+                    file: Err(contract::tool::Unsaved {
+                        message: "the output could not be kept".to_owned(),
+                        left: Some(missing.clone()),
+                    }),
+                }),
+                ..Output::default()
+            },
+        }
+    }
+}
+
+/// Does what the loop does for a `ShellStarted`: writes the durable line
+/// while it sets the handshake, then accepts.
+fn write_start(
+    log: &log::Log,
+    line: contract::events::ShellCommandStarted,
+    handshake: &Mutex<contract::inbox::Handshake>,
+    ack: contract::inbox::Ack,
+) {
+    let mut state = lock(handshake);
+    log.append(&Event::ShellCommandStarted(line), None, None)
+        .unwrap();
+    *state = contract::inbox::Handshake::Written;
+    drop(state);
+    (ack.0)(Ok(None));
+}
+
+/// A driver shell worker on a thread of its own, as the reader runs it:
+/// its answer, and a signal that it returned and untracked itself.
+struct Worker {
+    answers: mpsc::Receiver<contract::inbox::Answer>,
+    done: mpsc::Receiver<()>,
+}
+
+fn run_worker(gate: &Arc<Gate>, id: &str, send: bool) -> Worker {
+    let args = contract::commands::Shell {
+        command: "sleep 60".to_owned(),
+        send,
+    };
+    let running = crate::shell::start(gate, &CommandId(id.into()), &args, None)
+        .expect("the driver shell is wired");
+    let (answer_tx, answers) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let gate = Arc::clone(gate);
+    thread::spawn(move || {
+        running.finish(
+            &gate,
+            contract::inbox::Ack(Box::new(move |answer| {
+                let _gone = answer_tx.send(answer);
+            })),
+        );
+        let _gone = done_tx.send(());
+    });
+    Worker { answers, done }
+}
+
+/// The next delivery, within [`DEADLINE`].
+fn next_delivery(inbox: &mpsc::Receiver<Delivery>) -> Delivery {
+    Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("a delivery reached the loop's inbox")
+}
+
+/// The line a worker's end carries, taking the `Delivery::Shell` and
+/// accepting it.
+fn next_end(inbox: &mpsc::Receiver<Delivery>) -> contract::events::ShellCommand {
+    let Delivery::Shell(line, ack) = next_delivery(inbox) else {
+        panic!("the worker's end reached the loop");
+    };
+    (ack.0)(Ok(None));
+    line
+}
+
+#[test]
+fn a_sent_driver_shell_waits_for_its_start_line_then_streams_to_every_client() {
+    let opened = Opened::open(Vec::new());
+    let stub = Starting::exits(vec!["one\n", "two\n"]);
+    opened.session.shell(stub.clone());
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    let mut seen: Vec<Value> = Vec::new();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_full", "full")).unwrap();
+            let _ack = recv(&client);
+            client
+                .send(
+                    r#"{"id":"c_bang","command":"shell","args":{"command":"sleep 60","send":true}}"#,
+                )
+                .unwrap();
+            let Delivery::ShellStarted(line, handshake, ack) = next_delivery(&inbox) else {
+                panic!("the shell asks the loop to write its start");
+            };
+            assert_eq!(line.command_id, CommandId("c_bang".into()));
+            assert_eq!(line.command, "sleep 60");
+            assert!(!stub.started(), "the command waits for its start line");
+            write_start(&log, line, &handshake, ack);
+            let ended = next_end(&inbox);
+            assert_eq!(ended.command_id, Some(CommandId("c_bang".into())));
+            assert_eq!(ended.command, "sleep 60");
+            assert!(stub.started());
+            assert!(
+                stub.paced(),
+                "the driver shell streams paced output as `job_delta` is"
+            );
+            let wait = Deadline::after(DEADLINE);
+            let mut deltas = 0;
+            while deltas < 2 {
+                let line = client.recv(wait).expect("a delta reached the client");
+                if line["kind"] == "shell_command_delta" {
+                    deltas += 1;
+                }
+                seen.push(line);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let kinds: Vec<&str> = seen
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    // Order: the start comes before any delta (`docs/events.md`,
+    // "`shell_command_started`": before any of its `shell_command_delta` lines).
+    let started = kinds
+        .iter()
+        .position(|kind| *kind == "shell_command_started")
+        .expect("the full client saw the start line");
+    assert!(seen[started]["seq"].is_number(), "the start is durable");
+    assert_eq!(seen[started]["payload"]["command_id"], "c_bang");
+    let deltas: Vec<&Value> = seen
+        .iter()
+        .filter(|line| line["kind"] == "shell_command_delta")
+        .collect();
+    // Count: the stub exits with two outputs, so two deltas; the order of
+    // the two texts follows the stub's write order, not a doc promise.
+    assert_eq!(deltas.len(), 2);
+    for delta in &deltas {
+        assert_eq!(delta["payload"]["command_id"], "c_bang");
+        assert!(delta.get("seq").is_none_or(Value::is_null), "ephemeral");
+    }
+    assert_eq!(deltas[0]["payload"]["text"], "one\n");
+    assert_eq!(deltas[1]["payload"]["text"], "two\n");
+    // Order: the start line comes before any delta (`docs/events.md`,
+    // "`shell_command_started`").
+    assert!(
+        kinds
+            .iter()
+            .position(|kind| *kind == "shell_command_delta")
+            .unwrap()
+            > started,
+        "the start line comes before any delta: {kinds:?}"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_show_only_driver_shell_streams_to_its_sender_only_and_logs_nothing() {
+    let opened = Opened::open(Vec::new());
+    let stub = Starting::exits(vec!["one\n", "two\n"]);
+    opened.session.shell(stub);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    let mut sender_saw: Vec<Value> = Vec::new();
+    let mut other_saw: Vec<Value> = Vec::new();
+    let mut counted = (0, 0);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let sender = Client::connect(&socket).unwrap();
+            sender.send(&subscribe_line("c_sender", "full")).unwrap();
+            let _ack = recv(&sender);
+            let other = Client::connect(&socket).unwrap();
+            other.send(&subscribe_line("c_other", "full")).unwrap();
+            let _ack = recv(&other);
+            counted.0 = log.count();
+            sender
+                .send(
+                    r#"{"id":"c_show","command":"shell","args":{"command":"git status","send":false}}"#,
+                )
+                .unwrap();
+            let wait = Deadline::after(DEADLINE);
+            loop {
+                let line = sender.recv(wait).expect("the sender is answered");
+                let answered = line["kind"] == "command_accepted"
+                    && line["payload"]["command_id"] == "c_show";
+                sender_saw.push(line);
+                if answered {
+                    break;
+                }
+            }
+            counted.1 = log.count();
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "a show-only shell asks the loop for nothing"
+            );
+            // A durable marker bounds what the other client has seen by
+            // now: it reads on to the marker, with no delta before it.
+            log.append(
+                &Event::SessionNamed(contract::events::SessionNamed {
+                    name: Some("marker".into()),
+                    by: contract::events::NamedBy::Person,
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+            let wait = Deadline::after(DEADLINE);
+            loop {
+                let line = other.recv(wait).expect("the marker reached the other client");
+                let marker = line["kind"] == "session_named";
+                other_saw.push(line);
+                if marker {
+                    break;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(counted.0, counted.1, "a show-only shell logs nothing");
+    let deltas: Vec<&Value> = sender_saw
+        .iter()
+        .filter(|line| line["kind"] == "shell_command_delta")
+        .collect();
+    assert_eq!(
+        deltas.len(),
+        2,
+        "the sender saw both deltas: {sender_saw:?}"
+    );
+    assert_eq!(deltas[0]["payload"]["command_id"], "c_show");
+    assert_eq!(deltas[0]["payload"]["text"], "one\n");
+    assert_eq!(deltas[1]["payload"]["text"], "two\n");
+    let last = sender_saw.last().unwrap();
+    assert_eq!(last["kind"], "command_accepted", "the deltas come first");
+    assert!(
+        !other_saw
+            .iter()
+            .any(|line| line["kind"] == "shell_command_delta"),
+        "another client sees none: {other_saw:?}"
+    );
+    close_within(opened.session, opened.log);
+}
+
+/// A sent driver shell whose start the loop never answers, stopped by
+/// `stop`: the stub never starts, the handshake reads `Abandoned`, and the
+/// sender's answer is the rejection the stop means.
+fn unanswered_start(stop: impl FnOnce(&Gate)) -> (contract::inbox::Answer, bool, bool) {
+    let opened = Opened::open(Vec::new());
+    let stub = Starting::exits(vec!["never\n"]);
+    opened.session.shell(stub.clone());
+    let gate = Arc::clone(&opened.session.gate);
+    let mut result = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let worker = run_worker(&gate, "c_bang", true);
+            let Delivery::ShellStarted(_line, handshake, held) = next_delivery(&inbox) else {
+                panic!("the shell asks the loop to write its start");
+            };
+            stop(&gate);
+            let answer = Deadline::after(DEADLINE)
+                .recv(&worker.answers)
+                .expect("the sender is answered without the loop");
+            Deadline::after(DEADLINE)
+                .recv(&worker.done)
+                .expect("the worker returned");
+            let abandoned = *lock(&handshake) == contract::inbox::Handshake::Abandoned;
+            drop(held);
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "an abandoned start sends no end"
+            );
+            result = Some((answer, abandoned, stub.started()));
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+    result.expect("the run completed")
+}
+
+#[test]
+fn a_cancel_ends_a_sent_shell_whose_start_the_loop_never_answers() {
+    let (answer, abandoned, started) = unanswered_start(Gate::cancel_shells);
+    assert!(abandoned, "the worker gave up its pending start");
+    assert!(!started, "the command never started");
+    let Err(rejection) = answer else {
+        panic!("a cancelled start is rejected");
+    };
+    assert_eq!(rejection.code, ErrorCode::Cancelled);
+}
+
+#[test]
+fn a_close_ends_a_sent_shell_whose_start_the_loop_never_answers() {
+    let (answer, abandoned, started) = unanswered_start(|gate| {
+        gate.mark_closed();
+        gate.cancel_shells();
+    });
+    assert!(abandoned);
+    assert!(!started);
+    let Err(rejection) = answer else {
+        panic!("a start ended by close is rejected");
+    };
+    assert_eq!(rejection.code, ErrorCode::Closing);
+}
+
+#[test]
+fn a_start_the_loop_answers_closing_never_starts_the_command() {
+    let opened = Opened::open(Vec::new());
+    let stub = Starting::exits(vec!["never\n"]);
+    opened.session.shell(stub.clone());
+    let gate = Arc::clone(&opened.session.gate);
+    let mut result = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let worker = run_worker(&gate, "c_bang", true);
+            let Delivery::ShellStarted(_line, handshake, ack) = next_delivery(&inbox) else {
+                panic!("the shell asks the loop to write its start");
+            };
+            // The loop answers `closing` only once close has begun, which
+            // closes admission first.
+            gate.mark_closed();
+            (ack.0)(Err(contract::inbox::Rejection {
+                code: ErrorCode::Closing,
+                message: crate::client::ENDED.to_owned(),
+            }));
+            let answer = Deadline::after(DEADLINE)
+                .recv(&worker.answers)
+                .expect("the sender is answered");
+            result = Some((answer, *lock(&handshake), stub.started()));
+            Ok(())
+        })
+        .unwrap();
+    let (answer, state, started) = result.expect("the run completed");
+    let Err(rejection) = answer else {
+        panic!("a refused start is rejected");
+    };
+    assert_eq!(rejection.code, ErrorCode::Closing);
+    assert_eq!(state, contract::inbox::Handshake::Abandoned);
+    assert!(!started);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_cancel_after_the_start_is_written_still_runs_the_command() {
+    let opened = Opened::open(Vec::new());
+    let stub = Starting::exits(vec!["ran\n"]);
+    opened.session.shell(stub.clone());
+    let gate = Arc::clone(&opened.session.gate);
+    let mut ended = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let worker = run_worker(&gate, "c_bang", true);
+            let Delivery::ShellStarted(_line, handshake, held) = next_delivery(&inbox) else {
+                panic!("the shell asks the loop to write its start");
+            };
+            // The loop wrote the line (the handshake says so) but has not
+            // answered when the cancel lands.
+            *lock(&handshake) = contract::inbox::Handshake::Written;
+            gate.cancel_shells();
+            let line = next_end(&inbox);
+            Deadline::after(DEADLINE)
+                .recv(&worker.done)
+                .expect("the worker returned");
+            drop(held);
+            ended = Some((line, stub.started()));
+            Ok(())
+        })
+        .unwrap();
+    let (line, started) = ended.expect("the run completed");
+    assert!(started, "a written start always gets its run");
+    assert_eq!(line.command_id, Some(CommandId("c_bang".into())));
+    close_within(opened.session, opened.log);
+}
+
+/// A sent driver shell whose start is written and whose tool then ends as
+/// `ending` says: the sender's answer, the end line the loop is sent, and
+/// whether the inbox held anything after it.
+fn ended_after_start(
+    ending: Ending,
+) -> (
+    contract::inbox::Answer,
+    contract::events::ShellCommand,
+    bool,
+) {
+    let opened = Opened::open(Vec::new());
+    opened
+        .session
+        .shell(Starting::new(true, vec!["partial\n"], ending));
+    let gate = Arc::clone(&opened.session.gate);
+    let log = Arc::clone(&opened.log);
+    let mut result = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let worker = run_worker(&gate, "c_bang", true);
+            let Delivery::ShellStarted(line, handshake, ack) = next_delivery(&inbox) else {
+                panic!("the shell asks the loop to write its start");
+            };
+            write_start(&log, line, &handshake, ack);
+            let end = next_end(&inbox);
+            Deadline::after(DEADLINE)
+                .recv(&worker.done)
+                .expect("the worker returned");
+            let answer = worker.answers.try_recv().expect("the sender was answered");
+            assert!(
+                worker.answers.try_recv().is_err(),
+                "the sender is answered exactly once"
+            );
+            assert_eq!(gate.shells.running_len(), 0, "the worker untracked itself");
+            result = Some((answer, end, inbox.try_recv().is_err()));
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+    result.expect("the run completed")
+}
+
+#[test]
+fn a_spawn_failure_after_start_sends_one_end_line() {
+    for message in [
+        "No such file or directory (os error 2)",
+        "hosted call call_1: the keeper refused to start it",
+    ] {
+        let (answer, end, quiet) = ended_after_start(Ending::SpawnFails(message));
+        let Err(rejection) = answer else {
+            panic!("a spawn that failed is rejected");
+        };
+        assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+        assert_eq!(rejection.message, message);
+        assert_eq!(end.command_id, Some(CommandId("c_bang".into())));
+        assert_eq!(end.output, format!("invalid_arguments: {message}"));
+        assert_eq!(end.process.exit_code, None);
+        assert_eq!(end.process.signal, None);
+        assert!(!end.process.timed_out);
+        assert!(end.artifact.is_none());
+        assert!(quiet, "exactly one end line");
+    }
+}
+
+#[test]
+fn a_rejection_after_the_run_sends_one_end_line() {
+    let dir = fakes::TempDir::new("fd-unremovable");
+    let missing = dir.path().join("partial-that-is-not-there");
+    let (answer, end, quiet) = ended_after_start(Ending::SpillUnremovable(missing));
+    let Err(rejection) = answer else {
+        panic!("a spill that cannot be cleaned is rejected");
+    };
+    assert_eq!(rejection.code, ErrorCode::IoFailed);
+    assert!(
+        end.output.starts_with("io_failed: The partial output at "),
+        "{}",
+        end.output
+    );
+    assert_eq!(end.process, exit_zero(), "the run's own process is kept");
+    assert!(quiet, "exactly one end line");
+}
+
+#[test]
+fn a_shell_that_never_asks_to_start_sends_no_start_request() {
+    let opened = Opened::open(Vec::new());
+    opened
+        .session
+        .shell(Starting::new(false, Vec::new(), Ending::Exits));
+    let gate = Arc::clone(&opened.session.gate);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let _worker = run_worker(&gate, "c_bang", true);
+            let line = next_end(&inbox);
+            assert_eq!(line.command_id, Some(CommandId("c_bang".into())));
+            assert!(inbox.try_recv().is_err(), "no start request preceded it");
+            Ok(())
+        })
+        .unwrap();
     close_within(opened.session, opened.log);
 }

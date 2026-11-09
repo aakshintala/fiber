@@ -189,6 +189,7 @@ fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
         | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
         | Delivery::Shell(..)
+        | Delivery::ShellStarted(..)
         | Delivery::Cancelled => panic!("the prompt arrives as a prompt"),
     }
 }
@@ -412,6 +413,7 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             | Delivery::ExtensionUsage(_)
             | Delivery::DelegateUsage { .. }
             | Delivery::Close(_)
+            | Delivery::ShellStarted(..)
             | Delivery::Shell(..) => panic!("the prompt arrives as a prompt"),
         }
         Ok(())
