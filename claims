@@ -284,3 +284,4 @@ crates/hub/src/archive.rs	fiber-4489	plan	2026-11-09T22:21:41Z	roundhouse-7010-p
 crates/hub/src/archive_tests.rs	fiber-4489	plan	2026-11-09T22:21:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/commands/archive.rs	fiber-4489	plan	2026-11-09T22:21:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/*archive*.snap	fiber-4489	plan	2026-11-09T22:21:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/turn.rs	fiber-4484	plan	2026-11-09T22:53:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4498
