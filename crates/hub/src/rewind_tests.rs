@@ -1028,7 +1028,7 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
             !serde_json::to_string(&rejection).unwrap().contains(&next),
             "the rejection carries no new session id: {rejection}"
         );
-        // `docs/invocation.md`, "What each command does": the hub retries the same child id once when the old process exits.
+        // `docs/invocation.md`, "What the hub speaks": the hub retries the same child id once when the old process exits.
         assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
         // Before the old socket is released, a command for the new
         // session names a session with no log: it is rejected
@@ -1042,7 +1042,7 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         assert_eq!(refused["payload"]["code"], "session_not_found", "{refused}");
         // The old socket closes: the redirect retries the recorded
         // child once through the kept level, and the retry fails like the
-        // initial attempt (`docs/invocation.md`, "What each command does": the
+        // initial attempt (`docs/invocation.md`, "What the hub speaks": the
         // hub retries the same child id once when the old process exits).
         // The retry runs on the relay thread after the session thread
         // ends, so its starter signal ends the wait below: the retry's
@@ -1058,7 +1058,7 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         }));
         let answered = client.next("the old session's later answer");
         assert_eq!(answered["payload"]["command_id"], "c_old2", "{answered}");
-        // `docs/invocation.md`, "What each command does": the hub retries the same child id once when the old process exits.
+        // `docs/invocation.md`, "What the hub speaks": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             2,
@@ -1505,7 +1505,7 @@ fn follow_without_a_kept_level_starts_the_child_but_attaches_nothing() {
     follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
     // The retry is not conditional on the level: the child starts, but no
     // relay is published without one to attach.
-    // `docs/invocation.md`, "What each command does": the hub retries the same child id once when the old process exits.
+    // `docs/invocation.md`, "What the hub speaks": the hub retries the same child id once when the old process exits.
     assert_eq!(starter.rewound().len(), 1, "the child still starts");
     assert!(starter.resumed().is_empty(), "a continued log starts");
     assert!(
@@ -2721,7 +2721,7 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         // old log still ends `moved`.
         let refused = reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
         assert_eq!(refused.code, ErrorCode::ExtensionRequiredFailed);
-        // `docs/invocation.md`, "What each command does": the hub retries the same child id once when the old process exits.
+        // `docs/invocation.md`, "What the hub speaks": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             1,
@@ -2937,7 +2937,7 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
         let starter = FailOnceThenBind::new(&temp.dir);
         let hub = temp.hub(starter.clone());
         // The move-time reach is the initial attempt: it fails, and the
-        // old log still ends `moved` (`docs/invocation.md`, "What each command does": the retry follows the initial attempt).
+        // old log still ends `moved` (`docs/invocation.md`, "What the hub speaks": the retry follows the initial attempt).
         reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
         assert_eq!(
             starter.attempts().len(),
@@ -3024,7 +3024,7 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
         );
         first.join().unwrap();
         second.join().unwrap();
-        // `docs/invocation.md`, "What each command does": the hub retries the
+        // `docs/invocation.md`, "What the hub speaks": the hub retries the
         // same child id once when the old process exits.
         assert_eq!(
             starter.attempts().len(),
@@ -3049,8 +3049,7 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
 /// socket's EOF even when the feed never observes the old process exit
 /// (#3565): the retry does not wait for the feed's scan. With and without
 /// a saved subscription, the shared decision still makes the one retry;
-/// only attaching needs the kept level (`docs/invocation.md`, "What the hub speaks",
-/// "What the hub speaks": the hub retries the same child id once when
+/// only attaching needs the kept level (`docs/invocation.md`, "What the hub speaks": the hub retries the same child id once when
 /// the old process exits).
 #[test]
 fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
@@ -3077,7 +3076,7 @@ fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
         );
         let hub = temp.hub(starter.clone());
         reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
-        // `docs/invocation.md`, "What each command does": the retry follows the
+        // `docs/invocation.md`, "What the hub speaks": the retry follows the
         // initial attempt.
         assert_eq!(
             starter.rewound().len(),
@@ -3096,7 +3095,7 @@ fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
         let (write, _) = UnixStream::pair().unwrap();
         // No feed callback runs: the old process exits before the scan.
         follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
-        // `docs/invocation.md`, "What each command does": the hub retries the
+        // `docs/invocation.md`, "What the hub speaks": the hub retries the
         // same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
@@ -3169,7 +3168,7 @@ fn a_failed_old_exit_retry_is_never_repeated() {
         &SessionId(old.clone()),
         &SessionId(next.clone()),
     ));
-    // `docs/invocation.md`, "What each command does": the hub retries the same child id once when the old process exits.
+    // `docs/invocation.md`, "What the hub speaks": the hub retries the same child id once when the old process exits.
     assert_eq!(
         starter.rewound().len(),
         2,
