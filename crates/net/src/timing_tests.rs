@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{Op, Timing};
+use contract::diag::{Op, Timing, TimingName};
 use fakes::Deadline;
 use ureq::unversioned::resolver::{DefaultResolver, Resolver};
 use ureq::unversioned::transport::{
@@ -51,11 +51,14 @@ impl Capture {
 
     fn timing(self: &Arc<Self>) -> Timing {
         let me = Arc::clone(self);
-        Arc::new(move |op, tool, started| {
+        Arc::new(move |op, name, started| {
             let start = me.clock.now();
             me.calls.lock().unwrap().push(Call {
                 op,
-                tool: tool.map(str::to_owned),
+                tool: name.and_then(|name| match name {
+                    TimingName::Tool(tool) => Some(tool.to_owned()),
+                    TimingName::Job(_) => None,
+                }),
                 started: started.is_some(),
                 start,
             });

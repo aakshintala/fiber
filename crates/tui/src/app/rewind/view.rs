@@ -386,6 +386,7 @@ pub(super) fn render(
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Rewind".to_owned(),
         command: "/rewind".to_owned(),
         rows,

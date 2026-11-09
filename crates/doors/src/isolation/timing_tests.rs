@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::Clock;
-use contract::diag::{Op, Timing};
+use contract::diag::{Op, Timing, TimingName};
 use contract::events::{Event, SessionStarted, Variables, VariablesSource};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -147,14 +147,17 @@ impl Capture {
     fn timing(self: &Arc<Self>) -> Timing {
         let me = Arc::clone(self);
         Arc::new(
-            move |op: Op, tool: Option<&str>, started: Option<Instant>| {
+            move |op: Op, name: Option<TimingName>, started: Option<Instant>| {
                 me.calls.fetch_add(1, Ordering::SeqCst);
                 let stamped = started.is_some();
                 let start = started.unwrap_or_else(|| me.clock.now());
                 let scope = Scope {
                     capture: Arc::clone(&me),
                     op,
-                    tool: tool.map(str::to_owned),
+                    tool: name.and_then(|name| match name {
+                        TimingName::Tool(tool) => Some(tool.to_owned()),
+                        TimingName::Job(_) => None,
+                    }),
                     stamped,
                     start,
                 };

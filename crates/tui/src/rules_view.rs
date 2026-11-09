@@ -232,6 +232,7 @@ impl Rules {
         };
         Frame {
             joins: Vec::new(),
+            chrome: None,
             title: "Rules".to_owned(),
             command: "/rules".to_owned(),
             rows: self

@@ -3,24 +3,24 @@ source: crates/tui/src/app/config_views_tests.rs
 expression: painted_text(&restored)
 ---
   Settings  /settings                                                Esc returns
-   key                value   layer
-   compaction.tokens  400000  default
- › tui.theme          dark    global
+ Changes save automatically
 
+  Appearance   Notifications   Models   Permissions   Sessions   Advanced
 
+   compaction.tokens  400000
 
+ › tui.theme          dark
 
-
-
+   Key bindings       Open /keys ›
 
 ⋮
 ⋮
 ⋮
 
 
-
- Applies now.
- Ctrl+G opens the file
+ About tui.theme.
+ tui.theme · set in global · Applies now.
+ ←→ tab · / search · Enter change · Tab layer · Delete reset
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▌─────────────────────────────────────────────────────────────────────────────
