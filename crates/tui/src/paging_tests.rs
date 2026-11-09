@@ -6492,7 +6492,7 @@ fn live_pages(id: &str, command: &str) -> Pages {
 #[test]
 fn a_live_shell_row_shows_its_output_then_running() {
     // Order: the row shows its head, the output so far, then `running`
-    // (`docs/tui.md`, "`!cmd`": while it runs, the row shows the output so
+    // (`docs/tui.md`, "The input box": while it runs, the row shows the output so
     // far, then `running`; `docs/events.md`, "`shell_command_started`").
     let mut pages = live_pages("c_1", "srv");
     assert_eq!(
