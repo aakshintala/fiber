@@ -506,7 +506,6 @@ jobs:
       # job. The default profile writes no JUnit XML and retries nothing,
       # so there is no retry list to record here.
       - name: The alloc-stats unit tests
-        id: diag_alloc
         if: github.event_name == 'push'
         run: cargo nextest run -p diag --lib --features alloc-stats
       # One ticket test inside the `timings` binary, not the whole feature
@@ -586,10 +585,10 @@ jobs:
           if [ "${{ matrix.runner }}" = ubuntu-24.04 ] && [ "${{ steps.flaky_hub.outputs.complete }}" = false ]; then
             complete=false
           fi
-          if [ "${{ steps.flaky_alloc.outputs.complete }}" = false ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
             complete=false
           fi
-          if [ "${{ steps.flaky_dhat.outputs.complete }}" = false ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
             complete=false
           fi
           if [ "$complete" = true ]; then
