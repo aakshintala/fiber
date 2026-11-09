@@ -261,15 +261,4 @@ crates/contract/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-P
 crates/main/src/main.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/tui/Cargo.toml	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/doors/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
-crates/main/tests/support/mod.rs	fiber-3093	plan	2026-11-09T12:56:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/session_turns/reload.rs	fiber-3093	plan	2026-11-09T12:56:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hub_daemon/hub_exit_window.rs	fiber-4230	plan	2026-11-09T13:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/commands/change_workspace.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/commands/import.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/extension_host/repository_hooks.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/extension_host/repository_load.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/hub_daemon/socket.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/screens/exit_window.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/session_turns/resume.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/tool_calls/tool_search.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/tool_calls/tools_tokens.rs	fiber-3093	plan	2026-11-09T13:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
