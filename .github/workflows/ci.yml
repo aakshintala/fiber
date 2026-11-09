@@ -659,7 +659,7 @@ jobs:
           # an executed id is decided and only a skipped one is unrunnable.
           # A failure list past the argument limit fails this step, failing
           # closed.
-          if NEXTEST_PROFILE=ci cargo nextest run --no-fail-fast --exact "${names[@]}"; then
+          if NEXTEST_PROFILE=ci cargo nextest run --no-fail-fast -- --exact "${names[@]}"; then
             echo "the base rerun passed"
           else
             echo "the base rerun failed: the outcomes below decide the break"
