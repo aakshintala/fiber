@@ -499,6 +499,75 @@ jobs:
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
+      # The allocation counters' unit tests, which exist only under the
+      # `alloc-stats` feature (docs/ci.md, "On every pull request that
+      # changes code"). Push-only: the backstop runs them on all three
+      # platforms, while pull requests keep the compile check in the lint
+      # job. The default profile writes no JUnit XML and retries nothing,
+      # so there is no retry list to record here.
+      - name: The alloc-stats unit tests
+        if: github.event_name == 'push'
+        run: cargo nextest run -p diag --lib --features alloc-stats
+      # One ticket test inside the `timings` binary, not the whole feature
+      # suite: the two profiling features cannot be combined, because each
+      # sets the global allocator (docs/performance.md, "Measuring"), so
+      # the two runs stay separate. Each run writes
+      # target/nextest/ci/junit.xml, so the file is removed before the run
+      # and its retry list appended right after, before the next run
+      # overwrites it.
+      - name: The alloc-stats timings test
+        id: alloc_tests
+        if: github.event_name == 'push'
+        env:
+          NEXTEST_PROFILE: ci
+        run: |
+          rm -f target/nextest/ci/junit.xml
+          cargo nextest run -p main --test timings --features alloc-stats -E 'test(=alloc_stats::a_debug_tool_run_line_carries_alloc_fields)'
+      # The alloc-stats run's tests that passed on retry, appended to the
+      # same list. Runs only when its execution ran: a skipped run must
+      # not parse stale XML from an earlier invocation.
+      - name: Record alloc-stats tests that passed on retry
+        id: flaky_alloc
+        if: always() && steps.alloc_tests.outcome != 'skipped'
+        env:
+          LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
+        run: |
+          if scripts/flaky-tests target/nextest/ci/junit.xml >> "$LIST" 2>"$RUNNER_TEMP/flaky-alloc-error.txt"; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -s "$LIST" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The dhat-heap timings test
+        id: dhat_tests
+        if: github.event_name == 'push'
+        env:
+          NEXTEST_PROFILE: ci
+        run: |
+          rm -f target/nextest/ci/junit.xml
+          cargo nextest run -p main --test timings --features dhat-heap -E 'test(=dhat_heap::ask_writes_dhat_heap_json_at_exit)'
+      # The dhat-heap run's tests that passed on retry, appended to the
+      # same list, under the same skipped-run rule as the alloc-stats one.
+      - name: Record dhat-heap tests that passed on retry
+        id: flaky_dhat
+        if: always() && steps.dhat_tests.outcome != 'skipped'
+        env:
+          LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
+        run: |
+          if scripts/flaky-tests target/nextest/ci/junit.xml >> "$LIST" 2>"$RUNNER_TEMP/flaky-dhat-error.txt"; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -s "$LIST" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
       # Whether every parser invocation above succeeded. A true marker
       # with an empty list is a complete empty result; anything else fails
       # flake_decide closed before any lookup. The marker travels in the
@@ -514,6 +583,12 @@ jobs:
           mkdir -p "$(dirname "$MARKER")"
           complete="${{ steps.flaky.outputs.complete }}"
           if [ "${{ matrix.runner }}" = ubuntu-24.04 ] && [ "${{ steps.flaky_hub.outputs.complete }}" = false ]; then
+            complete=false
+          fi
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
+            complete=false
+          fi
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
             complete=false
           fi
           if [ "$complete" = true ]; then
@@ -545,7 +620,7 @@ jobs:
       # flake_decide reads that leg's marker from its job outputs
       # (docs/testing.md, "Flaky tests").
       - name: Upload the tests that passed on retry
-        if: always() && (matrix.runner != 'ubuntu-24.04' || steps.flaky.outputs.found == 'true' || steps.flaky_hub.outputs.found == 'true')
+        if: always() && (matrix.runner != 'ubuntu-24.04' || steps.flaky.outputs.found == 'true' || steps.flaky_hub.outputs.found == 'true' || steps.flaky_alloc.outputs.found == 'true' || steps.flaky_dhat.outputs.found == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flaky-tests-${{ matrix.runner }}

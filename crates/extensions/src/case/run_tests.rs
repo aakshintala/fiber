@@ -1292,7 +1292,7 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
 
 /// A command case sends its command once, with the name and text as args:
 /// a second send, or a missing one, breaks the recorded call. A command
-/// case runs no turn (docs/extensions.md:753-759), so `until` is the
+/// case runs no turn (`docs/extensions.md`, "Session cases"), so `until` is the
 /// ephemeral `extension_ui` and the stream holds only the startup lines
 /// and the exit line.
 #[test]
@@ -1339,7 +1339,7 @@ fn a_command_case_sends_its_command_once_after_extensions_loaded() {
 
 /// A session reload writes a second `extensions_loaded`: the command is
 /// already taken, so no second send follows it. A command case runs no
-/// turn (docs/extensions.md:753-759), so `until` is the ephemeral
+/// turn (`docs/extensions.md`, "Session cases"), so `until` is the ephemeral
 /// `extension_ui`.
 #[test]
 fn a_second_extensions_loaded_sends_no_further_command() {
@@ -1624,7 +1624,7 @@ fn a_prompt_case_sends_no_command() {
 
 /// An omitted `text` parses to the empty string and is sent as one: the
 /// driver line carries `"text": ""`, not a missing key. A command case
-/// runs no turn (docs/extensions.md:753-759), so `until` is the ephemeral
+/// runs no turn (`docs/extensions.md`, "Session cases"), so `until` is the ephemeral
 /// `extension_ui`.
 #[test]
 fn omitted_command_text_sends_the_empty_string() {

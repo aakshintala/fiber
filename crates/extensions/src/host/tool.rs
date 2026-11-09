@@ -23,8 +23,8 @@ const TOOL_DEPTH: usize = super::MAX_DEPTH;
 
 /// `host.tool` yields this tag, `"tool"` and the call's spec. The
 /// extension's thread runs the tool through its runner and resumes the
-/// coroutine with the reply (`docs/extensions.md`, "A host call suspends the
-/// code that made it"). The arguments travel as the JSON text `check`
+/// coroutine with the reply (`docs/extensions.md`, "How an extension runs").
+/// The arguments travel as the JSON text `check`
 /// returned, so a coroutine that yields `host.tool` through a parent which
 /// then mutates the shared table cannot change what the host reads.
 const TOOL: &str = r#"

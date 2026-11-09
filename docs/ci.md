@@ -481,7 +481,15 @@ On Linux x86_64 alone:
   `cargo check -p main --bins --tests --features alloc-stats` and
   `cargo check -p main --bins --tests --features dhat-heap`, so neither
   stops compiling unnoticed. The job's `timeout-minutes` is 12 to leave
-  room for the two uncached checks alongside `scripts/check`.
+  room for the two uncached checks alongside `scripts/check`. The backstop
+  on `main` runs the tests that exist only under those features, on Linux
+  x86_64, Linux arm64 and macOS arm64: the `diag` unit tests
+  (`cargo nextest run -p diag --lib --features alloc-stats`) and one exact
+  test each inside the `timings` binary
+  (`test(=alloc_stats::a_debug_tool_run_line_carries_alloc_fields)` under
+  `alloc-stats`,
+  `test(=dhat_heap::ask_writes_dhat_heap_json_at_exit)` under `dhat-heap`),
+  never the whole suite under either feature.
 
 No pull request runs `release`. The backstop measures the release build on
 every push ("The backstop on `main`").

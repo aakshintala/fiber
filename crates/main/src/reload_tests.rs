@@ -417,7 +417,7 @@ impl Fixture {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fakes::within(
                 "reload prepared",
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN), // ruling: #4311
                 move || {
                     state
                         .prepare_inner(
