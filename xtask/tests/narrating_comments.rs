@@ -13,26 +13,15 @@ use fakes::TempDir;
 #[path = "common/mod.rs"]
 mod common;
 
-fn git(dir: &TempDir, args: &[&str]) {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(args)
-        .current_dir(dir.path())
-        .stdin(Stdio::null());
-    let (code, output) = common::run("git fixture", command, &[], Duration::from_secs(30));
-    assert_eq!(code, Some(0), "git {args:?}: {output}");
-}
-
 fn setup() -> TempDir {
     let dir = TempDir::new("xtask-narrating-comments");
-    git(&dir, &["init", "-q"]);
+    common::git(&dir, &["init", "-q"]);
     dir.write(
         "src/lib.rs",
         concat!("/", "/ previously old\nfn original() {}\n"),
     );
-    git(&dir, &["add", "."]);
-    git(&dir, &["commit", "-qm", "baseline"]);
+    common::git(&dir, &["add", "."]);
+    common::git(&dir, &["commit", "-qm", "baseline"]);
     dir
 }
 
@@ -103,7 +92,7 @@ fn staged_additions_are_included() {
             "/ changed from old\n"
         ),
     );
-    git(&dir, &["add", "src/lib.rs"]);
+    common::git(&dir, &["add", "src/lib.rs"]);
     let (code, out) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
     assert_eq!(code, Some(1), "{out}");
     assert_eq!(
@@ -124,8 +113,8 @@ fn committed_additions_are_included_and_deleted_violations_are_not() {
             "/ changed from old\n"
         ),
     );
-    git(&dir, &["add", "src/lib.rs"]);
-    git(&dir, &["commit", "-qm", "comment"]);
+    common::git(&dir, &["add", "src/lib.rs"]);
+    common::git(&dir, &["commit", "-qm", "comment"]);
     let (code, out) = run(&dir, &["narrating-comments", "--base", "HEAD~1"]);
     assert_eq!(code, Some(1), "{out}");
     dir.write("src/lib.rs", "fn original() {}\n");
@@ -143,8 +132,8 @@ fn unchanged_history_and_ignored_or_binary_inputs_do_not_fail() {
     let (code, out) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
     assert_eq!(code, Some(0), "{out}");
     dir.write(".gitignore", "ignored.rs\n");
-    git(&dir, &["add", ".gitignore"]);
-    git(&dir, &["commit", "-qm", "ignore generated input"]);
+    common::git(&dir, &["add", ".gitignore"]);
+    common::git(&dir, &["commit", "-qm", "ignore generated input"]);
     dir.write("ignored.rs", concat!("/", "/ now uses cache\n"));
     dir.write("generated.rs", concat!("/", "/ now uses cache\n\0binary\n"));
     let (code, out) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
@@ -154,7 +143,7 @@ fn unchanged_history_and_ignored_or_binary_inputs_do_not_fail() {
 #[test]
 fn a_rename_does_not_reintroduce_old_comments_but_new_edits_are_checked() {
     let dir = setup();
-    git(&dir, &["mv", "src/lib.rs", "src/renamed.rs"]);
+    common::git(&dir, &["mv", "src/lib.rs", "src/renamed.rs"]);
     let (code, out) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
     assert_eq!(code, Some(0), "{out}");
     dir.write(
@@ -171,6 +160,19 @@ fn a_rename_does_not_reintroduce_old_comments_but_new_edits_are_checked() {
     assert!(
         out.contains("src/renamed.rs:3: comment narrates history"),
         "{out}"
+    );
+}
+
+#[test]
+fn quoted_non_ascii_rust_path_is_checked() {
+    let dir = setup();
+    dir.write("café.rs", "// now uses the cache\n");
+    common::git(&dir, &["add", "café.rs"]);
+    let (code, output) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
+    assert_eq!(code, Some(1), "{output}");
+    assert!(
+        output.contains("café.rs:1: comment narrates history"),
+        "{output}"
     );
 }
 
@@ -249,7 +251,7 @@ fn added_hunks_keep_new_side_coordinates_and_ignore_deletions() {
             "fn five() {}\n",
         ),
     );
-    git(&dir, &["add", "src/lib.rs"]);
+    common::git(&dir, &["add", "src/lib.rs"]);
     dir.write(
         "src/lib.rs",
         concat!(
@@ -322,12 +324,12 @@ fn stateless_comment_forms_and_hash_language_scope_are_reported() {
             "manifest.yml",
             "value: \" # fixed the bug where it failed\"\n",
         ),
-        ("notes.txt", concat!("/", "/ previously\n")),
+        ("notes.txt", "# now uses cache\n"),
     ];
     for (path, text) in fixtures {
         dir.write(path, text);
     }
-    git(
+    common::git(
         &dir,
         &[
             "add",

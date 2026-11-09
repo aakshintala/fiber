@@ -9,6 +9,8 @@ const PHRASES: &str =
 pub(crate) fn narrating_comments(base: &str) -> Result<Vec<String>, String> {
     let merge_base = git(&["merge-base", base, "HEAD"])?;
     let diff = git(&[
+        "-c",
+        "core.quotePath=false",
         "diff",
         "--no-ext-diff",
         "--no-color",
@@ -136,7 +138,8 @@ fn shell_comment(line: &str) -> &str {
                         .next_back()
                         .is_some_and(char::is_whitespace))
         })
-        .map_or("", |(position, _)| &line[position + 1..])
+        .and_then(|(position, _)| line[position..].strip_prefix('#'))
+        .unwrap_or("")
 }
 
 fn rust_comment(line: &str) -> &str {
