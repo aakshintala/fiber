@@ -8702,8 +8702,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     let grid = run.wait_screen("the partial delegates list", |grid| {
         delegates_list_header(grid)
             && ((grid.contents.contains("scan three") && !grid.contents.contains("✓ scan three"))
-                || (grid.contents.contains("scan four")
-                    && !grid.contents.contains("✓ scan four")))
+                || (grid.contents.contains("scan four") && !grid.contents.contains("✓ scan four")))
             && !(grid.contents.contains("scan one") && !grid.contents.contains("✓ scan one"))
             && !(grid.contents.contains("scan two") && !grid.contents.contains("✓ scan two"))
             && grid.contents.contains("✓ scan")
