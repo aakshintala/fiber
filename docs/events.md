@@ -975,7 +975,7 @@ Durable.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `reason` | string | yes | `start`, `resume`, `reload` or `switch`; a closed set |
+| `reason` | string | yes | `start`, `resume`, `reload`, `switch` or `sandbox`; a closed set |
 | `model` | string | yes | the model reference |
 | `context_window` | integer | yes | the model's context window, in tokens |
 | `trigger_at` | integer | no | the context size, in tokens, at which an automatic compaction runs (`docs/compaction.md`, "Automatic"); absent when automatic compaction is off |
@@ -1004,7 +1004,9 @@ or `--credential` on a resume, is a `model_changed` whose `credential` differs.
 
 `preamble_built` follows `session_started` or `fiber_started`, `reloaded`, or
 `model_changed`, before the next model request. A fork or a rewind sends the
-latest `preamble_built` before its point.
+latest `preamble_built` before its point. `preamble_built` with reason
+`sandbox` follows a `/sandbox` toggle that changed the setting, with the
+shell tool's new description; a toggle that changes nothing builds nothing.
 
 ### Opening message
 
@@ -1185,7 +1187,10 @@ Durable.
 | `failed` | array | no | each server that failed: `server`, `reason` and `error`, as on `mcp_server_failed` |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
-follows it. The next model request misses the prompt cache.
+follows it. The next model request misses the prompt cache. A reload that
+changes the effective sandbox setting writes one `notice` saying which way
+it went (`Sandbox on after /reload.` or `Sandbox off after /reload.`), after
+`reloaded` and before the rebuilt `preamble_built`.
 
 ### Extensions
 

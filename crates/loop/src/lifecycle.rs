@@ -113,13 +113,14 @@ impl Default for State {
 impl State {
     /// The state for a loop whose preamble builds for `reason`: a new
     /// session starts, anything resumed continues, whatever the build's
-    /// own wording (`reload`, `switch`) calls it.
+    /// own wording (`reload`, `switch`, `sandbox`) calls it.
     pub(crate) fn new(reason: PreambleReason, session: &SessionId) -> Self {
         let reason = match reason {
             PreambleReason::Start => StartReason::Start,
-            PreambleReason::Resume | PreambleReason::Reload | PreambleReason::Switch => {
-                StartReason::Resume
-            }
+            PreambleReason::Resume
+            | PreambleReason::Reload
+            | PreambleReason::Switch
+            | PreambleReason::Sandbox => StartReason::Resume,
         };
         Self {
             reason,
