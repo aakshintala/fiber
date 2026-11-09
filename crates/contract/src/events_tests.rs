@@ -2426,9 +2426,44 @@ fn a_credential_switch_result_writes_and_reads_only_its_provider() {
 }
 
 #[test]
+fn a_stop_result_with_keepers_writes_both_counts_and_reads_an_old_shape_as_zero() {
+    // docs/invocation.md, "Commands and flags": `stop` answers both counts.
+    // Old hubs omit `keepers_stopped`, which reads as zero.
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+        keepers_stopped: 2,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3, "keepers_stopped": 2})
+    );
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"sessions_stopped": 3}})),
+        CommandResult::Stop {
+            sessions_stopped: 3,
+            keepers_stopped: 0,
+        }
+    );
+}
+
+#[test]
+fn a_stop_result_without_keepers_omits_the_keeper_count() {
+    // Zero keepers stay byte-identical to the old shape on the wire.
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+        keepers_stopped: 0,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3})
+    );
+}
+
+#[test]
 fn a_sessions_stopped_result_round_trips_as_stop() {
     let result = CommandResult::Stop {
         sessions_stopped: 3,
+        keepers_stopped: 0,
     };
     assert_eq!(
         serde_json::to_value(&result).unwrap(),

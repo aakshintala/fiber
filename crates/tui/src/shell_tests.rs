@@ -145,6 +145,7 @@ fn a_shell_command_line_is_a_sent_row() {
 fn a_stop_answer_is_never_a_shell_item() {
     let stopped = Some(CommandResult::Stop {
         sessions_stopped: 2,
+        keepers_stopped: 0,
     });
     assert_eq!(answered("!!ls", stopped), None);
 }

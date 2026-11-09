@@ -35,6 +35,18 @@ fn every_keeper_line_round_trips_byte_for_byte() {
 }
 
 #[test]
+fn shutdown_true_is_the_frozen_keeper_stop_line() {
+    // docs/invocation.md, "Commands and flags": the keeper stop a newer
+    // `fiber stop` delivers to any older keeper is exactly this line.
+    let line = serde_json::to_string(&ToKeeper::Shutdown(true)).expect("encode");
+    assert_eq!(line, r#"{"shutdown":true}"#);
+    assert_eq!(
+        serde_json::to_string(&ToKeeper::Shutdown(false)).expect("encode"),
+        r#"{"shutdown":false}"#
+    );
+}
+
+#[test]
 fn an_unknown_stdin_is_refused() {
     assert!(serde_json::from_str::<HostStdin>(r#""pipe""#).is_err());
 }

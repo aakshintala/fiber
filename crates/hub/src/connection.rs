@@ -1423,6 +1423,8 @@ fn on_stop(
         } if unconfirmed.is_empty() => {
             let result = CommandResult::Stop {
                 sessions_stopped: confirmed.len(),
+                // Task 3 wires the confirmed keeper count here.
+                keepers_stopped: 0,
             };
             let result = serde_json::to_value(&result).unwrap_or(Value::Null);
             match web {
