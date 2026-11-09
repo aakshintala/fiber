@@ -27,7 +27,7 @@ fn configure(client: &Socket, id: &str, args: Value) -> Value {
 
 #[test]
 fn the_hub_reads_and_saves_reviewer_notes_with_version_conflicts_stale() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let hub = Arc::new(Mutex::new(None));
     let (client, hello) = connect_hub(&setup, &hub);
     assert_eq!(hello["kind"], "hub_hello");

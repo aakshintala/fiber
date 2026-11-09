@@ -11,7 +11,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::Value;
 
-use super::tests::{DEADLINE, hello, launch, once, open};
+use super::tests::{DEADLINE, hello, once, open};
 use crate::catalogue::{Catalogue, ModelEntry, Refresh};
 use crate::configure_fake::Fake;
 use contract::HubEventKind;
@@ -193,11 +193,10 @@ fn the_start_pick_lists_the_hubs_models() {
         .spawn(move || serve(hub, reported))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let calls = Arc::new(Mutex::new(0usize));
-    let mut remote = launch();
+    let mut remote = super::tests::launch_without_model();
     remote.location = crate::LaunchLocation::Remote {
         hub: "box".to_owned(),
     };
-    remote.model = None;
     // A remote terminal keeps its client-owned rows locally: the seam
     // is what `seams` builds the hub remote over. The client's lists
     // stay installed but unread.

@@ -307,7 +307,7 @@ fn completions_model_completes_a_turn_on_the_mlflow_route() {
 
 #[test]
 fn models_lists_exactly_the_three_discovered_references() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let server = ProviderServer::start(discovery()).unwrap();
     let host = install(
         &setup,
@@ -427,7 +427,7 @@ fn unset_workspace_leaves_the_seed_model_out() {
 /// page of 1,000 `chat` rows, only one of them matching.
 #[test]
 fn a_thousand_row_catalog_page_fits_the_memory_cap() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let mut rows = vec![json!({
         "model_name": "bulk-model", "mode": "chat", "provider_type": "MICROSOFT_FOUNDRY",
         "context_window": {"max_input": 64000, "max_output": 8000},

@@ -341,7 +341,7 @@ fn setup_from_installed_home_with_provider_pick_then_first_turn() {
         // server state is touched after a caught panic; the wrapper only
         // records the failure and unwinds.
         std::panic::AssertUnwindSafe(|| {
-            let setup = Setup::new();
+            let setup = Setup::without_provider();
             let server = ProviderServer::start([support::hello_inline_completed()]).unwrap();
             install_fake_provider_extension(&setup, &server);
             assert!(
