@@ -95,7 +95,6 @@ docs/tools.md	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aak
 crates/main/src/keeper_restore.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
 crates/main/src/keeper_restore_tests.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
 crates/loop/src/resume_tests.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
-crates/main/tests/hub_exit_window.rs	fiber-4230	plan	2026-11-08T16:24:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/bubble.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/bubble_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/markdown.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -261,4 +260,3 @@ crates/contract/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-P
 crates/main/src/main.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/tui/Cargo.toml	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/doors/src/lib.rs	fiber-3897	plan	2026-11-09T12:01:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
-crates/main/tests/hub_daemon/hub_exit_window.rs	fiber-4230	plan	2026-11-09T13:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
