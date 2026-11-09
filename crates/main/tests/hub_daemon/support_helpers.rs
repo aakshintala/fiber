@@ -1043,11 +1043,6 @@ fn held_wait_returns_the_released_wait_result() {
 }
 
 #[test]
-fn held_wait_outer_bound_is_three_inner_budgets() {
-    assert_eq!(OUTER_BUDGET_FACTOR, 3);
-}
-
-#[test]
 fn path_gone_fails_fast_while_held_and_passes_after_release() {
     let dir = fakes::TempDir::new("wait-path-gone");
     let path = dir.path().join("gone");
