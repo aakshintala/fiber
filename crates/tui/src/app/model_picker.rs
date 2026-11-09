@@ -243,6 +243,7 @@ impl App {
             id.clone(),
             (super::Kind::Command, crate::input::Draft::default()),
         );
+        self.outbox.wait(&id, super::Waiting::Model);
         // The send stashes its choice for the answer. A send while a
         // turn runs also says so up front: the chips hold the old model
         // and level until the session accepts it, so the notice says the

@@ -130,6 +130,24 @@ pub(crate) enum Waiting {
     JobStop,
     /// An item view's `job_input`.
     JobInput,
+    /// A conversation search's `history` fetch; `find_answered` settles it.
+    Find,
+    /// A session's `commands` ask filling the `/` list; `commands_answered`
+    /// settles it where it clears `commands_id`.
+    Commands,
+    /// A `model` command from the picker; its accept or refusal settles it.
+    Model,
+    /// A `reply` command from the question form or the offer; `reply_ack`
+    /// settles it.
+    Reply,
+    /// An `offered_file` command reading the held offer's source;
+    /// `file_answered` settles it, and every refusal but `DuplicateCommand`.
+    OfferFile,
+    /// A `steer` command from the steering queue or a delegate's box;
+    /// its answer settles generically, with no handler of its own.
+    Steer,
+    /// A `!` command's `shell` run; its accept settles it, then the fold.
+    Shell,
 }
 
 /// Which `recent` ask a [`Waiting::Recent`] tag stands for.
