@@ -283,3 +283,4 @@ crates/tui/src/app/home/prompt/exit_tests.rs	fiber-3897	plan	2026-11-09T09:42:05
 crates/tui/src/view/quit_tests.rs	fiber-3897	plan	2026-11-09T09:42:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/stop.rs	fiber-3897	plan	2026-11-09T09:42:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/items.rs	fiber-3896	plan	2026-11-09T10:29:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/testing/fakes.md	fiber-4460	plan	2026-11-09T11:05:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4482
