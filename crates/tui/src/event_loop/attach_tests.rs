@@ -2250,16 +2250,30 @@ fn reopened_history(older_ending: bool) {
             .map(|bytes| serde_json::from_slice::<contract::Envelope>(bytes).unwrap()),
     );
     let (page_zero_tx, page_zero) = mpsc::channel();
-    let server = std::thread::spawn(move || {
+    // The loop writes a command line per replayed line (`commands`). The
+    // server below waits on the wire while the replay drains, so a
+    // thread of its own keeps reading the socket: with the server the
+    // only reader, a full socket buffer blocks the loop's write, the
+    // loop stops returning the reader's credits, and the hand-outs the
+    // server waits for stop. It ends when the loop drops its end.
+    let (command_tx, command_rx) = mpsc::channel::<String>();
+    let command_reader = std::thread::spawn(move || {
         let mut commands = std::io::BufReader::new(theirs);
-        let mut text = String::new();
-        let mut seen = 0;
         loop {
-            text.clear();
+            let mut text = String::new();
             match std::io::BufRead::read_line(&mut commands, &mut text) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
+            if command_tx.send(text).is_err() {
+                break;
+            }
+        }
+    });
+    let server = std::thread::spawn(move || {
+        let mut seen = 0;
+        // Ends when the reader thread above ends and drops its sender.
+        while let Ok(text) = command_rx.recv() {
             let command: serde_json::Value = serde_json::from_str(&text).unwrap();
             if command["command"] != "history" {
                 continue;
@@ -2313,10 +2327,13 @@ fn reopened_history(older_ending: bool) {
                     &session_id,
                     Some(last as u64)
                 ))));
+                // A push that fails would leave the replay short of the
+                // threshold below, so it fails here, naming the push.
                 for line in &script {
-                    if !server_wire.push(line.clone()) {
-                        break;
-                    }
+                    assert!(
+                        server_wire.push(line.clone()),
+                        "the wire to take every replayed line"
+                    );
                 }
             }
             let from = command["args"]["from_seq"].as_u64().unwrap();
@@ -2399,6 +2416,7 @@ fn reopened_history(older_ending: bool) {
     reader.join().unwrap();
     let seen = Deadline::after(DEADLINE).recv_or_fail(&server_done, "the command server to end");
     server.join().unwrap();
+    command_reader.join().unwrap();
     assert!(seen > 1, "pages load after the pass ends");
 }
 
