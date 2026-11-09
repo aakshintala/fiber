@@ -2046,6 +2046,7 @@ impl Live {
     }
 
     /// Asks the `tools` command and returns its declared rows.
+    #[cfg(target_os = "linux")]
     fn tools_rows(&mut self, cmd: &str) -> Vec<serde_json::Value> {
         send(
             &self.client,
@@ -2079,6 +2080,7 @@ fn session_log(setup: &Setup, id: &str) -> Vec<serde_json::Value> {
 }
 
 /// Sorted declared-tool names of a `tools` answer.
+#[cfg(target_os = "linux")]
 fn row_names(rows: &[serde_json::Value]) -> Vec<String> {
     let mut names: Vec<String> = rows
         .iter()
@@ -2089,11 +2091,13 @@ fn row_names(rows: &[serde_json::Value]) -> Vec<String> {
 }
 
 /// Whether a `tools` answer lists `name`.
+#[cfg(target_os = "linux")]
 fn has_row(rows: &[serde_json::Value], name: &str) -> bool {
     rows.iter().any(|row| row["name"] == name)
 }
 
 /// The `bytes` of the `name` row in a `tools` answer.
+#[cfg(target_os = "linux")]
 fn row_bytes(rows: &[serde_json::Value], name: &str) -> u64 {
     rows.iter()
         .find(|row| row["name"] == name)
