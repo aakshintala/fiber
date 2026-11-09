@@ -8,7 +8,7 @@ use crate::app::testkit::{hello, home_with};
 use crate::home::Spot;
 use crate::link::Line;
 use contract::SessionId;
-use contract::commands::SubscribeLevel;
+use contract::commands::{HistoryArgs, SubscribeLevel};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -422,7 +422,11 @@ fn a_history_answer_after_the_last_draw_still_raises_full() {
     // The tail's window: the read is requested but unanswered.
     assert_eq!(
         app.tail_next(),
-        Some(json!({})),
+        Some(HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        }),
         "the first window reads the tail"
     );
     drawn(&mut app);

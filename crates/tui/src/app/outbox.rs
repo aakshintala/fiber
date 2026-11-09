@@ -8,9 +8,9 @@
 
 use std::collections::HashMap;
 
-use contract::commands::{Command, CommandLine, SubscribeLevel};
-use contract::{CommandId, SessionId};
-use serde_json::{Value, json};
+use contract::commands::{Command, CommandLine, HistoryArgs, SubscribeLevel};
+use contract::{CommandId, Seq, SessionId};
+use serde_json::Value;
 
 use crate::import_report::ImportSource;
 use crate::input::Draft;
@@ -343,20 +343,6 @@ impl Outbox {
     }
 }
 
-/// A command for a session: `session_id` beside `id`, `command` and `args`.
-pub(crate) fn session_command(
-    id: &str,
-    command: &str,
-    session: &SessionId,
-    args: Option<Value>,
-) -> Value {
-    let mut line = json!({"id": id, "command": command, "session_id": session.0});
-    if let (Some(args), Some(object)) = (args, line.as_object_mut()) {
-        object.insert("args".to_owned(), args);
-    }
-    line
-}
-
 /// A command line for a session: `command` serialized as a
 /// [`CommandLine`] with `session_id` beside `id`, `command` and `args`,
 /// written as one JSON object line (`docs/invocation.md`, "The command
@@ -383,18 +369,12 @@ pub(crate) fn history_args(
     segment: &SessionId,
     from: Option<u64>,
     to: Option<u64>,
-) -> Value {
-    let mut args = serde_json::Map::new();
-    if segment != own {
-        args.insert("session_id".to_owned(), Value::String(segment.0.clone()));
+) -> HistoryArgs {
+    HistoryArgs {
+        session_id: (segment != own).then(|| segment.clone()),
+        from_seq: from.map(Seq),
+        to_seq: to.map(Seq),
     }
-    if let Some(from) = from {
-        args.insert("from_seq".to_owned(), Value::Number(from.into()));
-    }
-    if let Some(to) = to {
-        args.insert("to_seq".to_owned(), Value::Number(to.into()));
-    }
-    Value::Object(args)
 }
 
 #[cfg(test)]

@@ -2,16 +2,16 @@
 //! and the resume lines (`docs/tui.md`, "Quit", "On exit"). This module
 //! is a child of home's question module, whose closes it owns.
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::super::super::{App, Effect, Phase, session_command};
+use super::super::super::{App, Effect, Phase, session_line};
 use super::{Ask, Prompt};
 use crate::home::{QuitChoice, Spot, State};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use contract::ErrorCode;
 use contract::SessionId;
-use contract::commands::SubscribeLevel;
+use contract::commands::{CloseArgs, Command, SubscribeLevel};
 
 impl App {
     /// Quits, asking first while sessions work: with no session working
@@ -363,9 +363,11 @@ impl App {
                 lines.push(self.subscribe(session, SubscribeLevel::Summary));
             }
             let id = support::mint("c_");
-            lines.push(
-                session_command(&id, "close", session, Some(json!({"now": true}))).to_string(),
-            );
+            lines.push(session_line(
+                &id,
+                session,
+                Command::Close(CloseArgs { now: true }),
+            ));
             pairs.push((session.clone(), id));
         }
         (lines, pairs)

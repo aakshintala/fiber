@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use contract::ErrorCode;
+use contract::commands::HistoryArgs;
 use contract::{ActionId, JobId, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
@@ -1818,11 +1819,8 @@ fn fold_image(pages: &mut crate::window::Pages, path: &str) {
 /// The tail read's window answers, as the doors answer history: the last
 /// 256 lines at or below the asked `to_seq`, oldest first, or the last
 /// 256 when the args hold none.
-fn doors(lines: &[contract::Envelope], args: &Value) -> Vec<contract::Envelope> {
-    let end = args
-        .get("to_seq")
-        .and_then(Value::as_u64)
-        .unwrap_or(u64::MAX);
+fn doors(lines: &[contract::Envelope], args: &HistoryArgs) -> Vec<contract::Envelope> {
+    let end = args.to_seq.map(|seq| seq.0).unwrap_or(u64::MAX);
     let mut out: Vec<contract::Envelope> = lines
         .iter()
         .filter(|line| line.seq.is_some_and(|seq| seq.0 <= end))
@@ -1861,7 +1859,7 @@ fn plain(count: u64) -> Vec<contract::Envelope> {
 
 /// Reads `all` through a fresh tail, following the answers' windows, and
 /// returns each `next_args` in order.
-fn read_all(all: Vec<contract::Envelope>) -> (Vec<Value>, crate::app::overlay::Tail) {
+fn read_all(all: Vec<contract::Envelope>) -> (Vec<HistoryArgs>, crate::app::overlay::Tail) {
     use crate::app::overlay::Tail;
     let mut tail = Tail::new();
     let mut asked = Vec::new();
@@ -1885,10 +1883,52 @@ fn read_all(all: Vec<contract::Envelope>) -> (Vec<Value>, crate::app::overlay::T
 #[test]
 fn reads_follow_the_answer_window_at_the_edges() {
     for (count, expected) in [
-        (255u64, vec![json!({})]),
-        (256, vec![json!({})]),
-        (257, vec![json!({}), json!({"to_seq": 0})]),
-        (258, vec![json!({}), json!({"to_seq": 1})]),
+        (
+            255u64,
+            vec![HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: None,
+            }],
+        ),
+        (
+            256,
+            vec![HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: None,
+            }],
+        ),
+        (
+            257,
+            vec![
+                HistoryArgs {
+                    session_id: None,
+                    from_seq: None,
+                    to_seq: None,
+                },
+                HistoryArgs {
+                    session_id: None,
+                    from_seq: None,
+                    to_seq: Some(contract::Seq(0)),
+                },
+            ],
+        ),
+        (
+            258,
+            vec![
+                HistoryArgs {
+                    session_id: None,
+                    from_seq: None,
+                    to_seq: None,
+                },
+                HistoryArgs {
+                    session_id: None,
+                    from_seq: None,
+                    to_seq: Some(contract::Seq(1)),
+                },
+            ],
+        ),
     ] {
         let (asked, tail) = read_all(plain(count));
         let many = usize::try_from(count).unwrap_or(usize::MAX);
@@ -2312,7 +2352,14 @@ fn a_filled_display_stops_pre_frame_reads_and_counts_after() {
     );
     // The first window fills the display, so the pre-frame read stops:
     // no older window and no ancestor is asked before the first frame.
-    app.tail_lines(doors(&child, &json!({})));
+    app.tail_lines(doors(
+        &child,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ));
     assert!(
         app.tail_next().is_none(),
         // docs/tui.md ("History and paging"): older own-segment windows until the preview fills.
@@ -2337,7 +2384,11 @@ fn a_filled_display_stops_pre_frame_reads_and_counts_after() {
         .expect("the count continues past the filled display");
     assert_eq!(
         args,
-        json!({"session_id": ANCESTOR, "to_seq": 9}),
+        HistoryArgs {
+            session_id: Some(SessionId(ANCESTOR.to_owned())),
+            from_seq: None,
+            to_seq: Some(contract::Seq(9))
+        },
         // docs/tui.md ("History and paging"): ancestor windows under their session.
         "the ancestor under its session"
     );
@@ -2371,12 +2422,23 @@ fn an_unfilled_display_still_walks_the_seam_to_the_root() {
     let mut app = reading();
     // The own window leaves the display short, so the pre-frame read
     // crosses the seam instead of stopping for the count phase.
-    app.tail_lines(doors(&child, &json!({})));
+    app.tail_lines(doors(
+        &child,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ));
     // docs/tui.md ("History and paging"): an unfilled preview keeps asking older windows.
     let args = app.tail_next().expect("an unfilled display keeps reading");
     assert_eq!(
         args,
-        json!({"session_id": ANCESTOR, "to_seq": point}),
+        HistoryArgs {
+            session_id: Some(SessionId(ANCESTOR.to_owned())),
+            from_seq: None,
+            to_seq: Some(contract::Seq(point))
+        },
         // docs/tui.md ("History and paging"): ancestor windows under their session.
         "the ancestor under its session"
     );
@@ -2424,12 +2486,23 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
     let mut app = reading();
     // The leaf window leaves the display short, so the read crosses
     // into the middle segment.
-    app.tail_lines(doors(&leaf, &json!({})));
+    app.tail_lines(doors(
+        &leaf,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ));
     // docs/tui.md ("History and paging"): an unfilled preview keeps asking older windows.
     let args = app.tail_next().expect("an unfilled display keeps reading");
     assert_eq!(
         args,
-        json!({"session_id": MID, "to_seq": mpoint}),
+        HistoryArgs {
+            session_id: Some(SessionId(MID.to_owned())),
+            from_seq: None,
+            to_seq: Some(contract::Seq(mpoint))
+        },
         // docs/tui.md ("History and paging"): the chain reads as one history across the seam.
         "the middle segment under its session"
     );
@@ -2443,7 +2516,11 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
         .expect("a fill past a crossed seam keeps going");
     assert_eq!(
         args,
-        json!({"session_id": ANCESTOR, "to_seq": rpoint}),
+        HistoryArgs {
+            session_id: Some(SessionId(ANCESTOR.to_owned())),
+            from_seq: None,
+            to_seq: Some(contract::Seq(rpoint))
+        },
         // docs/tui.md ("History and paging"): ancestor windows under their session.
         "the root under its session"
     );
@@ -2472,7 +2549,14 @@ fn finish_count_without_a_shown_preview_restores_the_count() {
     let point = chain_segment(ANCESTOR, None, "root reply", 3).len() as u64 - 1;
     let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 1);
     let mut app = reading();
-    app.tail_lines(doors(&child, &json!({})));
+    app.tail_lines(doors(
+        &child,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ));
     app.install_tail();
     let before = app.attached_screen().pages().index().total();
     app.overlay = Overlay::None;
@@ -2575,7 +2659,14 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
         lines.extend(turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")));
     }
     let all = envelopes(&lines);
-    let first = doors(&all, &json!({}));
+    let first = doors(
+        &all,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    );
     assert!(first.len() < all.len(), "the first answer is a window");
     let mut app = reading();
     assert!(app.tail_next().is_some());
@@ -2611,7 +2702,14 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
     );
     // A first answer holding no turn start keeps nothing.
     let all = plain(300);
-    let first = doors(&all, &json!({}));
+    let first = doors(
+        &all,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    );
     let mut app = reading();
     app.tail_lines(first);
     app.tail_ended(Some("gone"));
@@ -2634,7 +2732,14 @@ fn an_older_window_replaces_the_candidate_from_fresh_pages() {
     let mut all_lines = roomy_turn(&mut seq, "a_old", "older reply", 300);
     all_lines.extend(roomy_turn(&mut seq, "a_new", "newer reply", 1));
     let all = envelopes(&all_lines);
-    let first = doors(&all, &json!({}));
+    let first = doors(
+        &all,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    );
     assert!(first.len() < all.len(), "the newest window is partial");
 
     let mut app = reading();
@@ -2745,7 +2850,14 @@ fn a_fresh_read_drops_the_old_candidate_and_cursor() {
     let mut all_lines = roomy_turn(&mut seq, "a_old", "older reply", 300);
     all_lines.extend(roomy_turn(&mut seq, "a_new", "newer reply", 1));
     let all = envelopes(&all_lines);
-    let first = doors(&all, &json!({}));
+    let first = doors(
+        &all,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    );
     assert!(first.len() < all.len(), "the newest window is partial");
 
     let mut app = reading();
@@ -2836,10 +2948,24 @@ fn the_count_folds_only_lines_older_than_the_installed_floor() {
     let root = segment_lines(ANCESTOR, 12, None);
     let child = segment_lines(SESSION, 12, Some((ANCESTOR, 11)));
     let mut tail = Tail::new();
-    tail.prepend(doors(&child, &json!({})))
-        .unwrap_or_else(|_| panic!("the child window"));
-    tail.prepend(doors(&root, &json!({"session_id": ANCESTOR, "to_seq": 11})))
-        .unwrap_or_else(|_| panic!("the ancestor window"));
+    tail.prepend(doors(
+        &child,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ))
+    .unwrap_or_else(|_| panic!("the child window"));
+    tail.prepend(doors(
+        &root,
+        &HistoryArgs {
+            session_id: Some(SessionId(ANCESTOR.to_owned())),
+            from_seq: None,
+            to_seq: Some(contract::Seq(11)),
+        },
+    ))
+    .unwrap_or_else(|_| panic!("the ancestor window"));
     let own = id(SESSION);
     let ancestor = id(ANCESTOR);
     let (prefix, trailer) = tail.count_parts(&own, None);
@@ -3418,14 +3544,14 @@ fn segment_lines_in(
 fn read_chain(
     child: &[contract::Envelope],
     root: &[contract::Envelope],
-) -> (Vec<Value>, crate::app::overlay::Tail) {
+) -> (Vec<HistoryArgs>, crate::app::overlay::Tail) {
     use crate::app::overlay::Tail;
     let mut tail = Tail::new();
     let mut asked = Vec::new();
     loop {
         let args = tail.next_args();
         asked.push(args.clone());
-        let pool = if args.get("session_id").is_some() {
+        let pool = if args.session_id.is_some() {
             root
         } else {
             child
@@ -3451,10 +3577,26 @@ fn the_tail_walks_the_chain_past_the_seam() {
     assert_eq!(
         asked,
         vec![
-            json!({}),
-            json!({"to_seq": 43}),
-            json!({"session_id": ANCESTOR, "to_seq": 299}),
-            json!({"session_id": ANCESTOR, "to_seq": 43}),
+            HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: None
+            },
+            HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: Some(contract::Seq(43))
+            },
+            HistoryArgs {
+                session_id: Some(SessionId(ANCESTOR.to_owned())),
+                from_seq: None,
+                to_seq: Some(contract::Seq(299))
+            },
+            HistoryArgs {
+                session_id: Some(SessionId(ANCESTOR.to_owned())),
+                from_seq: None,
+                to_seq: Some(contract::Seq(43))
+            },
         ],
         "the own windows, then the ancestor's under its session"
     );
@@ -3494,10 +3636,26 @@ fn the_tail_walks_a_cross_project_chain_by_session() {
     assert_eq!(
         asked,
         vec![
-            json!({}),
-            json!({"to_seq": 43}),
-            json!({"session_id": ANCESTOR, "to_seq": 299}),
-            json!({"session_id": ANCESTOR, "to_seq": 43}),
+            HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: None
+            },
+            HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: Some(contract::Seq(43))
+            },
+            HistoryArgs {
+                session_id: Some(SessionId(ANCESTOR.to_owned())),
+                from_seq: None,
+                to_seq: Some(contract::Seq(299))
+            },
+            HistoryArgs {
+                session_id: Some(SessionId(ANCESTOR.to_owned())),
+                from_seq: None,
+                to_seq: Some(contract::Seq(43))
+            },
         ],
         "the own windows, then the ancestor's under its session"
     );
@@ -3534,7 +3692,15 @@ fn a_malformed_project_pointer_ends_the_tail_walk() {
     let mut child = segment_lines(SESSION, 5, Some((ANCESTOR, 4)));
     child[0].payload["forked_from"]["project"] = json!(5);
     let (asked, tail) = read_chain(&child, &root);
-    assert_eq!(asked, vec![json!({})], "no parent page goes out");
+    assert_eq!(
+        asked,
+        vec![HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None
+        }],
+        "no parent page goes out"
+    );
     assert!(tail.chain_done(), "the held segment ends the walk");
     let held: Vec<(String, u64)> = tail
         .turn_lines()
@@ -3561,21 +3727,48 @@ fn an_ancestor_longer_than_one_window_walks_every_window() {
     for (count, expected) in [
         (
             255usize,
-            vec![json!({"session_id": ANCESTOR, "to_seq": 254})],
+            vec![HistoryArgs {
+                session_id: Some(SessionId(ANCESTOR.to_owned())),
+                from_seq: None,
+                to_seq: Some(contract::Seq(254)),
+            }],
         ),
-        (256, vec![json!({"session_id": ANCESTOR, "to_seq": 255})]),
+        (
+            256,
+            vec![HistoryArgs {
+                session_id: Some(SessionId(ANCESTOR.to_owned())),
+                from_seq: None,
+                to_seq: Some(contract::Seq(255)),
+            }],
+        ),
         (
             257,
             vec![
-                json!({"session_id": ANCESTOR, "to_seq": 256}),
-                json!({"session_id": ANCESTOR, "to_seq": 0}),
+                HistoryArgs {
+                    session_id: Some(SessionId(ANCESTOR.to_owned())),
+                    from_seq: None,
+                    to_seq: Some(contract::Seq(256)),
+                },
+                HistoryArgs {
+                    session_id: Some(SessionId(ANCESTOR.to_owned())),
+                    from_seq: None,
+                    to_seq: Some(contract::Seq(0)),
+                },
             ],
         ),
         (
             258,
             vec![
-                json!({"session_id": ANCESTOR, "to_seq": 257}),
-                json!({"session_id": ANCESTOR, "to_seq": 1}),
+                HistoryArgs {
+                    session_id: Some(SessionId(ANCESTOR.to_owned())),
+                    from_seq: None,
+                    to_seq: Some(contract::Seq(257)),
+                },
+                HistoryArgs {
+                    session_id: Some(SessionId(ANCESTOR.to_owned())),
+                    from_seq: None,
+                    to_seq: Some(contract::Seq(1)),
+                },
             ],
         ),
     ] {
@@ -3583,7 +3776,11 @@ fn an_ancestor_longer_than_one_window_walks_every_window() {
         let point = u64::try_from(count).expect("an ancestor line") - 1;
         let child = segment_lines(SESSION, 3, Some((ANCESTOR, point)));
         let (asked, tail) = read_chain(&child, &root);
-        let mut wants = vec![json!({})];
+        let mut wants = vec![HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        }];
         wants.extend(expected);
         assert_eq!(asked, wants, "{count} ancestor lines");
         assert!(tail.chain_done(), "{count} ancestor lines");
@@ -3686,7 +3883,14 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
     let height = app.conversation_height();
     // The newest window fills the display on its own segment, so the
     // pre-frame read stops there.
-    app.tail_lines(doors(&child, &json!({})));
+    app.tail_lines(doors(
+        &child,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ));
     assert!(
         app.tail_next().is_none(),
         // docs/tui.md ("History and paging"): older own-segment windows until the preview fills.
@@ -3713,7 +3917,7 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
     // Older own windows and the ancestor load through the post-frame
     // count, reaching the chain root.
     while let Some(args) = app.tail_count_next() {
-        let pool = if args.get("session_id").is_some() {
+        let pool = if args.session_id.is_some() {
             &ancestor
         } else {
             &child
@@ -5012,9 +5216,16 @@ fn delegate_message_turn(
 /// pass, to the landing, then opens every ledger.
 fn open_chain(ancestor: &[contract::Envelope], child: &[contract::Envelope]) -> App {
     let mut app = reading();
-    app.tail_lines(doors(child, &json!({})));
+    app.tail_lines(doors(
+        child,
+        &HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+    ));
     while let Some(args) = app.tail_next() {
-        let pool = if args.get("session_id").is_some() {
+        let pool = if args.session_id.is_some() {
             ancestor
         } else {
             child
@@ -5023,7 +5234,7 @@ fn open_chain(ancestor: &[contract::Envelope], child: &[contract::Envelope]) -> 
     }
     app.install_tail();
     while let Some(args) = app.tail_count_next() {
-        let pool = if args.get("session_id").is_some() {
+        let pool = if args.session_id.is_some() {
             ancestor
         } else {
             child

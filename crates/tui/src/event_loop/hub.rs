@@ -18,10 +18,11 @@ use contract::{Envelope, Seq, SessionId};
 
 use super::batch::{HUB_BATCH, batch, batchable, ready};
 use crate::Input;
-use crate::app::{App, history_args, session_command};
+use crate::app::{App, history_args, session_line};
 use crate::link::{self, Credits, Line};
 use crate::retry::Retry;
 use crate::tick::TickThread;
+use contract::commands::Command;
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
 /// "Driver commands").
@@ -269,8 +270,11 @@ impl Connection {
                 .paging_session()
                 .cloned()
                 .unwrap_or_else(|| session.clone());
-            let args = history_args(&top, session, Some(from), Some(to));
-            let command = session_command(&id, "history", &top, Some(args)).to_string();
+            let command = session_line(
+                &id,
+                &top,
+                Command::History(history_args(&top, session, Some(from), Some(to))),
+            );
             let written = self
                 .hub
                 .as_ref()
@@ -349,7 +353,7 @@ impl Connection {
                 return Ok(());
             };
             let id = support::mint("c_");
-            let command = session_command(&id, "history", session, Some(args)).to_string();
+            let command = session_line(&id, session, Command::History(args));
             let written = self
                 .hub
                 .as_ref()

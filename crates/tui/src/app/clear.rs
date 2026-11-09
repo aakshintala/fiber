@@ -4,9 +4,9 @@ use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::json;
 
-use super::{App, Effect, Kind, session_command};
+use super::{App, Effect, Kind, session_line};
 use crate::input::Draft;
-use contract::commands::SubscribeLevel;
+use contract::commands::{CloseArgs, Command, SubscribeLevel};
 
 /// A `/clear` start waiting for its answer: the cleared session, the
 /// credential its args named, and whether its close goes with `now`.
@@ -158,13 +158,11 @@ impl App {
         self.attached_screen_mut().clear();
         self.attach(session.clone());
         let id = support::mint("c_");
-        let close = session_command(
+        let close = session_line(
             &id,
-            "close",
             &pending.old,
-            Some(json!({"now": pending.now})),
-        )
-        .to_string();
+            Command::Close(CloseArgs { now: pending.now }),
+        );
         self.outbox
             .insert(id.clone(), Kind::Command, Draft::default());
         self.outbox.wait(&id, super::outbox::Waiting::ClearClose);

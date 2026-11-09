@@ -8,6 +8,7 @@
 use contract::events::EventKind;
 use std::time::{Duration, Instant};
 
+use contract::commands::HistoryArgs;
 use contract::events::{InputItem, ToolCallRequested, ToolCallStarted, TurnStarted};
 use contract::shapes::{ContentPart, Origin, Point};
 use contract::{ActionId, Envelope, Seq, SessionId};
@@ -275,7 +276,7 @@ impl Fold {
     /// line, or the parent the held run continues from when it reached
     /// its segment's first line. Past the seam every window names its
     /// segment. `None` with nothing held.
-    pub(super) fn next_args(&self) -> Option<Value> {
+    pub(super) fn next_args(&self) -> Option<HistoryArgs> {
         let first = self.lines.first()?;
         let Some(serving) = &self.serving else {
             return None;

@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use super::super::reconnect::UNANSWERED;
-use super::super::{App, Effect, Kind, session_command};
+use super::super::{App, Effect, Kind, session_line};
 use super::{refusal, refusal_code};
 use crate::home::{Spot, State, dependents};
 use crate::input::Draft;
@@ -17,6 +17,7 @@ use crate::view::max_question_scroll;
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::commands::SubscribeLevel;
+use contract::commands::{CloseArgs, Command};
 use contract::events::CommandAccepted;
 
 mod exit;
@@ -286,7 +287,11 @@ impl App {
             lines.push(self.subscribe(&session, SubscribeLevel::Summary));
         }
         let id = support::mint("c_");
-        lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
+        lines.push(session_line(
+            &id,
+            &session,
+            Command::Close(CloseArgs { now: true }),
+        ));
         self.home
             .questions
             .asks

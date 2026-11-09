@@ -10,7 +10,7 @@ use super::super::{App, Effect};
 use super::{Kind, Link, Outbox, RecentAsk, Waiting};
 use crate::app::testkit::{SESSION, hello, now};
 use crate::input::Draft;
-use contract::commands::{Command, CommandLine, ContentArgs};
+use contract::commands::{Command, CommandLine, ContentArgs, SubscribeArgs, SubscribeLevel};
 
 #[test]
 fn wait_then_settled_returns_the_tag_once() {
@@ -219,8 +219,15 @@ fn wrote_keeps_session_lines_but_not_subscribe_or_start() {
     );
     outbox.wrote(&steer);
     // `subscribe` and `commands` go out afresh on a reconnect.
-    outbox.wrote(&super::session_command("c_2", "subscribe", &session, None).to_string());
-    outbox.wrote(&super::session_command("c_3", "commands", &session, None).to_string());
+    outbox.wrote(&super::session_line(
+        "c_2",
+        &session,
+        Command::Subscribe(SubscribeArgs {
+            level: SubscribeLevel::Summary,
+            credential: None,
+        }),
+    ));
+    outbox.wrote(&super::session_line("c_3", &session, Command::Commands));
     // `start` carries no `session_id`, so it is never kept.
     outbox.wrote(&json!({"id": "c_4", "command": "start"}).to_string());
     // A line with no id is not a command.
