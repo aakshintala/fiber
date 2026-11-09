@@ -2887,6 +2887,10 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
     setup.provider(&server);
     let id = doors::mint("s_");
     let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
+    // The on-leg wait proves the rows moved, so the baseline is read before
+    // any reload: a single read is fresh here because no rebuild is in flight.
+    let init_rows = live.tools_rows("tools_init");
+    let init_row_bytes = row_bytes(&init_rows, "shell");
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "sandbox": {"enabled": true}}),
@@ -2936,7 +2940,25 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
     );
     // (`docs/invocation.md`, "What each command does": `tools` answers every declared tool. The
     // rebuild re-derives the catalogue and rows from the refreshed registry.)
-    let on_rows = live.tools_rows("tools_rl_on");
+    // The rebuilt build lands ahead of the refreshed rows, so a single read
+    // can still answer pre-reload sizes: poll the `tools` answer until the
+    // shell bytes move off the session-start value. Each attempt sends under
+    // its own command id so the match is that attempt's answer, never the
+    // first read's. One deadline bounds the whole wait (`docs/testing.md`,
+    // "Waits and timeouts").
+    let on_fresh = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut attempt = 0;
+    let on_rows = loop {
+        attempt += 1;
+        let rows = live.tools_rows(&format!("tools_rl_on_fresh_{attempt}"));
+        if row_bytes(&rows, "shell") != init_row_bytes {
+            break rows;
+        }
+        assert!(
+            !on_fresh.left().is_zero(),
+            "the /tools rows refresh after the reload: shell still answers {init_row_bytes}"
+        );
+    };
     let on_names = row_names(&on_rows);
     assert!(
         has_row(&on_rows, "shell"),
