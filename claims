@@ -344,3 +344,4 @@ docs/tui.md	fiber-2720	plan	2026-11-09T23:13:26Z	Amoghs-MacBook-Pro:/Users/aaksh
 crates/main/tests/screens/main.rs	fiber-2720	plan	2026-11-09T23:13:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/select.rs	fiber-2720	plan	2026-11-09T23:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/select_tests.rs	fiber-2720	plan	2026-11-09T23:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/extensions.md	fiber-2720	plan	2026-11-09T23:58:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
