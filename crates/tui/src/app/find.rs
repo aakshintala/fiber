@@ -508,6 +508,7 @@ impl App {
         }
         let to = from.saturating_add(HISTORY_LINES - 1).min(last);
         let id = mint();
+        self.outbox.wait(&id, super::Waiting::Find);
         // An ancestor page's window rides the serving session's chain
         // read: the command stays routed to the serving session, and
         // the args name the page's segment.

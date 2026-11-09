@@ -408,3 +408,413 @@ fn an_import_entry_answers_with_its_source_then_closes() {
     assert!(outbox.pending.is_empty());
     assert!(outbox.answered("c_1").is_none());
 }
+
+#[test]
+fn find_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Find), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Find));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Find));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn commands_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Commands), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Commands));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Commands));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn model_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Model), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Model));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Model));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn reply_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Reply), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Reply));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Reply));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn offer_file_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::OfferFile), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::OfferFile));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::OfferFile));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn steer_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Steer), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Steer));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Steer));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn shell_wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Shell), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Shell));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Shell));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn a_second_wait_replaces_the_first_across_variants() {
+    let mut outbox = up();
+    assert_eq!(outbox.wait("c_wait", Waiting::Model), None);
+    assert_eq!(outbox.wait("c_wait", Waiting::Shell), Some(Waiting::Model));
+    assert_eq!(outbox.waiting("c_wait"), Some(Waiting::Shell));
+    assert_eq!(outbox.settled("c_wait"), Some(Waiting::Shell));
+}
+
+/// One session envelope from [`SESSION`], with no action id.
+fn session_envelope(kind: &str, payload: serde_json::Value) -> crate::link::Line {
+    crate::link::Line::Session(contract::Envelope {
+        kind: contract::events::EventKind::from_name(kind),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// Folds one session line, answering the `commands` ask a fold may send
+/// with no rows.
+fn fold_session_line(app: &mut App, line: crate::link::Line) {
+    let mut out = app.on_line(line);
+    assert!(out.len() <= 1, "{out:?}");
+    let Some(first) = out.pop() else {
+        return;
+    };
+    let asked: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(asked["command"], "commands", "{asked}");
+    let answer = session_envelope(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+}
+
+/// The id of the single line `effect` sends, parsed.
+fn sent_id(effect: Effect) -> (String, serde_json::Value) {
+    let Effect::Send(lines) = effect else {
+        panic!("expected one line, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    let id = line["id"].as_str().unwrap_or_default().to_owned();
+    assert!(id.starts_with("c_"), "{id}");
+    (id, line)
+}
+
+#[test]
+fn a_find_send_registers_find() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(40, 10);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let mut seq = 0u64;
+    find_text_turn(&mut app, &mut seq, &["a needle here"]);
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        find_text_turn(&mut app, &mut seq, &refs);
+    }
+    assert!(app.pages().page_count() > 1);
+    assert!(app.pages().part(0).is_none(), "the first page dropped");
+    assert_eq!(app.on_key(crate::keys::Key::CtrlF, now()), Effect::None);
+    let mut generation = 0u64;
+    for ch in "needle".chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(crate::keys::Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: crate::app::find::FIND_PAUSE,
+            }
+        );
+    }
+    let mut first = app.find_due(generation);
+    first.extend(app.find_outgoing());
+    assert_eq!(first.len(), 1, "one fetch on the wire");
+    let fetch: serde_json::Value = serde_json::from_str(&first[0]).unwrap();
+    assert_eq!(fetch["command"], "history");
+    let id = fetch["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Find));
+}
+
+/// A turn of `replies` text replies, seqs from `seq`.
+fn find_text_turn(app: &mut App, seq: &mut u64, replies: &[&str]) {
+    *seq += 1;
+    find_numbered(
+        app,
+        seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]}),
+        true,
+    );
+    for reply in replies {
+        *seq += 1;
+        find_numbered(app, seq, "text_completed", json!({"text": reply}), false);
+    }
+    *seq += 1;
+    find_numbered(
+        app,
+        seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        false,
+    );
+}
+
+/// Folds one durable session line, answering a `commands` ask with no rows.
+fn find_numbered(
+    app: &mut App,
+    seq: &mut u64,
+    kind: &str,
+    payload: serde_json::Value,
+    commands: bool,
+) {
+    let line = crate::link::Line::Session(contract::Envelope {
+        kind: contract::events::EventKind::from_name(kind),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(*seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    });
+    let mut rest = Vec::new();
+    let mut asked = Vec::new();
+    for sent in app.on_line(line) {
+        let value: serde_json::Value = serde_json::from_str(&sent).unwrap();
+        if value["command"] == "commands" {
+            asked.push(value);
+        } else {
+            rest.push(sent);
+        }
+    }
+    assert!(rest.is_empty(), "{rest:?}");
+    if commands {
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let answer = crate::link::Line::Session(contract::Envelope {
+            kind: contract::events::EventKind::from_name("command_accepted"),
+            session_id: contract::SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: json!({"command_id": asked[0]["id"], "result": {"commands": []}})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        });
+        assert!(app.on_line(answer).is_empty());
+    } else {
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+}
+
+#[test]
+fn a_commands_send_registers_commands() {
+    let mut app = fresh();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let session = contract::SessionId(SESSION.to_owned());
+    let line: serde_json::Value = serde_json::from_str(&app.ask_commands(&session)).unwrap();
+    assert_eq!(line["command"], "commands");
+    let id = line["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Commands));
+}
+
+#[test]
+fn a_model_send_registers_model() {
+    let mut app = fresh();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(hello());
+    let choice = crate::model_picker::Choice {
+        reference: "acme/m1".to_owned(),
+        level: None,
+        level_chosen: false,
+        save_model: false,
+        session_only: true,
+    };
+    let (id, line) = sent_id(app.choose(choice));
+    assert_eq!(line["command"], "model");
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Model));
+}
+
+#[test]
+fn a_reply_send_registers_reply() {
+    use crate::app::commands::commands_testkit::attached;
+    let mut app = attached();
+    fold_session_line(
+        &mut app,
+        session_envelope(
+            "interaction_requested",
+            json!({"request_id": "r_c", "kind": "confirm", "prompt": "Continue?",
+                "action_ids": ["a_1"]}),
+        ),
+    );
+    let (id, line) = sent_id(app.on_key(crate::keys::Key::Enter, now()));
+    assert_eq!(line["command"], "reply");
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Reply));
+}
+
+#[test]
+fn an_offer_file_send_registers_offer_file() {
+    use crate::app::commands::commands_testkit::attached;
+    let mut app = attached();
+    app.set_size(80, 24);
+    fold_session_line(
+        &mut app,
+        session_envelope(
+            "repository_code_offered",
+            json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db",
+                "hash": "h", "required": false, "summary": "hook",
+                "files": ["tools/db.sh", "tools/b.sh"]}]}),
+        ),
+    );
+    assert!(app.offer_open());
+    let (id, line) = sent_id(app.on_key(crate::keys::Key::Enter, now()));
+    assert_eq!(line["command"], "offered_file");
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::OfferFile));
+}
+
+#[test]
+fn an_offer_send_registers_reply() {
+    use crate::app::commands::commands_testkit::attached;
+    let mut app = attached();
+    fold_session_line(
+        &mut app,
+        session_envelope(
+            "repository_code_offered",
+            json!({"request_id": "r_1", "items": [
+                {"kind": "mcp_server", "name": "a", "hash": "h", "required": false,
+                    "summary": "MCP server: a"},
+                {"kind": "mcp_server", "name": "b", "hash": "h", "required": false,
+                    "summary": "MCP server: b"},
+                {"kind": "mcp_server", "name": "c", "hash": "h", "required": false,
+                    "summary": "MCP server: c"}]}),
+        ),
+    );
+    assert!(app.offer_open());
+    assert_eq!(app.on_edit(crate::keys::Edit::Left), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Down, now()), Effect::None);
+    assert_eq!(app.on_edit(crate::keys::Edit::Right), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Down, now()), Effect::None);
+    let (id, line) = sent_id(app.on_key(crate::keys::Key::Enter, now()));
+    assert_eq!(line["command"], "reply");
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Reply));
+}
+
+#[test]
+fn a_steer_send_registers_steer() {
+    use crate::app::commands::commands_testkit::attached;
+    let mut app = attached();
+    fold_session_line(
+        &mut app,
+        session_envelope(
+            "steering_queue",
+            json!({"messages": [
+                {"content": [{"type": "text", "text": "one"}],
+                    "source": "driver", "command_id": "c_1"},
+                {"content": [{"type": "text", "text": "two"}],
+                    "source": "driver", "command_id": "c_2"}]}),
+        ),
+    );
+    app.select_steering(0);
+    let Effect::Send(lines) = app.on_key(crate::keys::Key::Enter, now()) else {
+        panic!("Enter amends");
+    };
+    assert_eq!(lines.len(), 2);
+    let lines: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert_eq!(lines[0]["command"], "steer_drop");
+    assert_eq!(lines[1]["command"], "steer");
+    let id = lines[1]["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Steer));
+}
+
+#[test]
+fn a_delegate_steer_send_registers_steer() {
+    use crate::app::items::testkit::DELEGATE_A;
+    use crate::app::items::testkit::{commands, home, opened, opened_item, start_delegate};
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    app.draft.set("focus on the tests");
+    let out = match app.on_key(crate::keys::Key::Enter, now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("Enter steers the delegate"),
+    };
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "steer");
+    assert_eq!(out[0]["session_id"], DELEGATE_A);
+    let id = out[0]["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Steer));
+}
+
+#[test]
+fn a_shell_send_registers_shell() {
+    use crate::app::commands::commands_testkit::{attached, enter, sent};
+    let mut app = attached();
+    let out = sent(enter(&mut app, "!ls"));
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "shell");
+    let id = out[0]["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Shell));
+    // A plain prompt registers no tag: the `Shell` registration fires
+    // only on the `!` send.
+    let out = sent(enter(&mut app, "hi"));
+    let id = out[0]["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), None);
+}

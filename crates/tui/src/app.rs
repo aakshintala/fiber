@@ -1657,6 +1657,15 @@ impl App {
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
                     Some(
+                        Waiting::Find
+                        | Waiting::Commands
+                        | Waiting::Model
+                        | Waiting::Reply
+                        | Waiting::OfferFile
+                        | Waiting::Steer
+                        | Waiting::Shell,
+                    ) => {}
+                    Some(
                         Waiting::Directories(..)
                         | Waiting::Subscribe { .. }
                         | Waiting::Stop
@@ -1741,6 +1750,15 @@ impl App {
                         Some(Waiting::RewindHistory) => {}
                         Some(Waiting::Sessions) => {}
                         Some(Waiting::Abandoned) => {}
+                        Some(
+                            Waiting::Find
+                            | Waiting::Commands
+                            | Waiting::Model
+                            | Waiting::Reply
+                            | Waiting::OfferFile
+                            | Waiting::Steer
+                            | Waiting::Shell,
+                        ) => {}
                         Some(Waiting::ConfigAsk) => {
                             self.outbox.settled(id);
                             self.config_views_refused(id, &message);
@@ -2056,6 +2074,15 @@ impl App {
                 | Waiting::CredentialSwitch
                 | Waiting::JobStop
                 | Waiting::JobInput,
+            ) => None,
+            Some(
+                Waiting::Find
+                | Waiting::Commands
+                | Waiting::Model
+                | Waiting::Reply
+                | Waiting::OfferFile
+                | Waiting::Steer
+                | Waiting::Shell,
             ) => None,
             None => None,
         };

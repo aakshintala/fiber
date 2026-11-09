@@ -44,6 +44,7 @@ impl App {
         let Some(line) = make(&mut self.queue, &id) else {
             return Effect::None;
         };
+        self.outbox.wait(&id, super::Waiting::Reply);
         self.outbox
             .pending
             .insert(id, (Kind::Reply, Draft::default()));

@@ -740,6 +740,7 @@ impl App {
         let args = super::commands::content_arg(&self.draft);
         let line = session_command(&id, "steer", &delegate.session, Some(args)).to_string();
         let draft = std::mem::take(&mut self.draft);
+        self.outbox.wait(&id, super::Waiting::Steer);
         self.outbox.pending.insert(id, (Kind::Steer, draft));
         Some(Effect::Send(vec![line]))
     }

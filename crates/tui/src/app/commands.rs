@@ -1027,7 +1027,11 @@ impl App {
     /// and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
-        self.completion.ask_commands(session)
+        let line = self.completion.ask_commands(session);
+        if let Some(id) = &self.completion.commands_id {
+            self.outbox.wait(id, super::outbox::Waiting::Commands);
+        }
+        line
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
@@ -1158,6 +1162,9 @@ impl App {
         }
         let draft = std::mem::take(&mut self.draft);
         let line = line.to_string();
+        if kind == Kind::Shell {
+            self.outbox.wait(&id, super::outbox::Waiting::Shell);
+        }
         match self.outbox.send(id, kind, draft, line) {
             Some(line) => Effect::Send(vec![line]),
             None => Effect::None,

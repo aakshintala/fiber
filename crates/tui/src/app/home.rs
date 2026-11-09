@@ -833,6 +833,15 @@ impl App {
                             | super::Waiting::JobStop
                             | super::Waiting::JobInput,
                         ) => return None,
+                        Some(
+                            super::Waiting::Find
+                            | super::Waiting::Commands
+                            | super::Waiting::Model
+                            | super::Waiting::Reply
+                            | super::Waiting::OfferFile
+                            | super::Waiting::Steer
+                            | super::Waiting::Shell,
+                        ) => {}
                         None => {}
                     }
                     // A rejected `start` is home's blocker text, above the
@@ -1006,6 +1015,15 @@ impl App {
                             | super::Waiting::CredentialSwitch
                             | super::Waiting::JobStop
                             | super::Waiting::JobInput,
+                        ) => {}
+                        Some(
+                            super::Waiting::Find
+                            | super::Waiting::Commands
+                            | super::Waiting::Model
+                            | super::Waiting::Reply
+                            | super::Waiting::OfferFile
+                            | super::Waiting::Steer
+                            | super::Waiting::Shell,
                         ) => {}
                     }
                     // The `commands` an opening sends is answered while

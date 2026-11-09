@@ -88,6 +88,7 @@ impl App {
         let id = mint();
         let line = self.offer.step_file(action, &id, &session);
         if let Some(line) = line {
+            self.outbox.wait(&id, super::Waiting::OfferFile);
             return Effect::Send(vec![line]);
         }
         if action == FileAction::Open {
@@ -112,6 +113,7 @@ impl App {
         let Some(line) = self.offer.answer(&id, &session) else {
             return Effect::None;
         };
+        self.outbox.wait(&id, super::Waiting::Reply);
         self.outbox
             .pending
             .insert(id, (Kind::Reply, Draft::default()));
