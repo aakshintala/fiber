@@ -3330,6 +3330,43 @@ fn settings_search_matches_keep_layer_tag_and_clip_safely_when_narrow() {
 }
 
 #[test]
+fn settings_search_matches_narrow_annotation_cuts_the_value_short() {
+    let fake = Fake::new(rows());
+    // At 40 columns the value is cut short of the tab annotation, keeping
+    // the layer tag whole: the exact cut pins the annotation's reserved
+    // room, so narrowing that reserve fails here.
+    expect(
+        &drawn(&searched(&fake, "sandbox"), None, 40, 24),
+        r#"
+| Settings  /settings         Esc returns
+|Changes save automatically
+|
+|/ sandbox
+|
+|› Sandbox writable paths  …  Permissions
+|
+|  Sandbox                 …  repositoryP
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|About sandbox.allow_write.
+|sandbox.allow_write · not set · changing
+|←→ tab · / search · Enter change · Tab l
+"#,
+    );
+}
+
+#[test]
 fn settings_search_matches_draw_in_a_short_frame() {
     let fake = Fake::new(rows());
     let settings = searched(&fake, "reviewer");
@@ -3747,6 +3784,23 @@ fn settings_search_controls_dash_c_stays_read_only_and_delete_resets_the_match()
         settings.focus,
         Some(super::Focus::Key("tui.rail.width".to_owned()))
     );
+}
+
+#[test]
+fn settings_search_controls_left_and_right_edit_the_query_not_the_tabs() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "rail");
+    // With a search open Left and Right move in the query: the tab stays
+    // put and the query text is untouched by the moves alone.
+    edit(&mut settings, &fake, Edit::Right);
+    edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert!(settings.search.is_some());
+    assert_eq!(query_of(&settings), "rail");
+    // The cursor they move is real: typing lands where it sits.
+    edit(&mut settings, &fake, Edit::Left);
+    one(&mut settings, &fake, Key::Char('x'));
+    assert_eq!(query_of(&settings), "raxil");
 }
 
 #[test]
