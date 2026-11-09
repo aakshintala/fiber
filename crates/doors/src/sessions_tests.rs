@@ -1543,3 +1543,65 @@ fn session_entries_propagates_a_non_not_found_error() {
     let error = session_entries(dir.path()).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
 }
+
+#[test]
+fn probe_marks_an_answering_peer_a_session() {
+    let home = Home::new();
+    // One ack line: the probe reads the first line, then closes, so a
+    // two-line peer would race the close with a broken pipe.
+    let peer = Peer::new(&home, ID, |command, stream| {
+        writeln!(stream, "{}", ack(command)).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(
+        classify_sockets(home.temp.path()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Session)]
+    );
+    peer.subscribed(&deadline);
+    peer.ended(&deadline);
+}
+
+#[test]
+fn probe_marks_an_accept_drop_peer_keeper_or_gone() {
+    let home = Home::new();
+    // A keeper reads the probe's line, drops it and closes: read, then
+    // shut down with no answer, like the crashed-socket reader.
+    let peer = Peer::new(&home, ID, |_, stream| {
+        stream.shutdown(std::net::Shutdown::Both).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(
+        classify_sockets(home.temp.path()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
+    );
+    peer.subscribed(&deadline);
+    peer.ended(&deadline);
+}
+
+#[test]
+fn probe_marks_a_stale_socket_file_gone() {
+    let home = Home::new();
+    let stale = home.listener(ID);
+    drop(stale);
+    assert_eq!(
+        classify_sockets(home.temp.path()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Gone)]
+    );
+}
+
+#[test]
+fn probe_skips_the_hub_entry() {
+    let home = Home::new();
+    fs::create_dir_all(home.run()).unwrap();
+    fs::write(home.run().join("hub"), b"not a session socket").unwrap();
+    let peer = Peer::new(&home, ID, |command, stream| {
+        writeln!(stream, "{}", ack(command)).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(
+        classify_sockets(home.temp.path()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Session)]
+    );
+    peer.subscribed(&deadline);
+    peer.ended(&deadline);
+}

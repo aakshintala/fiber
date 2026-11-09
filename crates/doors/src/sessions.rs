@@ -49,6 +49,66 @@ pub fn session_entries(home: &Path) -> io::Result<Vec<SessionId>> {
     Ok(names)
 }
 
+/// How one `run/` entry answered the probe: the TUI stops keepers
+/// direct and closes sessions, so it must tell them apart with no hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketClass {
+    /// Answered the subscribe write: a live session.
+    Session,
+    /// Accepted, then EOF or reset before any line: a keeper, or a
+    /// session that died as the probe landed (a stop write then decides:
+    /// it fails on a gone socket and stops a keeper).
+    KeeperOrGone,
+    /// Refused or absent, or the subscribe write failed: nothing to stop.
+    Gone,
+}
+
+/// Classifies every `run/` entry for the TUI: `session_entries` listed
+/// (so `hub` never appears), each probed with one connect, one summary
+/// subscribe write and one first-line read, no waits. A local socket
+/// refuses or accepts at once, and both a session's answer and a
+/// keeper's accept-drop arrive without waiting.
+pub fn classify_sockets(home: &Path) -> io::Result<Vec<(SessionId, SocketClass)>> {
+    let run = config::run_dir(home);
+    let entries = session_entries(home)?;
+    Ok(entries
+        .into_iter()
+        .map(|id| {
+            let class = probe_socket(&run.join(&id.0), &id);
+            (id, class)
+        })
+        .collect())
+}
+
+/// One entry's probe: a refused-or-absent connect is gone, as is a
+/// failed subscribe write (a session gone since the listing); EOF or
+/// reset before any line is keeper-or-gone; any first line is a live
+/// session's answer.
+fn probe_socket(path: &Path, id: &SessionId) -> SocketClass {
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return SocketClass::Gone;
+    };
+    let subscribed = crate::attach::send(
+        &mut stream,
+        id,
+        &CommandLine {
+            id: contract::CommandId(crate::mint("c_")),
+            command: Command::Subscribe(SubscribeArgs {
+                level: SubscribeLevel::Summary,
+                credential: None,
+            }),
+        },
+    );
+    if subscribed.is_err() {
+        return SocketClass::Gone;
+    }
+    let mut reader = std::io::BufReader::new(stream);
+    match support::framing::read_line(&mut reader, MAX_LINE) {
+        Ok(Some(_)) => SocketClass::Session,
+        Ok(None) | Err(_) => SocketClass::KeeperOrGone,
+    }
+}
+
 /// The account's session sockets, queried afresh on each call.
 pub struct SessionSockets {
     home: PathBuf,
