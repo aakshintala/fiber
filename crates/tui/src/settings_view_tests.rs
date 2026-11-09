@@ -3339,3 +3339,222 @@ fn settings_search_matches_draw_in_a_short_frame() {
     assert!(shown.contains("Reviewer model"), "{shown}");
     assert!(shown.contains("Permissions"), "{shown}");
 }
+
+// The ruled Escape transitions (`docs/tui.md`, "Swapped views",
+// `/settings`, "Search"): with a match the focus stays on it in its own
+// tab; with no match, or an empty query, it goes back to the row focused
+// when the search opened. The next Esc returns.
+
+/// The fixture rows without `key`.
+fn without(key: &str) -> Vec<SettingRow> {
+    rows().into_iter().filter(|row| row.key != key).collect()
+}
+
+#[test]
+fn settings_search_escape_keeps_the_match_in_its_tab_and_closes_next() {
+    let fake = Fake::new(rows());
+    // `tui` matches across Appearance and Notifications: move past the
+    // first result, so keeping it cannot pass.
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "tui");
+    press(&mut settings, &fake, &[Key::Down, Key::Down, Key::Down]);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.attention.bell".to_owned()))
+    );
+    expect(
+        &screen(&settings),
+        r#"
+| Settings  /settings                                                 Esc returns
+|Changes save automatically
+|
+|/ tui
+|
+|  Hover          [x] On                                               Appearance
+|
+|  Rail width     30  project                                          Appearance
+|
+|  Theme          Default                                              Appearance
+|
+|› Terminal bell  [ ] Off                                           Notifications
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|About tui.attention.bell.
+|tui.attention.bell · using the default · Applies when the terminal starts again.
+|←→ tab · / search · Enter change · Tab layer · Delete reset
+"#,
+    );
+    // The first Esc clears but stays open, on the match in its own tab.
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Notifications);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.attention.bell".to_owned()))
+    );
+    expect(
+        &screen(&settings),
+        r#"
+| Settings  /settings                                                 Esc returns
+|Changes save automatically
+|
+| Appearance   Notifications   Models   Permissions   Sessions   Advanced
+|
+|› Terminal bell  [ ] Off
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|About tui.attention.bell.
+|tui.attention.bell · using the default · Applies when the terminal starts again.
+|←→ tab · / search · Enter change · Tab layer · Delete reset
+"#,
+    );
+    // The next Esc returns.
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
+}
+
+#[test]
+fn settings_search_escape_with_no_match_restores_the_origin_row() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    let origin = screen(&settings);
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "zzz");
+    assert_eq!(settings.focus, None);
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.rail.width".to_owned()))
+    );
+    assert_eq!(screen(&settings), origin);
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
+}
+
+#[test]
+fn settings_search_escape_empty_query_restores_the_origin() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    let origin = screen(&settings);
+    one(&mut settings, &fake, Key::Char('/'));
+    // Even with the result focus moved into another tab, an empty query
+    // restores the origin.
+    press(
+        &mut settings,
+        &fake,
+        &[Key::Down, Key::Down, Key::Down, Key::Down],
+    );
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.attention.bell".to_owned()))
+    );
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.rail.width".to_owned()))
+    );
+    assert_eq!(screen(&settings), origin);
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
+}
+
+#[test]
+fn settings_search_escape_screen_match_stays_on_its_tab() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "skills");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(super::Screen::Skills))
+    );
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Sessions);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(super::Screen::Skills))
+    );
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
+}
+
+#[test]
+fn settings_search_escape_reopen_recaptures_the_origin() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "skills");
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert_eq!(settings.tab, SettingsTab::Sessions);
+    // Opening again captures the cleared tab and row as the origin.
+    one(&mut settings, &fake, Key::Char('/'));
+    assert_eq!(query_of(&settings), "");
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert_eq!(settings.tab, SettingsTab::Sessions);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(super::Screen::Skills))
+    );
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
+}
+
+#[test]
+fn settings_search_escape_reread_keeps_result_and_falls_back_without_it() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "reviewer");
+    // A reread keeps the focused result and the query.
+    settings.reread(&ctx(&fake));
+    assert_eq!(query_of(&settings), "reviewer");
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("reviewer.model".to_owned()))
+    );
+    // A reread that removes the focused result leaves no match: Esc
+    // restores the origin.
+    *support::lock(&fake.rows) = Ok(without("reviewer.model"));
+    settings.reread(&ctx(&fake));
+    assert!(settings.items().is_empty());
+    assert_eq!(settings.focus, None);
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.rail.width".to_owned()))
+    );
+    // A reread that removes the origin row instead falls back to the
+    // first remaining row of the origin tab, never a stale index.
+    one(&mut settings, &fake, Key::Char('/'));
+    typed(&mut settings, &fake, "zzz");
+    *support::lock(&fake.rows) = Ok(without("tui.rail.width"));
+    settings.reread(&ctx(&fake));
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.hover".to_owned()))
+    );
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
+}
