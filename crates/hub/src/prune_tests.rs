@@ -469,6 +469,36 @@ fn the_passed_callback_deletes_through_the_hubs_own_delete() {
     drop(held);
 }
 
+#[test]
+fn prune_deletes_an_archived_session_like_any_other() {
+    let (_held, dir) = crate::testkit::home("hp-archived");
+    let archived = session(&dir, "-p", 1, None);
+    let mut log = fs::read_to_string(archived.join("events.jsonl")).unwrap();
+    log.push_str(&format!(
+        "{{\"kind\":\"archived\",\"seq\":1,\"session_id\":\"{}\"}}\n",
+        id(1),
+    ));
+    fs::write(archived.join("events.jsonl"), log).unwrap();
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let hub = hub(&dir, Arc::new(FakeStarter::hang(&dir)), clock);
+    let hub = hub.with_machine(Arc::new(InvokeMachine {
+        fake: FakeMachine::default(),
+    }));
+    let pruned = crate::prune::prune(
+        &hub,
+        &args(
+            json!({"older_than": "30d", "cascade": true, "force": true, "expect": {
+                "sessions": [{"id": id(1), "cascade": [id(1)]}],
+                "worktrees": [], "pinned": [], "diagnostics": [],
+            }}),
+        ),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(pruned["total"], 1);
+    assert!(!archived.exists(), "the archived session is gone");
+}
+
 /// Appends a `moved` last line to `dir`'s log naming `next`: the parent's
 /// post-move state, as a hub prune meets it.
 fn append_moved(dir: &std::path::Path, old: u64, next: u64) {

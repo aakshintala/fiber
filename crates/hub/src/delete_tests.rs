@@ -188,6 +188,41 @@ fn delete_removes_the_directory_and_is_accepted_with_no_result() {
 }
 
 #[test]
+fn delete_removes_an_archived_session_and_keeps_its_row() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    // The archived marker and row change nothing about deletion.
+    fs::write(
+        dir.join("events.jsonl"),
+        format!(
+            "{}{{\"kind\":\"archived\",\"seq\":1,\"session_id\":\"{}\"}}\n",
+            fs::read_to_string(dir.join("events.jsonl")).unwrap(),
+            id(1),
+        ),
+    )
+    .unwrap();
+    let row = RecentRow {
+        session_id: SessionId(id(1)),
+        ts: 1,
+        project: "-p".to_owned(),
+        workspace: "/w".to_owned(),
+        name: "n".to_owned(),
+        how: crate::Left::Exited,
+        status: None,
+        archived: true,
+    };
+    recent::append(&temp.dir, &row).unwrap();
+    let rows = fs::read(temp.dir.join("recent.jsonl")).unwrap();
+    let hub = temp.hub();
+    let line = json!({"id": "1", "command": "delete", "args": {"session": id(1)}});
+    let answer = over_the_wire(&hub, &line.to_string());
+    assert_eq!(answer["kind"], "command_accepted");
+    assert!(!dir.exists(), "the log is gone with its archive marker");
+    // The derived row stays: listings skip the missing directory.
+    assert_eq!(fs::read(temp.dir.join("recent.jsonl")).unwrap(), rows);
+}
+
+#[test]
 fn a_refusal_over_the_wire_carries_its_code() {
     let temp = Temp::new();
     let hub = temp.hub();
