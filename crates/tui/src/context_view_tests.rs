@@ -1,7 +1,7 @@
 //! Tests for the context breakdown's fold, estimates, bar and frame
 //! (`docs/tui.md`, "Swapped views").
 
-use super::{Category, ContextFold, Handoff, LARGEST_SHOWN, Sized, bar, categories, frame};
+use super::{Category, Compaction, ContextFold, LARGEST_SHOWN, Sized, bar, categories, frame};
 use crate::swapped::{Ink, List, render};
 use crate::theme::Role;
 use contract::Envelope;
@@ -122,13 +122,13 @@ fn text(fold: &ContextFold, rate: Rate, sized: Option<Sized>, width: u16) -> Str
 
 #[test]
 fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
-    // 268,000 of a 1,000,000 window with the handoff at 400,000: the
-    // bar spans to the handoff point, so the marker sits on its end.
+    // 268,000 of a 1,000,000 window with the compaction at 400,000: the
+    // bar spans to the compaction point, so the marker sits on its end.
     let fold = fold_with_sizes(100_000, 50_000, 118_000);
     let sized = Sized {
         total: 268_000,
         window: 1_000_000,
-        trigger: Handoff::At(400_000),
+        trigger: Compaction::At(400_000),
     };
     let frame = frame(&fold, rate(), Some(sized), List::default(), 80);
     // The body is indented two columns: "268k tokens" bold, then the
@@ -140,7 +140,7 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
     assert_eq!(
         frame.rows[0][2],
         (
-            " · 26% of the 1M window · automatic handoff at 400k".to_owned(),
+            " · 26% of the 1M window · automatic compaction at 400k".to_owned(),
             None,
             Ink::Muted
         )
@@ -182,11 +182,15 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
             .iter()
             .map(|(text, _, _)| text.as_str())
             .collect::<String>(),
-        format!("{}handoff 400k", " ".repeat(68))
+        format!("{}compaction 400k", " ".repeat(65))
     );
     assert_eq!(
         frame.rows[2].last(),
-        Some(&("handoff 400k".to_owned(), None, Ink::Role(Role::Attention)))
+        Some(&(
+            "compaction 400k".to_owned(),
+            None,
+            Ink::Role(Role::Attention)
+        ))
     );
     // One row per category: the mark in its colour, the padded name,
     // the size and its share dim.
@@ -291,7 +295,7 @@ fn categories_are_absent_without_a_preamble_even_with_a_rate() {
     let sized = Some(Sized {
         total: 20,
         window: 100,
-        trigger: Handoff::Unknown,
+        trigger: Compaction::Unknown,
     });
     let shown = text(&fold, rate(), sized, 80);
     assert!(!shown.contains("system prompt"), "{shown}");
@@ -314,11 +318,11 @@ fn an_empty_preamble_draws_known_zero_categories() {
     let sized = Some(Sized {
         total: 20,
         window: 100,
-        trigger: Handoff::Off,
+        trigger: Compaction::Off,
     });
     let shown = text(&fold, rate(), sized, 80);
     assert!(shown.contains("system prompt"), "{shown}");
-    assert!(shown.contains("automatic handoff off"), "{shown}");
+    assert!(shown.contains("automatic compaction off"), "{shown}");
 }
 
 #[test]
@@ -360,7 +364,7 @@ fn a_zero_window_draws_no_bar_or_marker() {
 }
 
 #[test]
-fn the_handoff_marker_uses_the_trigger_cell() {
+fn the_compaction_marker_uses_the_trigger_cell() {
     let fill = [(Category::Messages, 100)];
     assert_eq!(
         bar(&fill, 100, Some(25), 8),
@@ -385,7 +389,7 @@ fn a_trigger_past_the_window_marks_the_last_cell() {
 }
 
 #[test]
-fn no_trigger_draws_no_handoff_marker() {
+fn no_trigger_draws_no_compaction_marker() {
     let fill = [(Category::Messages, 50)];
     assert_eq!(
         bar(&fill, 100, None, 4),
@@ -443,7 +447,7 @@ fn largest_results_show_five_largest_and_keep_arrival_order_for_ties() {
         Some(Sized {
             total: 100,
             window: 100,
-            trigger: Handoff::At(80),
+            trigger: Compaction::At(80),
         }),
         80,
     );
@@ -457,12 +461,12 @@ fn largest_results_show_five_largest_and_keep_arrival_order_for_ties() {
 }
 
 #[test]
-fn a_completed_handoff_clears_tool_results_and_the_largest_list() {
+fn a_completed_compaction_clears_tool_results_and_the_largest_list() {
     let mut fold = ContextFold::default();
     fold.fold(&requested("a1", "read"));
     fold.fold(&completed(Some("a1"), vec![text_part("result".to_owned())]));
     fold.fold(&envelope(
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed"}),
     ));
@@ -471,13 +475,13 @@ fn a_completed_handoff_clears_tool_results_and_the_largest_list() {
 }
 
 #[test]
-fn failed_and_cancelled_handoffs_keep_tool_results_and_the_largest_list() {
+fn failed_and_cancelled_compactions_keep_tool_results_and_the_largest_list() {
     for outcome in ["failed", "cancelled"] {
         let mut fold = ContextFold::default();
         fold.fold(&requested("a1", "read"));
         fold.fold(&completed(Some("a1"), vec![text_part("result".to_owned())]));
         fold.fold(&envelope(
-            "handoff_completed",
+            "compaction_completed",
             None,
             json!({"outcome": outcome}),
         ));
@@ -504,7 +508,7 @@ fn result_names_come_from_the_request_and_unseen_requests_are_tools() {
         Some(Sized {
             total: 100,
             window: 100,
-            trigger: Handoff::Unknown,
+            trigger: Compaction::Unknown,
         }),
         80,
     );
@@ -558,7 +562,7 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Handoff::At(80),
+            trigger: Compaction::At(80),
         }),
         List::default(),
         12,
@@ -583,7 +587,7 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
             Some(Sized {
                 total: 20,
                 window: 100,
-                trigger: Handoff::At(80),
+                trigger: Compaction::At(80),
             }),
             80
         )
@@ -602,7 +606,7 @@ fn with_a_rate_the_view_shows_each_category_and_sizes_results_in_tokens() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Handoff::At(80),
+            trigger: Compaction::At(80),
         }),
         List::default(),
         80,
@@ -613,7 +617,7 @@ fn with_a_rate_the_view_shows_each_category_and_sizes_results_in_tokens() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Handoff::At(80),
+            trigger: Compaction::At(80),
         }),
         80,
     );
@@ -649,7 +653,7 @@ fn tool_results_draw_in_error() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Handoff::At(80),
+            trigger: Compaction::At(80),
         }),
         List::default(),
         80,
@@ -668,7 +672,7 @@ fn tool_results_draw_in_error() {
 }
 
 #[test]
-fn a_missing_trigger_says_automatic_handoff_is_off() {
+fn a_missing_trigger_says_automatic_compaction_is_off() {
     let fold = fold_with_sizes(4, 5, 6);
     let shown = text(
         &fold,
@@ -676,24 +680,24 @@ fn a_missing_trigger_says_automatic_handoff_is_off() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Handoff::Off,
+            trigger: Compaction::Off,
         }),
         80,
     );
-    assert!(shown.contains("automatic handoff off"));
-    assert!(!shown.contains("handoff at"));
+    assert!(shown.contains("automatic compaction off"));
+    assert!(!shown.contains("compaction at"));
 }
 
 #[test]
-fn an_unknown_handoff_draws_the_window_with_no_marker_and_no_off_row() {
+fn an_unknown_compaction_draws_the_window_with_no_marker_and_no_off_row() {
     // A continuation with no `preamble_built` of its own (see #3756):
-    // the total draws against the inherited window, with no handoff
+    // the total draws against the inherited window, with no compaction
     // tail, no marker label and no off row.
     let fold = ContextFold::default();
     let sized = Some(Sized {
         total: 50,
         window: 200,
-        trigger: Handoff::Unknown,
+        trigger: Compaction::Unknown,
     });
     let frame = frame(&fold, Rate::default(), sized, List::default(), 80);
     let shown = text(&fold, Rate::default(), sized, 80);
@@ -701,9 +705,9 @@ fn an_unknown_handoff_draws_the_window_with_no_marker_and_no_off_row() {
         shown.contains("50 tokens · 25% of the 200 window"),
         "{shown}"
     );
-    // No tail, no marker label and no off row: each carries "handoff "
+    // No tail, no marker label and no off row: each carries "compaction "
     // with a trailing word, which the largest-results row never has.
-    assert!(!shown.contains("handoff "), "{shown}");
+    assert!(!shown.contains("compaction "), "{shown}");
     assert!(
         !shown.contains("The context shows after the session's first request."),
         "{shown}"
@@ -712,7 +716,7 @@ fn an_unknown_handoff_draws_the_window_with_no_marker_and_no_off_row() {
     assert!(shown.contains('█'), "{shown}");
     assert!(!shown.contains("system prompt"), "{shown}");
     assert_eq!(frame.below, ["Breakdown after a request without images."]);
-    assert!(shown.contains("none since the last handoff"), "{shown}");
+    assert!(shown.contains("none since the last compaction"), "{shown}");
 }
 
 #[test]
@@ -721,7 +725,7 @@ fn the_bar_row_stays_present_and_row_count_does_not_depend_on_width() {
     let sized = Some(Sized {
         total: 20,
         window: 100,
-        trigger: Handoff::At(80),
+        trigger: Compaction::At(80),
     });
     let zero = frame(&fold, rate(), sized, List::default(), 0);
     let wide = frame(&fold, rate(), sized, List::default(), 80);
@@ -758,7 +762,7 @@ fn a_fork_notes_that_inherited_history_counts_under_messages() {
         Some(Sized {
             total: 100,
             window: 100,
-            trigger: Handoff::At(80),
+            trigger: Compaction::At(80),
         }),
         80,
     );
@@ -784,7 +788,7 @@ fn the_context_view_snapshot_is_rendered_through_the_shared_frame() {
         Some(Sized {
             total: 61_234,
             window: 200_000,
-            trigger: Handoff::At(140_000),
+            trigger: Compaction::At(140_000),
         }),
         List::default(),
         80,

@@ -244,11 +244,11 @@ fn the_preamble_is_built_once_per_loop_not_per_turn() {
 }
 
 #[test]
-fn trigger_at_is_absent_when_automatic_handoff_is_off() {
+fn trigger_at_is_absent_when_automatic_compaction_is_off() {
     let mut session =
-        Session::new(vec![Scripted::text("Done.")], None).handoff(r#loop::HandoffSettings {
+        Session::new(vec![Scripted::text("Done.")], None).compaction(r#loop::CompactionSettings {
             enabled: false,
-            ..r#loop::HandoffSettings::default()
+            ..r#loop::CompactionSettings::default()
         });
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
@@ -281,9 +281,9 @@ fn trigger_at_is_absent_when_automatic_handoff_is_off() {
 #[test]
 fn trigger_at_follows_the_configured_tokens() {
     let mut session =
-        Session::new(vec![Scripted::text("Done.")], None).handoff(r#loop::HandoffSettings {
+        Session::new(vec![Scripted::text("Done.")], None).compaction(r#loop::CompactionSettings {
             tokens: 1_234,
-            ..r#loop::HandoffSettings::default()
+            ..r#loop::CompactionSettings::default()
         });
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();

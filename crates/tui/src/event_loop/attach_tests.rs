@@ -3457,7 +3457,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
 
 #[test]
 fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() {
-    let mut log = super::handoff_log(3, "tail reply");
+    let mut log = super::compaction_log(3, "tail reply");
     let at = log
         .iter()
         .position(|line| line.kind == EventKind::AssistantMessageCompleted)
@@ -3550,7 +3550,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
             }
         }
     }
-    let mut log = super::handoff_log(3, "tail reply");
+    let mut log = super::compaction_log(3, "tail reply");
     let at = log
         .iter()
         .position(|line| line.kind == EventKind::AssistantMessageCompleted)
@@ -3595,7 +3595,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
 
 #[test]
 fn the_first_frame_draws_the_last_page_before_the_full_subscribe() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let open = tail_open(log, Full::Hung, History::Windows, Vec::new());
     assert_eq!(
         seen_commands(&open),
@@ -3640,7 +3640,7 @@ fn older_reads_use_to_seq_just_below_the_earliest_held_line() {
 /// ends as failed with the answer's message, and the raise goes out.
 #[test]
 fn a_history_rejection_shows_the_notice_and_still_raises() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let open = tail_open(log, Full::Accepted, History::Reject("boom"), Vec::new());
     assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
     let levels: Vec<String> = seen_commands(&open)
@@ -3656,7 +3656,7 @@ fn a_history_rejection_shows_the_notice_and_still_raises() {
 /// open, and the raise goes out.
 #[test]
 fn a_reopening_during_the_read_abandons_it_and_still_raises() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let reopened = json!({"kind": "stream_reopened", "ts": 0,
         "schema_version": contract::SCHEMA_VERSION,
         "payload": {"session_id": "s_aaaaaaaaaaaaaaaa"}});
@@ -3675,7 +3675,7 @@ fn a_reopening_during_the_read_abandons_it_and_still_raises() {
 /// the tail never installs, and no raise goes out.
 #[test]
 fn a_lost_connection_during_the_read_ends_everything() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let mut open = tail_open(log, Full::Hung, History::Drop, Vec::new());
     assert!(!open.lp.app.connected());
     assert!(!open.lp.hub.has_stream());
@@ -3698,7 +3698,7 @@ fn a_lost_connection_during_the_read_ends_everything() {
 /// pass.
 #[test]
 fn an_empty_log_draws_no_history_and_raises() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let mut open = tail_open(log, Full::Accepted, History::Empty, Vec::new());
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
@@ -3722,7 +3722,7 @@ fn an_empty_log_draws_no_history_and_raises() {
 /// first with the answer wait holding the commands reply and two notices.
 #[test]
 fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let notice = |text: &str| {
         let envelope = super::line("notice", None, None, json!({"message": text}));
         let mut value = serde_json::to_value(&envelope).unwrap_or_default();
@@ -3771,7 +3771,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     const SHORT: usize = 50;
     // Nine lines a turn bar the last: the replay overfills one batch,
     // with a tail behind the short part.
-    let log = super::handoff_log(479, "the last reply holds quokkas");
+    let log = super::compaction_log(479, "the last reply holds quokkas");
     // The ack and `HUB_BATCH - 1` lines fill the first batch.
     let head = HUB_BATCH - 1;
     assert!(
@@ -3979,7 +3979,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     const SHORT: usize = 50;
     // Nine lines a turn bar the last: the replay overfills one batch,
     // with a tail behind the short part.
-    let log = super::handoff_log(479, "the last reply holds quokkas");
+    let log = super::compaction_log(479, "the last reply holds quokkas");
     // The ack and `HUB_BATCH - 1` lines fill the first batch.
     let head = HUB_BATCH - 1;
     assert!(
@@ -4144,7 +4144,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
 
 #[test]
 fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let mut open = tail_open(log.clone(), Full::Replay, History::Windows, Vec::new());
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
@@ -4414,7 +4414,7 @@ fn last_seq(log: &[contract::Envelope]) -> u64 {
 fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
     // The held rows stay the preview through the reconnect.
-    let log = super::handoff_log(5, "the held reply holds quokkas");
+    let log = super::compaction_log(5, "the held reply holds quokkas");
     let last = last_seq(&log);
     let mut app = live_app();
     for envelope in &log {
@@ -4453,7 +4453,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     // Without the anchor the landing follows the end: the replay
     // lacks the top row's reply, so the top row's text is gone and
     // the last lines show.
-    let log = super::handoff_log(2, "the first reply");
+    let log = super::compaction_log(2, "the first reply");
     let mut app = live_app();
     for envelope in &log {
         app.on_line(Line::Session(envelope.clone()));
@@ -4465,7 +4465,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
         !lines.iter().any(|line| line.contains("\"history\"")),
         "reads nothing: {lines:?}"
     );
-    let other = super::handoff_log(1, "the other last reply");
+    let other = super::compaction_log(1, "the other last reply");
     let summary = summary_id(&lines);
     app.on_line(session_accepted(SESSION, &summary));
     let raise: serde_json::Value =
@@ -4488,7 +4488,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     // A row open still reads and follows: the tail read goes out,
     // and the landed screen shows the end of a session taller than
     // the screen.
-    let log = super::handoff_log(5, "the last reply holds quokkas");
+    let log = super::compaction_log(5, "the last reply holds quokkas");
     let mut open = tail_open(log, Full::Replay, History::Windows, Vec::new());
     assert!(
         open.seen

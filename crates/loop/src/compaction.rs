@@ -1,14 +1,14 @@
-//! Handoff (`docs/handoff.md`): the context's restart from a note the
-//! session's own model or a `before_handoff` hook writes. This module holds the settings, context size
+//! Compaction (`docs/compaction.md`): the context's restart from a note the
+//! session's own model or a `before_compaction` hook writes. This module holds the settings, context size
 //! and automatic check. Its child modules hold the note request, recording,
-//! handoff run, and render state that makes the live conversation and a
+//! compaction run, and render state that makes the live conversation and a
 //! resume's rebuild agree.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use contract::events::{
-    ContextNudged, Event, HandoffTrigger, Notice, Outcome, SkillLoad, SkillSent, SkillsResent,
+    CompactionTrigger, ContextNudged, Event, Notice, Outcome, SkillLoad, SkillSent, SkillsResent,
     ToolCallRequested, TurnCompleted, TurnOutcome, group_notices, grouped_lead,
 };
 use contract::provider::{Input, ModelRequest};
@@ -33,21 +33,21 @@ pub(crate) use note::{failure, reply_note};
 
 pub(crate) use carry::Carry;
 
-/// How automatic handoff is set (`docs/configuration.md`, `handoff.*`).
+/// How automatic compaction is set (`docs/configuration.md`, `compaction.*`).
 #[derive(Debug, Clone, PartialEq)]
-pub struct HandoffSettings {
-    /// `handoff.enabled`: whether automatic handoff runs.
+pub struct CompactionSettings {
+    /// `compaction.enabled`: whether automatic compaction runs.
     pub enabled: bool,
-    /// `handoff.tokens`: the token trigger.
+    /// `compaction.tokens`: the token trigger.
     pub tokens: u64,
-    /// `handoff.window_fraction`: the trigger as a fraction of the model's
+    /// `compaction.window_fraction`: the trigger as a fraction of the model's
     /// context window.
     pub window_fraction: f64,
-    /// `handoff.nudge`: whether the nudge is given.
+    /// `compaction.nudge`: whether the nudge is given.
     pub nudge: bool,
 }
 
-impl Default for HandoffSettings {
+impl Default for CompactionSettings {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -58,16 +58,16 @@ impl Default for HandoffSettings {
     }
 }
 
-/// The context size, in tokens, at which an automatic handoff runs: the
+/// The context size, in tokens, at which an automatic compaction runs: the
 /// token trigger, or the window fraction when that comes first. `None` when
-/// automatic handoff is off.
+/// automatic compaction is off.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
     reason = "a window is far below 2^53 tokens, and the product is floored and non-negative"
 )]
-pub(crate) fn trigger_at(settings: &HandoffSettings, window: u64) -> Option<u64> {
+pub(crate) fn trigger_at(settings: &CompactionSettings, window: u64) -> Option<u64> {
     if !settings.enabled {
         return None;
     }
@@ -114,28 +114,28 @@ struct Measured {
     at: usize,
 }
 
-/// What the loop keeps for handoff: the settings, the trigger the preamble
+/// What the loop keeps for compaction: the settings, the trigger the preamble
 /// recorded, the context's measure and the per-turn block.
 pub(crate) struct State {
-    pub(crate) settings: HandoffSettings,
+    pub(crate) settings: CompactionSettings,
     /// `preamble_built.trigger_at`: what the check compares against.
     pub(crate) trigger_at: Option<u64>,
-    /// Runs on every completed handoff (`docs/tools.md`, "File tools").
+    /// Runs on every completed compaction (`docs/tools.md`, "File tools").
     forget: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// What the conversation's rendering carries across a handoff.
+    /// What the conversation's rendering carries across a compaction.
     pub(crate) carry: Carry,
     /// The last reply's size; `None` in a context no reply has measured.
     measured: Option<Measured>,
-    /// A failed handoff blocks the automatic trigger for the rest of the
+    /// A failed compaction blocks the automatic trigger for the rest of the
     /// turn.
     blocked: bool,
-    /// The instructions of each person's `handoff` taken and not yet run, in
-    /// arrival order: the next step boundary runs them as one handoff.
+    /// The instructions of each person's `compact` taken and not yet run, in
+    /// arrival order: the next step boundary runs them as one compaction.
     pub(crate) held: Vec<Option<String>>,
-    /// Whether this turn began as a person's `handoff` between turns.
+    /// Whether this turn began as a person's `compact` between turns.
     person_turn: bool,
-    /// Whether a handoff of any trigger ran in this step: the overflow rule
-    /// runs at most once per step, and a tool's handoff does not follow one.
+    /// Whether a compaction of any trigger ran in this step: the overflow rule
+    /// runs at most once per step, and a tool's compaction does not follow one.
     pub(crate) step_ran: bool,
 }
 
@@ -143,7 +143,7 @@ impl State {
     /// A fresh state around what a rebuild carried.
     pub(crate) fn new(carry: Carry) -> Self {
         Self {
-            settings: HandoffSettings::default(),
+            settings: CompactionSettings::default(),
             trigger_at: None,
             forget: None,
             carry,
@@ -156,7 +156,7 @@ impl State {
     }
 
     /// A new turn lifts the block. `person` is whether the turn began as a
-    /// person's `handoff` between turns.
+    /// person's `compact` between turns.
     pub(crate) fn new_turn(&mut self, person: bool) {
         self.blocked = false;
         self.person_turn = person;
@@ -164,17 +164,17 @@ impl State {
 }
 
 impl Loop {
-    /// Turns automatic handoff on or off and sets its triggers. Default
-    /// [`HandoffSettings::default`].
-    pub fn handoff(mut self, settings: HandoffSettings) -> Self {
-        self.handoff.settings = settings;
+    /// Turns automatic compaction on or off and sets its triggers. Default
+    /// [`CompactionSettings::default`].
+    pub fn compaction(mut self, settings: CompactionSettings) -> Self {
+        self.compaction.settings = settings;
         self
     }
 
-    /// Runs `forget` on every completed handoff: what the model had seen of
+    /// Runs `forget` on every completed compaction: what the model had seen of
     /// the files is no longer in its context.
-    pub fn on_handoff(mut self, forget: Arc<dyn Fn() + Send + Sync>) -> Self {
-        self.handoff.forget = Some(forget);
+    pub fn on_compaction(mut self, forget: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.compaction.forget = Some(forget);
         self
     }
 
@@ -208,13 +208,13 @@ impl Loop {
     /// Sets the trigger the preamble records and the check compares with.
     pub(crate) fn set_trigger(&mut self) {
         let window = self.prompt.context_window;
-        self.handoff.trigger_at = trigger_at(&self.handoff.settings, window);
+        self.compaction.trigger_at = trigger_at(&self.compaction.settings, window);
     }
 
     /// Measures the context at a session-model reply: its tokens, and the
     /// conversation as it stands.
     pub(crate) fn measure(&mut self, tokens: &Tokens) {
-        self.handoff.measured = Some(Measured {
+        self.compaction.measured = Some(Measured {
             tokens: context_tokens(tokens),
             at: self.conversation.len(),
         });
@@ -223,7 +223,7 @@ impl Loop {
     /// The context's size: the last reply's tokens plus an estimate of what
     /// was rendered after it. `None` before any reply measured this context.
     fn context_size(&self) -> Option<u64> {
-        let measured = self.handoff.measured?;
+        let measured = self.compaction.measured?;
         let after: u64 = self
             .conversation
             .get(measured.at..)
@@ -234,49 +234,49 @@ impl Loop {
         Some(measured.tokens.saturating_add(after))
     }
 
-    /// Runs one handoff and, when it completes, moves the loaded names the
+    /// Runs one compaction and, when it completes, moves the loaded names the
     /// new context dropped back to `Deferred` (`docs/tools.md`,
     /// "Tool search").
-    fn run_handoff_rows(
+    fn run_compaction_rows(
         &mut self,
         turn: &TurnId,
         source: note::Source,
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
         let before = self.loaded_names();
-        let outcome = self.run_handoff(turn, source, tokens_before)?;
+        let outcome = self.run_compaction(turn, source, tokens_before)?;
         if outcome == Outcome::Completed {
-            self.publish_handoff_rows(&before);
+            self.publish_compaction_rows(&before);
         }
         Ok(outcome)
     }
 
-    /// The check before each request (`docs/loop.md`, "One step"): hands off
+    /// The check before each request (`docs/loop.md`, "One step"): compacts
     /// at the trigger, or gives the nudge once per context. Returns the
-    /// turn's end when the handoff was cancelled.
+    /// turn's end when the compaction was cancelled.
     pub(crate) fn check_context(&mut self, turn: &TurnId) -> Result<Option<TurnCompleted>, Error> {
-        self.handoff.step_ran = false;
-        if !self.handoff.held.is_empty() {
-            return self.run_person_handoff(turn);
+        self.compaction.step_ran = false;
+        if !self.compaction.held.is_empty() {
+            return self.run_person_compaction(turn);
         }
-        let Some(trigger_at) = self.handoff.trigger_at else {
+        let Some(trigger_at) = self.compaction.trigger_at else {
             return Ok(None);
         };
         let Some(size) = self.context_size() else {
             return Ok(None);
         };
-        if size >= trigger_at && !self.handoff.blocked {
-            return Ok(cancelled(self.run_handoff_rows(
+        if size >= trigger_at && !self.compaction.blocked {
+            return Ok(cancelled(self.run_compaction_rows(
                 turn,
                 note::Source::Requested {
-                    trigger: HandoffTrigger::Auto,
+                    trigger: CompactionTrigger::Auto,
                     instructions: None,
                 },
                 size,
             )?));
         }
-        if self.handoff.settings.nudge
-            && !self.handoff.carry.nudged
+        if self.compaction.settings.nudge
+            && !self.compaction.carry.nudged
             && size.saturating_mul(3) >= trigger_at.saturating_mul(2)
         {
             self.append(
@@ -291,50 +291,52 @@ impl Loop {
         Ok(None)
     }
 
-    /// The handoff a person asked for, with the instructions of every
+    /// The compaction a person asked for, with the instructions of every
     /// command that arrived before this boundary, in arrival order. It takes
-    /// the step's one handoff, so the automatic check does not also run. A
+    /// the step's one compaction, so the automatic check does not also run. A
     /// turn that began as the command and holds no message from the person
     /// ends here, with no request after the note.
-    fn run_person_handoff(&mut self, turn: &TurnId) -> Result<Option<TurnCompleted>, Error> {
-        let parts: Vec<String> = std::mem::take(&mut self.handoff.held)
+    fn run_person_compaction(&mut self, turn: &TurnId) -> Result<Option<TurnCompleted>, Error> {
+        let parts: Vec<String> = std::mem::take(&mut self.compaction.held)
             .into_iter()
             .flatten()
             .filter(|instructions| !instructions.is_empty())
             .collect();
         let instructions = (!parts.is_empty()).then(|| parts.join("\n\n"));
         let size = self.context_estimate();
-        let ended = cancelled(self.run_handoff_rows(
+        let ended = cancelled(self.run_compaction_rows(
             turn,
             note::Source::Requested {
-                trigger: HandoffTrigger::Person,
+                trigger: CompactionTrigger::Person,
                 instructions,
             },
             size,
         )?);
-        if ended.is_none() && self.handoff.person_turn && self.handoff.carry.input.is_empty() {
+        if ended.is_none() && self.compaction.person_turn && self.compaction.carry.input.is_empty()
+        {
             return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
         }
         Ok(ended)
     }
 
-    /// The handoff the last step's tools asked for, through
-    /// `control.handoff`: no note request, because each call's argument is
-    /// the note (`docs/handoff.md`, "A tool"). Runs once the step's calls
-    /// have completed. At most one handoff runs per step: after an
-    /// automatic or person's handoff in this step, it does nothing, and each
+    /// The compaction the last step's tools asked for, through
+    /// `control.compact`: no note request, because each call's argument is
+    /// the note (`docs/compaction.md`, "A tool"). Runs once the step's calls
+    /// have completed. At most one compaction runs per step: after an
+    /// automatic or person's compaction in this step, it does nothing, and each
     /// call's result stays in the conversation as an ordinary result. Returns
-    /// whether a handoff ran and restarted the context.
-    pub(crate) fn handoff_from_tools(&mut self, turn: &TurnId) -> Result<bool, Error> {
-        if self.handoff.step_ran {
+    /// whether a compaction ran and restarted the context.
+    pub(crate) fn compaction_from_tools(&mut self, turn: &TurnId) -> Result<bool, Error> {
+        if self.compaction.step_ran {
             return Ok(false);
         }
-        let note = self.handoff.carry.noted();
+        let note = self.compaction.carry.noted();
         if note.is_empty() {
             return Ok(false);
         }
         let tokens_before = self.context_estimate();
-        let outcome = self.run_handoff_rows(turn, note::Source::Tools { note }, tokens_before)?;
+        let outcome =
+            self.run_compaction_rows(turn, note::Source::Tools { note }, tokens_before)?;
         Ok(outcome == Outcome::Completed)
     }
 
@@ -345,11 +347,11 @@ impl Loop {
             .unwrap_or_else(|| self.conversation.iter().map(estimate).sum())
     }
 
-    /// The overflow rule (`docs/handoff.md`, "Overflow"): a request that
+    /// The overflow rule (`docs/compaction.md`, "Overflow"): a request that
     /// does not fit, or that the provider rejected for size as `failed`,
-    /// hands off with the last step's tool results moved out, then sends the
+    /// compacts with the last step's tool results moved out, then sends the
     /// step's request from the new context. Once per step; with automatic
-    /// handoff off, or when the handoff does not complete, the turn fails
+    /// compaction off, or when the compaction does not complete, the turn fails
     /// `context_overflow`.
     pub(crate) fn overflowed(
         &mut self,
@@ -362,14 +364,14 @@ impl Loop {
                 "The request does not fit the model's context window.",
             )
         });
-        if !self.handoff.settings.enabled || self.handoff.step_ran {
+        if !self.compaction.settings.enabled || self.compaction.step_ran {
             return Ok(Step::Ended(crate::ended(TurnOutcome::Failed, Some(over))));
         }
         let size = self.context_estimate();
-        match self.run_handoff_rows(
+        match self.run_compaction_rows(
             turn,
             note::Source::Requested {
-                trigger: HandoffTrigger::Overflow,
+                trigger: CompactionTrigger::Overflow,
                 instructions: None,
             },
             size,
@@ -409,7 +411,7 @@ impl Loop {
             return Ok(Step::Ended(self.budget_end(completed)));
         }
         let window = self.prompt.context_window;
-        if self.handoff.settings.enabled && self.context_estimate() > window {
+        if self.compaction.settings.enabled && self.context_estimate() > window {
             return self.overflowed(turn, None);
         }
         if let Some(completed) = self.model_call_allowed(turn)? {
@@ -425,9 +427,9 @@ impl Loop {
     /// instruction-file state from them. Refreshes the maintained skill
     /// set with what the message sent, so `/name` and the `skill` tool
     /// answer from the listing the model was given. Before the opening, a
-    /// completed handoff's loads are sent again as `skills_resent`, read
-    /// fresh from disk (`docs/handoff.md`, "What the model sees after a
-    /// handoff").
+    /// completed compaction's loads are sent again as `skills_resent`, read
+    /// fresh from disk (`docs/compaction.md`, "What the model sees after a
+    /// compaction").
     pub(crate) fn write_opening(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
         // The loop's current inputs, with the maintained disabled list
         // applied: a model switch updates the window `collect` sizes its
@@ -458,10 +460,10 @@ impl Loop {
         } else {
             Vec::new()
         };
-        // The previous context's loads, armed by a completed handoff: the
+        // The previous context's loads, armed by a completed compaction: the
         // set is now the new listing, so what is sent and what is listed
         // follow one rule.
-        let resend = std::mem::take(&mut self.handoff.carry.resend);
+        let resend = std::mem::take(&mut self.compaction.carry.resend);
         let reader = self.skills.reader();
         let (sent, left_out) = resent_skills(&reader, &|target| self.refuse(target), &resend);
         self.changes =
@@ -592,7 +594,7 @@ fn resent_skills(
 fn resend_notice(name: &str, code: ErrorCode, why: &str) -> Notice {
     Notice {
         code,
-        message: format!("Skill {name} was not sent again after the handoff: {why}"),
+        message: format!("Skill {name} was not sent again after the compaction: {why}"),
         extension: None,
     }
 }

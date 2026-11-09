@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
-assertion_line: 1072
 expression: "screen(&app, 160, 40)"
 ---
 
@@ -10,7 +9,7 @@ expression: "screen(&app, 160, 40)"
 
                                                                                                                                  test/model                high
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
-                                                                                                                                 handoff at 800               —
+                                                                                                                                 compacts at 800              —
                                                                                                                                  then a summary, fresh context
                                                                                                                                  tokens in / out              —
                                                                                                                                  cache hits                   —

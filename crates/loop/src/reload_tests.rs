@@ -239,7 +239,7 @@ fn prepared() -> ReloadPrepared {
             reviewer_notes: "new notes".into(),
             limits: BlockLimits::default(),
             retry: Retry::default(),
-            handoff: HandoffSettings::default(),
+            compaction: CompactionSettings::default(),
             budget: Some(10.0),
             idle_exit: Some(Duration::from_secs(100)),
             warm_cap: Some(2),
@@ -340,10 +340,10 @@ impl contract::hook::Hooks for StatefulHooks {
             notices: Vec::new(),
         }
     }
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<contract::inbox::Delivery>) {}
@@ -1147,4 +1147,124 @@ fn merge_command_rows_keeps_the_first_of_each_tag_and_name() {
     let mut rows = vec![row("old", "before")];
     ServerSync::merge_command_rows(&mut rows, &[row("new", "after")]);
     assert_eq!(rows.len(), 2, "a new tag with a new name appends");
+}
+
+/// A shell-like tool whose definition reflects a shared flag, mirroring the
+/// real shell's availability-qualified sentence for the reload seam test.
+struct ReloadShell {
+    enabled: Arc<std::sync::Mutex<bool>>,
+}
+
+impl contract::tool::Tool for ReloadShell {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        let enabled = *self.enabled.lock().unwrap();
+        let mut description =
+            "Runs a command in a new process session. `command` is the command.".to_owned();
+        if enabled {
+            description.push_str(
+                " When the session sandbox is on and available, the call runs confined \
+                 with no sockets and writes limited to the workspace, temp and granted paths; \
+                 a call with `unconfined: true` or `detach` set runs outside the sandbox \
+                 and is reviewed as with the sandbox off.",
+            );
+        }
+        contract::provider::ToolDefinition {
+            name: "shell".to_owned(),
+            description,
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        panic!("effects not used in reload seam test")
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("run not used in reload seam test")
+    }
+}
+
+#[test]
+fn a_reload_rebuilds_through_the_seam_with_reason_reload() {
+    let enabled = Arc::new(std::sync::Mutex::new(false));
+    let mut w = world();
+    // Hold a warming request so the seam must drop it.
+    w.looped.warming.set_cap(Some(1));
+    let request = contract::provider::ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: contract::events::CacheLifetime::FiveMinutes,
+        cache_key: String::new(),
+        conversation: Vec::new().into(),
+        previous_end: None,
+        sent_tools: None,
+        max_output_tokens: None,
+        media: Default::default(),
+    };
+    let now = w.looped.log.clock().now();
+    w.looped.warming.record(&request, now);
+    assert!(w.looped.warming.held().is_some());
+    let shell: Arc<dyn contract::tool::Tool> = Arc::new(ReloadShell {
+        enabled: Arc::clone(&enabled),
+    });
+    let flag = Arc::clone(&enabled);
+    w.looped = w.looped.reloader(Arc::new(move |_| {
+        let mut next = prepared();
+        // The registry starts stale (off) while the install flips the shared
+        // flag on, mirroring `refresh_sandbox` running inside the install
+        // after the registration: the seam must publish the fresh bytes.
+        next.tools = vec![("builtin".to_owned(), Arc::clone(&shell))];
+        next.notices = vec![contract::events::Notice {
+            code: contract::ErrorCode::Sandbox,
+            message: "Sandbox on after /reload.".to_owned(),
+            extension: None,
+        }];
+        let flag = Arc::clone(&flag);
+        next.installed = Box::new(move || {
+            *flag.lock().unwrap() = true;
+        });
+        Ok(next)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(w.looped.preamble_reason, PreambleReason::Reload);
+    assert!(w.looped.warming.held().is_none(), "the seam stops warming");
+    let registered = w
+        .looped
+        .tools
+        .get("shell")
+        .expect("the shell stays registered")
+        .2
+        .description
+        .clone();
+    assert!(
+        registered.contains("confined"),
+        "the registered bytes are fresh after reload"
+    );
+    let lines = log::read(w.looped.log.dir()).unwrap();
+    assert!(
+        lines.iter().any(|line| {
+            line.kind() == EventKind::PreambleBuilt && line.payload["reason"] == "reload"
+        }),
+        "the rebuild carries reason reload"
+    );
 }

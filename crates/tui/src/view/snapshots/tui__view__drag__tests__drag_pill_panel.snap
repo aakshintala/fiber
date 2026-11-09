@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/drag_tests.rs
-assertion_line: 208
 expression: "crate::view::text(&buf)"
 ---
   w +            $0.00 · 0 ✓
@@ -10,7 +9,7 @@ expression: "crate::view::text(&buf)"
 ▌
 ▌ $0.00                                                                                                                                                  test/model
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                            ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                            —
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                            handoff at —                                 —
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                            compacts at —                                —
 ▌ 2 ✓ READY               0s                                                                                                                             then a summary, fresh context
 ▌ two                                                                                                                                                    tokens in / out                          1 / 2
 ▌                                                                                                                                                        cache hits                                  0%

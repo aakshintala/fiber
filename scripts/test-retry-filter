@@ -84,8 +84,9 @@ fn single_fails_once() {
 EOF
 
 code=0
+# The harness-provided override would otherwise retry the unit probe.
 RETRY_PROBE_DIR="$tmp/probes" CARGO_TARGET_DIR="$tmp/target" CARGO_NET_OFFLINE=true \
-  cargo nextest run --manifest-path "$tmp/pkg/Cargo.toml" --config-file "$config" \
+  env -u NEXTEST_RETRIES cargo nextest run --manifest-path "$tmp/pkg/Cargo.toml" --config-file "$config" \
   --profile ci --no-fail-fast >"$tmp/run.log" 2>&1 || code=$?
 [ "$code" -ne 0 ] || fail "the unit probe, which never retries, did not fail the run"
 

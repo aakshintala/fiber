@@ -809,7 +809,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
     );
 }
 
-/// A reviewed shell call that reaches stage 2, then an automatic handoff,
+/// A reviewed shell call that reaches stage 2, then an automatic compaction,
 /// with an extension loaded throughout: the saved log holds exactly three
 /// reviewer `usage_recorded` lines, and no other line carries `reviewer`.
 /// The extension's `after_tool` hook also makes one `host.model` call, so
@@ -817,7 +817,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
 /// the extension's `before_model_call` hook runs for the session's own
 /// calls only. The exclusion is asserted over every usage line in the log.
 #[test]
-fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
+fn a_reviewed_call_then_a_compaction_marks_only_the_reviewer_lines() {
     let setup = Setup::new();
     install_lua(
         &setup,
@@ -833,13 +833,13 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     script(
         &setup,
         "s.json",
-        // The session's own steps: the tool call, then the handoff note.
+        // The session's own steps: the tool call, then the compaction note.
         // The extension's `host.model` call connects its own scripted
         // provider for `e.json` below, so it takes no step of this script.
         &json!({"steps": [
             {"tool_calls": [{"name": "shell", "arguments": {"command": "touch made && echo ran"}}],
              "usage": {"input": 100, "output": 10}},
-            {"text": "Handing off."},
+            {"text": "Compacting."},
             {"text": "Done."}
         ]}),
     );
@@ -865,7 +865,7 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
         &setup,
         // The `roles` entry registers `scripted/e.json` for the hook's
         // `host.model` call; no delegate runs, so it stays inert.
-        json!({"model": "scripted/s.json", "handoff": {"tokens": 5},
+        json!({"model": "scripted/s.json", "compaction": {"tokens": 5},
                "roles": {"ext": "fiber:scripted/e.json"}}),
     );
     let run = ask(&setup);
@@ -881,7 +881,7 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
         .collect();
     assert_eq!(seen.len(), 1, "{:?}", run.of("extension_log"));
     assert_eq!(
-        run.of("handoff_completed")[0]["payload"]["outcome"],
+        run.of("compaction_completed")[0]["payload"]["outcome"],
         "completed"
     );
 
@@ -910,12 +910,12 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
             "tool_call_completed",
             "step_started",
             "usage_recorded",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -961,12 +961,12 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
         );
         assert!(line.get("action_id").is_none(), "{line}");
     }
-    let handoff = stage("handoff");
+    let compaction = stage("compaction");
     assert_eq!(
-        handoff["payload"]["reviewer"],
-        json!({"purpose": "handoff"})
+        compaction["payload"]["reviewer"],
+        json!({"purpose": "compaction"})
     );
-    assert!(handoff.get("action_id").is_none(), "{handoff}");
+    assert!(compaction.get("action_id").is_none(), "{compaction}");
     // Nothing else does: neither the session's own calls nor any other
     // line in the log.
     for line in &usages {
@@ -1007,7 +1007,7 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     );
     assert!(exited["payload"]["usage"]["cost"].is_null(), "{exited}");
     // The extension's `before_model_call` hook ran for the session's step
-    // sends only: the tool call and the final text. The handoff note sends
+    // sends only: the tool call and the final text. The compaction note sends
     // through `request_note`, which never consults the hooks, and the
     // extension's own call never reaches them either, so neither has a
     // `checking` line.

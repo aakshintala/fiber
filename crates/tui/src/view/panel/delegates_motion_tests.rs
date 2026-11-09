@@ -135,7 +135,7 @@ fn progress_an_idle_delegate_asks_for_the_next_elapsed_second() {
     subscribe(&mut app, "j_1", json!({"state": "idle", "started": 1500}));
     app.set_now(clock.origin(), 10_750);
     app.motion().clear_wake();
-    assert_eq!(lines(&app, 97)[1], "  0 calls · 9s");
+    assert_eq!(lines(&app, 97)[1], "  0 calls · 9s · $0.00");
     assert_eq!(
         app.take_wake(),
         Some(clock.origin() + std::time::Duration::from_millis(750))
@@ -337,9 +337,71 @@ fn a_still_delegate_keeps_its_dot_while_a_working_one_spins() {
         lines(&app, 97),
         vec![
             format!("{} alpha", SPINNER[1]),
-            "  0 calls · 0s".to_owned(),
+            "  0 calls · 0s · $0.00".to_owned(),
             "● beta".to_owned(),
-            "  0 calls · 0s".to_owned(),
+            "  0 calls · 0s · $0.00".to_owned(),
         ]
     );
+}
+
+#[test]
+fn motion_tracks_only_visible_running_state_rows_at_each_offset() {
+    let clock = FakeClock::new();
+    let mut app = attached(200, 40);
+    for n in 1..=4 {
+        delegate(&mut app, &format!("j_{n}"), &format!("task {n}"));
+    }
+    app.set_now(clock.origin(), 0);
+    for (drawn, wants) in [(0..1, true), (2..3, true), (4..5, true), (6..7, false)] {
+        ask(&app, drawn.clone());
+        assert_eq!(app.take_wake().is_some(), wants, "{drawn:?}");
+    }
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap();
+    let (_, span) = crate::view::panel::rows_and_delegates(&app, rect.width);
+    let row = rect.y + 1 + u16::try_from(span.unwrap().start).unwrap();
+    assert!(rect.contains((rect.x + 4, row).into()));
+    app.on_wheel(&crate::keys::Mouse {
+        kind: crate::keys::MouseKind::WheelDown,
+        col: rect.x + 4,
+        row,
+    });
+    assert_eq!(app.panel_state().delegate_scroll(), 1);
+    ask(&app, 4..5);
+    assert!(app.take_wake().is_some());
+    for n in 1..=3 {
+        app.on_line(session_line(
+            "job_completed",
+            json!({"job_id": format!("j_{n}"), "status": "completed"}),
+        ));
+    }
+    // The closed fold and the finished suffix never request spinner frames.
+    ask(&app, 2..6);
+    assert_eq!(app.take_wake(), None);
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    ask(&app, 2..6);
+    assert_eq!(app.take_wake(), None);
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap();
+    let (_, span) = crate::view::panel::rows_and_delegates(&app, rect.width);
+    let row = rect.y + 1 + u16::try_from(span.unwrap().start).unwrap();
+    assert!(rect.contains((rect.x + 4, row).into()));
+    for _ in 0..2 {
+        app.on_wheel(&crate::keys::Mouse {
+            kind: crate::keys::MouseKind::WheelDown,
+            col: rect.x + 4,
+            row,
+        });
+    }
+    assert_eq!(app.panel_state().delegate_scroll(), 2);
+    ask(&app, 0..6);
+    assert_eq!(app.take_wake(), None);
 }

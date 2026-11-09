@@ -10,28 +10,56 @@ use std::sync::Arc;
 
 use contract::clock::Clock;
 use contract::events::{AskStep, DecidedBy, Decision, Escalation, Event, KeptMessage, ReviewerUse};
-use contract::provider::{Input, Provider};
+use contract::provider::{Cost, Input, Provider};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Failure, Tokens};
 use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
-use contract::{ActionId, ErrorCode, Seq, SessionId, TurnId};
+use contract::{ActionId, ErrorCode, Seq, SessionId, ThinkingLevel, TurnId};
 use r#loop::{
     BlockLimits, Loop, Model, Permissions, PromptInputs, ReviewPrepared, Reviewed, Reviewer,
     Session, Shown,
 };
 use serde_json::{Map, Value};
 
+/// How many times each entry runs per model when `--runs` is absent: the
+/// owner runs one command and does no manual pooling.
+const DEFAULT_RUNS: u32 = 3;
+
+/// The owner's billed budget for one sweep command: reviewer calls,
+/// retries included (owner ruling on #477, Q1). A sweep planning more is
+/// rejected before it drives anything.
+const MAX_REVIEWER_CALLS: u64 = 170;
+
+/// Rejects a sweep whose planned reviewer calls exceed the billed cap: one
+/// call per model per entry per run. Names the flags that set the total,
+/// with the planned count and the cap.
+pub(crate) fn check_call_cap(models: usize, entries: usize, runs: u32) -> Result<(), String> {
+    let planned = u64::try_from(models).unwrap_or(u64::MAX).saturating_mul(
+        u64::try_from(entries)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::from(runs)),
+    );
+    if planned > MAX_REVIEWER_CALLS {
+        return Err(format!(
+            "review_sweep: {models} --models × {entries} set entries × --runs {runs} plans {planned} reviewer calls, above the {MAX_REVIEWER_CALLS}-call cap: pass fewer --models or lower --runs"
+        ));
+    }
+    Ok(())
+}
+
 /// How the sweep runs: over a set with named reviewer models, or one file
 /// parsed and counted with no providers.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// Run every entry of `set` once per reviewer model.
+    /// Run every entry of `set` `runs` times in turn per reviewer model.
     Sweep {
         /// Bare candidate names, qualified at the runner's `--models`
         /// boundary.
         models: Vec<String>,
         /// The labelled set.
         set: PathBuf,
+        /// How many times each entry runs per model; `--runs`.
+        runs: u32,
     },
     /// Parse `file` and print its line count; no providers, no network.
     Check {
@@ -40,13 +68,25 @@ pub(crate) enum Mode {
     },
 }
 
+/// Reads a `--runs` count, rejecting a missing, non-numeric or zero value.
+fn runs_count(raw: Option<&String>) -> Result<u32, String> {
+    let raw = raw.ok_or_else(|| "review_sweep: --runs needs a value".to_owned())?;
+    match raw.parse::<u32>() {
+        Ok(count) if count > 0 => Ok(count),
+        Ok(_) => Err("review_sweep: --runs needs a positive count".to_owned()),
+        Err(_) => Err(format!("review_sweep: --runs needs a count, not {raw:?}")),
+    }
+}
+
 /// Parses the runner's argv (skipping argv[0]) into its [`Mode`].
 /// `--check` runs alone; a sweep needs `--set` with at least one
-/// `--models` entry. Every rejection names the flag it tripped on.
+/// `--models` entry, running each entry `--runs` times (`DEFAULT_RUNS`
+/// without the flag). Every rejection names the flag it tripped on.
 pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
     let mut models = Vec::new();
     let mut set = None;
     let mut check = None;
+    let mut runs = None;
     let mut args = argv.iter().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -61,6 +101,9 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
                         .ok_or_else(|| "review_sweep: --set needs a value".to_owned())?
                         .clone(),
                 );
+            }
+            "--runs" => {
+                runs = Some(runs_count(args.next())?);
             }
             "--check" => {
                 check = Some(
@@ -82,6 +125,7 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
         (None, Some(set)) if !models.is_empty() => Ok(Mode::Sweep {
             models,
             set: PathBuf::from(set),
+            runs: runs.unwrap_or(DEFAULT_RUNS),
         }),
         (None, Some(_)) => {
             Err("review_sweep: a sweep needs at least one --models entry".to_owned())
@@ -599,7 +643,7 @@ fn resolved_for(
 }
 
 /// Reads the scratch log's `permission_requested` lines for the call under
-/// review and returns the last escalation cause a reviewer handoff named.
+/// review and returns the last escalation cause a reviewer compaction named.
 /// A reviewer failure carries its message; block budgets carry the
 /// reviewer's reason.
 fn escalation_for(log_dir: &Path, action: &str) -> Result<Option<String>, String> {
@@ -650,13 +694,17 @@ fn escalation_for(log_dir: &Path, action: &str) -> Result<Option<String>, String
 
 /// Folds the scratch log's `usage_recorded` lines for the call under
 /// review: stage-1 and stage-2 tokens, and whether a stage-2 line exists.
+/// A later event with the same generation replaces the earlier one within
+/// its purpose (`docs/events.md`): stage 1 and stage 2 are distinct
+/// purposes, so a re-asked stage supersedes its own first report without
+/// touching the other stage.
 fn fold_usage(log_dir: &Path, action: &str) -> Result<(Tokens, Tokens, bool), String> {
     let events = log_dir.join("events.jsonl");
     let text = std::fs::read_to_string(&events)
         .map_err(|error| format!("review_sweep: cannot read {}: {error}", events.display()))?;
-    let mut s1 = no_tokens();
-    let mut s2 = no_tokens();
-    let mut stage2 = false;
+    // The latest report per generation within its purpose: a re-asked
+    // stage's second report supersedes its first.
+    let mut kept: BTreeMap<(String, bool), Tokens> = BTreeMap::new();
     for (position, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -681,26 +729,92 @@ fn fold_usage(log_dir: &Path, action: &str) -> Result<(Tokens, Tokens, bool), St
         };
         match recorded.reviewer {
             Some(ReviewerUse::Stage1 { action_id }) if action_id.0 == action => {
-                add_tokens(&mut s1, &recorded.tokens)
+                kept.insert(
+                    (recorded.generation_id.0.clone(), false),
+                    recorded.tokens.clone(),
+                );
             }
             Some(ReviewerUse::Stage2 { action_id }) if action_id.0 == action => {
-                stage2 = true;
-                add_tokens(&mut s2, &recorded.tokens);
+                kept.insert(
+                    (recorded.generation_id.0.clone(), true),
+                    recorded.tokens.clone(),
+                );
             }
             _ => {}
+        }
+    }
+    let mut s1 = no_tokens();
+    let mut s2 = no_tokens();
+    let mut stage2 = false;
+    for ((_, second), tokens) in kept {
+        if second {
+            stage2 = true;
+            add_tokens(&mut s2, &tokens);
+        } else {
+            add_tokens(&mut s1, &tokens);
         }
     }
     Ok((s1, s2, stage2))
 }
 
-/// Drives `entry` through `Loop::review` on the injected `provider`,
-/// timing it on the injected `clock`. A loop that cannot start, a review
-/// the provider fails, and a usage fold that cannot read are error
-/// outcomes, never verdicts.
+/// The resolved reviewer metadata `drive` carries into `Loop::review`:
+/// the reference, cost, subscription flag and thinking levels resolved for
+/// the `--models` entry, mirroring `choose_reviewer`
+/// (`crates/main/src/parts.rs`) field for field. Both reviewer request
+/// sites then ask the model's lowest declared level
+/// (`docs/permissions.md`, "How it runs"), instead of a placeholder
+/// reference with empty levels.
+pub(crate) struct SweepModel {
+    /// The resolved model reference, `provider/model`.
+    pub(crate) reference: String,
+    /// The declared prices, if the resolution carried any.
+    pub(crate) cost: Option<Cost>,
+    /// Whether a subscription login serves the model.
+    pub(crate) subscription: bool,
+    /// The thinking levels the model declares.
+    pub(crate) thinking_levels: Vec<ThinkingLevel>,
+}
+
+/// Drives `entry` through `Loop::review` on the injected `provider` with
+/// the resolved reviewer `model`, timing it on the injected `clock`.
 pub(crate) fn drive(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
+    model: &SweepModel,
+) -> Outcome {
+    drive_with(
+        entry,
+        provider,
+        clock,
+        Ok(Reviewer {
+            provider: Arc::clone(provider),
+            model: Model::from_resolved(
+                model.reference.clone(),
+                model.cost.clone(),
+                model.subscription,
+            ),
+            thinking_levels: model.thinking_levels.clone(),
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: u64::MAX,
+        }),
+    )
+}
+
+/// Drives `entry` through `Loop::review` on the injected `provider` with
+/// the given reviewer setup, timing it on the injected `clock`. A loop
+/// that cannot start, a review the provider fails, and a usage fold that
+/// cannot read are error outcomes, never verdicts. A denied reviewer
+/// failure is one too: the dropped inbox leaves the escalation unanswered,
+/// so the denial resolves by cancel and the untouched generic arm below
+/// reports it as an error — excluded from both denominators and counted
+/// in `errors`. The seam exists so tests can install a failing reviewer;
+/// `drive` always installs its metadata reviewer as `Ok`.
+pub(crate) fn drive_with(
+    entry: &Entry,
+    provider: &Arc<dyn Provider>,
+    clock: &Arc<dyn Clock>,
+    reviewer: Result<Reviewer, Failure>,
 ) -> Outcome {
     let errored = |reason: String| {
         Outcome::Errored(ErrorOutcome {
@@ -753,20 +867,7 @@ pub(crate) fn drive(
         Ok(looped) => looped,
         Err(error) => return errored(format!("review_sweep: cannot start its loop: {error}")),
     }
-    .reviewer(
-        Ok(Reviewer {
-            provider: Arc::clone(provider),
-            model: Model {
-                reference: "sweep/reviewer".to_owned(),
-                cost: None,
-                subscription: false,
-            },
-            thinking_levels: Vec::new(),
-            cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: u64::MAX,
-        }),
-        BlockLimits::default(),
-    )
+    .reviewer(reviewer, BlockLimits::default())
     .reviewer_notes(String::new());
     // No person answers an escalation: dropping the sender closes the
     // inbox, so an escalated call denies as gone instead of waiting.
@@ -888,6 +989,11 @@ pub(crate) struct ModelReport {
     pub(crate) s2: Purpose,
     /// The p50 over per-call latencies, or nothing when nothing ran.
     pub(crate) latency_p50: Option<u64>,
+    /// Input tokens read from the prompt cache, both stages, all runs.
+    pub(crate) cached_input: u64,
+    /// Input tokens outside the cache, both stages, all runs. Cache-write
+    /// tokens keep their own purpose columns.
+    pub(crate) uncached_input: u64,
 }
 
 /// Folds `outcomes` into one model's row. Unlabelled runs count toward the
@@ -908,6 +1014,8 @@ pub(crate) fn score(model: &str, outcomes: &[Outcome]) -> ModelReport {
         s1: Purpose::default(),
         s2: Purpose::default(),
         latency_p50: None,
+        cached_input: 0,
+        uncached_input: 0,
     };
     let mut latencies = Vec::new();
     for outcome in outcomes {
@@ -921,6 +1029,14 @@ pub(crate) fn score(model: &str, outcomes: &[Outcome]) -> ModelReport {
         }
         report.s1.add(&ran_at.s1);
         report.s2.add(&ran_at.s2);
+        report.cached_input = report
+            .cached_input
+            .saturating_add(ran_at.s1.cache_read)
+            .saturating_add(ran_at.s2.cache_read);
+        report.uncached_input = report
+            .uncached_input
+            .saturating_add(ran_at.s1.input)
+            .saturating_add(ran_at.s2.input);
         latencies.push(ran_at.latency_ms);
         match (ran_at.label1, ran_at.verdict) {
             (Some(Label::Block), Verdict::Allow) => {
@@ -963,11 +1079,11 @@ fn rate(rate: Option<f64>) -> String {
 /// on zero denominators, never a division.
 pub(crate) fn render_table(reports: &[ModelReport]) -> String {
     let mut table = String::from(
-        "model block_total misses miss_rate pass_total false_blocks false_block_rate errors runs stage2_count stage2_share s1_input s1_cache_read s1_cache_write s1_output s2_input s2_cache_read s2_cache_write s2_output latency_ms_p50\n",
+        "model block_total misses miss_rate pass_total false_blocks false_block_rate errors runs stage2_count stage2_share s1_input s1_cache_read s1_cache_write s1_output s2_input s2_cache_read s2_cache_write s2_output latency_ms_p50 cached_input uncached_input\n",
     );
     for report in reports {
         table.push_str(&format!(
-            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
             report.model,
             report.block_total,
             report.misses,
@@ -990,7 +1106,82 @@ pub(crate) fn render_table(reports: &[ModelReport]) -> String {
             report
                 .latency_p50
                 .map_or_else(|| "n/a".to_owned(), |p50| p50.to_string()),
+            report.cached_input,
+            report.uncached_input,
         ));
+    }
+    table
+}
+
+/// One entry's verdicts over its repetitions: the majority side names the
+/// entry line, while the model row pools every run.
+pub(crate) struct EntryTally {
+    /// The set line id.
+    pub(crate) id: String,
+    /// The entry's first-family verdict, if it carries one.
+    pub(crate) label: Option<Label>,
+    /// Runs the reviewer allowed.
+    pub(crate) allows: u64,
+    /// Runs the reviewer denied.
+    pub(crate) blocks: u64,
+}
+
+/// Drives each entry `runs` times in turn through `drive_entry`, so one
+/// entry's repetitions go out back to back and later runs can reuse the
+/// prompt cache. Returns the per-entry tallies beside every outcome in
+/// drive order, for the entry table and the pooled model row.
+pub(crate) fn sweep(
+    entries: &[Entry],
+    runs: u32,
+    drive_entry: impl Fn(&Entry) -> Outcome,
+) -> (Vec<EntryTally>, Vec<Outcome>) {
+    let mut tallies = Vec::with_capacity(entries.len());
+    let mut outcomes = Vec::new();
+    for entry in entries {
+        let mut allows = 0u64;
+        let mut blocks = 0u64;
+        for _ in 0..runs {
+            let outcome = drive_entry(entry);
+            match &outcome {
+                Outcome::Ran(ran_at) => match ran_at.verdict {
+                    Verdict::Allow => {
+                        allows = allows.saturating_add(1);
+                    }
+                    Verdict::Block => {
+                        blocks = blocks.saturating_add(1);
+                    }
+                },
+                Outcome::Errored(_) => {}
+            }
+            outcomes.push(outcome);
+        }
+        tallies.push(EntryTally {
+            id: entry.id.clone(),
+            label: entry.label1,
+            allows,
+            blocks,
+        });
+    }
+    (tallies, outcomes)
+}
+
+/// Renders the per-entry table: one `id label verdict count/runs` line per
+/// entry, naming the majority verdict (ties read allow). Error runs cast
+/// no vote here; the model row counts them.
+pub(crate) fn render_entry_table(tallies: &[EntryTally], runs: u32) -> String {
+    let mut table = String::new();
+    for tally in tallies {
+        let label = match tally.label {
+            Some(Label::Pass) => "pass",
+            Some(Label::Block) => "block",
+            None => "unlabelled",
+        };
+        let (side, count) = if tally.allows >= tally.blocks {
+            ("allow", tally.allows)
+        } else {
+            ("block", tally.blocks)
+        };
+        table.push_str(&format!("{} {label} {side} {count}/{runs}\n", tally.id));
     }
     table
 }

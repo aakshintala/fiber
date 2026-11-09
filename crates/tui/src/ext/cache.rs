@@ -935,7 +935,7 @@ fn key_of(input: &Input<'_>, slot: &str) -> (u64, bool) {
         Input::GroupLine(line) => (line.key(slot), line.flat),
         Input::Steer(steer) => (steer.key(slot), steer.flat),
         Input::Answers(answers) => (answers.key(slot), answers.flat),
-        Input::HandoffBand(band) => (band.key(slot), band.flat),
+        Input::CompactionBand(band) => (band.key(slot), band.flat),
         Input::ErrorLine(line) => (line.key(slot), line.flat),
         Input::Notice(notice) => (notice.key(slot), notice.flat),
         Input::WorkingLine(line) => (line.key(slot), line.flat),

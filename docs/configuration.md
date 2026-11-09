@@ -64,7 +64,7 @@ every new worktree.
 `-c` works on both doors: `fiber ask`, and the terminal, which passes it to
 each session it asks the hub to start.
 The key is a dotted path and the value is JSON, or a bare string when it does
-not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
+not parse as JSON: `-c compaction.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
 the same thing, read before every `-c`, so `-c model=` wins over `--model`.
 `FIBER_HOME` names Fiber home, and `FIBER_CHANNEL` names the release channel `fiber update` follows: the `--channel` flag beats the environment, and an empty setting means stable. `install.sh` reads the same channel setting, plus `FIBER_INSTALL_DIR` and `FIBER_VERSION` (`docs/releasing.md`); the shell tool sets `FIBER_GREP_MATCHES`
@@ -125,10 +125,10 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). Only Fiber home's global and per-project files set it; `-c` is ignored with a `notice`. |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
-| `handoff.enabled` | true | yes | Whether automatic handoff runs (`docs/handoff.md`). |
-| `handoff.tokens` | 400000 | yes | The token trigger. |
-| `handoff.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |
-| `handoff.nudge` | true | yes | Whether the nudge is given. |
+| `compaction.enabled` | true | yes | Whether automatic compaction runs (`docs/compaction.md`). |
+| `compaction.tokens` | 400000 | yes | The token trigger. |
+| `compaction.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |
+| `compaction.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
 | `cache.warm_cap` | `2` | yes | How many cache lifetimes after the last turn warming stops, an integer; less than 12 (`docs/prompt-cache.md`, "Warming while idle"). |
@@ -188,17 +188,17 @@ and win over the same key at the top level of the same layer:
 
 ```json
 {
-  "handoff": { "tokens": 400000 },
+  "compaction": { "tokens": 400000 },
   "models": {
     "databricks/databricks-claude-opus-5": {
-      "handoff": { "window_fraction": 0.5 },
+      "compaction": { "window_fraction": 0.5 },
       "cache": { "lifetime": "5m" }
     }
   }
 }
 ```
 
-The keys that may be set per model are `handoff.*`, `cache.lifetime` and `thinking`. A
+The keys that may be set per model are `compaction.*`, `cache.lifetime` and `thinking`. A
 per-model key may be set by a repository when the top-level key may be.
 
 ### MCP servers
@@ -438,7 +438,7 @@ Fiber writes configuration in these places:
   `--repo`
 - the terminal's `/settings` writes a key through the same path as
   `fiber config set`, in the layer the person picks among those the key
-  allows, and `tui.theme` to the global file (`docs/tui.md`, "Swapped views")
+  allows (`docs/tui.md`, "Swapped views")
 - the terminal's `/tools` switches write an MCP server's or an extension's
   `tools.enabled` and `tools.disabled` in the project's file or the global
   file, never a repository's; a file that holds no list starts from the one

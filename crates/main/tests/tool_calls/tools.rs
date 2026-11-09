@@ -1713,18 +1713,18 @@ fn an_image_over_50_megapixels_fails_unsupported_file_with_the_pixel_count() {
     assert!(result["content"].is_string());
 }
 
-/// Configuration with a handoff trigger of five tokens: any reply's prompt
+/// Configuration with a compaction trigger of five tokens: any reply's prompt
 /// passes it.
 fn tiny_trigger(setup: &Setup) {
     write(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "handoff": {"tokens": 5}}),
+        &json!({"model": "fake/m", "compaction": {"tokens": 5}}),
     );
 }
 
-/// A turn whose first reply reads a file, then hands off on the five-token
+/// A turn whose first reply reads a file, then compacts on the five-token
 /// trigger and answers from the new context, to the end of the process.
-const HANDOFF_TURN: &[&str] = &[
+const COMPACTION_TURN: &[&str] = &[
     "turn_started",
     "step_started",
     "assistant_message_started",
@@ -1734,14 +1734,14 @@ const HANDOFF_TURN: &[&str] = &[
     "tool_call_started",
     "tool_call_completed",
     "step_started",
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
     "opening_message",
     "assistant_message_started",
     "assistant_message_delta",
@@ -1762,7 +1762,7 @@ fn of_kind<'a>(run: &'a StdoutRun, kind: &str) -> Vec<&'a Value> {
 }
 
 #[test]
-fn handoff_configuration_reaches_a_new_session() {
+fn compaction_configuration_reaches_a_new_session() {
     let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
@@ -1791,7 +1791,7 @@ fn handoff_configuration_reaches_a_new_session() {
                 "preamble_built",
                 "opening_message",
             ][..],
-            HANDOFF_TURN,
+            COMPACTION_TURN,
         ]
         .concat()
     );
@@ -1799,16 +1799,16 @@ fn handoff_configuration_reaches_a_new_session() {
         of_kind(&run, "preamble_built")[0]["payload"]["trigger_at"],
         5
     );
-    assert_eq!(of_kind(&run, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&run, "compaction_started").len(), 1);
     assert_eq!(
-        of_kind(&run, "handoff_completed")[0]["payload"]["outcome"],
+        of_kind(&run, "compaction_completed")[0]["payload"]["outcome"],
         "completed"
     );
     assert_eq!(server.requests().len(), 3);
 }
 
 #[test]
-fn handoff_configuration_reaches_a_resumed_session() {
+fn compaction_configuration_reaches_a_resumed_session() {
     let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
@@ -1826,7 +1826,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
     tiny_trigger(&setup);
     let first = setup.tools_run(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
-    // One reply, and no second step: nothing handed off yet.
+    // One reply, and no second step: nothing compacted yet.
     assert_eq!(
         first.kinds(),
         [
@@ -1856,7 +1856,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
         second.kinds(),
         [
             &["fiber_started", "extensions_loaded", "preamble_built"][..],
-            HANDOFF_TURN,
+            COMPACTION_TURN,
         ]
         .concat()
     );
@@ -1864,7 +1864,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
         of_kind(&second, "preamble_built")[0]["payload"]["trigger_at"],
         5
     );
-    assert_eq!(of_kind(&second, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&second, "compaction_started").len(), 1);
     assert_eq!(server.requests().len(), 4);
 }
 
@@ -3211,7 +3211,7 @@ fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
     assert_eq!(requests.len(), 1);
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(tool_in(&body, "ask_user")["strict"], false);
-    assert_eq!(tool_in(&body, "handoff")["strict"], true);
+    assert_eq!(tool_in(&body, "compact")["strict"], true);
 
     let id = first.session_id().to_owned();
     let second = setup.tools_run(&["ask", "--resume", &id, "main; call it fiber"]);

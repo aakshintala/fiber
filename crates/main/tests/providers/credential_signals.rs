@@ -177,6 +177,14 @@ fn picker_query_shown(screen: &Grid, query: &str) -> bool {
     screen.rows.iter().any(|row| row.contains(&needle))
 }
 
+/// The fixture credential timeout: a product fixture input, not a test
+/// deadline. A binary-level test that must hand product code a clock uses
+/// `StretchedClock`, which runs it slower so a product deadline spans the
+/// test's own; this test spawns the real binary and cannot run it slower,
+/// so the fixture timeout keeps the product's own 30 s read timeout from
+/// firing while the test waits under load.
+const CREDENTIAL_TIMEOUT: &str = "10m";
+
 /// Installs a command-credential fixture under `home`: provider `acme` serving
 /// `m1` from its data file and refresh callback, with no `credential`
 /// (so the read falls through to the command source), a cached list dated
@@ -224,7 +232,7 @@ fn install(home: &Path, script: &str) {
         &home.join("config.json"),
         &json!({"model": "acme/m1", "hub": {"idle_exit_ms": 1000},
                 "providers": {"acme": {"credentials": {"default": {
-            "command": ["sh", "-c", script],
+            "command": ["sh", "-c", script], "timeout": CREDENTIAL_TIMEOUT,
         }}}}}),
     );
 }
@@ -665,13 +673,15 @@ fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_grou
     // process's shared reads.
     run.write(b"\x0c");
     run.wait_screen("the open picker", picker_open);
-    run.wait_screen("the picker's asked catalogue read", picker_read_asked);
     let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     fakes::kill_pid(run.id(), "TERM").unwrap();
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(143));
-    assert!(fakes::group_empties(pgid, setup.deadline));
+    assert!(
+        fakes::group_empties(pgid, setup.deadline),
+        "the helper's group is gone after SIGTERM"
+    );
     group.stand_down(setup.deadline.cleanup_phase());
     matching.stand_down(setup.deadline.cleanup_phase());
 }
@@ -693,13 +703,15 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
     // process's shared reads.
     run.write(b"\x0c");
     run.wait_screen("the open picker", picker_open);
-    run.wait_screen("the picker's asked catalogue read", picker_read_asked);
     let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     fakes::kill_pid(run.id(), "HUP").unwrap();
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(129));
-    assert!(fakes::group_empties(pgid, setup.deadline));
+    assert!(
+        fakes::group_empties(pgid, setup.deadline),
+        "the helper's group is gone after SIGHUP"
+    );
     group.stand_down(setup.deadline.cleanup_phase());
     matching.stand_down(setup.deadline.cleanup_phase());
 }

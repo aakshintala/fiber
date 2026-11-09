@@ -1292,7 +1292,7 @@ fn without_a_reviewer_the_loop_gets_its_failure() {
 #[test]
 fn the_prepared_fields_follow_the_new_model() {
     let fixture = fixture("fiber-switch-fields");
-    let switching = switching(&fixture, &["cache.lifetime=5m", "handoff.enabled=false"]);
+    let switching = switching(&fixture, &["cache.lifetime=5m", "compaction.enabled=false"]);
     let made = prepared(&switching, &args("fake/n"), None);
     assert_eq!(made.context_window, 1000);
     assert_eq!(made.addendum, Some("The extra paragraph.\n".to_owned()));
@@ -1300,7 +1300,7 @@ fn the_prepared_fields_follow_the_new_model() {
         made.cache_lifetime,
         contract::events::CacheLifetime::FiveMinutes
     );
-    assert!(!made.handoff.enabled);
+    assert!(!made.compaction.enabled);
     let searched = prepared(&switching, &args("claude/w"), None);
     assert_eq!(searched.context_window, 500);
 }
@@ -1643,7 +1643,7 @@ fn only_a_web_search_from_another_registrant_stands() {
         let (tool, _) = crate::builtin::hosted("web_search_20250305").unwrap();
         tool
     };
-    let other: Arc<dyn contract::tool::Tool> = Arc::new(tools::Handoff);
+    let other: Arc<dyn contract::tool::Tool> = Arc::new(tools::Compact);
     assert!(!hosted_stands(&[]));
     assert!(!hosted_stands(&[("builtin".to_owned(), hosted())]));
     assert!(!hosted_stands(&[("search-ext".to_owned(), other)]));

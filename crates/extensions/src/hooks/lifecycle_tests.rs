@@ -231,7 +231,7 @@ fn two_session_start_hooks_add_context_in_run_order() {
             "return { context = \"B\" }",
         ),
     );
-    let answer = session_start(&home.load(&[]), StartReason::Handoff);
+    let answer = session_start(&home.load(&[]), StartReason::Compaction);
     assert_eq!(
         added(&answer),
         vec![
@@ -267,7 +267,7 @@ fn a_session_start_hook_is_shown_why_the_session_started() {
         (StartReason::Resume, "resume"),
         (StartReason::Fork, "fork"),
         (StartReason::Rewind, "rewind"),
-        (StartReason::Handoff, "handoff"),
+        (StartReason::Compaction, "compaction"),
     ] {
         let home = Home::new();
         home.install(
@@ -341,7 +341,7 @@ fn a_turn_start_hook_is_shown_the_turns_input_without_unknown_items() {
         InputItem::Jobs {
             job_ids: vec![contract::JobId("j_1".into())],
         },
-        InputItem::Handoff {
+        InputItem::Compaction {
             command_id: contract::CommandId("c_2".into()),
         },
         InputItem::Unknown,
@@ -352,7 +352,7 @@ fn a_turn_start_hook_is_shown_the_turns_input_without_unknown_items() {
         vec![Context {
             state: Vec::new(),
             extension: "fiber.test/a".into(),
-            text: "message,jobs,handoff".into(),
+            text: "message,jobs,compaction".into(),
         }]
     );
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);

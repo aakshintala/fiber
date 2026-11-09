@@ -277,7 +277,7 @@ impl Hooks for CompletionHooks {
         }
     }
 
-    fn before_handoff(&self, _: &hook::BeforeHandoff<'_>) -> hook::BeforeHandoffAnswer {
+    fn before_compaction(&self, _: &hook::BeforeCompaction<'_>) -> hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 

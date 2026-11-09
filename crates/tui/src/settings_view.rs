@@ -1,25 +1,22 @@
-//! `/settings` (`docs/tui.md`, "Swapped views", "Themes"): every
-//! configuration key with its effective value and layer, an edit field
-//! that writes through the same path as `fiber config set`, the choice of
-//! theme, and when a written key applies (`docs/configuration.md`, "When
-//! Fiber reads configuration").
+//! `/settings` (`docs/tui.md`, "Swapped views", `/settings`): every
+//! configuration key with no `*` in its path on the tab its schema entry
+//! names, each edited by the control its schema type gives it, saved at
+//! once through the same path as `fiber config set` to the layer the
+//! value already comes from, and when a written key applies
+//! (`docs/configuration.md`, "When Fiber reads configuration").
 
 use std::path::{Path, PathBuf};
 
-use std::fmt;
-
-use contract::settings::{SettingsMetadata, SettingsTab};
+use contract::settings::{SettingControl, SettingsMetadata, SettingsTab};
+use ratatui::style::{Modifier, Style};
 use serde_json::Value;
 
 use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Frame, GUTTER, Ink, List, Spot, rows_height};
+use crate::swapped::{Chrome, Frame, GUTTER, Ink, Inline, List, Span, Spot, rows_height, tinted};
 use crate::text;
-
-/// The key the theme choice edits.
-pub(crate) const THEME: &str = "tui.theme";
 
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
@@ -123,18 +120,149 @@ pub const SCREEN_ROWS: [ScreenRow; 6] = [
     ),
 ];
 
-/// The widest key column; a longer key pushes its value right.
-const KEY_COLUMN: usize = 36;
+/// The six screens the screen rows open, in [`SCREEN_ROWS`] order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Screen {
+    /// `/keys`.
+    Keys,
+    /// `/credential`.
+    Credentials,
+    /// `/rules`.
+    Rules,
+    /// `/tools`.
+    Tools,
+    /// `/skills`.
+    Skills,
+    /// `/mcp`.
+    Mcp,
+}
 
-/// The widest layer word, `repository`: the room the layer column keeps
-/// at the end of a row.
-const LAYER_COLUMN: usize = 10;
+impl Screen {
+    /// Every screen, in [`SCREEN_ROWS`] order.
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Keys,
+        Self::Credentials,
+        Self::Rules,
+        Self::Tools,
+        Self::Skills,
+        Self::Mcp,
+    ];
 
-/// The gap between two columns.
+    /// The screen's row in [`SCREEN_ROWS`].
+    pub(crate) fn row(self) -> Option<&'static ScreenRow> {
+        Self::ALL
+            .iter()
+            .position(|screen| *screen == self)
+            .and_then(|at| SCREEN_ROWS.get(at))
+    }
+}
+
+/// What the view asks the app to do for it, beyond its own state: the app
+/// takes one after the view handles a key, an edit or a click.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Request {
+    /// Open this screen.
+    Screen(Screen),
+    /// Open the model picker; its choice saves to the key and layer the
+    /// view kept in `awaiting`.
+    Model,
+}
+
+/// The key the theme choice edits.
+pub(crate) const THEME: &str = "tui.theme";
+
+/// The columns between a row's label and its value.
 const GAP: usize = 2;
 
-/// The columns the two gaps of a row take.
-const GAPS: usize = GAP.saturating_mul(2);
+/// The widest label column; a longer label is cut.
+const LABEL_MAX: usize = 30;
+
+/// The body rows a frame keeps for the controls before it gives up the
+/// description and detail lines under the list.
+const MIN_BODY: usize = 3;
+
+/// The height from which the view spaces its rows one blank line apart
+/// and keeps blank lines in its top rows.
+const TALL: usize = 18;
+
+/// The layers a write to `scope` may choose, in Tab's order, global first.
+pub(crate) fn layers(scope: WriteScope) -> Vec<Layer> {
+    match scope {
+        WriteScope::Any { repo: true } => vec![Layer::Global, Layer::Project, Layer::Repository],
+        WriteScope::Any { repo: false } | WriteScope::PersonFiles => {
+            vec![Layer::Global, Layer::Project]
+        }
+        WriteScope::GlobalOnly => vec![Layer::Global],
+        WriteScope::RepoOnly => vec![Layer::Repository],
+    }
+}
+
+/// A value as `fiber config set` takes it: a JSON string bare, anything
+/// else as its JSON.
+pub(crate) fn as_typed(value: &str) -> String {
+    match serde_json::from_str::<Value>(value) {
+        Ok(Value::String(text)) => text,
+        Ok(_) | Err(_) => value.to_owned(),
+    }
+}
+
+/// A string as the JSON text `fiber config set` reads back as that string.
+fn quoted(text: &str) -> String {
+    Value::String(text.to_owned()).to_string()
+}
+
+/// A layer's name, as the view says it.
+fn layer_name(layer: Layer) -> &'static str {
+    match layer {
+        Layer::Global => "global",
+        Layer::Project => "project",
+        Layer::Repository => "repository",
+    }
+}
+
+/// The layer a row's `layer` word names, if it is one of the files.
+fn layer_named(word: &str) -> Option<Layer> {
+    [Layer::Global, Layer::Project, Layer::Repository]
+        .into_iter()
+        .find(|layer| layer_name(*layer) == word)
+}
+
+/// What a key or click asks of the app.
+#[derive(Debug)]
+pub(crate) enum Act {
+    /// Nothing beyond the view's own change.
+    Stay,
+    /// Close the view.
+    Close,
+    /// Apply this theme now.
+    Theme(ThemeSetting),
+    /// Open this file in the editor.
+    Open(PathBuf),
+    /// Open a client-owned file; a default row uses the client's global file.
+    OpenLocal(Option<PathBuf>),
+    /// Start the browser login for this provider.
+    Login(String),
+    /// Reconnect this MCP server: the hub restarts the one slot.
+    McpReconnect(String),
+    /// Log in this MCP server: the hub runs the OAuth device flow.
+    McpLogin(String),
+    /// Read the reviewer choices for this stored provider in the
+    /// background, after its key was stored.
+    Reviewer(String),
+    /// Copy this URL through OSC 52 and the system clipboard.
+    Copy(String),
+}
+
+/// What a view's call needs from the app: the seam, the workspace the
+/// view is about, the view's height in rows and its width in columns,
+/// and the last call's prompt size on the session on screen.
+pub(crate) struct Ctx<'a> {
+    pub(crate) seam: &'a dyn Configure,
+    pub(crate) workspace: &'a Path,
+    pub(crate) height: usize,
+    pub(crate) width: usize,
+    pub(crate) usage: Option<u64>,
+}
 
 /// When a written key takes effect (`docs/configuration.md`, "When Fiber
 /// reads configuration").
@@ -217,110 +345,83 @@ pub(crate) fn applies_text(key: &str, usage: Option<u64>) -> String {
     }
 }
 
-/// The layers a write to `scope` may choose, in Tab's order, global first.
-pub(crate) fn layers(scope: WriteScope) -> Vec<Layer> {
-    match scope {
-        WriteScope::Any { repo: true } => vec![Layer::Global, Layer::Project, Layer::Repository],
-        WriteScope::Any { repo: false } | WriteScope::PersonFiles => {
-            vec![Layer::Global, Layer::Project]
-        }
-        WriteScope::GlobalOnly => vec![Layer::Global],
-        WriteScope::RepoOnly => vec![Layer::Repository],
-    }
+/// What a row on a tab is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Item {
+    /// A configuration key: its index in the rows read.
+    Key(usize),
+    /// A screen row.
+    Screen(Screen),
 }
 
-/// A value as `fiber config set` takes it: a JSON string bare, anything
-/// else as its JSON.
-pub(crate) fn as_typed(value: &str) -> String {
-    match serde_json::from_str::<Value>(value) {
-        Ok(Value::String(text)) => text,
-        Ok(_) | Err(_) => value.to_owned(),
-    }
+/// The focused row, by identity: a re-read or a tab change keeps it where
+/// it still exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Focus {
+    Key(String),
+    Screen(Screen),
 }
 
-/// A layer's name, as the edit field says it.
-fn layer_name(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Global => "global",
-        Layer::Project => "project",
-        Layer::Repository => "repository",
-    }
-}
-
-/// What a key or click asks of the app.
+/// The cross-tab search: its query and the tab and row focused when it
+/// opened, so clearing it can stay on a match or go back. Independent of
+/// `Mode`: an inline field or a list page can cover a search without
+/// losing it. `None` is no search; `Some` with an empty query shows
+/// every eligible row.
 #[derive(Debug)]
-pub(crate) enum Act {
-    /// Nothing beyond the view's own change.
-    Stay,
-    /// Close the view.
-    Close,
-    /// Apply this theme now.
-    Theme(ThemeSetting),
-    /// Open this file in the editor.
-    Open(PathBuf),
-    /// Open a client-owned file; a default row uses the client's global file.
-    OpenLocal(Option<PathBuf>),
-    /// Start the browser login for this provider.
-    Login(String),
-    /// Reconnect this MCP server: the hub restarts the one slot.
-    McpReconnect(String),
-    /// Log in this MCP server: the hub runs the OAuth device flow.
-    McpLogin(String),
-    /// Read the reviewer choices for this stored provider in the
-    /// background, after its key was stored.
-    Reviewer(String),
-    /// Copy this URL through OSC 52 and the system clipboard.
-    Copy(String),
+struct Search {
+    query: Draft,
+    origin_tab: SettingsTab,
+    origin: Option<Focus>,
 }
 
-/// What a view's call needs from the app: the seam, the workspace the
-/// view is about, the view's height in rows and its width in columns,
-/// and the last call's prompt size on the session on screen.
-pub(crate) struct Ctx<'a> {
-    pub(crate) seam: &'a dyn Configure,
-    pub(crate) workspace: &'a Path,
-    pub(crate) height: usize,
-    pub(crate) width: usize,
-    pub(crate) usage: Option<u64>,
+/// One display line of the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Line {
+    Item(Item),
+    Blank,
+    Note(String),
 }
 
-/// The edit field: the layers a write may choose, the one chosen, the
-/// typed text, and whether the row's value is hidden.
+/// The edit field of a number or free text.
 struct Field {
-    layers: Vec<Layer>,
-    at: usize,
+    key: String,
+    layer: Layer,
+    /// Whether the text goes to `set` as typed (a number) or as a JSON
+    /// string (free text).
+    number: bool,
     draft: Draft,
-    redacted: bool,
 }
 
-/// The field may hold a typed secret replacing a redacted value, so it
-/// prints its draft redacted (`docs/code-quality.md`, "Errors").
-impl fmt::Debug for Field {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Field")
-            .field("layers", &self.layers)
-            .field("at", &self.at)
-            .field("draft", &"redacted")
-            .field("redacted", &self.redacted)
-            .finish()
-    }
+/// The list sub-page's field: the entry it edits, or none for "+ Add".
+struct PageField {
+    at: Option<usize>,
+    draft: Draft,
 }
 
-impl Field {
-    /// The layer chosen.
-    fn layer(&self) -> Layer {
-        self.layers.get(self.at).copied().unwrap_or(Layer::Global)
-    }
+/// The list sub-page of a string list or `repository_extensions`
+/// (`docs/tui.md`, "Swapped views", `/settings`): the committed entries,
+/// the entry in focus and the open field. Every change saves the whole
+/// list before the entries change.
+struct Page {
+    key: String,
+    label: String,
+    layer: Layer,
+    /// Whether the entries are `{path, required}` objects.
+    objects: bool,
+    entries: Vec<Value>,
+    list: List,
+    field: Option<PageField>,
 }
 
 /// What the view shows below its header.
 #[derive(Debug)]
 enum Mode {
-    /// The keys.
+    /// The tab's rows.
     Rows,
-    /// The edit field over the selected key.
+    /// The edit field in the focused row's value place.
     Field(Field),
-    /// The theme choices: their names, the current one, the selection.
+    /// The theme choices `/theme` opens on: their names, the current one,
+    /// the selection.
     Choices {
         names: Vec<String>,
         current: Option<String>,
@@ -328,54 +429,117 @@ enum Mode {
     },
 }
 
+/// The field prints its draft redacted: it may hold a typed secret
+/// (`docs/code-quality.md`, "Errors").
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Field")
+            .field("key", &self.key)
+            .field("layer", &self.layer)
+            .field("number", &self.number)
+            .field("draft", &"redacted")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for PageField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PageField")
+            .field("at", &self.at)
+            .field("draft", &"redacted")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Page {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Page")
+            .field("key", &self.key)
+            .field("layer", &self.layer)
+            .field("entries", &self.entries.len())
+            .field("field", &self.field)
+            .finish()
+    }
+}
+
+/// Everything the body of one frame is made of, worked out once so the
+/// draw, the keys and the clicks agree.
+struct Layout {
+    lines: Vec<Line>,
+    /// The display line of each item.
+    takes: Vec<usize>,
+    top: Vec<Vec<Span>>,
+    below: Vec<String>,
+    /// The body rows the frame keeps.
+    body: usize,
+    /// The display line of the focused item.
+    focus: Option<usize>,
+    label_col: usize,
+}
+
 /// The `/settings` view's state.
 #[derive(Debug)]
 pub(crate) struct Settings {
     rows: Vec<SettingRow>,
+    /// The run's `-c` overrides, in order: every re-read uses them.
+    overrides: Vec<String>,
+    tab: SettingsTab,
+    focus: Option<Focus>,
     list: List,
     mode: Mode,
+    page: Option<Page>,
     /// The entry `tui.theme`, resolved once when the view opened: a
-    /// cancel restores this, whatever a preview queued since.
+    /// cancel of the theme choices restores this, whatever a preview
+    /// queued since.
     entry_theme: ThemeSetting,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
+    /// What the app is asked to do next.
+    request: Option<Request>,
+    /// The model picker is open above the view for this key and layer.
+    awaiting: Option<(String, Layer)>,
+    /// The cross-tab search, when one is open.
+    search: Option<Search>,
 }
 
 impl Settings {
-    /// The view over `ctx`'s workspace, its rows read.
-    pub(crate) fn open(ctx: &Ctx<'_>) -> Self {
+    /// The view over `ctx`'s workspace, its rows read with the run's
+    /// `overrides`, on the first tab.
+    pub(crate) fn open(ctx: &Ctx<'_>, overrides: Vec<String>) -> Self {
         let mut settings = Self {
             rows: Vec::new(),
+            overrides,
+            tab: SettingsTab::Appearance,
+            focus: None,
             list: List::gutter(),
             mode: Mode::Rows,
+            page: None,
             entry_theme: ThemeSetting::Follow,
             said: Vec::new(),
+            request: None,
+            awaiting: None,
+            search: None,
         };
         settings.reread(ctx);
         settings.entry_theme = settings.entry_setting(ctx);
         settings
     }
 
-    /// The lines the list holds: the header row, then one per key; none
-    /// with no keys.
-    fn list_len(&self) -> usize {
-        if self.rows.is_empty() {
-            0
-        } else {
-            self.rows.len() + 1
-        }
-    }
-
-    /// The view opened directly in the theme choices, as `/theme`
-    /// opens it: the `tui.theme` row focused with its choices open.
-    /// With no theme row the view opens on its rows, as `open` does.
-    pub(crate) fn open_theme(ctx: &Ctx<'_>) -> Self {
-        let mut settings = Self::open(ctx);
-        if let Some(at) = settings.rows.iter().position(|row| row.key == THEME) {
-            settings
-                .list
-                .select(at + 1, settings.list_len(), settings.shown(ctx));
-            settings.edit(ctx);
+    /// The view opened directly in the theme choices, as `/theme` opens
+    /// it: the `tui.theme` row focused with its choices open. With no
+    /// theme row the view opens on its rows, as `open` does.
+    pub(crate) fn open_theme(ctx: &Ctx<'_>, overrides: Vec<String>) -> Self {
+        let mut settings = Self::open(ctx, overrides);
+        if settings.rows.iter().any(|row| row.key == THEME) {
+            settings.focus = Some(Focus::Key(THEME.to_owned()));
+            settings.tab = settings
+                .rows
+                .iter()
+                .find(|row| row.key == THEME)
+                .and_then(|row| row.presentation.tab)
+                .unwrap_or(SettingsTab::Appearance);
+            settings.place(ctx);
+            settings.open_choices(ctx);
         }
         settings
     }
@@ -383,16 +547,19 @@ impl Settings {
     /// The entry `tui.theme`, resolved against `ctx`'s seam: the theme
     /// the choices restore on a cancel.
     fn entry_setting(&self, ctx: &Ctx<'_>) -> ThemeSetting {
-        let name = self
-            .rows
+        ctx.seam.theme(ctx.workspace, &self.theme_name())
+    }
+
+    /// The effective `tui.theme` name: `auto` when none is set.
+    fn theme_name(&self) -> String {
+        self.rows
             .iter()
             .find(|row| row.key == THEME)
-            .map(|row| match &row.value {
-                Shown::Value(value) => as_typed(value),
-                Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => "auto".to_owned(),
+            .and_then(|row| match &row.value {
+                Shown::Value(value) => Some(as_typed(value)),
+                Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
             })
-            .unwrap_or_else(|| "auto".to_owned());
-        ctx.seam.theme(ctx.workspace, &name)
+            .unwrap_or_else(|| "auto".to_owned())
     }
 
     /// The captured entry theme, while the theme choices are open: what
@@ -404,38 +571,385 @@ impl Settings {
         }
     }
 
-    /// Reads the rows again, keeping the selection where it was; a failed
-    /// read says why.
+    /// Reads the rows again with the run's overrides, keeping the focused
+    /// key where it is; a failed read says why.
     pub(crate) fn reread(&mut self, ctx: &Ctx<'_>) {
-        match ctx.seam.settings(ctx.workspace) {
+        match ctx.seam.settings(ctx.workspace, &self.overrides) {
             Ok(rows) => self.rows = rows,
             Err(error) => {
                 self.rows = Vec::new();
                 self.said = vec![error.message];
             }
         }
-        let shown = self.shown(ctx);
-        // The header takes no selection: a list that holds keys rests on
-        // one.
-        let at = self.list.selected().max(1);
-        self.list.select(at, self.list_len(), shown);
+        self.place(ctx);
     }
 
-    /// The rows the view shows at `ctx`'s height.
-    fn shown(&self, ctx: &Ctx<'_>) -> usize {
-        rows_height(&self.frame(ctx.width, ctx.usage), ctx.height)
+    /// The request the app owes the view, once.
+    pub(crate) fn take_request(&mut self) -> Option<Request> {
+        self.request.take()
     }
 
-    /// The selected key's row; the header row is none.
+    /// Whether the model picker is open above the view for one of its
+    /// keys.
+    pub(crate) fn awaiting_model(&self) -> bool {
+        self.awaiting.is_some()
+    }
+
+    /// The model picker closed without a choice: nothing was written.
+    pub(crate) fn model_cancelled(&mut self) {
+        self.awaiting = None;
+    }
+
+    /// Saves `reference`, byte for byte, to the key and layer the picker
+    /// was opened for. A saved choice ends the wait; a refused one keeps it,
+    /// so the picker can choose again, and says why. Whether it saved.
+    pub(crate) fn choose_model(&mut self, reference: &str, ctx: &Ctx<'_>) -> bool {
+        let Some((key, layer)) = self.awaiting.clone() else {
+            return false;
+        };
+        if self.save(ctx, layer, &key, &quoted(reference)) {
+            self.awaiting = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The last thing said, for a notice when the view is covered.
+    pub(crate) fn last_said(&self) -> Option<&str> {
+        self.said.last().map(String::as_str)
+    }
+
+    // The tab's rows.
+
+    /// The rows the open tab holds: its keys in the order read, then its
+    /// screen rows. With a search open, the matching rows of every tab
+    /// instead, in tab order and then the same row order.
+    fn items(&self) -> Vec<Item> {
+        if let Some(search) = &self.search {
+            let needle = search.query.expand().to_lowercase();
+            let mut items = Vec::new();
+            for tab in SettingsTab::ALL {
+                items.extend(
+                    self.rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| {
+                            row.presentation.tab == Some(tab) && key_matches(row, &needle)
+                        })
+                        .map(|(at, _)| Item::Key(at)),
+                );
+                items.extend(
+                    Screen::ALL
+                        .into_iter()
+                        .filter(|screen| {
+                            screen.row().is_some_and(|row| {
+                                row.metadata.tab == Some(tab) && screen_matches(row, &needle)
+                            })
+                        })
+                        .map(Item::Screen),
+                );
+            }
+            return items;
+        }
+        let mut items: Vec<Item> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.presentation.tab == Some(self.tab))
+            .map(|(at, _)| Item::Key(at))
+            .collect();
+        items.extend(
+            Screen::ALL
+                .into_iter()
+                .filter(|screen| {
+                    screen
+                        .row()
+                        .is_some_and(|row| row.metadata.tab == Some(self.tab))
+                })
+                .map(Item::Screen),
+        );
+        items
+    }
+
+    fn row(&self, at: usize) -> Option<&SettingRow> {
+        self.rows.get(at)
+    }
+
+    fn focus_of(&self, item: Item) -> Option<Focus> {
+        match item {
+            Item::Key(at) => self.row(at).map(|row| Focus::Key(row.key.clone())),
+            Item::Screen(screen) => Some(Focus::Screen(screen)),
+        }
+    }
+
+    /// The focused item on the open tab; the first when the focus is on
+    /// no row of it.
+    fn focused(&self, items: &[Item]) -> Option<Item> {
+        items
+            .iter()
+            .copied()
+            .find(|item| self.focus_of(*item) == self.focus)
+            .or_else(|| items.first().copied())
+    }
+
+    /// The focused key's row, outside the screen rows.
     fn selected(&self) -> Option<&SettingRow> {
-        self.rows.get(self.list.selected().checked_sub(1)?)
+        match self.focused(&self.items())? {
+            Item::Key(at) => self.row(at),
+            Item::Screen(_) => None,
+        }
     }
 
+    /// Puts the focus on a row of the open tab and the list on it.
+    fn place(&mut self, ctx: &Ctx<'_>) {
+        let items = self.items();
+        self.focus = self.focused(&items).and_then(|item| self.focus_of(item));
+        let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+        self.list = self.list_over(&layout);
+    }
+
+    /// The list scrolled so the focused row shows in `layout`'s body.
+    fn list_over(&self, layout: &Layout) -> List {
+        let mut list = self.list;
+        if let Some(focus) = layout.focus {
+            list.select(focus, layout.lines.len(), layout.body);
+        }
+        list
+    }
+
+    /// Moves the focus to the item on display line `line`, if it is one.
+    fn focus_line(&mut self, line: usize, ctx: &Ctx<'_>) {
+        let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+        if let Some(Line::Item(item)) = layout.lines.get(line) {
+            self.focus = self.focus_of(*item);
+        }
+        let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+        self.list = self.list_over(&layout);
+    }
+
+    /// The layout of the open tab at `width` by `height`. With a search
+    /// open the query takes the tab bar's fixed rows, and the rows are
+    /// the matches across every tab.
+    fn layout(&self, width: usize, height: usize, usage: Option<u64>) -> Layout {
+        let items = self.items();
+        let focused = self.focused(&items);
+        let compact = height < TALL;
+        // The fixed rows: what saving does, then the query or the tab
+        // bar. The query keeps the same rows, so the body never moves.
+        let mut top = vec![vec![(
+            "Changes save automatically".to_owned(),
+            Ink::Muted.style(),
+        )]];
+        if !compact {
+            top.push(Vec::new());
+        }
+        if self.search.is_some() {
+            top.push(self.query_row());
+        } else {
+            top.push(self.tab_bar(width));
+        }
+        if !compact {
+            top.push(Vec::new());
+        }
+        let mut details = focused
+            .map(|item| self.details(item, usage))
+            .unwrap_or_default();
+        details.extend(self.said.iter().cloned());
+        // The controls keep their room: a short frame drops the
+        // description, then the detail line, and keeps what was said.
+        let room = height
+            .saturating_sub(2 + top.len() + MIN_BODY)
+            .min(details.len());
+        let below = details.split_off(details.len().saturating_sub(room));
+        let body = height.saturating_sub(2 + top.len() + below.len());
+        let spaced = !items.is_empty() && items.len().saturating_mul(2).saturating_sub(1) <= body;
+        let mut lines = Vec::new();
+        let mut takes = Vec::new();
+        for (at, item) in items.iter().enumerate() {
+            if at > 0 && spaced {
+                lines.push(Line::Blank);
+            }
+            takes.push(lines.len());
+            lines.push(Line::Item(*item));
+        }
+        if lines.is_empty() {
+            lines.push(Line::Note(if let Some(search) = &self.search {
+                format!(
+                    "No settings match \u{201c}{}\u{201d}.",
+                    search.query.expand()
+                )
+            } else {
+                "Nothing is set on this tab.".to_owned()
+            }));
+        }
+        let focus = focused.and_then(|item| items.iter().position(|it| *it == item));
+        let label_col = items
+            .iter()
+            .map(|item| text::width(&self.label_of(*item)))
+            .max()
+            .unwrap_or(0)
+            .min(LABEL_MAX);
+        Layout {
+            focus: focus.and_then(|at| takes.get(at).copied()),
+            lines,
+            takes,
+            top,
+            below,
+            body,
+            label_col,
+        }
+    }
+
+    /// The search line in the tab bar's fixed rows: the query after its
+    /// slash, the slash dim. It shows nowhere else, so drawing below it
+    /// never moves.
+    fn query_row(&self) -> Vec<Span> {
+        let query = self
+            .search
+            .as_ref()
+            .map(|search| search.query.expand())
+            .unwrap_or_default();
+        vec![("/ ".to_owned(), Ink::Muted.style()), (query, Style::new())]
+    }
+
+    /// The tab bar: the open tab bold on the `surface` tint, the rest
+    /// plain. A bar wider than the frame drops tabs from the left, never
+    /// the open one.
+    fn tab_bar(&self, width: usize) -> Vec<Span> {
+        let open = Style::new().add_modifier(Modifier::BOLD);
+        let spans: Vec<(SettingsTab, Span)> = SettingsTab::ALL
+            .into_iter()
+            .map(|tab| {
+                let name = format!(" {} ", tab_name(tab));
+                let style = if tab == self.tab {
+                    tinted(open)
+                } else {
+                    Style::new()
+                };
+                (tab, (name, style))
+            })
+            .collect();
+        let fits = |from: usize| {
+            let used: usize = spans
+                .iter()
+                .skip(from)
+                .map(|(_, (name, _))| text::width(name) + 1)
+                .sum();
+            used <= width.saturating_add(1)
+        };
+        // The first tab from which the rest fit, or the open one.
+        let start = spans
+            .iter()
+            .enumerate()
+            .find(|(from, (tab, _))| *tab == self.tab || fits(*from))
+            .map_or(0, |(from, _)| from);
+        let mut bar = Vec::new();
+        for (at, (_, span)) in spans.into_iter().enumerate().skip(start) {
+            if at > start {
+                bar.push((" ".to_owned(), Style::new()));
+            }
+            bar.push(span);
+        }
+        bar
+    }
+
+    /// The label a row shows.
+    fn label_of(&self, item: Item) -> String {
+        match item {
+            Item::Key(at) => self
+                .row(at)
+                .map_or_else(String::new, |row| row.presentation.label.clone()),
+            Item::Screen(screen) => screen
+                .row()
+                .map_or_else(String::new, |row| row.metadata.label.to_owned()),
+        }
+    }
+
+    /// The lines under the list for the focused row: its description, then
+    /// its key path, where it is set and when a change applies.
+    fn details(&self, item: Item, usage: Option<u64>) -> Vec<String> {
+        match item {
+            Item::Screen(screen) => screen.row().map_or_else(Vec::new, |row| {
+                vec![
+                    row.metadata.description.to_owned(),
+                    format!("{} · opens its own screen", row.command),
+                ]
+            }),
+            Item::Key(at) => self.row(at).map_or_else(Vec::new, |row| {
+                vec![
+                    row.presentation.description.clone(),
+                    format!(
+                        "{} · {} · {}",
+                        row.key,
+                        origin(row),
+                        applies_text(&row.key, usage)
+                    ),
+                ]
+            }),
+        }
+    }
+
+    /// The body rows that fit at `ctx`'s size.
+    fn shown(&self, ctx: &Ctx<'_>) -> usize {
+        rows_height(&self.frame(ctx.width, ctx.height, ctx.usage), ctx.height)
+    }
+}
+
+/// A tab's name.
+fn tab_name(tab: SettingsTab) -> &'static str {
+    match tab {
+        SettingsTab::Appearance => "Appearance",
+        SettingsTab::Notifications => "Notifications",
+        SettingsTab::Models => "Models",
+        SettingsTab::Permissions => "Permissions",
+        SettingsTab::Sessions => "Sessions",
+        SettingsTab::Advanced => "Advanced",
+    }
+}
+
+/// Whether a key matches the lowercased query: its label or its key
+/// path, either as a substring.
+fn key_matches(row: &SettingRow, needle: &str) -> bool {
+    row.presentation.label.to_lowercase().contains(needle) || row.key.contains(needle)
+}
+
+/// Whether a screen row matches the lowercased query: its label or one
+/// of the key paths it covers, either as a substring.
+fn screen_matches(row: &ScreenRow, needle: &str) -> bool {
+    row.metadata.label.to_lowercase().contains(needle)
+        || row.covers.iter().any(|covered| covered.contains(needle))
+}
+
+/// Where a row's value comes from, as the line under the list says it.
+fn origin(row: &SettingRow) -> String {
+    if is_run(row) {
+        return "set by -c for this run".to_owned();
+    }
+    match (&row.value, row.layer.as_str()) {
+        (Shown::Unset, _) => "not set".to_owned(),
+        (_, "default") => "using the default".to_owned(),
+        (_, layer) => format!("set in {layer}"),
+    }
+}
+
+/// Whether the run's `-c` sets the row's value: the file cannot change it.
+fn is_run(row: &SettingRow) -> bool {
+    row.layer == "-c"
+}
+
+// Keys.
+
+impl Settings {
     /// Handles one key.
     pub(crate) fn key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
+        if self.page.is_some() {
+            self.page_key(key, ctx);
+            return Act::Stay;
+        }
         let shown = self.shown(ctx);
         match &mut self.mode {
-            Mode::Rows => self.rows_key(key, ctx, shown),
+            Mode::Rows => self.rows_key(key, ctx),
             Mode::Field(_) => {
                 self.field_key(key, ctx);
                 Act::Stay
@@ -464,57 +978,166 @@ impl Settings {
         }
     }
 
-    /// A key in the edit field: typing, Tab to the next layer (a union's
-    /// field then holds that layer's own list), Enter to write, Esc to
-    /// close it writing nothing.
-    fn field_key(&mut self, key: &Key, ctx: &Ctx<'_>) {
-        if *key == Key::Enter {
-            self.submit(ctx);
-            return;
-        }
+    /// A key over the rows: move, change the focused value, move it to
+    /// another layer, open the file, search, or close.
+    fn rows_key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
         if *key == Key::Esc {
-            self.mode = Mode::Rows;
-            self.said.clear();
-            return;
-        }
-        let union = self.selected().and_then(|row| match &row.value {
-            Shown::Union { own, .. } => Some(own.clone()),
-            Shown::Unset | Shown::Value(_) | Shown::Redacted(_) => None,
-        });
-        let Mode::Field(field) = &mut self.mode else {
-            return;
-        };
-        if let Key::Char(ch) = key {
-            field.draft.insert(*ch);
-        } else if *key == Key::Backspace {
-            field.draft.backspace();
-        } else if *key == Key::Tab {
-            field.at = (field.at + 1) % field.layers.len().max(1);
-            if let Some(own) = &union {
-                field.draft.set(&own_list(own, field.layer()));
+            // Clearing a search stays open; only the next Esc closes.
+            if self.search.is_some() {
+                self.clear_search(ctx);
+                return Act::Stay;
             }
+            return Act::Close;
+        }
+        if *key == Key::CtrlG {
+            let row = self.selected();
+            let file = row.and_then(|row| row.file.clone());
+            if row.is_some_and(|row| crate::remote::client_owned(&row.key)) {
+                return Act::OpenLocal(file);
+            }
+            return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
+        }
+        if *key == Key::Enter || *key == Key::Char(' ') {
+            return self.change(ctx);
+        }
+        if *key == Key::Tab {
+            return self.move_layer(ctx);
+        }
+        // A search takes every other printable character but Space, which
+        // keeps the control action above. Without one, `/` opens an empty
+        // search and a typed letter opens one holding it.
+        if let Key::Char(ch) = key {
+            if self.search.is_some() {
+                if text::printable(*ch) {
+                    self.mutate_query(ctx, |query| query.insert(*ch));
+                }
+                return Act::Stay;
+            }
+            if *ch == '/' {
+                self.open_search(ctx, None);
+                return Act::Stay;
+            }
+            if ch.is_alphabetic() {
+                self.open_search(ctx, Some(*ch));
+                return Act::Stay;
+            }
+        }
+        // Backspace edits the query, never the rows.
+        if *key == Key::Backspace && self.search.is_some() {
+            self.mutate_query(ctx, |query| query.backspace());
+            return Act::Stay;
+        }
+        let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+        let mut list = self.list_over(&layout);
+        let before = list.selected();
+        list.key_over(key, layout.lines.len(), layout.body, &layout.takes);
+        if list.selected() != before {
+            self.said.clear();
+        }
+        self.list = list;
+        self.focus_line(list.selected(), ctx);
+        Act::Stay
+    }
+
+    // The cross-tab search.
+
+    /// Opens a search over every tab, saving the tab and row focused now
+    /// so clearing it can go back. `seed` starts the query with one
+    /// typed letter; `None` starts it empty. The first result takes the
+    /// focus, as a new query always does.
+    fn open_search(&mut self, ctx: &Ctx<'_>, seed: Option<char>) {
+        let mut query = Draft::default();
+        if let Some(ch) = seed {
+            query.insert(ch);
+        }
+        self.search = Some(Search {
+            query,
+            origin_tab: self.tab,
+            origin: self.focus.clone(),
+        });
+        self.said.clear();
+        self.focus = None;
+        self.place(ctx);
+    }
+
+    /// Runs `edit` on the query; when its text changed, the first result
+    /// takes the focus.
+    fn mutate_query(&mut self, ctx: &Ctx<'_>, edit: impl FnOnce(&mut Draft)) {
+        let changed = match &mut self.search {
+            Some(search) => {
+                let before = search.query.expand();
+                edit(&mut search.query);
+                search.query.expand() != before
+            }
+            None => false,
+        };
+        if changed {
+            self.said.clear();
+            self.focus = None;
+            self.place(ctx);
         }
     }
 
-    /// Shifts the window one wheel step. The rows move three, clamping
-    /// the selection off the header row as the keys do; the theme
-    /// choices move three through their own list with the same live
-    /// preview. The edit field takes Up/Down without scrolling, so the
-    /// wheel is swallowed there and never retargets the key it edits.
+    /// Clears the search: with a match, the focus stays on that match
+    /// in its own tab; with no match, the focus goes back to the row
+    /// focused when the search opened. The next Esc closes, through the
+    /// ordinary path.
+    fn clear_search(&mut self, ctx: &Ctx<'_>) {
+        let Some(search) = self.search.take() else {
+            return;
+        };
+        if self.focus.is_some() {
+            if let Some(tab) = self.tab_of_focus() {
+                self.tab = tab;
+            }
+        } else {
+            self.tab = search.origin_tab;
+            self.focus = search.origin;
+        }
+        self.said.clear();
+        self.place(ctx);
+    }
+
+    /// The tab the focused row sits on: a key's own tab, a screen row's
+    /// metadata tab.
+    fn tab_of_focus(&self) -> Option<SettingsTab> {
+        match &self.focus {
+            Some(Focus::Key(key)) => self
+                .rows
+                .iter()
+                .find(|row| &row.key == key)
+                .and_then(|row| row.presentation.tab),
+            Some(Focus::Screen(screen)) => screen.row().and_then(|row| row.metadata.tab),
+            None => None,
+        }
+    }
+
+    /// Shifts the window one wheel step. The rows move three, then the
+    /// focus settles on the nearest row; the theme choices move three
+    /// through their own list with the same live preview. The field and
+    /// the list page swallow the wheel, so it never retargets what they
+    /// edit.
     pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
         let shown = self.shown(ctx);
+        if let Some(page) = &mut self.page {
+            if page.field.is_none() {
+                let rows = page.entries.len().saturating_add(1);
+                page.list.wheel(up, rows, shown, 3);
+            }
+            return Act::Stay;
+        }
         match &mut self.mode {
             Mode::Rows => {
-                let before = self.list.selected();
-                self.list.wheel(up, self.list_len(), shown, 3);
-                // The header takes no selection.
-                let at = self.list.selected().max(1);
-                if at != self.list.selected() {
-                    self.list.select(at, self.list_len(), shown);
-                }
-                if self.list.selected() != before {
+                let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+                let mut list = self.list_over(&layout);
+                let before = list.selected();
+                list.wheel(up, layout.lines.len(), layout.body, 3);
+                if list.selected() != before {
                     self.said.clear();
                 }
+                list.rest_on(&layout.takes, layout.lines.len(), layout.body);
+                self.list = list;
+                self.focus_line(list.selected(), ctx);
                 Act::Stay
             }
             Mode::Choices { names, list, .. } => {
@@ -533,144 +1156,40 @@ impl Settings {
         }
     }
 
-    /// A key over the rows: move, open the field or the theme choices,
-    /// open the selected row's file, or close.
-    fn rows_key(&mut self, key: &Key, ctx: &Ctx<'_>, shown: usize) -> Act {
-        if *key == Key::Esc {
-            return Act::Close;
-        }
-        if *key == Key::CtrlG {
-            let row = self.selected();
-            let file = row.and_then(|row| row.file.clone());
-            if row.is_some_and(|row| crate::remote::client_owned(&row.key)) {
-                return Act::OpenLocal(file);
+    /// Handles one editing key: the field's, while one is open; else ←→
+    /// move between tabs and Delete resets the focused value.
+    pub(crate) fn edit_key(&mut self, edit: Edit, ctx: &Ctx<'_>) -> Act {
+        if let Some(page) = &mut self.page {
+            if let Some(field) = &mut page.field {
+                edit_draft(&mut field.draft, edit);
+            } else if edit == Edit::Delete {
+                self.page_remove(ctx);
             }
-            return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
-        }
-        if *key == Key::Enter {
-            self.edit(ctx);
             return Act::Stay;
         }
-        let before = self.list.selected();
-        self.list.key(key, self.list_len(), shown);
-        // The header takes no selection.
-        let at = self.list.selected().max(1);
-        self.list.select(at, self.list_len(), shown);
-        if self.list.selected() != before {
-            self.said.clear();
-        }
-        Act::Stay
-    }
-
-    /// Opens the selected row's edit field, or the theme choices on the
-    /// `tui.theme` row.
-    fn edit(&mut self, ctx: &Ctx<'_>) {
-        let Some(row) = self.selected().cloned() else {
-            return;
-        };
-        self.said.clear();
-        if row.key == THEME {
-            let current = match &row.value {
-                Shown::Value(value) => Some(as_typed(value)),
-                Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
-            };
-            let mut names: Vec<String> = BUILT_IN_THEMES.map(str::to_owned).to_vec();
-            names.extend(
-                ctx.seam
-                    .themes(ctx.workspace)
-                    .into_iter()
-                    .filter(|name| !BUILT_IN_THEMES.contains(&name.as_str())),
-            );
-            let mut list = List::gutter();
-            let at = names
-                .iter()
-                .position(|name| Some(name) == current.as_ref())
-                .unwrap_or(0);
-            list.select(at, names.len(), self.shown(ctx));
-            self.mode = Mode::Choices {
-                names,
-                current,
-                list,
-            };
-            return;
-        }
-        let layers = layers(row.scope);
-        let first = layers.first().copied().unwrap_or(Layer::Global);
-        let (text, redacted) = match &row.value {
-            Shown::Unset => (String::new(), false),
-            Shown::Value(value) => (as_typed(value), false),
-            Shown::Union { own, .. } => (own_list(own, first), false),
-            Shown::Redacted(_) => (String::new(), true),
-        };
-        let mut draft = Draft::default();
-        draft.set(&text);
-        self.mode = Mode::Field(Field {
-            layers,
-            at: 0,
-            draft,
-            redacted,
-        });
-    }
-
-    /// Writes the field's text to its layer. A saved write reads the rows
-    /// again and says the file and when the key applies; a failed one
-    /// keeps the field and says why.
-    fn submit(&mut self, ctx: &Ctx<'_>) {
-        let (Some(row), Mode::Field(field)) = (self.selected(), &self.mode) else {
-            return;
-        };
-        let text = field.draft.expand();
-        if field.redacted && text.is_empty() {
-            self.said = vec!["Nothing was typed; nothing was written.".to_owned()];
-            return;
-        }
-        let key = row.key.clone();
-        match ctx.seam.set(ctx.workspace, field.layer(), &key, &text) {
-            Ok(saved) => {
-                self.mode = Mode::Rows;
-                self.reread(ctx);
-                let mut said = vec![
-                    format!("Saved to {}.", saved.file.display()),
-                    applies_text(&key, ctx.usage),
-                ];
-                said.extend(saved.warnings);
-                self.said = said;
-            }
-            Err(error) => self.said = vec![error.message],
-        }
-    }
-
-    /// Writes theme `name` to the global `tui.theme`, then asks for it to
-    /// apply. A failed write applies nothing.
-    fn choose(&mut self, name: &str, ctx: &Ctx<'_>) -> Act {
-        let text = Value::String(name.to_owned()).to_string();
-        match ctx.seam.set(ctx.workspace, Layer::Global, THEME, &text) {
-            Ok(saved) => {
-                self.mode = Mode::Rows;
-                self.reread(ctx);
-                let mut said = vec![
-                    format!("Saved to {}.", saved.file.display()),
-                    applies_text(THEME, ctx.usage),
-                ];
-                said.extend(saved.warnings);
-                self.said = said;
-                Act::Theme(ctx.seam.theme(ctx.workspace, name))
-            }
-            Err(error) => {
-                self.said = vec![error.message];
+        match &mut self.mode {
+            Mode::Field(field) => {
+                edit_draft(&mut field.draft, edit);
                 Act::Stay
             }
-        }
-    }
-
-    /// Handles one editing key: the field's, while it is open.
-    pub(crate) fn edit_key(&mut self, edit: Edit) {
-        if let Mode::Field(field) = &mut self.mode {
-            match edit {
-                Edit::Paste(text) => text.chars().for_each(|ch| field.draft.insert(ch)),
-                Edit::Left
-                | Edit::Right
-                | Edit::ShiftEnter
+            Mode::Choices { .. } => Act::Stay,
+            Mode::Rows => match &edit {
+                // Left and Right never switch tabs with a search open:
+                // they edit the query instead.
+                Edit::Left | Edit::Right if self.search.is_some() => {
+                    self.mutate_query(ctx, |query| edit_draft(query, edit.clone()));
+                    Act::Stay
+                }
+                Edit::Left => {
+                    self.step_tab(false, ctx);
+                    Act::Stay
+                }
+                Edit::Right => {
+                    self.step_tab(true, ctx);
+                    Act::Stay
+                }
+                Edit::Delete => self.reset(ctx),
+                Edit::ShiftEnter
                 | Edit::CtrlJ
                 | Edit::WordLeft
                 | Edit::WordRight
@@ -678,15 +1197,50 @@ impl Settings {
                 | Edit::DeleteToLineStart
                 | Edit::LineStart
                 | Edit::LineEnd
-                | Edit::Delete => field.draft.edit(edit),
-            }
+                | Edit::Paste(_) => {
+                    if self.search.is_some() {
+                        self.mutate_query(ctx, |query| edit_draft(query, edit.clone()));
+                    }
+                    Act::Stay
+                }
+            },
         }
     }
 
-    /// A click: the ✕ closes, a row is selected, and a theme choice is
+    /// Moves to the next or previous tab; the first and last stop.
+    fn step_tab(&mut self, forward: bool, ctx: &Ctx<'_>) {
+        let at = SettingsTab::ALL
+            .iter()
+            .position(|tab| *tab == self.tab)
+            .unwrap_or(0);
+        let to = if forward {
+            at.saturating_add(1)
+                .min(SettingsTab::ALL.len().saturating_sub(1))
+        } else {
+            at.saturating_sub(1)
+        };
+        if let Some(tab) = SettingsTab::ALL.get(to).copied()
+            && tab != self.tab
+        {
+            self.tab = tab;
+            self.focus = None;
+            self.list = List::gutter();
+            self.said.clear();
+            self.place(ctx);
+        }
+    }
+
+    /// A click: the ✕ closes, a row is focused, and a theme choice is
     /// chosen.
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
-        let shown = self.shown(ctx);
+        if let Some(page) = &self.page {
+            if let (Spot::Row(at), None) = (spot, &page.field)
+                && at <= page.entries.len()
+            {
+                self.page_select(at, ctx);
+            }
+            return Act::Stay;
+        }
         match (spot, &mut self.mode) {
             (Spot::Close, _) => Act::Close,
             (Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_), _) => Act::Stay,
@@ -695,11 +1249,8 @@ impl Settings {
                 None => Act::Stay,
             },
             (Spot::Row(at), Mode::Rows) => {
-                // The header row is not a key.
-                if (1..=self.rows.len()).contains(&at) {
-                    self.list.select(at, self.list_len(), shown);
-                    self.said.clear();
-                }
+                self.focus_line(at, ctx);
+                self.said.clear();
                 Act::Stay
             }
             (Spot::Row(_), Mode::Field(_)) => Act::Stay,
@@ -708,9 +1259,578 @@ impl Settings {
             (Spot::Cell(_, _), _) => Act::Stay,
         }
     }
+}
 
-    /// The frame to draw at `width` columns.
-    pub(crate) fn frame(&self, width: usize, usage: Option<u64>) -> Frame {
+/// An editing key in a field's draft.
+fn edit_draft(draft: &mut Draft, edit: Edit) {
+    match edit {
+        Edit::Paste(text) => text
+            .chars()
+            .filter(|ch| *ch != '\n' && *ch != '\t')
+            .for_each(|ch| draft.insert(ch)),
+        Edit::Left
+        | Edit::Right
+        | Edit::ShiftEnter
+        | Edit::CtrlJ
+        | Edit::WordLeft
+        | Edit::WordRight
+        | Edit::DeleteWord
+        | Edit::DeleteToLineStart
+        | Edit::LineStart
+        | Edit::LineEnd
+        | Edit::Delete => draft.edit(edit),
+    }
+}
+
+// Changing a value.
+
+impl Settings {
+    /// The layer a change to `row` saves to: the one its value already
+    /// comes from, else the first the key allows (global first).
+    fn write_layer(row: &SettingRow) -> Layer {
+        let allowed = layers(row.scope);
+        layer_named(&row.layer)
+            .filter(|layer| allowed.contains(layer))
+            .or_else(|| allowed.first().copied())
+            .unwrap_or(Layer::Global)
+    }
+
+    /// Writes `text` to `key` in `layer`, then reads the rows again. A
+    /// saved write says where; a refused one says why and changes nothing.
+    /// Whether it saved.
+    fn save(&mut self, ctx: &Ctx<'_>, layer: Layer, key: &str, text: &str) -> bool {
+        match ctx.seam.set(ctx.workspace, layer, key, text) {
+            Ok(saved) => {
+                self.reread(ctx);
+                let mut said = vec![format!("Saved to {} config.", layer_name(layer))];
+                said.extend(saved.warnings);
+                self.said = said;
+                true
+            }
+            Err(error) => {
+                self.said = vec![error.message];
+                false
+            }
+        }
+    }
+
+    /// Enter or Space on the focused row, by its control.
+    fn change(&mut self, ctx: &Ctx<'_>) -> Act {
+        self.said.clear();
+        let items = self.items();
+        let Some(item) = self.focused(&items) else {
+            return Act::Stay;
+        };
+        let at = match item {
+            Item::Screen(screen) => {
+                self.request = Some(Request::Screen(screen));
+                return Act::Stay;
+            }
+            Item::Key(at) => at,
+        };
+        let Some(row) = self.row(at).cloned() else {
+            return Act::Stay;
+        };
+        // A value the run's `-c` sets is read-only: no control writes
+        // under it, whatever opens it.
+        if is_run(&row) {
+            return Act::Stay;
+        }
+        let layer = Self::write_layer(&row);
+        match (&row.control, &row.value) {
+            (_, Shown::Redacted(_) | Shown::Union { .. }) | (SettingControl::Json, _) => {
+                self.said = vec![format!(
+                    "{} has no control here; set it with `fiber config set`.",
+                    row.key
+                )];
+                Act::Stay
+            }
+            (SettingControl::Boolean, value) => {
+                let on = !matches!(value, Shown::Value(text) if text == "true");
+                self.save(ctx, layer, &row.key, if on { "true" } else { "false" });
+                Act::Stay
+            }
+            (SettingControl::Fixed(choices), value) => {
+                let next = next_choice(choices, current_text(value).as_deref());
+                self.step(ctx, layer, &row.key, next)
+            }
+            (SettingControl::Theme, value) => {
+                let mut names: Vec<String> = BUILT_IN_THEMES.map(str::to_owned).to_vec();
+                names.extend(
+                    ctx.seam
+                        .themes(ctx.workspace)
+                        .into_iter()
+                        .filter(|name| !BUILT_IN_THEMES.contains(&name.as_str())),
+                );
+                let next = next_choice(&names, current_text(value).as_deref());
+                self.step(ctx, layer, &row.key, next)
+            }
+            (SettingControl::Model, _) => {
+                self.awaiting = Some((row.key.clone(), layer));
+                self.request = Some(Request::Model);
+                Act::Stay
+            }
+            (SettingControl::Number | SettingControl::Text, value) => {
+                let mut draft = Draft::default();
+                draft.set(&current_text(value).unwrap_or_default());
+                self.mode = Mode::Field(Field {
+                    key: row.key.clone(),
+                    layer,
+                    number: row.control == SettingControl::Number,
+                    draft,
+                });
+                Act::Stay
+            }
+            (SettingControl::StringList | SettingControl::RepositoryExtensions, value) => {
+                let entries = match value {
+                    Shown::Value(text) => {
+                        serde_json::from_str::<Vec<Value>>(text).unwrap_or_default()
+                    }
+                    Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => Vec::new(),
+                };
+                self.page = Some(Page {
+                    key: row.key.clone(),
+                    label: row.presentation.label.clone(),
+                    layer,
+                    objects: row.control == SettingControl::RepositoryExtensions,
+                    entries,
+                    list: List::gutter(),
+                    field: None,
+                });
+                Act::Stay
+            }
+        }
+    }
+
+    /// Writes one fixed value, and applies the theme once it saved.
+    fn step(&mut self, ctx: &Ctx<'_>, layer: Layer, key: &str, name: Option<String>) -> Act {
+        let Some(name) = name else {
+            return Act::Stay;
+        };
+        if !self.save(ctx, layer, key, &quoted(&name)) {
+            return Act::Stay;
+        }
+        if key == THEME {
+            return Act::Theme(ctx.seam.theme(ctx.workspace, &name));
+        }
+        Act::Stay
+    }
+
+    /// Tab: moves the focused value to the next layer its key allows.
+    /// The destination is written first and the source removed after, so
+    /// a refused write leaves the value where it was and a refused removal
+    /// leaves it in both places and says so.
+    fn move_layer(&mut self, ctx: &Ctx<'_>) -> Act {
+        self.said.clear();
+        let Some(row) = self.selected().cloned() else {
+            return Act::Stay;
+        };
+        if is_run(&row) {
+            return Act::Stay;
+        }
+        let Shown::Value(original) = &row.value else {
+            return Act::Stay;
+        };
+        let allowed = layers(row.scope);
+        let from = Self::write_layer(&row);
+        let Some(at) = allowed.iter().position(|layer| *layer == from) else {
+            return Act::Stay;
+        };
+        let to = allowed
+            .get(at.saturating_add(1) % allowed.len().max(1))
+            .copied()
+            .unwrap_or(from);
+        if to == from {
+            return Act::Stay;
+        }
+        if let Err(error) = ctx.seam.set(ctx.workspace, to, &row.key, original) {
+            self.said = vec![error.message];
+            return Act::Stay;
+        }
+        // A default has no file to take it out of.
+        let from_file = layer_named(&row.layer);
+        let removed = from_file.map(|layer| {
+            ctx.seam
+                .reset(ctx.workspace, layer, &row.key, original)
+                .map(|_| layer)
+        });
+        self.reread(ctx);
+        self.said = match removed {
+            None => vec![format!("Saved to {} config.", layer_name(to))],
+            Some(Ok(layer)) => vec![format!(
+                "Moved from {} to {} config.",
+                layer_name(layer),
+                layer_name(to)
+            )],
+            Some(Err(error)) => vec![format!(
+                "Saved to {} config, but removing it from {} failed: {}",
+                layer_name(to),
+                row.layer,
+                error.message
+            )],
+        };
+        self.theme_after(&row.key, ctx)
+    }
+
+    /// Delete: removes the focused value's override so the inherited value
+    /// applies.
+    fn reset(&mut self, ctx: &Ctx<'_>) -> Act {
+        self.said.clear();
+        let Some(row) = self.selected().cloned() else {
+            return Act::Stay;
+        };
+        if is_run(&row) {
+            return Act::Stay;
+        }
+        let (Shown::Value(expected), Some(layer)) = (&row.value, layer_named(&row.layer)) else {
+            return Act::Stay;
+        };
+        match ctx.seam.reset(ctx.workspace, layer, &row.key, expected) {
+            Ok(_) => {
+                self.reread(ctx);
+                self.said = vec![format!(
+                    "Removed {} from {} config.",
+                    row.key,
+                    layer_name(layer)
+                )];
+                self.theme_after(&row.key, ctx)
+            }
+            Err(error) => {
+                self.said = vec![error.message];
+                Act::Stay
+            }
+        }
+    }
+
+    /// The theme to apply after a change to `key`: the effective one, once
+    /// the row is read again.
+    fn theme_after(&self, key: &str, ctx: &Ctx<'_>) -> Act {
+        if key == THEME {
+            Act::Theme(ctx.seam.theme(ctx.workspace, &self.theme_name()))
+        } else {
+            Act::Stay
+        }
+    }
+
+    // The field.
+
+    /// A key in the edit field: typing, Enter to write, Esc to close it
+    /// writing nothing.
+    fn field_key(&mut self, key: &Key, ctx: &Ctx<'_>) {
+        if *key == Key::Enter {
+            self.submit(ctx);
+            return;
+        }
+        if *key == Key::Esc {
+            self.mode = Mode::Rows;
+            self.said.clear();
+            return;
+        }
+        let Mode::Field(field) = &mut self.mode else {
+            return;
+        };
+        if let Key::Char(ch) = key {
+            field.draft.insert(*ch);
+        } else if *key == Key::Backspace {
+            field.draft.backspace();
+        }
+    }
+
+    /// Writes the field's text. A saved write closes the field; a refused
+    /// one keeps it, with the draft, and says why.
+    fn submit(&mut self, ctx: &Ctx<'_>) {
+        let Mode::Field(field) = &self.mode else {
+            return;
+        };
+        let typed = field.draft.expand();
+        let text = if field.number {
+            typed.trim().to_owned()
+        } else {
+            quoted(&typed)
+        };
+        let (layer, key) = (field.layer, field.key.clone());
+        if self.save(ctx, layer, &key, &text) {
+            self.mode = Mode::Rows;
+        }
+    }
+
+    // The legacy theme choices.
+
+    /// Opens the theme choices over the `tui.theme` row. A theme the run's
+    /// `-c` sets is read-only, so the choices stay shut and the row says
+    /// where its value comes from.
+    fn open_choices(&mut self, ctx: &Ctx<'_>) {
+        if self.rows.iter().any(|row| row.key == THEME && is_run(row)) {
+            return;
+        }
+        let current = self
+            .rows
+            .iter()
+            .find(|row| row.key == THEME)
+            .and_then(|row| match &row.value {
+                Shown::Value(value) => Some(as_typed(value)),
+                Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
+            });
+        let mut names: Vec<String> = BUILT_IN_THEMES.map(str::to_owned).to_vec();
+        names.extend(
+            ctx.seam
+                .themes(ctx.workspace)
+                .into_iter()
+                .filter(|name| !BUILT_IN_THEMES.contains(&name.as_str())),
+        );
+        let mut list = List::gutter();
+        let at = names
+            .iter()
+            .position(|name| Some(name) == current.as_ref())
+            .unwrap_or(0);
+        list.select(at, names.len(), self.shown(ctx));
+        self.mode = Mode::Choices {
+            names,
+            current,
+            list,
+        };
+    }
+
+    /// Writes theme `name` to the global `tui.theme`, then asks for it to
+    /// apply. A failed write applies nothing.
+    fn choose(&mut self, name: &str, ctx: &Ctx<'_>) -> Act {
+        if self.save(ctx, Layer::Global, THEME, &quoted(name)) {
+            self.mode = Mode::Rows;
+            return Act::Theme(ctx.seam.theme(ctx.workspace, name));
+        }
+        Act::Stay
+    }
+}
+
+/// A value's text as a field takes it: a string bare, anything else as
+/// its JSON.
+fn current_text(value: &Shown) -> Option<String> {
+    match value {
+        Shown::Value(text) => Some(as_typed(text)),
+        Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
+    }
+}
+
+/// The choice after `current` in `choices`, wrapping from the last to the
+/// first; the first when `current` is none of them. `None` for no choices.
+fn next_choice(choices: &[String], current: Option<&str>) -> Option<String> {
+    let at = current.and_then(|current| choices.iter().position(|name| name == current));
+    let to = match at {
+        Some(at) => at.saturating_add(1) % choices.len().max(1),
+        None => 0,
+    };
+    choices.get(to).cloned()
+}
+
+// The list sub-page.
+
+impl Settings {
+    /// A key on the list sub-page.
+    fn page_key(&mut self, key: &Key, ctx: &Ctx<'_>) {
+        let shown = self.shown(ctx);
+        let Some(page) = self.page.as_mut() else {
+            return;
+        };
+        if let Some(field) = page.field.as_mut() {
+            if *key == Key::Enter {
+                self.page_submit(ctx);
+            } else if *key == Key::Esc {
+                page.field = None;
+                self.said.clear();
+            } else if let Key::Char(ch) = key {
+                field.draft.insert(*ch);
+            } else if *key == Key::Backspace {
+                field.draft.backspace();
+            }
+            return;
+        }
+        let rows = page.entries.len().saturating_add(1);
+        let at = page.list.selected().min(page.entries.len());
+        if *key == Key::Esc {
+            self.page = None;
+            self.said.clear();
+        } else if *key == Key::Enter {
+            let entry = page.entries.get(at);
+            let mut draft = Draft::default();
+            draft.set(&entry.map(entry_path).unwrap_or_default());
+            page.field = Some(PageField {
+                at: entry.map(|_| at),
+                draft,
+            });
+            self.said.clear();
+        } else if *key == Key::Char(' ') {
+            if page.objects && at < page.entries.len() {
+                self.page_flip(at, ctx);
+            }
+        } else if *key == Key::AltUp {
+            self.page_move(at, false, ctx);
+        } else if *key == Key::AltDown {
+            self.page_move(at, true, ctx);
+        } else if page.list.key(key, rows, shown) {
+            self.said.clear();
+        }
+    }
+
+    /// Puts the page's focus on entry `at` (or "+ Add" past the last).
+    fn page_select(&mut self, at: usize, ctx: &Ctx<'_>) {
+        let shown = self.shown(ctx);
+        if let Some(page) = &mut self.page {
+            let rows = page.entries.len().saturating_add(1);
+            page.list.select(at, rows, shown);
+        }
+    }
+
+    /// Saves `candidate` as the whole list; on success it becomes the
+    /// page's entries. Whether it saved.
+    fn page_commit(&mut self, candidate: Vec<Value>, ctx: &Ctx<'_>) -> bool {
+        let Some(page) = &self.page else {
+            return false;
+        };
+        let (layer, key) = (page.layer, page.key.clone());
+        let text = Value::Array(candidate.clone()).to_string();
+        if !self.save(ctx, layer, &key, &text) {
+            return false;
+        }
+        if let Some(page) = &mut self.page {
+            page.entries = candidate;
+        }
+        true
+    }
+
+    /// Enter in the page's field: adds or edits the entry.
+    fn page_submit(&mut self, ctx: &Ctx<'_>) {
+        let Some(page) = &self.page else {
+            return;
+        };
+        let Some(field) = &page.field else {
+            return;
+        };
+        let typed = field.draft.expand();
+        let mut candidate = page.entries.clone();
+        let at = field.at;
+        match at.and_then(|at| candidate.get_mut(at)) {
+            Some(entry) => set_path(entry, &typed),
+            None => candidate.push(new_entry(page.objects, &typed)),
+        }
+        let focus = at.unwrap_or(candidate.len().saturating_sub(1));
+        if self.page_commit(candidate, ctx) {
+            if let Some(page) = &mut self.page {
+                page.field = None;
+            }
+            self.page_select(focus, ctx);
+        }
+    }
+
+    /// Space on an object entry: flips `required`.
+    fn page_flip(&mut self, at: usize, ctx: &Ctx<'_>) {
+        let Some(mut candidate) = self.page.as_ref().map(|page| page.entries.clone()) else {
+            return;
+        };
+        if let Some(Value::Object(entry)) = candidate.get_mut(at) {
+            let required = entry
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            entry.insert("required".to_owned(), Value::Bool(!required));
+        }
+        self.page_commit(candidate, ctx);
+    }
+
+    /// Delete: removes the focused entry. "+ Add" has none.
+    fn page_remove(&mut self, ctx: &Ctx<'_>) {
+        let Some(page) = &self.page else {
+            return;
+        };
+        let at = page.list.selected();
+        if at >= page.entries.len() {
+            return;
+        }
+        let mut candidate = page.entries.clone();
+        candidate.remove(at);
+        if self.page_commit(candidate, ctx) {
+            self.page_select(at, ctx);
+        }
+    }
+
+    /// ⌥↑ and ⌥↓: moves the focused entry one place; at either end, or on
+    /// "+ Add", nothing moves.
+    fn page_move(&mut self, at: usize, down: bool, ctx: &Ctx<'_>) {
+        let Some(page) = &self.page else {
+            return;
+        };
+        let to = if down {
+            at.saturating_add(1)
+        } else {
+            at.saturating_sub(1)
+        };
+        if at >= page.entries.len() || to >= page.entries.len() || to == at {
+            return;
+        }
+        let mut candidate = page.entries.clone();
+        candidate.swap(at, to);
+        if self.page_commit(candidate, ctx) {
+            self.page_select(to, ctx);
+        }
+    }
+}
+
+/// An entry's text: the string, or an object's `path`.
+fn entry_path(entry: &Value) -> String {
+    match entry {
+        Value::String(text) => text.clone(),
+        Value::Object(object) => object
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) => String::new(),
+    }
+}
+
+/// Replaces an entry's text; an object keeps every other member.
+fn set_path(entry: &mut Value, text: &str) {
+    match entry {
+        Value::Object(object) => {
+            object.insert("path".to_owned(), Value::String(text.to_owned()));
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            *entry = Value::String(text.to_owned());
+        }
+    }
+}
+
+/// A new entry: a string, or an object with `required` off.
+fn new_entry(objects: bool, text: &str) -> Value {
+    if objects {
+        serde_json::json!({"path": text, "required": false})
+    } else {
+        Value::String(text.to_owned())
+    }
+}
+
+// Drawing.
+
+/// A footer of `keys` (bold) and what they do, as the doc words it:
+/// `("Enter", " save · ")`, ...
+fn footer(parts: &[(&str, &str)]) -> (String, Vec<Span>) {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let mut plain = String::new();
+    let mut spans = Vec::new();
+    for (key, what) in parts {
+        plain.push_str(key);
+        plain.push_str(what);
+        spans.push(((*key).to_owned(), bold));
+        spans.push(((*what).to_owned(), Ink::Muted.style()));
+    }
+    (plain, spans)
+}
+
+impl Settings {
+    /// The frame to draw at `width` by `height`.
+    pub(crate) fn frame(&self, width: usize, height: usize, usage: Option<u64>) -> Frame {
+        if let Some(page) = &self.page {
+            return self.page_frame(page, width, height);
+        }
         match &self.mode {
             Mode::Choices {
                 names,
@@ -735,128 +1855,270 @@ impl Settings {
                 below: self.said.clone(),
                 field: None,
                 footer: "↑↓ move · Enter choose · Esc back".to_owned(),
+                chrome: None,
             },
-            Mode::Rows => {
-                let below = if self.said.is_empty() {
-                    self.selected()
-                        .map(|row| vec![applies_text(&row.key, usage)])
-                        .unwrap_or_default()
-                } else {
-                    self.said.clone()
-                };
-                Frame {
-                    joins: Vec::new(),
-                    title: "Settings".to_owned(),
-                    command: "/settings".to_owned(),
-                    rows: self.lines(width),
-                    list: self.rows_list(),
-                    below,
-                    field: None,
-                    footer: "Ctrl+G opens the file".to_owned(),
-                }
-            }
-            Mode::Field(field) => {
-                let key = self.selected().map_or("", |row| row.key.as_str());
-                let mut below = self.said.clone();
-                if field.redacted {
-                    below.push("The stored value is hidden; what you type replaces it.".to_owned());
-                }
-                below.push(format!(
-                    "{key}, written to the {} file:",
-                    layer_name(field.layer())
-                ));
-                Frame {
-                    joins: Vec::new(),
-                    title: "Settings".to_owned(),
-                    command: "/settings".to_owned(),
-                    rows: self.lines(width),
-                    list: self.rows_list(),
-                    below,
-                    field: Some((field.draft.expand(), field.draft.position())),
-                    footer: "Tab layer · Enter save · Esc cancel".to_owned(),
-                }
-            }
+            Mode::Rows | Mode::Field(_) => self.rows_frame(width, height, usage),
         }
     }
 
-    /// The list the rows draw with: with no key to focus, none is marked.
-    fn rows_list(&self) -> List {
-        if self.rows.is_empty() {
+    /// The open tab.
+    fn rows_frame(&self, width: usize, height: usize, usage: Option<u64>) -> Frame {
+        let layout = self.layout(width, height, usage);
+        let list = if layout.takes.is_empty() {
             self.list.blur()
         } else {
-            self.list
+            self.list_over(&layout)
+        };
+        let editing = match &self.mode {
+            Mode::Field(field) => layout.focus.map(|line| (line, field)),
+            Mode::Rows | Mode::Choices { .. } => None,
+        };
+        let rows = layout
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(at, line)| match line {
+                Line::Blank => Vec::new(),
+                Line::Note(note) => vec![((note).clone(), None, Ink::Muted)],
+                Line::Item(item) => self.cells(
+                    *item,
+                    &layout,
+                    width,
+                    editing.is_some_and(|(line, _)| line == at),
+                ),
+            })
+            .collect();
+        let draft = editing.map(|(row, field)| Inline {
+            row,
+            column: layout.label_col.saturating_add(GAP),
+            text: field.draft.expand(),
+            caret: field.draft.position(),
+        });
+        let (plain, spans) = if draft.is_some() {
+            footer(&[("Enter", " save · "), ("Esc", " cancel")])
+        } else {
+            footer(&[
+                ("←→", " tab · "),
+                ("/", " search · "),
+                ("Enter", " change · "),
+                ("Tab", " layer · "),
+                ("Delete", " reset"),
+            ])
+        };
+        Frame {
+            joins: Vec::new(),
+            title: "Settings".to_owned(),
+            command: "/settings".to_owned(),
+            rows,
+            list,
+            below: layout.below,
+            field: None,
+            footer: plain,
+            chrome: Some(Chrome {
+                top: layout.top,
+                draft,
+                footer: spans,
+            }),
         }
     }
 
-    /// The table: a dim header row, then one line per key as aligned
-    /// columns of key, value and layer. The value column is cut with `…`
-    /// to the room the key and layer columns leave, so the layer column
-    /// stays where it is; a key wider than its column pushes its value.
-    fn lines(&self, width: usize) -> Vec<Vec<(String, Option<Spot>, Ink)>> {
-        if self.rows.is_empty() {
-            return Vec::new();
+    /// One row's cells: the label, the value, then the layer it comes from
+    /// when that is not global. A row being edited keeps its label only;
+    /// the field draws over its value.
+    fn cells(
+        &self,
+        item: Item,
+        layout: &Layout,
+        width: usize,
+        editing: bool,
+    ) -> Vec<(String, Option<Spot>, Ink)> {
+        let label = text::cut(&self.label_of(item), layout.label_col, "…");
+        let pad = layout
+            .label_col
+            .saturating_sub(text::width(&label))
+            .saturating_add(GAP);
+        let mut cells = vec![(format!("{label}{}", " ".repeat(pad)), None, Ink::Plain)];
+        if editing {
+            return cells;
         }
-        let key_col = self
-            .rows
-            .iter()
-            .map(|row| text::width(&row.key))
-            .chain(["key".len()])
-            .max()
-            .unwrap_or(0)
-            .min(KEY_COLUMN);
-        let values: Vec<String> = self.rows.iter().map(shown_value).collect();
-        let room = width.saturating_sub(key_col + LAYER_COLUMN + GAPS + GUTTER);
-        let value_col = values
-            .iter()
-            .map(|value| text::width(value))
-            .chain(["value".len()])
-            .max()
-            .unwrap_or(0)
-            .min(room);
-        let line = |key: &str, value: &str, layer: &str, ink: Ink| {
-            let key_pad = key_col.saturating_sub(text::width(key)) + GAP;
-            let value = text::cut(value, value_col, "…");
-            let value_pad = value_col.saturating_sub(text::width(&value)) + GAP;
-            vec![
-                (format!("{key}{}", " ".repeat(key_pad)), None, ink),
-                (format!("{value}{}", " ".repeat(value_pad)), None, ink),
-                (layer.to_owned(), None, ink),
-            ]
+        let (value, tag) = match item {
+            Item::Screen(screen) => (
+                screen
+                    .row()
+                    .map_or_else(String::new, |row| format!("Open {} ›", row.command)),
+                None,
+            ),
+            Item::Key(at) => self
+                .row(at)
+                .map_or_else(|| (String::new(), None), shown_value),
         };
-        let mut lines = vec![line("key", "value", "layer", Ink::Muted)];
-        lines.extend(
-            self.rows
-                .iter()
-                .zip(&values)
-                .map(|(row, value)| line(&row.key, value, &row.layer, Ink::Plain)),
+        // A search annotates each result with its own tab, dim at the
+        // right: the value is cut short of the annotation, keeping the
+        // layer tag whole.
+        let annotation: Option<String> = self.search.as_ref().map(|_| {
+            let tab = match item {
+                Item::Key(at) => self.row(at).and_then(|row| row.presentation.tab),
+                Item::Screen(screen) => screen.row().and_then(|row| row.metadata.tab),
+            };
+            tab.map(tab_name).unwrap_or_default().to_owned()
+        });
+        let annotation_room = annotation
+            .as_ref()
+            .map_or(0, |name| text::width(name) + GAP);
+        let tag_room = tag.as_ref().map_or(0, |tag| text::width(tag) + GAP);
+        let room = width
+            .saturating_sub(GUTTER + layout.label_col + GAP + tag_room + annotation_room)
+            .max(1);
+        let shown = text::cut(&value, room, "…");
+        let mut used = GUTTER + layout.label_col + GAP + text::width(&shown);
+        cells.push((shown, None, Ink::Plain));
+        if let Some(tag) = tag {
+            used = used.saturating_add(GAP + text::width(&tag));
+            cells.push((format!("{}{tag}", " ".repeat(GAP)), None, Ink::Muted));
+        }
+        if let Some(name) = annotation {
+            let gap = width.saturating_sub(used + text::width(&name));
+            cells.push((format!("{}{name}", " ".repeat(gap)), None, Ink::Muted));
+        }
+        cells
+    }
+
+    /// The list sub-page.
+    fn page_frame(&self, page: &Page, width: usize, height: usize) -> Frame {
+        let editing = page.field.as_ref();
+        let col = page
+            .entries
+            .iter()
+            .map(|entry| text::width(&entry_path(entry)))
+            .max()
+            .unwrap_or(0)
+            .min(width.saturating_sub(GUTTER + 16));
+        let mut rows: Vec<Vec<(String, Option<Spot>, Ink)>> = page
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(at, entry)| {
+                if editing.is_some_and(|field| field.at == Some(at)) {
+                    return Vec::new();
+                }
+                let path = text::controls_to_space(&entry_path(entry));
+                if !page.objects {
+                    return vec![(path, None, Ink::Plain)];
+                }
+                let required = entry
+                    .get("required")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let path = text::cut(&path, col, "…");
+                let pad = col.saturating_sub(text::width(&path)).saturating_add(GAP);
+                vec![
+                    (format!("{path}{}", " ".repeat(pad)), None, Ink::Plain),
+                    (
+                        if required {
+                            "[x] required"
+                        } else {
+                            "[ ] required"
+                        }
+                        .to_owned(),
+                        None,
+                        Ink::Plain,
+                    ),
+                ]
+            })
+            .collect();
+        let add_row = page.entries.len();
+        rows.push(if editing.is_some_and(|field| field.at.is_none()) {
+            Vec::new()
+        } else {
+            vec![("+ Add".to_owned(), None, Ink::Plain)]
+        });
+        let draft = editing.map(|field| Inline {
+            row: field.at.unwrap_or(add_row),
+            column: 0,
+            text: field.draft.expand(),
+            caret: field.draft.position(),
+        });
+        let room = height.saturating_sub(2 + MIN_BODY);
+        let below: Vec<String> = self.said.iter().rev().take(room).rev().cloned().collect();
+        let (plain, spans) = if draft.is_some() {
+            footer(&[("Enter", " save · "), ("Esc", " cancel")])
+        } else {
+            footer(&[
+                ("Enter", " edit · "),
+                ("Delete", " remove · "),
+                ("⌥↑⌥↓", " move · "),
+                ("Esc", " back"),
+            ])
+        };
+        let mut list = page.list;
+        list.select(
+            page.list.selected(),
+            rows.len(),
+            height.saturating_sub(2 + below.len()),
         );
-        lines
+        Frame {
+            joins: Vec::new(),
+            title: page.label.clone(),
+            command: "/settings".to_owned(),
+            rows,
+            list,
+            below,
+            field: None,
+            footer: plain,
+            chrome: Some(Chrome {
+                top: Vec::new(),
+                draft,
+                footer: spans,
+            }),
+        }
     }
 }
 
-/// A key's effective value as the table says it: a string bare, as
-/// `fiber config set` takes it, anything else as its JSON, a union as
-/// its names and layers.
-fn shown_value(row: &SettingRow) -> String {
-    let value = match &row.value {
-        Shown::Unset => "unset".to_owned(),
-        Shown::Value(value) => as_typed(value),
-        Shown::Redacted(value) => value.clone(),
-        Shown::Union { names, .. } => names
+/// A row's value as the tab says it, and the layer tag after it when the
+/// value is set anywhere but global.
+fn shown_value(row: &SettingRow) -> (String, Option<String>) {
+    let list_text = |text: &str| {
+        let names: Vec<String> = serde_json::from_str::<Vec<Value>>(text)
+            .unwrap_or_default()
+            .iter()
+            .map(entry_path)
+            .collect();
+        if names.is_empty() {
+            "none".to_owned()
+        } else {
+            names.join(", ")
+        }
+    };
+    let value = match (&row.control, &row.value) {
+        (_, Shown::Redacted(text)) => text.clone(),
+        (_, Shown::Union { names, .. }) => names
             .iter()
             .map(|(name, layer)| format!("{name} ({layer})"))
             .collect::<Vec<_>>()
             .join(", "),
+        (
+            SettingControl::Fixed(_) | SettingControl::Theme | SettingControl::Boolean,
+            Shown::Unset,
+        ) => "Default".to_owned(),
+        (SettingControl::Boolean, Shown::Value(text)) => {
+            if text == "true" { "[x] On" } else { "[ ] Off" }.to_owned()
+        }
+        (SettingControl::Model, Shown::Unset) => "Not set ›".to_owned(),
+        (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
+        (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Unset) => {
+            "none ›".to_owned()
+        }
+        (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Value(text)) => {
+            format!("{} ›", list_text(text))
+        }
+        (_, Shown::Unset) => "Not set".to_owned(),
+        (_, Shown::Value(text)) => as_typed(text),
     };
-    text::controls_to_space(&value)
-}
-
-/// `layer`'s own list in a union, as the field takes it; `[]` when the
-/// layer sets none.
-fn own_list(own: &[(Layer, String)], layer: Layer) -> String {
-    own.iter()
-        .find(|(at, _)| *at == layer)
-        .map_or_else(|| "[]".to_owned(), |(_, list)| list.clone())
+    let tag = match (&row.value, row.layer.as_str()) {
+        (Shown::Unset, _) | (_, "global" | "default") => None,
+        (_, layer) => Some(layer.to_owned()),
+    };
+    (text::controls_to_space(&value), tag)
 }
 
 #[cfg(test)]

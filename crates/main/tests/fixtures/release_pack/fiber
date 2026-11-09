@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$FIBER_RELEASE_PACK_REAL_BINARY" "$@"

@@ -161,7 +161,7 @@ impl Tool for Skill {
                 text: format!("{listing}\n\n{body}"),
             }],
             control: Some(Control {
-                handoff: None,
+                compact: None,
                 questions: None,
                 skill: Some(SkillLoad {
                     name,

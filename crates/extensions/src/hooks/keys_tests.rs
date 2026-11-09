@@ -20,9 +20,9 @@ use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::clock::Wake;
-use contract::events::{CallStatus, HandoffTrigger, InputItem, Notice};
+use contract::events::{CallStatus, CompactionTrigger, InputItem, Notice};
 use contract::hook::{
-    AfterToolCall, BeforeHandoff, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks,
+    AfterToolCall, BeforeCompaction, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks,
     MessageSender, SessionStart, StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process, Tokens, Usage};
@@ -175,7 +175,7 @@ const SUPPORTED: &[(&str, &[&str])] = &[
     ("before_model_call", &["refuse"]),
     ("after_tool", &["content", "details", "artifact"]),
     ("turn_end", &["message"]),
-    ("before_handoff", &["note"]),
+    ("before_compaction", &["note"]),
 ];
 
 /// A hook returning `key`'s valid value at `point`. Panics on a key
@@ -196,7 +196,7 @@ fn returning(point: &str, key: &str) -> String {
         ("after_tool", "content") => "return { content = \"y\" }".to_owned(),
         ("after_tool", "details") => "return { details = { n = 1 } }".to_owned(),
         ("after_tool", "artifact") => "return { artifact = \"a\" }".to_owned(),
-        ("before_handoff", "note") => "return { note = \"Next.\" }".to_owned(),
+        ("before_compaction", "note") => "return { note = \"Next.\" }".to_owned(),
         _ => panic!("no valid `{key}` value for `{point}`"),
     };
     hook(point, &body)
@@ -212,7 +212,7 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
             let id = SessionId("s_4c1d".into());
             session
                 .session_start(&SessionStart {
-                    reason: StartReason::Handoff,
+                    reason: StartReason::Compaction,
                     session_id: &id,
                     workspace: "/w",
                     cancel: &NEVER,
@@ -235,7 +235,7 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 InputItem::Jobs {
                     job_ids: vec![contract::JobId("j_1".into())],
                 },
-                InputItem::Handoff {
+                InputItem::Compaction {
                     command_id: contract::CommandId("c_2".into()),
                 },
             ];
@@ -287,14 +287,14 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 })
                 .notices
         }
-        "before_handoff" => {
+        "before_compaction" => {
             let conversation = vec![contract::provider::Input::User {
                 text: "hi".into(),
                 images: Vec::new(),
             }];
             session
-                .before_handoff(&BeforeHandoff {
-                    trigger: HandoffTrigger::Auto,
+                .before_compaction(&BeforeCompaction {
+                    trigger: CompactionTrigger::Auto,
                     instructions: Some("Focus."),
                     conversation: &conversation,
                     cancel: &NEVER,
@@ -397,10 +397,10 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 })
                 .notices
         }
-        "before_handoff" => {
+        "before_compaction" => {
             session
-                .before_handoff(&BeforeHandoff {
-                    trigger: HandoffTrigger::Auto,
+                .before_compaction(&BeforeCompaction {
+                    trigger: CompactionTrigger::Auto,
                     instructions: None,
                     conversation: &[],
                     cancel: &NEVER,
@@ -456,7 +456,7 @@ fn the_table_names_the_eight_points() {
             "before_model_call",
             "after_tool",
             "turn_end",
-            "before_handoff"
+            "before_compaction"
         ]
     );
 }
@@ -470,7 +470,7 @@ fn each_point_is_given_exactly_the_tables_keys() {
         // returns one, and the probe errors with what it was shown.
         let probe = "local keys = {} for k in pairs(call) do keys[#keys + 1] = k end \
              table.sort(keys) error(table.concat(keys, \",\"))";
-        if point == "before_handoff" {
+        if point == "before_compaction" {
             home.install("a", &hook(&point, r#"return { note = "earlier" }"#));
             home.install("b", &hook(&point, probe));
         } else {

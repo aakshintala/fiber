@@ -571,10 +571,10 @@ impl Hooks for MessageHooks {
             notices: Vec::new(),
         }
     }
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
     fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
@@ -770,7 +770,7 @@ fn prepared() -> ReloadPrepared {
             reviewer_notes: "new notes".into(),
             limits: Default::default(),
             retry: Default::default(),
-            handoff: Default::default(),
+            compaction: Default::default(),
             budget: None,
             idle_exit: None,
             warm_cap: None,
@@ -888,7 +888,7 @@ fn texts(conversation: &[Input]) -> String {
 }
 
 /// A fork past the nudge threshold names its own log in the nudge and in
-/// the handoff note request, not its parent's (`docs/handoff.md`,
+/// the compaction note request, not its parent's (`docs/compaction.md`,
 /// "Looking back").
 #[test]
 fn a_forked_nudge_and_note_name_the_forks_own_log() {
@@ -928,7 +928,7 @@ fn a_forked_nudge_and_note_name_the_forks_own_log() {
         "{nudge:?}"
     );
     assert!(!nudge.contains("s_test"), "{nudge:?}");
-    // The automatic handoff at 400_000 tokens asks for the note against
+    // The automatic compaction at 400_000 tokens asks for the note against
     // the fork's own log too.
     let asked = user(requests[2].conversation.last().unwrap());
     assert!(
