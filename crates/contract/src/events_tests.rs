@@ -427,6 +427,53 @@ fn directory_added_round_trips_with_its_resolved_path() {
     );
 }
 
+#[test]
+fn a_shell_command_without_a_command_id_reads_as_none_and_writes_back_without_the_key() {
+    let payload =
+        json!({"command": "ls", "output": "o", "process": {"exit_code": 0, "timed_out": false}});
+    let event = read("shell_command", payload.clone()).unwrap().unwrap();
+    let Event::ShellCommand(line) = &event else {
+        panic!("a shell_command line: {event:?}");
+    };
+    assert_eq!(line.command_id, None);
+    assert_eq!(
+        serde_json::to_value(event.payload().unwrap()).unwrap(),
+        payload
+    );
+    let paired = read(
+        "shell_command",
+        json!({"command_id": "c_bang", "command": "ls", "output": "o",
+        "process": {"exit_code": 0, "timed_out": false}}),
+    )
+    .unwrap()
+    .unwrap();
+    let Event::ShellCommand(line) = &paired else {
+        panic!("a shell_command line: {paired:?}");
+    };
+    assert_eq!(line.command_id, Some(CommandId("c_bang".to_owned())));
+}
+
+#[test]
+fn the_shell_command_start_is_durable_and_its_delta_is_not() {
+    let started = read(
+        "shell_command_started",
+        json!({"command_id": "c_bang", "command": "ls"}),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(started.class(), Class::Durable);
+    let delta = read(
+        "shell_command_delta",
+        json!({"command_id": "c_bang", "text": "o"}),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(delta.class(), Class::Ephemeral);
+    // Both keys are required: a payload missing one does not read.
+    assert!(read("shell_command_started", json!({"command_id": "c_bang"})).is_err());
+    assert!(read("shell_command_delta", json!({"text": "o"})).is_err());
+}
+
 /// One payload per kind, or more where the doc makes keys exclusive, with
 /// every key the doc lists for it.
 fn samples() -> Vec<(&'static str, Value)> {
@@ -511,8 +558,16 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "shell_command",
-            json!({"command": "ls", "output": "o", "artifact": "artifacts/o.log",
-            "process": process}),
+            json!({"command_id": "c_bang", "command": "ls", "output": "o",
+            "artifact": "artifacts/o.log", "process": process}),
+        ),
+        (
+            "shell_command_started",
+            json!({"command_id": "c_bang", "command": "ls"}),
+        ),
+        (
+            "shell_command_delta",
+            json!({"command_id": "c_bang", "text": "o"}),
         ),
         ("session_named", json!({"name": null, "by": "person"})),
         ("directory_added", json!({"path": "/shared"})),

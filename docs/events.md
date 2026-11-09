@@ -433,13 +433,51 @@ Ephemeral. Written whenever the queue changes; the latest wins.
 
 Durable. A command the person ran with `send` true (`docs/invocation.md`,
 `shell`), written when the command ends. It joins the next turn's input.
+Its `shell_command_started` comes before it in the log, with the same
+`command_id`; a command that could not start ends here too, with the
+failure as `output`.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
+| `command_id` | string | no | the driver command's id, pairing the end with its `shell_command_started`; absent on a line written before that kind existed |
 | `command` | string | yes | the command as typed |
-| `output` | string | yes | its output, cut as a shell call's result is (`docs/tools.md`, "Result and output") |
+| `output` | string | yes | its output, cut as a shell call's result is (`docs/tools.md`, "Result and output"); for a command that could not start, `<code>: <message>`, the error as the sender was answered |
 | `artifact` | string | no | the full output's path, when cut |
-| `process` | `process` | yes | how it ended |
+| `process` | `process` | yes | how it ended; a command that could not start has neither `exit_code` nor `signal` |
+
+#### `shell_command_started`
+
+Durable. A command the person ran with `send` true, written when the loop
+takes its start, before the command starts, so before any of its
+`shell_command_delta` lines and before its `shell_command`. It is written
+while a turn runs too, at the next point the loop reads its inbox: while a
+tool call runs, at a step boundary, and when a model response ends if one
+is streaming. Fsynced before the command starts (the third exception
+in "Writing"). It renders nothing to the model: only `shell_command` joins
+the next turn's input.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `command_id` | string | yes | the driver command's id |
+| `command` | string | yes | the command as typed |
+
+A client folds it as a live row for `command_id`: the command, then its
+output so far from the deltas, then no ending until `shell_command` with the
+same `command_id` replaces the row. A client that attaches mid-run reads
+this line and every delta after it attaches, and the full output when
+`shell_command` lands; output that streamed before it attached is not
+replayed. A command run with `send` false writes neither line.
+
+#### `shell_command_delta`
+
+Ephemeral. Output a running command added, paced as `job_delta` is. With
+`send` true it goes to every attached client; with `send` false it goes
+only to the client that sent the command, and is never logged.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `command_id` | string | yes | the driver command's id |
+| `text` | string | yes | output added since the last delta, at most the newest 64 KiB of it, starting at a character boundary; the whole output is in `shell_command`'s `output` or, for `send` false, in the command's answer |
 
 #### `session_named`
 
@@ -1555,6 +1593,7 @@ What the reader can tell about work that was in flight, from the log alone:
 |---|---|
 | `tool_call_requested`, no `tool_call_started` | provably never ran; safe to run or discard |
 | `tool_call_requested` with `provider_item` | the provider ran it; Fiber never reviews, runs or answers it on resume |
+| `shell_command_started`, no `shell_command` | the session ended before the run's end was written: the process died, or the run outlived the shutdown's last drain; Fiber never re-runs it, and nothing from it joins the next turn's input |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
 | `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, except for a Fiber delegate whose own log's latest run holds `fiber_exited`, which is settled from it |
@@ -1713,9 +1752,10 @@ there. A person moves with `/cd <path>` in the terminal, a driver with the
 ## Writing
 
 **Fsync the record of a side effect after it happens and before causing the
-next one.** Two exceptions, both because the effect costs money or touches the
-world: `tool_call_started` is fsynced *before* the tool runs, and
-`assistant_message_started` *before* the model request is sent. Two fsyncs
+next one.** Three exceptions, all because the effect costs money or touches the
+world: `tool_call_started` is fsynced *before* the tool runs,
+`assistant_message_started` *before* the model request is sent, and
+`shell_command_started` *before* the command starts. Two fsyncs
 bracket each effect, so a quiet text turn costs two. `step_started` records no
 effect and is flushed with the step's first fsync.
 

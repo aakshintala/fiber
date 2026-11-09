@@ -1,5 +1,4 @@
-//! `recent.jsonl` at the top of Fiber home (`docs/state.md`, "Recently
-//! exited sessions"): one JSON line per session that exited. A session
+//! `recent.jsonl` at the top of Fiber home (`docs/state.md`, "What each part holds"): one JSON line per session that exited. A session
 //! appends its own row as it exits; the hub appends a crashed session's.
 //! Nothing rewrites the file, and every reader skips a row whose session
 //! directory is gone.

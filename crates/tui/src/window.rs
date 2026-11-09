@@ -5,13 +5,14 @@
 //! totals, which its ▣ line draws, are kept for the whole session.
 
 use contract::events::EventKind;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
 use contract::events::{JobStarted, TurnCompleted, TurnOutcome, UsageRecorded};
 use contract::{Envelope, GenerationId, JobId, Seq, SessionId};
 use jiff::tz::TimeZone;
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use crate::app::{Target, read};
@@ -20,6 +21,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
+use crate::theme::{Role, style};
 use crate::turn::opened::OPENED_LINES;
 use crate::turn::{DrawSummary, Entry, Fold, Recipients, Row, Turn, target_id};
 
@@ -267,6 +269,49 @@ pub(crate) enum Draw {
 /// A focus stop's row, height and stable id across paging.
 type FocusItems = Vec<(usize, usize, TargetId)>;
 
+/// A `!` or `!!` run's live row: the head it opened with and the newest
+/// output it streamed. Once the run ends the row holds its ending and
+/// these empty.
+#[derive(Debug, Clone)]
+struct ShellRun {
+    /// The run's slot in [`Pages::shells`].
+    slot: usize,
+    head: String,
+    output: String,
+}
+
+impl ShellRun {
+    fn new(slot: usize, head: String) -> Self {
+        Self {
+            slot,
+            head,
+            output: String::new(),
+        }
+    }
+
+    /// The row's text while it runs: the head, then the output so far
+    /// with trailing whitespace dropped.
+    fn text(&self) -> String {
+        let output = self.output.trim_end();
+        if output.is_empty() {
+            self.head.clone()
+        } else {
+            format!("{}\n{output}", self.head)
+        }
+    }
+}
+
+/// What ending a run's live row did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// The row was running and the ending replaced it.
+    Replaced,
+    /// The row had already ended; nothing changed.
+    Already,
+    /// No row has the id; the caller adds one.
+    None,
+}
+
 /// The conversation: the page index, the cards of the resident pages, each
 /// turn's totals and what the person opened.
 #[derive(Debug)]
@@ -292,6 +337,12 @@ pub(crate) struct Pages {
     /// order: drawing a turn slot looks up its own bucket instead of
     /// walking every shell the session ever ran.
     shell_index: HashMap<(usize, usize), Vec<usize>>,
+    /// The `!` and `!!` runs that have a command id, by id: where each
+    /// draws and what it streamed. A row keeps its id after it ends, so a
+    /// second ending finds it.
+    shell_runs: BTreeMap<String, ShellRun>,
+    /// The slots of the runs still running: they draw `running`.
+    shells_running: BTreeSet<usize>,
     /// Whether each page's replies hold a Markdown table, `None` until
     /// the page is first counted: tables lay out at the render width, so
     /// their logical lines move with it and the search rescans them
@@ -445,6 +496,8 @@ impl Pages {
             fold: Fold::default(),
             shells: Vec::new(),
             shell_index: HashMap::new(),
+            shell_runs: BTreeMap::new(),
+            shells_running: BTreeSet::new(),
             table: vec![None],
             focus: vec![Vec::new()],
             row_seqs: Vec::new(),
@@ -1402,6 +1455,51 @@ impl Pages {
             .filter(|(page, _, _, _)| *page < len)
             .cloned()
             .collect();
+        // The carried runs keep their ids and their running state under
+        // their new slots, and the fold's follow them. An id the carried
+        // pages hold already stays theirs alone: its row in the fold does
+        // not run, so one id never draws as running twice.
+        let mut slots = HashMap::new();
+        let mut carried = 0;
+        for (at, (page, ..)) in self.shells.iter().enumerate() {
+            if *page < len {
+                slots.insert(at, carried);
+                carried += 1;
+            }
+        }
+        let mut runs: BTreeMap<String, ShellRun> = BTreeMap::new();
+        let mut running: BTreeSet<usize> = BTreeSet::new();
+        for (id, run) in &self.shell_runs {
+            if let Some(slot) = slots.get(&run.slot) {
+                runs.insert(
+                    id.clone(),
+                    ShellRun {
+                        slot: *slot,
+                        ..run.clone()
+                    },
+                );
+                if self.shells_running.contains(&run.slot) {
+                    running.insert(*slot);
+                }
+            }
+        }
+        for (id, run) in &fold.shell_runs {
+            if !runs.contains_key(id) {
+                let slot = run.slot.saturating_add(carried);
+                runs.insert(
+                    id.clone(),
+                    ShellRun {
+                        slot,
+                        ..run.clone()
+                    },
+                );
+                if fold.shells_running.contains(&run.slot) {
+                    running.insert(slot);
+                }
+            }
+        }
+        fold.shell_runs = runs;
+        fold.shells_running = running;
         shells.extend(fold.shells.iter().map(|(page, after, text, open)| {
             (
                 page.saturating_add(len),
@@ -1951,17 +2049,117 @@ impl Pages {
         let Some(item) = item else {
             return false;
         };
+        self.push_shell(item);
+        true
+    }
+
+    /// Adds a run's row to the page where it ran and returns its slot.
+    fn push_shell(&mut self, item: String) -> usize {
         let page = self.residency.len();
         let after = self.summaries.len();
+        let slot = self.shells.len();
         self.shell_index
             .entry((page, after))
             .or_default()
-            .push(self.shells.len());
+            .push(slot);
         self.shells.push((page, after, item, false));
         // Shell output draws on the page, so its search text changed.
         self.index.invalidate(page);
         self.count(page);
+        slot
+    }
+
+    /// Sets run `slot`'s text and recounts the page it draws on.
+    fn set_shell_text(&mut self, slot: usize, text: String) {
+        let Some(run) = self.shells.get_mut(slot) else {
+            return;
+        };
+        run.2 = text;
+        let page = run.0;
+        self.index.invalidate(page);
+        self.count(page);
+    }
+
+    /// Adds the row of the run `command_id` that has started, with its
+    /// `head` (`crate::shell::live_head`); it draws `running` until it
+    /// ends. False when a row has the id already, so one id never draws
+    /// twice.
+    pub(crate) fn start_shell(&mut self, command_id: &str, head: String) -> bool {
+        if self.shell_runs.contains_key(command_id) {
+            return false;
+        }
+        let slot = self.push_shell(head.clone());
+        self.shell_runs
+            .insert(command_id.to_owned(), ShellRun::new(slot, head));
+        self.shells_running.insert(slot);
         true
+    }
+
+    /// Adds streamed `text` to the running row of `command_id`, keeping
+    /// the newest 64 KiB (`support::pace::HELD_MAX`), so a command running
+    /// for hours holds a bounded amount. False when no row of that id is
+    /// running.
+    pub(crate) fn stream_shell(&mut self, command_id: &str, text: &str) -> bool {
+        let Some(run) = self.shell_runs.get_mut(command_id) else {
+            return false;
+        };
+        if !self.shells_running.contains(&run.slot) {
+            return false;
+        }
+        run.output.push_str(text);
+        support::pace::cap_held(&mut run.output);
+        let (slot, text) = (run.slot, run.text());
+        self.set_shell_text(slot, text);
+        true
+    }
+
+    /// Ends the running row of `command_id` with its final `item`, for a
+    /// `shell_command` or a `!!` answer. A row that already ended keeps
+    /// what it holds, and an id with no row is the caller's to add.
+    pub(crate) fn end_live_shell(&mut self, command_id: &str, item: String) -> Ended {
+        let Some(slot) = self.shell_runs.get(command_id).map(|run| run.slot) else {
+            return Ended::None;
+        };
+        if !self.shells_running.contains(&slot) {
+            return Ended::Already;
+        }
+        self.finish_shell(command_id, slot, item);
+        Ended::Replaced
+    }
+
+    /// Ends the row of `command_id`, running or not, with the `item` a
+    /// refusal draws: the sender's error wins over an ending that arrived
+    /// first. False when no row has the id.
+    pub(crate) fn end_shell(&mut self, command_id: &str, item: String) -> bool {
+        let Some(slot) = self.shell_runs.get(command_id).map(|run| run.slot) else {
+            return false;
+        };
+        self.finish_shell(command_id, slot, item);
+        true
+    }
+
+    /// Replaces run `slot`'s row with `item` and stops it running.
+    fn finish_shell(&mut self, command_id: &str, slot: usize, item: String) {
+        self.shells_running.remove(&slot);
+        if let Some(run) = self.shell_runs.get_mut(command_id) {
+            run.head = String::new();
+            run.output = String::new();
+        }
+        self.set_shell_text(slot, item);
+    }
+
+    /// Stops every running row, keeping the output it has: its session
+    /// ended before the ending was written. False when none was running.
+    pub(crate) fn settle_shells(&mut self) -> bool {
+        let running = std::mem::take(&mut self.shells_running);
+        for slot in &running {
+            if let Some(run) = self.shells.get(*slot) {
+                let page = run.0;
+                self.index.invalidate(page);
+                self.count(page);
+            }
+        }
+        !running.is_empty()
     }
 
     /// Each page's turns, the open page first and then back through
@@ -2066,7 +2264,8 @@ impl Pages {
                 crate::work::add(|work| work.shell_visits += bucket.len());
                 for slot in bucket {
                     if let Some((_, _, text, open)) = self.shells.get(*slot) {
-                        shell_rows(text, *open, *slot, &mut out);
+                        let running = self.shells_running.contains(slot);
+                        shell_rows(text, *open, *slot, running, &mut out);
                     }
                 }
             }
@@ -2243,8 +2442,10 @@ fn shell_ending(line: &str) -> bool {
 /// One run's lines. A run's row (head, kind note, output, ending) shows
 /// at most [`OPENED_LINES`] logical lines of output, then a dim more row
 /// that opens the rest in place and, open, reads "show less". Anything
-/// else, such as a cannot-start error row, draws whole.
-fn shell_rows(text: &str, open: bool, slot: usize, out: &mut Rows) {
+/// else, such as a cannot-start error row, draws whole. A run still
+/// running ends with a dim `running` line in `attention`, after the more
+/// row.
+fn shell_rows(text: &str, open: bool, slot: usize, running: bool, out: &mut Rows) {
     let lines: Vec<&str> = text.split('\n').collect();
     let plain = |line: &&str| ((*line).to_owned(), None);
     let row = |(line, target): (String, Option<Target>)| (Line::raw(line), target);
@@ -2272,6 +2473,16 @@ fn shell_rows(text: &str, open: bool, slot: usize, out: &mut Rows) {
         out.push((format::dim(more), Some(target)));
     }
     out.extend(tail.iter().map(plain).map(row));
+    if running {
+        // Where the ending will go.
+        out.push((
+            Line::styled(
+                "running",
+                style(Role::Attention).add_modifier(Modifier::DIM),
+            ),
+            None,
+        ));
+    }
 }
 
 /// Whether `part`'s replies hold a Markdown table, and how many reply
@@ -2362,6 +2573,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients
@@ -2438,6 +2651,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients

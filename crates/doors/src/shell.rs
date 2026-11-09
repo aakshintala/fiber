@@ -1,25 +1,36 @@
 //! A driver `shell` (`docs/architecture.md`, "One inbox"). The
 //! connection's reader checks it and registers its cancel, then runs it
 //! on a thread of its own and reads on, so a `cancel` on the same connection
-//! reaches it. With `send` false the thread answers the command itself;
-//! with `send` true it sends the shaped result to the loop's inbox, and
-//! the loop writes it as `shell_command` (`docs/invocation.md`, "Shell").
-//! The loop never runs it.
+//! reaches it. With `send` false the thread answers the command itself,
+//! and its output so far goes to the sending connection as
+//! `shell_command_delta`; with `send` true the loop writes
+//! `shell_command_started` before the command starts, every attached client
+//! gets its output as `shell_command_delta` while it runs, and the thread
+//! sends the shaped result to the loop's inbox, which writes it as
+//! `shell_command` (`docs/invocation.md`, "Shell"; `docs/events.md`,
+//! "`shell_command_started`"). The loop never runs it.
 
-use contract::ErrorCode;
+use contract::clock::Wake;
 use contract::commands::Shell;
 use contract::emit::Emit;
-use contract::events::{CommandResult, Event, ShellCommand};
-use contract::inbox::{Ack, Delivery, Rejection};
-use contract::shapes::ContentPart;
+use contract::events::{
+    CommandResult, Event, Progress, ShellCommand, ShellCommandDelta, ShellCommandStarted,
+};
+use contract::inbox::{Ack, Delivery, Handshake, Rejection};
+use contract::shapes::{ContentPart, Process};
 use contract::tool::{Bound, Output, Tool};
+use contract::{CommandId, ErrorCode};
 use log::{cut_joined, cut_notice};
 use serde_json::{Map, Value};
-use std::sync::Arc;
-use support::cancel::Token;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use support::cancel::{Cancel as _, Token};
+use support::lock;
 
+use crate::client::level::Outbox;
 use crate::mint;
-use crate::session::Gate;
+use crate::session::{Gate, envelope};
 
 pub(crate) const COULD_NOT_START: &str = "The command could not start.";
 /// What a `shell` stopped before its command started says when `cancel`
@@ -31,19 +42,127 @@ pub(crate) struct Running {
     tool: Arc<dyn Tool>,
     cancel: Arc<Token>,
     arguments: Map<String, Value>,
-    command: String,
-    send: bool,
+    stream: Stream,
 }
 
-struct Silent;
+/// Wakes a `send` run's wait for its start line when the run's token is
+/// cancelled.
+struct CancelWake(mpsc::Sender<()>);
 
-impl Emit for Silent {
-    fn emit(&self, _event: &Event) {}
+impl Wake for CancelWake {
+    fn wake(&self) {
+        let _gone = self.0.send(());
+    }
+}
+
+/// The emitter a driver shell runs under (`Emit`): it holds the command
+/// until its start line is written, and turns the tool's paced output into
+/// `shell_command_delta` lines.
+struct Stream {
+    gate: Arc<Gate>,
+    command_id: CommandId,
+    command: String,
+    send: bool,
+    /// The sending connection's route to its writer, when it has one:
+    /// where a `send` false run's deltas go.
+    outbox: Option<Outbox>,
+    cancel: Arc<Token>,
+    /// Shared with the `Delivery::ShellStarted` the loop takes: only the
+    /// loop sets `Written`, while it writes the line; only this side sets
+    /// `Abandoned`, and only from `Pending`.
+    handshake: Arc<Mutex<Handshake>>,
+    /// Whether a start line was written for this run, so its end is owed.
+    started: AtomicBool,
+}
+
+impl Emit for Stream {
+    fn emit(&self, event: &Event) {
+        let Event::ToolCallDelta(Progress {
+            text: Some(text), ..
+        }) = event
+        else {
+            return;
+        };
+        let delta = Event::ShellCommandDelta(ShellCommandDelta {
+            command_id: self.command_id.clone(),
+            text: text.clone(),
+        });
+        if self.send {
+            // Every attached client, through the log's watchers. The
+            // command started only after its start line was written, so
+            // no delta precedes it on any watcher.
+            if let Some(log) = self.gate.log.upgrade() {
+                log.emit(&delta);
+            }
+        } else if let Some(outbox) = &self.outbox {
+            // The sending connection only, droppable, never logged.
+            outbox.push(envelope(
+                &self.gate.session_id,
+                self.gate.clock.as_ref(),
+                &delta,
+            ));
+        }
+    }
+
+    fn paced(&self) -> bool {
+        true
+    }
+
+    /// With `send` false the command starts at once. With `send` true the
+    /// loop must write `shell_command_started` first: this asks it to, and
+    /// waits for the first of its answer, the run's cancel and the dropped
+    /// acknowledgement. A start still `Pending` at a wake is abandoned and
+    /// the command never starts; one already `Written` starts, and the
+    /// tool's own cancel handling stops it.
+    fn starting(&self) -> bool {
+        if !self.send {
+            return true;
+        }
+        let (wakes, woken) = mpsc::channel();
+        let waker: Arc<dyn Wake> = Arc::new(CancelWake(wakes.clone()));
+        self.cancel.subscribe(Arc::downgrade(&waker));
+        let answers = wakes.clone();
+        // The answer itself is read from the handshake: the loop sets it
+        // before it answers, and a dropped acknowledgement leaves it
+        // `Pending`.
+        let ack = crate::client::guard(move |_answer| {
+            let _gone = answers.send(());
+        });
+        self.gate.deliver(Delivery::ShellStarted(
+            ShellCommandStarted {
+                command_id: self.command_id.clone(),
+                command: self.command.clone(),
+            },
+            Arc::clone(&self.handshake),
+            ack,
+        ));
+        // A cancel before the subscription is not replayed.
+        if !self.cancel.is_cancelled() {
+            // Both senders live in this function, so the wait ends only
+            // with a wake.
+            let _woken = woken.recv();
+        }
+        drop(waker);
+        let mut state = lock(&self.handshake);
+        if *state == Handshake::Pending {
+            *state = Handshake::Abandoned;
+        }
+        let written = *state == Handshake::Written;
+        self.started.store(written, Ordering::SeqCst);
+        written
+    }
 }
 
 /// Checks `command` and registers its cancel with `gate`, so a `cancel`
-/// read after this returns reaches it. Called on the reader thread.
-pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Option<Running> {
+/// read after this returns reaches it. Called on the reader thread. `id` is
+/// the command's id; `outbox` is the sender's route to its writer, where a
+/// `send` false run's output goes as it runs.
+pub(crate) fn start(
+    gate: &Arc<Gate>,
+    id: &CommandId,
+    command: &Shell,
+    outbox: Option<Outbox>,
+) -> Option<Running> {
     let tool = gate.driver_shell()?;
     let cancel = Arc::new(Token::new());
     gate.shells.track(Arc::clone(&cancel));
@@ -51,10 +170,18 @@ pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Option<Running> {
     arguments.insert("command".to_owned(), Value::String(command.command.clone()));
     Some(Running {
         tool,
+        stream: Stream {
+            gate: Arc::clone(gate),
+            command_id: id.clone(),
+            command: command.command.clone(),
+            send: command.send,
+            outbox,
+            cancel: Arc::clone(&cancel),
+            handshake: Arc::new(Mutex::new(Handshake::Pending)),
+            started: AtomicBool::new(false),
+        },
         cancel,
         arguments,
-        command: command.command.clone(),
-        send: command.send,
     })
 }
 
@@ -64,14 +191,16 @@ impl Running {
     /// `send` true the shaped result goes to the loop's inbox instead of
     /// the ack, and the loop answers it when it writes `shell_command`. A
     /// result that never ran, or whose output never saved, answers the ack
-    /// directly either way. The registry lock is not held across
-    /// [`Tool::run`].
+    /// directly either way; when its start line was written, the loop is
+    /// also sent an end line that carries the rejection, so the start has
+    /// its end. The registry lock is not held across [`Tool::run`].
     pub(crate) fn finish(self, gate: &Gate, ack: Ack) {
         let output = self
             .tool
-            .run(&self.arguments, self.cancel.as_ref(), &Silent);
+            .run(&self.arguments, self.cancel.as_ref(), &self.stream);
+        let process = output.process.clone();
         let answered = answered(gate, output, self.tool.bound());
-        if self.send {
+        if self.stream.send {
             match answered {
                 Ok(Some(CommandResult::Shell {
                     output,
@@ -79,12 +208,17 @@ impl Running {
                     process,
                 })) => {
                     let line = ShellCommand {
-                        command: self.command,
+                        command_id: Some(self.stream.command_id.clone()),
+                        command: self.stream.command.clone(),
                         output,
                         artifact,
                         process,
                     };
                     gate.deliver(Delivery::Shell(line, ack));
+                }
+                Err(rejection) if self.stream.started.load(Ordering::SeqCst) => {
+                    (ack.0)(Err(rejection.clone()));
+                    self.end_rejected(gate, &rejection, process);
                 }
                 answered => (ack.0)(answered),
             }
@@ -93,6 +227,26 @@ impl Running {
         }
         // A panic aborts the process, so nothing later cancels this shell.
         gate.shells.untrack(&self.cancel);
+    }
+
+    /// Ends a run whose start line was written but whose answer was a
+    /// rejection: a `shell_command` carrying `<code>: <message>` as its
+    /// output and the run's process, or neither an exit code nor a signal
+    /// when none ran. The sender was answered already, so this line's
+    /// acknowledgement is ignored.
+    fn end_rejected(&self, gate: &Gate, rejection: &Rejection, process: Option<Process>) {
+        let line = ShellCommand {
+            command_id: Some(self.stream.command_id.clone()),
+            command: self.stream.command.clone(),
+            output: format!("{}: {}", rejection.code.name(), rejection.message),
+            artifact: None,
+            process: process.unwrap_or(Process {
+                exit_code: None,
+                signal: None,
+                timed_out: false,
+            }),
+        };
+        gate.deliver(Delivery::Shell(line, Ack(Box::new(|_| {}))));
     }
 
     /// Unregisters a shell that never ran, after the reader answered it.

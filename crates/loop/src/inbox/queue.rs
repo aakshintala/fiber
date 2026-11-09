@@ -137,11 +137,18 @@ impl Queue {
         kept
     }
 
-    /// Every session message waiting now, holding back anything else in
-    /// arrival order for the next drain: only a message waits for its
-    /// take to be answered, so only a message is taken early.
+    /// Every session message and every driver shell line waiting now, in
+    /// arrival order, holding back anything else for the next drain: a
+    /// message waits for its take to be answered, and a driver command waits
+    /// for its start line before it runs and shows its end when it ends, so
+    /// only these are taken early. A shell's end stays behind its start.
     pub(crate) fn take_messages(&mut self) -> Vec<Delivery> {
-        self.take_where(|delivery| matches!(delivery, Delivery::Message(..)))
+        self.take_where(|delivery| {
+            matches!(
+                delivery,
+                Delivery::Message(..) | Delivery::ShellStarted(..) | Delivery::Shell(..)
+            )
+        })
     }
 }
 

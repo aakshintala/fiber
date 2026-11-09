@@ -571,11 +571,17 @@ the person typed it, and a client that can attach already controls the session
 - With `send` false, the output goes back in the command's
   `command_accepted` to the client that sent it and is never logged. The
   terminal's side panel reads git state this way.
+  While it runs, the output reaches only that client, as
+  `shell_command_delta` (`docs/events.md`, "`shell_command_delta`"), and
+  never reaches the log.
 - With `send` true, the loop writes the output as `shell_command`
   (`docs/events.md`) when it takes the command, after it ends, and the
   command's `command_accepted` carries no result. It joins the next turn's
   input, never the running turn. The terminal sends it for `!command`, and
   sends `!!command` with `send` false.
+  Once the command has started, the loop writes `shell_command_started`
+  (`docs/events.md`, "`shell_command_started`"), and every attached client
+  gets its output as `shell_command_delta` while it runs.
 
 Settled by
 [#148](https://github.com/aakshintala/fiber/issues/148).
