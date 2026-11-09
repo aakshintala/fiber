@@ -14,11 +14,12 @@
 
 use contract::events::SteeringQueue;
 
-use super::{App, Effect, Kind, session_command};
+use super::{App, Effect, Kind, session_line};
 use crate::ext::{PromptImage, QueuedImage, SteeringMessage};
 use crate::input::Draft;
 use crate::keys::Key;
-use serde_json::json;
+use contract::CommandId;
+use contract::commands::{Command, SteerDrop};
 
 /// One queued message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,15 +352,11 @@ impl App {
         let id = support::mint("c_");
         let taken = std::mem::take(&mut self.draft);
         self.draft.put_back(stash);
-        lines.push(
-            session_command(
-                &id,
-                "steer",
-                &session,
-                Some(super::commands::content_arg(&taken)),
-            )
-            .to_string(),
-        );
+        lines.push(session_line(
+            &id,
+            &session,
+            Command::Steer(super::commands::content_arg(&taken)),
+        ));
         self.outbox.pending.insert(id, (Kind::Steer, taken));
         Effect::Send(lines)
     }
@@ -378,8 +375,13 @@ impl App {
             .into_iter()
             .map(|row| {
                 let id = support::mint("c_");
-                let args = json!({ "command_id": row });
-                let line = session_command(&id, "steer_drop", &session, Some(args));
+                let line = session_line(
+                    &id,
+                    &session,
+                    Command::SteerDrop(SteerDrop {
+                        command_id: CommandId(row),
+                    }),
+                );
                 self.outbox
                     .pending
                     .insert(id, (Kind::SteerDrop, Draft::default()));

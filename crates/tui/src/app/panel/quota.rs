@@ -5,11 +5,10 @@ use std::time::{Duration, Instant};
 
 use contract::{CommandId, Envelope};
 
+use super::super::{App, Effect, session_line};
 use crate::view::panel::{Card, cards};
+use contract::commands::{Command, QuotaArgs};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, QuotaInfo};
-use serde_json::json;
-
-use super::super::{App, Effect, session_command};
 
 /// The cache age in `docs/tools.md`, "Fetching".
 const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
@@ -197,7 +196,7 @@ impl App {
         }
         let session = self.session()?.clone();
         let id = CommandId(support::mint("c_"));
-        let line = session_command(&id.0, "quota", &session, None).to_string();
+        let line = session_line(&id.0, &session, Command::Quota(QuotaArgs { fetch: false }));
         self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Asked(id);
         Some(line)
@@ -235,8 +234,7 @@ impl App {
         }
         let session = self.session()?.clone();
         let id = CommandId(support::mint("c_"));
-        let line =
-            session_command(&id.0, "quota", &session, Some(json!({"fetch": true}))).to_string();
+        let line = session_line(&id.0, &session, Command::Quota(QuotaArgs { fetch: true }));
         self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Fetching(id);
         Some(line)

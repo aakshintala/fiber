@@ -13,6 +13,7 @@ use crate::model_picker::{
 use crate::swapped::{Spot, about};
 use contract::ErrorCode;
 use contract::ThinkingLevel;
+use contract::commands::Command;
 
 impl App {
     /// Folds a model-list read's answer: the catalogue's notices show
@@ -237,8 +238,7 @@ impl App {
             );
         }
         let id = support::mint("c_");
-        let line =
-            super::session_command(&id, "model", &session, Some(command_args(&choice))).to_string();
+        let line = super::session_line(&id, &session, Command::Model(command_args(&choice)));
         self.outbox.pending.insert(
             id.clone(),
             (super::Kind::Command, crate::input::Draft::default()),

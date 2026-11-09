@@ -12,11 +12,12 @@ use contract::shapes::ProviderFailure;
 use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::steering::Steering;
-use super::{App, Effect, Kind, Phase, session_command};
+use super::{App, Effect, Kind, Phase, session_line};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
 use contract::commands::SubscribeLevel;
+use contract::commands::{Command, JobInput, JobStop};
 
 pub(crate) mod keys;
 
@@ -625,13 +626,13 @@ impl App {
         let session = session.clone();
         let job_id = open.job_id.clone();
         let id = support::mint("c_");
-        let line = session_command(
+        let line = session_line(
             &id,
-            "job_stop",
             &session,
-            Some(serde_json::json!({"job_id": job_id.0})),
-        )
-        .to_string();
+            Command::JobStop(JobStop {
+                job_id: job_id.clone(),
+            }),
+        );
         self.outbox.wait(&id, super::Waiting::JobStop);
         self.outbox
             .pending
@@ -682,13 +683,14 @@ impl App {
     fn item_job_send(&mut self, text: String) -> Option<Effect> {
         let (session, job_id) = self.item_job_target()?;
         let id = support::mint("c_");
-        let line = session_command(
+        let line = session_line(
             &id,
-            "job_input",
             &session,
-            Some(serde_json::json!({"job_id": job_id.0, "text": text})),
-        )
-        .to_string();
+            Command::JobInput(JobInput {
+                job_id: job_id.clone(),
+                text,
+            }),
+        );
         self.outbox.wait(&id, super::Waiting::JobInput);
         self.outbox
             .pending
@@ -738,7 +740,7 @@ impl App {
         }
         let id = support::mint("c_");
         let args = super::commands::content_arg(&self.draft);
-        let line = session_command(&id, "steer", &delegate.session, Some(args)).to_string();
+        let line = session_line(&id, &delegate.session, Command::Steer(args));
         let draft = std::mem::take(&mut self.draft);
         self.outbox.pending.insert(id, (Kind::Steer, draft));
         Some(Effect::Send(vec![line]))

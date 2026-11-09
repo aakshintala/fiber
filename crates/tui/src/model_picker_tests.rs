@@ -8,6 +8,7 @@ use super::{
 };
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, LoggedOutProvider, ModelEntry};
 use crate::keys::Key;
+use contract::commands::ModelArgs;
 
 fn entry(
     reference: &str,
@@ -699,11 +700,17 @@ fn session_only_saves_nothing() {
 fn command_args_carry_thinking_exactly_when_there_is_a_level() {
     assert_eq!(
         command_args(&choice("acme/m1", Some("high"), false)),
-        serde_json::json!({"model": "acme/m1", "thinking": "high"})
+        ModelArgs {
+            model: "acme/m1".to_owned(),
+            thinking: Some("high".to_owned()),
+        }
     );
     assert_eq!(
         command_args(&choice("zeta/z1", None, false)),
-        serde_json::json!({"model": "zeta/z1"})
+        ModelArgs {
+            model: "zeta/z1".to_owned(),
+            thinking: None,
+        }
     );
 }
 

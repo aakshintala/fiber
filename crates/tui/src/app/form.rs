@@ -5,10 +5,11 @@ use contract::Envelope;
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandRejected};
 
-use super::{App, Effect, Kind, read, session_command};
+use super::{App, Effect, Kind, read, session_line};
 use crate::approvals::form::Spot;
 use crate::approvals::{PanelKey, Queue};
 use crate::input::Draft;
+use contract::commands::Command;
 
 impl App {
     /// Sends the shown request's answer. With the link down nothing goes
@@ -153,7 +154,7 @@ impl App {
             return Vec::new();
         };
         let cancel = support::mint("c_");
-        let line = session_command(&cancel, "cancel", &session, None).to_string();
+        let line = session_line(&cancel, &session, Command::Cancel);
         self.outbox
             .pending
             .insert(cancel, (Kind::Cancel, Draft::default()));

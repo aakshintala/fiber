@@ -5,11 +5,11 @@ use std::cell::RefCell;
 use contract::events::OfferedItem;
 use contract::{ErrorCode, RequestId, SessionId};
 use ratatui::text::Line;
-use serde_json::json;
 
 use super::{Row, clipped};
-use crate::app::session_command;
+use crate::app::session_line;
 use crate::keys::Key;
+use contract::commands::{Command, OfferedFile};
 
 #[derive(Debug)]
 enum Shown {
@@ -60,13 +60,14 @@ impl Source {
     ) -> String {
         self.asked = Some(id.to_owned());
         self.show(Shown::Loading);
-        session_command(
+        session_line(
             id,
-            "offered_file",
             session,
-            Some(json!({"request_id": request, "path": path})),
+            Command::OfferedFile(OfferedFile {
+                request_id: request.clone(),
+                path: path.to_owned(),
+            }),
         )
-        .to_string()
     }
 
     pub(crate) fn answered(&mut self, id: &str, text: String) -> bool {

@@ -3,11 +3,11 @@
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::{Command, Shell};
 use contract::events::{CommandResult, ShellCommand};
 use contract::shapes::Process;
-use serde_json::{Value, json};
 
-use crate::app::session_command;
+use crate::app::session_line;
 
 /// A draft that runs a shell command: the command, and `send`, whether
 /// its output goes with the next prompt. `!!cmd` shows the output only to
@@ -24,9 +24,15 @@ pub(crate) fn parse(text: &str) -> Option<(&str, bool)> {
 }
 
 /// The `shell` command line for `session`.
-pub(crate) fn command(id: &str, session: &SessionId, command: &str, send: bool) -> Value {
-    let args = json!({"command": command, "send": send});
-    session_command(id, "shell", session, Some(args))
+pub(crate) fn command(id: &str, session: &SessionId, command: &str, send: bool) -> String {
+    session_line(
+        id,
+        session,
+        Command::Shell(Shell {
+            command: command.to_owned(),
+            send,
+        }),
+    )
 }
 
 /// The item a `shell` answer shows for the draft `text` that sent it:

@@ -940,8 +940,7 @@ impl App {
         }
         let session = self.session()?.clone();
         let id = support::mint("c_");
-        let line =
-            shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false).to_string();
+        let line = shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false);
         self.panel_state.due = false;
         self.outbox.wait(&id, super::Waiting::Branch);
         self.panel_state.asked = Some(id);
@@ -989,8 +988,7 @@ impl App {
                     return Effect::None;
                 };
                 let id = support::mint("c_");
-                let line = shell::command(&id, &session, "git --no-optional-locks status", false)
-                    .to_string();
+                let line = shell::command(&id, &session, "git --no-optional-locks status", false);
                 let mut draft = Draft::default();
                 draft.set("!!git --no-optional-locks status");
                 self.outbox.pending.insert(id, (Kind::Shell, draft));

@@ -14,9 +14,10 @@ use contract::{Envelope, RequestId, SessionId};
 use ratatui::style::Style;
 use serde_json::Value;
 
-use crate::app::session_command;
+use crate::app::session_line;
 use crate::format;
 use crate::keys::{Edit, Key};
+use contract::commands::Command;
 
 use approval::{Approval, Choice};
 
@@ -337,8 +338,7 @@ impl Queue {
             request_id: RequestId(request.request_id.clone()),
             answer,
         };
-        let args = serde_json::to_value(reply).ok();
-        let line = session_command(id, "reply", &request.session, args).to_string();
+        let line = session_line(id, &request.session, Command::Reply(reply));
         request.answered_by = Some(id.to_owned());
         self.show_after(at);
         Some(line)

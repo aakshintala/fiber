@@ -15,6 +15,7 @@ use crate::swapped::{Frame, List, Spot};
 use crate::usage_view::UsageFold;
 use contract::Envelope;
 use contract::ErrorCode;
+use contract::commands::Command;
 use contract::events::{
     CommandAccepted, CommandRejected, DelegateStarted, JobStarted, ToolCallCompleted, UsageRecorded,
 };
@@ -223,8 +224,7 @@ impl App {
             &session,
             &changed_files_view::numstat_command(&paths),
             false,
-        )
-        .to_string();
+        );
         self.outbox.wait(&id, super::Waiting::Figures);
         self.session_views.figures_request = Some(id);
         Effect::Send(vec![line])
@@ -850,8 +850,7 @@ impl App {
             &session,
             &changed_files_view::diff_command(path),
             false,
-        )
-        .to_string();
+        );
         self.outbox.wait(&id, super::Waiting::Diff);
         self.session_views.request = Some((id, path.to_owned()));
         self.session_views.diff = Some((path.to_owned(), Diff::Reading));
@@ -1168,7 +1167,7 @@ impl App {
             return Effect::None;
         }
         let id = support::mint("c_");
-        let line = super::session_command(&id, "hooks", &session, None).to_string();
+        let line = super::session_line(&id, &session, Command::Hooks);
         self.outbox.wait(&id, super::Waiting::Hooks);
         self.session_views.hooks_request = Some(id);
         Effect::Send(vec![line])

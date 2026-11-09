@@ -16,19 +16,18 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::json;
-
 use super::call_view_pages::{Page, Pager, Seg};
 use super::call_view_rows::{
     Row, RowsInput, Source, build_frame, build_rows, edge_anchor_row, highlight_rows, row_text,
     shown_height, window,
 };
-use super::{App, Effect, Target, session_command};
+use super::{App, Effect, Target, session_line};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::swapped::{Frame, List, Spot};
 use crate::turn::opened::{self, CallSnapshot};
 use contract::SessionId;
+use contract::commands::{ArtifactPageArgs, Command};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, ToolCallCompleted};
 
 /// A `y` copy waiting on its pages, in file order: while it runs the
@@ -698,13 +697,11 @@ impl App {
             let id = support::mint("c_");
             view.pager.request = Some((id.clone(), offset));
             self.outbox.wait(&id, super::Waiting::ArtifactPage);
-            session_command(
+            session_line(
                 &id,
-                "artifact_page",
                 &session,
-                Some(json!({"path": path, "offset": offset})),
+                Command::ArtifactPage(ArtifactPageArgs { path, offset }),
             )
-            .to_string()
         };
         Some(line)
     }

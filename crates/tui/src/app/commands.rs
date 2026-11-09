@@ -7,10 +7,14 @@ use std::time::Instant;
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::{
+    AddDirectoryArgs, ChangeWorkspaceArgs, CloseArgs, Command, Compact, ContentArgs, ImportArgs,
+    Name, RunCommand, SandboxArgs,
+};
 use contract::events::CommandAccepted;
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, Surface, session_command};
+use super::{App, Effect, Kind, Link, Phase, Surface, session_line};
 use crate::editor::{OpenFile, Target};
 use crate::import_report::ImportSource;
 use crate::input::Draft;
@@ -27,13 +31,11 @@ const NO_SESSION: &str = "No session on screen.";
 pub(crate) use crate::completion_rows::{Completions, Rows};
 
 /// The draft's content as a prompt's `content` argument: text runs and
-/// image parts in order, each run one text part. `SentPart` serializes as
-/// the wire part, `type` with the part's fields, so the content converts
-/// directly. Every part serializes, so the fallback never runs.
-pub(super) fn content_arg(draft: &Draft) -> serde_json::Value {
-    let content =
-        serde_json::to_value(draft.content()).unwrap_or(serde_json::Value::Array(Vec::new()));
-    json!({ "content": content })
+/// image parts in order, each run one text part.
+pub(super) fn content_arg(draft: &Draft) -> ContentArgs {
+    ContentArgs {
+        content: draft.content(),
+    }
 }
 
 /// One built-in command: adding one is one row plus its handler, which
@@ -395,12 +397,20 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
 }
 
 fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
-    let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("compact", args).0)
+    let instructions = (!rest.is_empty()).then(|| rest.to_owned());
+    Some(
+        app.send_command(Command::Compact(Compact { instructions }))
+            .0,
+    )
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
-    Some(app.send_command("name", Some(json!({ "text": rest }))).0)
+    Some(
+        app.send_command(Command::Name(Name {
+            text: rest.to_owned(),
+        }))
+        .0,
+    )
 }
 
 pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -413,7 +423,7 @@ pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
             app.push_notice(ErrorCode::from_name(&code), text);
         }
     }
-    Some(app.send_command("reload", None).0)
+    Some(app.send_command(Command::Reload).0)
 }
 
 /// `/sandbox on|off`: sends the session sandbox switch, `on` or `off`
@@ -431,7 +441,7 @@ fn run_sandbox(app: &mut App, rest: &str) -> Option<Effect> {
         return Some(Effect::None);
     };
     Some(
-        app.send_command("sandbox", Some(json!({ "enabled": enabled })))
+        app.send_command(Command::Sandbox(SandboxArgs { enabled }))
             .0,
     )
 }
@@ -443,12 +453,12 @@ fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
     // the accepted answer's report names it; a bare import reports the
     // generic title.
     let rest = rest.trim();
-    let args = (!rest.is_empty()).then(|| json!({"source": rest}));
+    let source = (!rest.is_empty()).then(|| rest.to_owned());
     // The entry carries the import's source, so the accepted answer's
     // report names it; an unknown source stays a plain command, and
     // its accept opens no report.
     let kind = ImportSource::parse(rest).map_or(Kind::Command, Kind::Import);
-    let (effect, _) = app.send_kind(kind, "import", args);
+    let (effect, _) = app.send_kind(kind, Command::Import(ImportArgs { source }));
     Some(effect)
 }
 
@@ -552,7 +562,9 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let (effect, id) = self.send_command("change_workspace", Some(json!({"path": rest})));
+        let (effect, id) = self.send_command(Command::ChangeWorkspace(ChangeWorkspaceArgs {
+            path: rest.to_owned(),
+        }));
         if let Some(id) = id {
             self.outbox
                 .wait(&id, super::outbox::Waiting::ChangeWorkspace(session));
@@ -651,8 +663,10 @@ fn run_add_dir(app: &mut App, rest: &str) -> Option<Effect> {
         return Some(Effect::None);
     }
     Some(
-        app.send_command("add_directory", Some(json!({ "path": path })))
-            .0,
+        app.send_command(Command::AddDirectory(AddDirectoryArgs {
+            path: path.to_owned(),
+        }))
+        .0,
     )
 }
 
@@ -867,12 +881,14 @@ impl App {
             });
         if let Some(extension) = extension {
             let rest = rest.trim();
-            let args = if rest.is_empty() {
-                Some(json!({"name": extension}))
-            } else {
-                Some(json!({"name": extension, "text": rest}))
-            };
-            return Some(self.send_command("command", args).0);
+            let text = (!rest.is_empty()).then(|| rest.to_owned());
+            return Some(
+                self.send_command(Command::Command(RunCommand {
+                    name: (*extension).clone(),
+                    text,
+                }))
+                .0,
+            );
         }
         if !slash::is_built_in(name) {
             return None;
@@ -951,27 +967,18 @@ impl App {
     /// Sends `command` to the attached session, returning the minted
     /// command id beside the effect for callers recording per-command
     /// state. A rejection returns the draft.
-    fn send_command(
-        &mut self,
-        command: &str,
-        args: Option<serde_json::Value>,
-    ) -> (Effect, Option<String>) {
-        self.send_kind(Kind::Command, command, args)
+    fn send_command(&mut self, command: Command) -> (Effect, Option<String>) {
+        self.send_kind(Kind::Command, command)
     }
 
     /// Sends `command` of `kind` to the attached session, returning the
     /// minted command id beside the effect. A rejection returns the draft.
-    fn send_kind(
-        &mut self,
-        kind: Kind,
-        command: &str,
-        args: Option<serde_json::Value>,
-    ) -> (Effect, Option<String>) {
+    fn send_kind(&mut self, kind: Kind, command: Command) -> (Effect, Option<String>) {
         let Some((session, _)) = self.command_session() else {
             return (Effect::None, None);
         };
         let id = support::mint("c_");
-        let line = session_command(&id, command, &session, args).to_string();
+        let line = session_line(&id, &session, command);
         let draft = std::mem::take(&mut self.draft);
         self.outbox.insert(id.clone(), kind, draft);
         (Effect::Send(vec![line]), Some(id))
@@ -984,8 +991,11 @@ impl App {
             return Effect::None;
         };
         let id = support::mint("c_");
-        let lines =
-            vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
+        let lines = vec![session_line(
+            &id,
+            &session,
+            Command::Close(CloseArgs { now: true }),
+        )];
         // Home has a fresh draft: a rejected `close` gives only its notice.
         self.outbox.insert(id, Kind::Command, Draft::default());
         self.go_home();
@@ -1137,18 +1147,18 @@ impl App {
                 self.with_start_model(&mut args);
                 self.panel_state.note_start(&args);
                 let line = json!({"id": id, "command": "start", "args": args});
-                (Kind::Start, line)
+                (Kind::Start, line.to_string())
             }
             (Phase::Attached { session, .. }, Some((command, send))) => {
                 (Kind::Shell, shell::command(&id, session, command, send))
             }
             (Phase::Attached { session, busy }, None) => {
                 let (kind, command) = if *busy {
-                    (Kind::Steer, "steer")
+                    (Kind::Steer, Command::Steer(args))
                 } else {
-                    (Kind::Prompt, "prompt")
+                    (Kind::Prompt, Command::Prompt(args))
                 };
-                (kind, session_command(&id, command, session, Some(args)))
+                (kind, session_line(&id, session, command))
             }
         };
         if kind == Kind::Start {
@@ -1157,7 +1167,6 @@ impl App {
             };
         }
         let draft = std::mem::take(&mut self.draft);
-        let line = line.to_string();
         match self.outbox.send(id, kind, draft, line) {
             Some(line) => Effect::Send(vec![line]),
             None => Effect::None,
@@ -1169,8 +1178,7 @@ impl App {
     /// the prompt. A rejection returns the draft to an empty box.
     pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
         let id = support::mint("c_");
-        let args = content_arg(&draft);
-        let line = session_command(&id, "prompt", session, Some(args)).to_string();
+        let line = session_line(&id, session, Command::Prompt(content_arg(&draft)));
         self.outbox.insert(id, Kind::Prompt, draft);
         line
     }
@@ -1202,7 +1210,7 @@ impl App {
     /// One `cancel` of `session`'s turn, settled by its answer.
     fn send_cancel(&mut self, session: &SessionId) -> Effect {
         let id = support::mint("c_");
-        let line = session_command(&id, "cancel", session, None).to_string();
+        let line = session_line(&id, session, Command::Cancel);
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }
