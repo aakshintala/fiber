@@ -3,7 +3,7 @@
 //! request is resent with a one-token output cap shortly before the cache
 //! lifetime ends, until `cache.warm_cap` lifetimes after the last turn.
 //! [`Warming`] owns that state: the cap, the held request and its send,
-//! and when a switch stopped warming.
+//! and when an invalidation stopped warming.
 
 use std::time::{Duration, Instant};
 
@@ -16,8 +16,8 @@ use crate::{Error, Loop};
 /// one request's latency).
 const MARGIN: Duration = Duration::from_secs(30);
 
-/// An idle wait's warming state: the cap, the held request and when a
-/// switch stopped warming (`docs/prompt-cache.md`, "Warming while idle").
+/// An idle wait's warming state: the cap, the held request and when an
+/// invalidation stopped warming (`docs/prompt-cache.md`, "Warming while idle").
 #[derive(Debug, Default)]
 pub(crate) struct Warming {
     /// `cache.warm_cap`: how many cache lifetimes after the last turn an
@@ -46,8 +46,9 @@ impl Warming {
         }
     }
 
-    /// A model switch. When a request is held, it drops it and records
-    /// `now` as the stop. With nothing held it does nothing.
+    /// A cached-build invalidation (switch, reload or sandbox). When a
+    /// request is held, it drops it and records `now` as the stop. With
+    /// nothing held it does nothing.
     pub(crate) fn stop(&mut self, now: Instant) {
         if self.last.take().is_some() {
             self.stopped = Some(now);
