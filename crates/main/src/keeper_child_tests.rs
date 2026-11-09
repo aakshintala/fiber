@@ -1,4 +1,4 @@
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -273,6 +273,117 @@ fn crash(keeper: &mut Keeper) {
 fn session_dir(keeper: &Keeper) -> std::path::PathBuf {
     let (_, dir) = log::find_session(keeper.home.path(), &keeper.id).expect("session dir");
     dir
+}
+
+fn crashed_socket(keeper: &Keeper) -> std::path::PathBuf {
+    let dir = session_dir(keeper);
+    keeper
+        .home
+        .path()
+        .join("run")
+        .join(dir.file_name().expect("session dir name"))
+}
+
+/// The crashed socket accepts once the takeover binds it: the bind is the
+/// signal, so connect retries until the deadline instead of sleeping.
+fn await_crashed_socket(path: &std::path::Path) -> UnixStream {
+    let deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        if let Ok(stream) = UnixStream::connect(path) {
+            return stream;
+        }
+        if deadline.left().is_zero() {
+            panic!("waited for the keeper to bind {}", path.display());
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn keeper_crashed_socket_stop_ends_the_job_and_exits() {
+    // docs/invocation.md, "Commands and flags": the frozen stop line on a
+    // crashed session's socket ends every job as a shutdown does, then the
+    // keeper exits, unlinking the socket and releasing the lock.
+    let id = SessionId("s_4123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let mut keeper = serve_keeper("keeper-crash-stop", id, clock.clone());
+    let pgid = start_shell(&keeper, "sleepy", "sleep 60");
+    adopt_call(&keeper, "sleepy", "j_sleepy");
+    crash(&mut keeper);
+    let socket = crashed_socket(&keeper);
+    let mut stop = await_crashed_socket(&socket);
+    // The exact frozen bytes (docs/invocation.md, "Commands and flags").
+    stop.write_all(b"{\"shutdown\":true}\n")
+        .expect("frozen stop");
+    // The job's reap is the end signal: the stop landed shutdown-style.
+    let deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        match deadline.recv_or_fail(&keeper.read, "job end") {
+            FromKeeper::Exit { exit, .. } => {
+                assert_eq!(
+                    exit.signal,
+                    Some(signal_hook::consts::SIGTERM),
+                    "stop signals first"
+                );
+                break;
+            }
+            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+            FromKeeper::Failed { .. } => panic!("expected job end"),
+        }
+    }
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper exit")
+        .expect("keeper exits on the frozen stop");
+    assert!(!support::group::alive(pgid), "the stopped job is reaped");
+    assert!(!socket.exists(), "the socket is unlinked on exit");
+    let _resumed =
+        log::Log::open(&keeper.sessions, keeper.id.clone(), clock.clone()).expect("lock released");
+}
+
+#[test]
+fn keeper_crashed_socket_drops_other_lines_and_keeps_running() {
+    // Every other line is dropped unread, so a probe's read sees EOF
+    // exactly as before; only the frozen bytes stop the keeper. The wrong
+    // boolean is the closest non-match: matching it would stop the keeper.
+    let id = SessionId("s_5123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let mut keeper = serve_keeper("keeper-crash-drop", id, clock.clone());
+    let pgid = start_shell(&keeper, "sleepy", "sleep 60");
+    adopt_call(&keeper, "sleepy", "j_sleepy");
+    crash(&mut keeper);
+    let socket = crashed_socket(&keeper);
+    await_crashed_socket(&socket);
+    let probes: Vec<Vec<u8>> = vec![
+        b"{\"shutdown\":false}\n".to_vec(),
+        b"{\"id\":\"c_1\",\"command\":\"close\",\"args\":{\"now\":true}}\n".to_vec(),
+        b"{\"nope\":1}\n".to_vec(),
+        b"{\"shut".to_vec(),
+    ];
+    for probe in probes {
+        let mut peer = await_crashed_socket(&socket);
+        peer.write_all(&probe).expect("probe line");
+        if !probe.ends_with(b"\n") {
+            peer.shutdown(std::net::Shutdown::Write).expect("probe eof");
+        }
+        peer.set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("read timeout");
+        let mut eof = Vec::new();
+        peer.read_to_end(&mut eof).expect("probe read");
+        assert!(
+            eof.is_empty(),
+            "a dropped line reads as EOF, got {} bytes",
+            eof.len()
+        );
+        assert!(
+            keeper.result.try_recv().is_err(),
+            "the keeper still runs after a dropped line"
+        );
+        assert!(
+            support::group::alive(pgid),
+            "the job still runs after a dropped line"
+        );
+        assert!(socket.exists(), "the socket stays bound");
+    }
 }
 
 fn job_completed_lines(keeper: &Keeper) -> Vec<contract::Envelope> {

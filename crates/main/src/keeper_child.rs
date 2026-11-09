@@ -46,6 +46,12 @@ fn keeper_bound() -> Duration {
     KEEPER_BOUND
 }
 
+/// The exact bytes `fiber stop` and `/close all` write on a crashed
+/// session's socket to stop its keeper (`docs/invocation.md`, "Commands and
+/// flags"). Only this line acts; anything else is dropped unread, so a
+/// probe's read sees EOF exactly as before.
+const CRASHED_STOP_LINE: &str = "{\"shutdown\":true}";
+
 enum Sink {
     Control,
     Hold(Vec<(Stream, Vec<u8>)>),
@@ -128,13 +134,16 @@ impl Runtime {
         }
     }
 
-    fn decide(&self, choose: impl FnOnce(&mut Supervisor) -> Vec<Step>) -> io::Result<()> {
+    fn decide(
+        self: &Arc<Self>,
+        choose: impl FnOnce(&mut Supervisor) -> Vec<Step>,
+    ) -> io::Result<()> {
         let mut log = lock(&self.log);
         let steps = choose(&mut lock(&self.supervisor));
         self.apply(&mut log, steps)
     }
 
-    fn apply(&self, log: &mut Option<HeldLog>, steps: Vec<Step>) -> io::Result<()> {
+    fn apply(self: &Arc<Self>, log: &mut Option<HeldLog>, steps: Vec<Step>) -> io::Result<()> {
         for step in steps {
             match step {
                 Step::Stop { id } => {
@@ -172,10 +181,11 @@ impl Runtime {
                             let (socket, listener) = doors::bind(&self.home, &dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *log = Some(HeldLog { socket, log: held });
+                            let crashed = Arc::clone(self);
                             thread::spawn(move || {
                                 for accepted in listener.incoming() {
                                     match accepted {
-                                        Ok(stream) => drop(stream),
+                                        Ok(stream) => crashed.crashed_candidate(stream),
                                         Err(_) => break,
                                     }
                                 }
@@ -538,6 +548,42 @@ impl Runtime {
             }
             parker.park(&*self.clock, Some(bound_at), seen);
         }
+    }
+
+    /// Serves one connection on the crashed session's socket. Only the
+    /// frozen stop line acts, through the same discard plus
+    /// shutdown-requested path as the control pipe, then the exit that
+    /// unlinks the socket and releases the lock. Any other first line is a
+    /// probe or a resumer: the connection drops unread, so its read sees
+    /// EOF exactly as before. Each connection runs on its own thread, so a
+    /// peer that never writes cannot hold the accept loop past a stop.
+    fn crashed_candidate(self: &Arc<Self>, stream: UnixStream) {
+        let me = Arc::clone(self);
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stream);
+            let mut chunk = Vec::new();
+            // EOF or a dead peer drops the connection unread.
+            if reader.read_until(b'\n', &mut chunk).unwrap_or(0) == 0 {
+                return;
+            }
+            // A chunk without the framing newline is a torn tail: the peer
+            // died mid-write. Drop it, never parse it.
+            if chunk.last() != Some(&b'\n') {
+                return;
+            }
+            chunk.pop();
+            if chunk == CRASHED_STOP_LINE.as_bytes() {
+                me.discard();
+                match me.decide(Supervisor::shutdown_requested) {
+                    Ok(()) | Err(_) => {}
+                }
+                match me.decide(|_| vec![Step::Exit]) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+            // One line decides: staying open would hold a probe's read past
+            // the EOF it sees today, so the connection drops here.
+        });
     }
 
     fn control(self: &Arc<Self>, control: UnixStream) -> io::Result<()> {
