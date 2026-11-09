@@ -89,3 +89,80 @@ fn a_non_string_panic_reports_a_fixed_line() {
     assert!(text.contains("the wait for a turn line panicked"), "{text}");
     assert!(text.contains("a non-string panic"), "{text}");
 }
+
+#[test]
+fn the_outer_bound_is_twice_the_floor() {
+    assert_eq!(
+        WHOLE_SUBSYSTEM_WITHIN,
+        Duration::from_secs(2 * MUST_SUCCEED_WITHIN.as_secs())
+    );
+    assert!(WHOLE_SUBSYSTEM_WITHIN > MUST_SUCCEED_WITHIN);
+}
+
+#[test]
+fn equal_floor_budgets_report_the_outer_step() {
+    let clock: &'static std::sync::Arc<crate::clock::FakeClock> =
+        Box::leak(Box::new(crate::clock::FakeClock::new()));
+    let root = Deadline::on(&**clock);
+    let outer_deadline = root.within(MUST_SUCCEED_WITHIN);
+    let inner_deadline = root.within(MUST_SUCCEED_WITHIN);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN);
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (hold_tx, hold_rx) = mpsc::channel::<()>();
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        within("outer", outer_deadline, move || {
+            go_rx.recv().unwrap();
+            within("inner", inner_deadline, move || {
+                hold_rx.recv().unwrap();
+            })
+        })
+    }));
+    go_tx.send(()).unwrap();
+    let err = result.expect_err("equal budgets time out on the outer wait");
+    let text = message(err);
+    assert!(text.contains("waited"), "names the wait: {text}");
+    assert!(text.contains("outer"), "names the outer step: {text}");
+    assert!(
+        !text.contains("inner"),
+        "does not name the inner step: {text}"
+    );
+    drop(hold_tx);
+}
+
+#[test]
+fn a_doubled_outer_reports_the_inner_step() {
+    let clock: &'static std::sync::Arc<crate::clock::FakeClock> =
+        Box::leak(Box::new(crate::clock::FakeClock::new()));
+    let root = Deadline::on(&**clock);
+    let outer_deadline = root.within(WHOLE_SUBSYSTEM_WITHIN);
+    let inner_deadline = root.within(MUST_SUCCEED_WITHIN);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN);
+    let (hold_tx, hold_rx) = mpsc::channel::<()>();
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        within("outer", outer_deadline, move || {
+            within("inner", inner_deadline, move || {
+                hold_rx.recv().unwrap();
+            })
+        })
+    }));
+    let err = result.expect_err("doubled outer reports the inner step");
+    let text = message(err);
+    assert!(
+        text.contains("the wait for outer panicked"),
+        "carries the outer wait: {text}"
+    );
+    assert!(text.contains("for inner"), "names the inner step: {text}");
+    assert!(
+        !text.trim_end().ends_with("for outer"),
+        "does not end at the outer wait: {text}"
+    );
+    drop(hold_tx);
+}
