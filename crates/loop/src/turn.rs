@@ -10,7 +10,8 @@ use contract::events::{
     Event, PreambleReason, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome,
     TurnStarted, group_notices, grouped_lead,
 };
-use contract::provider::Input;
+use contract::provider::{Input, ToolDefinition};
+use contract::tool::Tool;
 
 use crate::{Error, Loop, Preamble, Summary, cancel, inbox, mint, prompt, status};
 
@@ -513,17 +514,25 @@ fn pause_sandbox_for_test() {
 
 impl Loop {
     /// The one invalidation every derived sandbox cache goes through on a
-    /// toggle flip and on a reload: refreshes the registered shell entry to
-    /// the live definition, then stops warming, clears the cached build,
-    /// sets the passed reason and rebuilds the preamble (which re-runs the
-    /// prompt build, re-derives the catalogue and sources, and publishes
-    /// rows). The live definition locks the shared handle per statement
+    /// toggle flip and on a reload: refreshes the shell entry to the live
+    /// definition, then stops warming, clears the cached build, sets the
+    /// passed reason and rebuilds the preamble (which re-runs the prompt
+    /// build, re-derives the catalogue and sources, and publishes rows).
+    /// The entry is located without naming it: it is the registered entry
+    /// whose live definition moved since its snapshot, with the key taken
+    /// from the owned live definition. A sandbox flip moves only that
+    /// entry. The live definition locks the shared handle per statement
     /// and releases, so no guard is held across the call here: holding one
-    /// would self-deadlock on the non-reentrant mutex. A flip between the
-    /// snapshot and the publish cannot publish stale bytes: the flipped or
-    /// refreshed value rides the delivery and the publish compares under
-    /// its own acquisition, re-running snapshot-plus-compute once on
-    /// mismatch; inbox serialization makes the mismatch unreachable.
+    /// would self-deadlock on the non-reentrant mutex. The loop observes
+    /// the setting only through these bytes — the tool seam exposes no
+    /// enabled flag, and the shell handle lives in a crate the loop never
+    /// links — so the enabled-level compare lives in the session-owned
+    /// switch (previous against new under the handle lock, with the verdict
+    /// traveling through the delivery), while this publish compares the
+    /// fresh bytes against the snapshot, re-running snapshot-plus-compute
+    /// once on mismatch, then publishing. Inbox serialization (one delivery
+    /// at a time, no scheduling point inside this synchronous seam) makes
+    /// the mismatch unreachable.
     pub(crate) fn invalidate_sandbox(
         &mut self,
         reason: PreambleReason,
@@ -535,28 +544,29 @@ impl Loop {
         // `/tools` metadata stale, so the seam refreshes the entry at the
         // single site. No other caller clears the cached build or stops
         // warming for sandbox.
-        if let Some((by, tool, _)) = self.tools.get("shell").cloned() {
-            let snapshot = tool.definition();
-            #[cfg(test)]
-            pause_sandbox_for_test();
+        //
+        // The carried value names the intended setting through the delivery;
+        // the publish decision below reads the owned bytes, the only sandbox
+        // state this crate can observe.
+        let _ = expected_enabled;
+        let mut moved: Vec<(String, Arc<dyn Tool>, ToolDefinition)> = Vec::new();
+        for (by, tool, stored) in self.tools.values() {
+            let live = tool.definition();
+            if live != *stored {
+                moved.push((by.clone(), Arc::clone(tool), live));
+            }
+        }
+        #[cfg(test)]
+        pause_sandbox_for_test();
+        for (by, tool, snapshot) in moved {
             let fresh = tool.definition();
-            // The carried value documents the flip through the delivery; the
-            // byte compare below is what publishes fresh bytes on the forced
-            // interleave. Inbox serialization (one delivery at a time, no
-            // scheduling point inside this synchronous seam) makes the
-            // mismatch unreachable.
-            let _ = expected_enabled;
             let definition = if fresh != snapshot {
                 tool.definition()
             } else {
                 snapshot
             };
-            self.tools
-                .insert("shell".to_owned(), (by, tool, definition));
-        } else {
-            #[cfg(test)]
-            pause_sandbox_for_test();
-            let _ = expected_enabled;
+            let name = definition.name.clone();
+            self.tools.insert(name, (by, tool, definition));
         }
         self.warming.stop(self.log.clock().now());
         self.preamble = None;
