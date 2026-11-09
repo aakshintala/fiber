@@ -231,3 +231,4 @@ crates/main/tests/commands/feedback.rs	fiber-4130	plan	2026-11-09T02:53:28Z	Amog
 docs/tui.md	fiber-4130	plan	2026-11-09T02:53:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/invocation.md	fiber-4130	plan	2026-11-09T02:53:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/user/reporting.md	fiber-4130	plan	2026-11-09T02:53:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/feedback_tests.rs	fiber-4130	grant	2026-11-09T02:55:12Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4130-frame-capture-plan	
