@@ -1078,15 +1078,15 @@ impl Settings {
         }
     }
 
-    /// Clears the search: with a nonempty query on a match, the focus
-    /// stays on that match in its own tab; with no match, or an empty
-    /// query, the focus goes back to the row focused when the search
-    /// opened. The next Esc closes, through the ordinary path.
+    /// Clears the search: with a match, the focus stays on that match
+    /// in its own tab; with no match, the focus goes back to the row
+    /// focused when the search opened. The next Esc closes, through the
+    /// ordinary path.
     fn clear_search(&mut self, ctx: &Ctx<'_>) {
         let Some(search) = self.search.take() else {
             return;
         };
-        if !search.query.expand().is_empty() && self.focus.is_some() {
+        if self.focus.is_some() {
             if let Some(tab) = self.tab_of_focus() {
                 self.tab = tab;
             }

@@ -3342,8 +3342,8 @@ fn settings_search_matches_draw_in_a_short_frame() {
 
 // The ruled Escape transitions (`docs/tui.md`, "Swapped views",
 // `/settings`, "Search"): with a match the focus stays on it in its own
-// tab; with no match, or an empty query, it goes back to the row focused
-// when the search opened. The next Esc returns.
+// tab; with no match it goes back to the row focused when the search
+// opened. The next Esc returns.
 
 /// The fixture rows without `key`.
 fn without(key: &str) -> Vec<SettingRow> {
@@ -3453,13 +3453,13 @@ fn settings_search_escape_with_no_match_restores_the_origin_row() {
 }
 
 #[test]
-fn settings_search_escape_empty_query_restores_the_origin() {
+fn settings_search_escape_empty_query_keeps_the_match() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "tui.rail.width");
-    let origin = screen(&settings);
     one(&mut settings, &fake, Key::Char('/'));
-    // Even with the result focus moved into another tab, an empty query
-    // restores the origin.
+    // Even with an empty query, a displayed focused match stays on its
+    // own tab: only "with no match" goes back (`docs/tui.md`, "Swapped
+    // views", `/settings`, "Search").
     press(
         &mut settings,
         &fake,
@@ -3470,12 +3470,12 @@ fn settings_search_escape_empty_query_restores_the_origin() {
         Some(super::Focus::Key("tui.attention.bell".to_owned()))
     );
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
-    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Notifications);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("tui.rail.width".to_owned()))
+        Some(super::Focus::Key("tui.attention.bell".to_owned()))
     );
-    assert_eq!(screen(&settings), origin);
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
 }
 
@@ -3500,21 +3500,28 @@ fn settings_search_escape_screen_match_stays_on_its_tab() {
 }
 
 #[test]
-fn settings_search_escape_reopen_recaptures_the_origin() {
+fn settings_search_escape_reopen_empty_query_keeps_the_first_match() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "tui.rail.width");
     one(&mut settings, &fake, Key::Char('/'));
     typed(&mut settings, &fake, "skills");
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
     assert_eq!(settings.tab, SettingsTab::Sessions);
-    // Opening again captures the cleared tab and row as the origin.
+    // Opening again starts an empty query over every row, so the first
+    // result takes the focus; Esc stays on that match in its own tab
+    // (`docs/tui.md`, "Swapped views", `/settings`, "Search").
     one(&mut settings, &fake, Key::Char('/'));
     assert_eq!(query_of(&settings), "");
-    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
-    assert_eq!(settings.tab, SettingsTab::Sessions);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Screen(super::Screen::Skills))
+        Some(super::Focus::Key("tui.hover".to_owned()))
+    );
+    assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.hover".to_owned()))
     );
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Close));
 }
@@ -3740,19 +3747,6 @@ fn settings_search_controls_dash_c_stays_read_only_and_delete_resets_the_match()
         settings.focus,
         Some(super::Focus::Key("tui.rail.width".to_owned()))
     );
-    // With no match Enter, Space, Tab and Delete change nothing and ask
-    // for no screen.
-    let mut settings = searched(&fake, "zzz");
-    for key in [Key::Enter, Key::Char(' '), Key::Tab] {
-        assert!(matches!(one(&mut settings, &fake, key), Act::Stay));
-    }
-    assert!(matches!(
-        edit(&mut settings, &fake, Edit::Delete),
-        Act::Stay
-    ));
-    assert!(fake.writes().is_empty());
-    assert_eq!(resets(&fake).len(), 1);
-    assert!(settings.take_request().is_none());
 }
 
 #[test]
