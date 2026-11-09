@@ -133,7 +133,6 @@ docs/tools.md	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aak
 crates/main/src/keeper_restore.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
 crates/main/src/keeper_restore_tests.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
 crates/loop/src/resume_tests.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
-crates/main/tests/release_pack.rs	fiber-3556	plan	2026-11-08T16:13:02Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/3556-release-pack-flake	
 crates/main/tests/hub_exit_window.rs	fiber-4230	plan	2026-11-08T16:24:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/bubble.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/bubble_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -172,7 +171,6 @@ crates/tui/src/configure_fake.rs	fiber-4443	plan	2026-11-08T21:45:45Z	Amoghs-Mac
 crates/main/tests/support/mod.rs,crates/main/tests/commands/setup.rs,crates/main/tests/support/journey.rs,crates/main/tests/main_journeys.rs,crates/main/tests/tool_calls/mcp_commands.rs,crates/main/tests/commands/release_pack.rs,crates/main/tests/commands/doctor.rs,crates/main/tests/screens/terminal.rs,crates/main/tests/support/pty.rs,crates/tui/src/event_loop_tests.rs,crates/tui/src/remote_run_tests.rs	fiber-4443	grant	2026-11-08T21:46:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4443-fixtures-start-signed-in	
 crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4261	plan	2026-11-08T21:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4434
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4261	plan	2026-11-08T21:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4434
-crates/main/tests/commands/release_pack.rs	fiber-3556	plan	2026-11-08T22:13:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/bug-red	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-bug-red	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-bug-red-cargo	fiber-4446	plan	2026-11-08T22:21:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
