@@ -10,11 +10,15 @@
 use crate::support;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixStream;
+use std::io::{BufRead, BufReader, Write as _};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 
 use fakes::Watchdog;
@@ -206,6 +210,68 @@ fn fixture_for(
         ready,
         gate,
     }
+}
+
+/// A fixture whose background job floods continuously: past the crash it
+/// writes numbered chunks until the test-owned stop file appears,
+/// publishing each completed chunk's number and a final count. Receipts
+/// and the stop are control files, never the job's stdout.
+struct FloodFixture {
+    bound: BoundFixture,
+    stop: PathBuf,
+    receipt: PathBuf,
+    final_count: PathBuf,
+}
+
+fn flood_fixture() -> FloodFixture {
+    let mut control = None;
+    let bound = fixture_for(|marker, ready, gate| {
+        let dir = ready.path().parent().unwrap().to_path_buf();
+        let stop = dir.join("flood-stop");
+        let receipt = dir.join("flood-receipt");
+        let final_count = dir.join("flood-final");
+        let script = dir.join("flood.sh");
+        // Past the initial pre-crash chunks the producer writes successive
+        // chunks with no handover-phase hold, until the test-owned stop
+        // file appears, checking only between whole chunks. Its stdout is
+        // the flood alone; the receipt and the final count are control
+        // files, never job output. Each receipt counts completed chunks.
+        fs::write(
+            &script,
+            format!(
+                r#"emit() {{ awk -v c="$1" 'BEGIN{{pad=sprintf("%53s","");gsub(/ /,"x",pad);for(j=0;j<16384;j++)printf "%03d-%05d-%s\n",c,j,pad}}'; }}
+i=0
+while [ $i -lt 24 ]; do emit $i; i=$((i + 1)); done
+echo $$ > "{first}"
+cat "{gate}"
+while [ ! -f "{stop}" ]; do emit $i; i=$((i + 1)); echo $i > "{receipt}"; done
+echo $i > "{final_count}"
+"#,
+                first = ready.path().display(),
+                gate = gate.display(),
+                stop = stop.display(),
+                receipt = receipt.display(),
+                final_count = final_count.display(),
+            ),
+        )
+        .unwrap();
+        control = Some((stop, receipt, final_count));
+        format!("sh {} {marker}", script.display())
+    });
+    let (stop, receipt, final_count) = control.unwrap();
+    FloodFixture {
+        bound,
+        stop,
+        receipt,
+        final_count,
+    }
+}
+
+/// Reads a chunk number the producer published, if it published one.
+fn published(path: &std::path::Path) -> Option<u64> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
 }
 
 /// What a crashed session leaves: its one background job under the keeper.
@@ -940,45 +1006,428 @@ fn peak_rss_kib(pid: u32) -> u64 {
     line.split_whitespace().nth(1).unwrap().parse().unwrap()
 }
 
+// ---- a relayed handover for the flood probe ----
+
+/// What the handover relay tells the test about the lines it forwards.
+enum RelayEvent {
+    Identify {
+        raw: String,
+    },
+    Handover {
+        raw: String,
+    },
+    HandoverReply {
+        raw: String,
+        jobs: Vec<(String, String)>,
+    },
+    AdoptedHeld {
+        raw: String,
+    },
+    AdoptDone {
+        raw: String,
+    },
+    Output {
+        raw: String,
+    },
+    Exit {
+        raw: String,
+    },
+}
+
+/// Occurrences of the handover's covered lines, counted by the relay: a
+/// second line of the same shape fails the witness, it never slips by.
+#[derive(Default)]
+struct RelayCounts {
+    identify: usize,
+    handover: usize,
+    handover_reply: usize,
+    adopted: usize,
+    adopt_done: usize,
+    exit: usize,
+}
+
+/// The running jobs a Handover reply carries, as job id and output path.
+fn running_jobs(value: &Value) -> Vec<(String, String)> {
+    value["handover"]["running"]
+        .as_array()
+        .map(|running| {
+            running
+                .iter()
+                .map(|job| {
+                    (
+                        job["job_id"].as_str().unwrap_or_default().to_owned(),
+                        job["output_path"].as_str().unwrap_or_default().to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+struct RelaySockets {
+    session: UnixStream,
+    upstream: UnixStream,
+}
+
+/// What a signaled Output frame carries: parsed bytes, never empty and
+/// never dumped on failure. The wire enum tags each line with its variant,
+/// so the bytes nest inside `output`.
+fn nonempty_output(raw: &str) {
+    let value: Value = serde_json::from_str(raw).expect("an Output frame parses");
+    assert!(
+        value["output"]["bytes"]
+            .as_str()
+            .is_some_and(|bytes| !bytes.is_empty()),
+        "a signaled Output frame is nonempty"
+    );
+}
+
+/// The relay's state shared with its worker: the handover line counts, the
+/// shutdown clones and the shutdown flag.
+#[derive(Clone)]
+struct RelayShared {
+    counts: Arc<Mutex<RelayCounts>>,
+    sockets: Arc<Mutex<Option<RelaySockets>>>,
+    shutdown: Arc<AtomicBool>,
+}
+
+/// A transparent handover relay: it moves the keeper's socket pathname
+/// aside, listens at the original path, and forwards every JSON line both
+/// directions byte for byte, holding the session's Adopted until the test
+/// releases it. Both relay readers run concurrently, so output cannot
+/// block the acknowledgement path. A session disconnect or a dead peer
+/// ends forwarding quietly; only a lost release fails loudly, so a
+/// missing release fails the test instead of hanging it. Dropping sets the
+/// shutdown flag, drops the release sender and shuts its sockets down,
+/// which ends even a still-waiting accept loop, then collects its worker
+/// without panicking.
+struct Relay {
+    events: mpsc::Receiver<RelayEvent>,
+    release: Option<mpsc::Sender<()>>,
+    shared: RelayShared,
+    finished: mpsc::Receiver<Result<(), String>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+/// The text and parsed value of one forwarded line, when it is JSON.
+fn parse_line(line: &[u8]) -> Option<(String, Value)> {
+    let text = std::str::from_utf8(line).ok()?;
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    let value = serde_json::from_str(text).ok()?;
+    Some((text.to_owned(), value))
+}
+
+fn send_event(send: &mpsc::Sender<RelayEvent>, event: RelayEvent) {
+    match send.send(event) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+impl Relay {
+    /// Moves the keeper's socket at `original` to another short path in the
+    /// same directory and binds the relay at the original path, so the
+    /// session's first dial reaches the relay instead of being refused by
+    /// the moved-away keeper. The upstream connection opens at once,
+    /// before the resume starts; every channel exists before either
+    /// forwarding thread starts.
+    fn start(original: PathBuf) -> Self {
+        let upstream = original.with_file_name("keeper-upstream");
+        fs::rename(&original, &upstream).expect("the keeper socket moves aside");
+        let listener = UnixListener::bind(&original).expect("the relay binds the original path");
+        listener
+            .set_nonblocking(true)
+            .expect("the relay polls its listener");
+        let upstream = UnixStream::connect(&upstream).expect("the keeper takes the relay upstream");
+        let (events_send, events) = mpsc::channel();
+        let (release_send, release) = mpsc::channel();
+        let (finished_send, finished) = mpsc::channel();
+        let shared = RelayShared {
+            counts: Arc::new(Mutex::new(RelayCounts::default())),
+            sockets: Arc::new(Mutex::new(None)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+        };
+        let worker_shared = shared.clone();
+        let worker = thread::spawn(move || {
+            let outcome = relay_worker(
+                original,
+                listener,
+                upstream,
+                events_send,
+                release,
+                worker_shared,
+            );
+            match finished_send.send(outcome) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Self {
+            events,
+            release: Some(release_send),
+            shared,
+            finished,
+            worker: Some(worker),
+        }
+    }
+
+    /// Forwards the held Adopted upstream.
+    fn release(&mut self) {
+        if let Some(send) = self.release.take() {
+            match send.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Ends the worker and collects it: the shutdown flag ends a
+    /// still-waiting accept loop, dropping the release sender ends the
+    /// held-Adopted wait, and shutting every socket down ends reads blocked
+    /// on either side, so the join is prompt. Never panics.
+    fn shutdown(&mut self) {
+        // No wake connection: one would look exactly like the session's
+        // dial to a worker still waiting in accept.
+        self.shared.shutdown.store(true, Ordering::SeqCst);
+        drop(self.release.take());
+        if let Ok(mut locked) = self.shared.sockets.lock()
+            && let Some(sockets) = locked.take()
+        {
+            match sockets.session.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+            match sockets.upstream.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        if let Some(worker) = self.worker.take() {
+            match worker.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// The worker's outcome, collected with a deadline.
+    fn finished(&self, deadline: Deadline, what: &str) -> Result<(), String> {
+        deadline.recv_or_fail(&self.finished, what)
+    }
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Accepts the session's dial (the connect a moved-away keeper would have
+/// refused), frees the original path so the session can bind its real
+/// socket once the keeper releases the log, then forwards both directions
+/// to the worker's end. The accepted connection survives the unlink.
+fn relay_worker(
+    original: PathBuf,
+    listener: UnixListener,
+    upstream: UnixStream,
+    events: mpsc::Sender<RelayEvent>,
+    release: mpsc::Receiver<()>,
+    shared: RelayShared,
+) -> Result<(), String> {
+    let session = loop {
+        match listener.accept() {
+            Ok((session, _)) => break session,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if shared.shutdown.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                thread::yield_now();
+            }
+            Err(error) => return Err(format!("the relay accepts the session: {error}")),
+        }
+    };
+    drop(listener);
+    match fs::remove_file(&original) {
+        Ok(()) | Err(_) => {}
+    }
+    let session_write = session
+        .try_clone()
+        .map_err(|error| format!("the relay clones the session side: {error}"))?;
+    let upstream_write = upstream
+        .try_clone()
+        .map_err(|error| format!("the relay clones upstream: {error}"))?;
+    *shared.sockets.lock().unwrap() = Some(RelaySockets {
+        session: session
+            .try_clone()
+            .map_err(|error| format!("the relay keeps a shutdown handle: {error}"))?,
+        upstream: upstream
+            .try_clone()
+            .map_err(|error| format!("the relay keeps a shutdown handle: {error}"))?,
+    });
+    let upstream_events = events.clone();
+    let upstream_counts = Arc::clone(&shared.counts);
+    let forwarder = thread::spawn(move || {
+        forward_upstream(upstream, session_write, &upstream_events, &upstream_counts);
+    });
+    let outcome = forward_session(session, upstream_write, &events, release, &shared.counts);
+    // The session side ended: shut upstream so the forwarder ends too,
+    // then collect it without holding any lock.
+    if let Some(sockets) = shared.sockets.lock().unwrap().take() {
+        match sockets.upstream.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    match forwarder.join() {
+        Ok(()) | Err(_) => {}
+    }
+    outcome
+}
+
+/// Forwards keeper to session, copying the acknowledgement, output and
+/// ending lines the test consumes. A dead peer ends it quietly. A chunk
+/// without the framing newline is a torn tail: the keeper died mid-write,
+/// so it is never forwarded and never parsed.
+fn forward_upstream(
+    upstream: UnixStream,
+    session: UnixStream,
+    events: &mpsc::Sender<RelayEvent>,
+    counts: &Arc<Mutex<RelayCounts>>,
+) {
+    let mut reader = BufReader::new(upstream);
+    let mut writer = session;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        if writer.write_all(&line).is_err() {
+            break;
+        }
+        let Some((raw, value)) = parse_line(&line) else {
+            continue;
+        };
+        if value.get("adopt_done").is_some() {
+            counts.lock().unwrap().adopt_done += 1;
+            send_event(events, RelayEvent::AdoptDone { raw });
+        } else if value.get("handover").is_some() {
+            counts.lock().unwrap().handover_reply += 1;
+            send_event(
+                events,
+                RelayEvent::HandoverReply {
+                    raw,
+                    jobs: running_jobs(&value),
+                },
+            );
+        } else if value
+            .get("output")
+            .and_then(|output| output.get("bytes"))
+            .is_some_and(|bytes| bytes.as_str().is_some_and(|text| !text.is_empty()))
+        {
+            send_event(events, RelayEvent::Output { raw });
+        } else if value.get("exit").is_some() {
+            counts.lock().unwrap().exit += 1;
+            send_event(events, RelayEvent::Exit { raw });
+        }
+    }
+}
+
+/// Forwards session to keeper: the handshake at once, the Adopted only
+/// once the test releases it, everything after as it arrives. A dead peer
+/// ends it quietly; only a lost release fails loudly. A chunk without the
+/// framing newline is a torn tail: the session died mid-write, so it is
+/// never forwarded and never parsed.
+fn forward_session(
+    session: UnixStream,
+    upstream: UnixStream,
+    events: &mpsc::Sender<RelayEvent>,
+    release: mpsc::Receiver<()>,
+    counts: &Arc<Mutex<RelayCounts>>,
+) -> Result<(), String> {
+    let mut reader = BufReader::new(session);
+    let mut writer = upstream;
+    let mut line = Vec::new();
+    // The handshake: copy Identify and the Handover request for the
+    // verdict, hold Adopted. The running jobs come from the keeper's
+    // Handover reply, since the request carries none. Classification comes
+    // before forwarding: the held Adopted must not reach the keeper until
+    // the test releases it.
+    let held = loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => return Ok(()),
+            Ok(_) => {}
+            Err(_) => return Ok(()),
+        }
+        if line.last() != Some(&b'\n') {
+            return Ok(());
+        }
+        let Some((raw, value)) = parse_line(&line) else {
+            if writer.write_all(&line).is_err() {
+                return Ok(());
+            }
+            continue;
+        };
+        if value.get("adopted").is_some() {
+            counts.lock().unwrap().adopted += 1;
+            send_event(events, RelayEvent::AdoptedHeld { raw });
+            break line.clone();
+        }
+        if writer.write_all(&line).is_err() {
+            return Ok(());
+        }
+        if value.get("identify").is_some() {
+            counts.lock().unwrap().identify += 1;
+            send_event(events, RelayEvent::Identify { raw });
+        } else if value
+            .get("handover")
+            .is_some_and(|handover| handover.is_boolean())
+        {
+            counts.lock().unwrap().handover += 1;
+            send_event(events, RelayEvent::Handover { raw });
+        }
+    };
+    // Held until the test releases, holding no lock and no writer mutex:
+    // the forwarder owns the other direction's writer. A lost release
+    // fails loudly instead of hanging the suite, since no second process
+    // decides the release.
+    match release.recv() {
+        Ok(()) => {}
+        Err(_) => return Err("the relay lost its release".to_owned()),
+    }
+    if writer.write_all(&held).is_err() {
+        return Ok(());
+    }
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        if writer.write_all(&line).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn keeper_handover_flood_exact_output_and_rss() {
-    // Three phases of 24 MiB each: before the crash, while only the keeper
-    // is there, and after the resume holds the job.
-    let mut second = None;
-    let fixture = fixture_for(|marker, ready, gate| {
-        let dir = ready.path().parent().unwrap().to_path_buf();
-        let phase_two = dir.join("phase-two");
-        fs::create_dir_all(&phase_two).unwrap();
-        second = Some(fakes::children::Ready::new(&phase_two));
-        let script = dir.join("flood.sh");
-        fs::write(
-            &script,
-            format!(
-                r#"emit() {{ awk -v c="$1" 'BEGIN{{pad=sprintf("%53s","");gsub(/ /,"x",pad);for(j=0;j<16384;j++)printf "%03d-%05d-%s\n",c,j,pad}}'; }}
-i=0
-while [ $i -lt 24 ]; do emit $i; i=$((i+1)); done
-echo $$ > {first}
-cat {gate}
-while [ $i -lt 48 ]; do emit $i; i=$((i+1)); done
-echo $$ > {next}
-while [ $i -lt 72 ]; do emit $i; i=$((i+1)); done
-"#,
-                first = ready.path().display(),
-                gate = gate.display(),
-                next = second.as_ref().unwrap().path().display(),
-            ),
-        )
-        .unwrap();
-        format!("sh {} {marker}", script.display())
-    });
-    let second = second.unwrap();
-    let setup = &fixture.setup;
-    let id = fixture.id.as_str();
-    // Phase one is all in the file before the crash: what a live session was
-    // sent and had not read would die with it.
+    // Past the crash the producer floods continuously until the
+    // test-owned stop file appears; the relay holds the handover's Adopted
+    // until the test releases it.
+    let fixture = flood_fixture();
+    let setup = &fixture.bound.setup;
+    let id = fixture.bound.id.as_str();
     let deadline = setup.deadline;
-    let crashed = crash_after(&fixture, None, |output| {
+    // The initial pre-crash FIFO: what a live session was sent and had not
+    // read would die with it, so no byte sent to the dead session is
+    // mistaken for a keeper-owned byte.
+    let crashed = crash_after(&fixture.bound, None, |output| {
         let watched = output.to_path_buf();
         fakes::wait_until("phase one in the file", deadline.start_wait(), move || {
             len_of(&watched) >= 24 * MIB
@@ -986,50 +1435,207 @@ while [ $i -lt 72 ]; do emit $i; i=$((i+1)); done
     });
     let _guard = KillGroup(crashed.job_group);
     let output = crashed.output.clone();
-    // Phase two: only the keeper writes it, into the file.
-    release(&fixture.gate, setup.deadline);
-    second.wait(setup.deadline.start_wait());
-    let watched = output.clone();
-    fakes::wait_until(
-        "phase two in the file",
-        setup.deadline.start_wait(),
-        move || len_of(&watched) >= 48 * MIB,
-    );
-    assert_eq!(len_of(&output), 48 * MIB);
-    assert_flood(&output, 0..48);
-    let keeper = fakes::matching(&fixture.keeper_pattern, setup.deadline.left())
-        .unwrap()
-        .into_iter()
-        .max()
-        .unwrap();
-    assert!(holds_open(keeper, &output), "the keeper writes the file");
-
+    // The producer floods the keeper's file while only the keeper is there,
+    // with no handover-phase hold.
+    release(&fixture.bound.gate, setup.deadline);
     script(
         setup,
         "quiet.json",
         json!([{"text":"Noted."},{"text":"Noted."}]),
     );
     // Nobody subscribes during the flood: the peak measures the handover.
-    let serving = serve_resume_unattached(setup, id, &["--model", "scripted/quiet.json"]);
-    let pid = serving.pid();
+    // The keeper phase runs deep before the resume, so the post-switch
+    // frames stay near the size the growth diagnostic is calibrated for:
+    // an unbounded flood would leave its size to startup timing.
+    let watched = output.clone();
+    fakes::wait_until(
+        "the keeper phase to run deep",
+        setup.deadline.start_wait(),
+        move || len_of(&watched) >= 48 * MIB,
+    );
+    // Only the crashed session's keeper exists before the resume: it
+    // writes the flood into the file.
+    let keeper = fakes::matching(&fixture.bound.keeper_pattern, setup.deadline.left())
+        .unwrap()
+        .into_iter()
+        .max()
+        .unwrap();
+    assert!(holds_open(keeper, &output), "the keeper writes the file");
+    // The relay moves the keeper's socket pathname aside and binds the
+    // original path before the resume starts; the session's first dial
+    // reaches the relay instead of being refused.
+    let original = setup.session_socket(&fixture.bound.id);
+    let mut relay = Relay::start(original.clone());
+    // Spawn without waiting for the first turn: the resume's startup sends
+    // Adopted and waits for AdoptDone, which the relay holds, so waiting
+    // for `fiber_started` here would wait for the release below.
+    let workspace = setup.workspace();
+    let args = [
+        "session",
+        "--id",
+        id,
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--resume",
+        "--model",
+        "scripted/quiet.json",
+    ];
+    let mut command = setup.fiber(&args);
+    command.current_dir(&workspace);
+    let (mut child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let session_guard = KillGroup(group);
+    let session_lines = stdout(&mut child);
+    let pid = group;
     let dir = session_dir(setup, id);
     fakes::wait_until(
         "the resumed process to hold the lock",
         setup.deadline.start_wait(),
         move || log::lock_label(&dir).as_deref() == Some(pid.to_string().as_str()),
     );
-    // The keeper has switched the job to frames once it closes the file.
+    // The held-Adopted rendezvous: the relay signals the held request, and
+    // the keeper's Handover reply names the job the verdict restores.
+    let mut identify = None;
+    let mut handover = None;
+    let mut reply = None;
+    let adopted = loop {
+        match deadline.recv_or_fail(&relay.events, "the held Adopted") {
+            RelayEvent::Identify { raw } => identify = Some(raw),
+            RelayEvent::Handover { raw } => handover = Some(raw),
+            RelayEvent::HandoverReply { raw, jobs } => reply = Some((raw, jobs)),
+            RelayEvent::AdoptedHeld { raw } => break raw,
+            RelayEvent::AdoptDone { .. } | RelayEvent::Output { .. } | RelayEvent::Exit { .. } => {
+                panic!("the handshake precedes any keeper line")
+            }
+        }
+    };
+    let identify = identify.expect("the relay copies Identify");
+    let handover = handover.expect("the relay copies the Handover request");
+    assert_eq!(identify, format!("{{\"identify\":\"{id}\"}}"));
+    assert_eq!(identify.len(), id.len() + 15, "the Identify line's length");
+    assert_eq!(handover, r#"{"handover":true}"#);
+    assert_eq!(handover.len(), 17, "the Handover line's length");
+    assert_eq!(adopted, r#"{"adopted":true}"#);
+    assert_eq!(adopted.len(), 16, "the Adopted line's length");
+    // At the signal capture completed chunk N: the receipt counts whole
+    // chunks the producer finished.
+    let receipt = fixture.receipt.clone();
+    fakes::wait_until(
+        "the producer to publish a receipt",
+        setup.deadline.start_wait(),
+        move || published(&receipt).is_some(),
+    );
+    let held_chunks = published(&fixture.receipt).expect("the receipt at the signal");
+    // A later complete chunk reaches the output file while the request
+    // remains held and the keeper still owns its writer: the handover
+    // overlaps the flood instead of preceding it.
     let watched = output.clone();
     fakes::wait_until(
-        "the keeper to stop writing the file",
+        "a later complete chunk in the file while Adopted is held",
         setup.deadline.start_wait(),
-        move || !holds_open(keeper, &watched),
+        move || len_of(&watched) >= (held_chunks + 1) * MIB,
     );
-    assert!(holds_open(pid, &output), "the session holds the file now");
-    // The peak so far: a debug build starts far above the release ceiling, so
-    // the bound is on what the flood adds, as for a foreground flood.
+    assert!(
+        holds_open(keeper, &output),
+        "the keeper still owns its writer"
+    );
+    // The baseline reads before the held request's output: a debug build
+    // starts far above the release ceiling, so the bound is on what the
+    // flood adds, as for a foreground flood.
     let before = peak_rss_kib(pid);
-    // Phase three reaches the file only through the session.
+    // The child keeps producing throughout release and the sink switch.
+    relay.release();
+    // The acknowledgement and the first frame arrive in whatever order the
+    // keeper sends them; the reply may still be in flight from the
+    // rendezvous.
+    let mut adopt_done = None;
+    let mut first_output = false;
+    while adopt_done.is_none() || !first_output || reply.is_none() {
+        match deadline.recv_or_fail(&relay.events, "the acknowledgement and first frame") {
+            RelayEvent::AdoptDone { raw } => adopt_done = Some(raw),
+            RelayEvent::Output { raw } => {
+                nonempty_output(&raw);
+                first_output = true;
+            }
+            RelayEvent::HandoverReply { raw, jobs } => {
+                assert!(reply.is_none(), "one Handover reply");
+                reply = Some((raw, jobs));
+            }
+            RelayEvent::Identify { .. }
+            | RelayEvent::Handover { .. }
+            | RelayEvent::AdoptedHeld { .. }
+            | RelayEvent::Exit { .. } => {
+                panic!("only the acknowledgement and frames follow the release")
+            }
+        }
+    }
+    let adopt_done = adopt_done.expect("the relay forwards AdoptDone");
+    assert_eq!(adopt_done, r#"{"adopt_done":true}"#);
+    assert_eq!(adopt_done.len(), 19, "the AdoptDone line's length");
+    let (reply_raw, reply_jobs) = reply.expect("the relay copies the Handover reply");
+    assert!(
+        reply_raw.starts_with(r#"{"handover":{"running":"#),
+        "the Handover reply's envelope"
+    );
+    assert_eq!(
+        reply_jobs,
+        vec![(
+            crashed.job.clone(),
+            crashed.output.to_str().unwrap().to_owned()
+        )],
+        "the verdict restores the held job"
+    );
+    let serving_receipt = fixture.receipt.clone();
+    let at_signal = published(&serving_receipt).expect("the receipt at the first frame");
+    fakes::wait_until(
+        "further whole-chunk progress past the first frame",
+        setup.deadline.start_wait(),
+        move || published(&serving_receipt).is_some_and(|chunks| chunks > at_signal),
+    );
+    // At least 72 MiB total before the stop: the flood ran past the switch
+    // as frames, not just into the keeper's file.
+    let watched = output.clone();
+    fakes::wait_until(
+        "at least 72 MiB total before the stop",
+        setup.deadline.start_wait(),
+        move || len_of(&watched) >= 72 * MIB,
+    );
+    // The stop: the producer observes it between whole chunks and exits,
+    // so the file ends on a chunk boundary with a final count.
+    fs::write(&fixture.stop, b"").expect("the test owns the stop file");
+    let final_count = fixture.final_count.clone();
+    fakes::wait_until(
+        "the producer to observe the stop",
+        setup.deadline.start_wait(),
+        move || published(&final_count).is_some(),
+    );
+    let chunks = published(&fixture.final_count).expect("the final count");
+    assert!(
+        chunks >= 72,
+        "the flood ran past the switch: {chunks} chunks"
+    );
+    assert_eq!(
+        published(&fixture.receipt),
+        Some(chunks),
+        "the final count follows the last receipt"
+    );
+    // The job's ending frame ends the stream.
+    let exit = loop {
+        match deadline.recv_or_fail(&relay.events, "the job ending frame") {
+            RelayEvent::Exit { raw } => break raw,
+            RelayEvent::Output { raw } => nonempty_output(&raw),
+            RelayEvent::HandoverReply { .. } => panic!("one Handover reply"),
+            RelayEvent::Identify { .. }
+            | RelayEvent::Handover { .. }
+            | RelayEvent::AdoptedHeld { .. }
+            | RelayEvent::AdoptDone { .. } => {
+                panic!("the ending closes the stream")
+            }
+        }
+    };
+    let exit: Value = serde_json::from_str(&exit).expect("the ending parses");
+    assert_eq!(exit["exit"]["code"], 0);
+    // The flood's ending lands in the log once every byte precedes it.
     let ended = session_dir(setup, id);
     fakes::wait_until(
         "the flood's ending",
@@ -1039,14 +1645,18 @@ while [ $i -lt 72 ]; do emit $i; i=$((i+1)); done
                 .is_ok_and(|text| text.contains(r#""kind":"job_completed""#))
         },
     );
-    assert_eq!(len_of(&output), 72 * MIB, "all output precedes the ending");
-    assert_flood(&output, 0..72);
+    assert_eq!(
+        len_of(&output),
+        chunks * MIB,
+        "all output precedes the ending"
+    );
+    assert_flood(&output, 0..chunks);
     let lines = log_lines(setup, id);
     let ends = completions(&lines);
     assert_eq!(ends.len(), 1, "{ends:?}");
     assert_eq!(ends[0]["payload"]["job_id"], crashed.job);
     assert_eq!(ends[0]["payload"]["status"], "completed");
-    // 24 MiB went through the session as frames, and no queue held them.
+    // The flood went through the session as frames, and no queue held them.
     let peak = peak_rss_kib(pid);
     assert!(
         peak <= before + 4096,
@@ -1057,20 +1667,53 @@ while [ $i -lt 72 ]; do emit $i; i=$((i+1)); done
     if cfg!(all(target_arch = "x86_64", not(debug_assertions))) {
         assert!(peak <= 46_720, "peak RSS {peak} KiB");
     }
+    // Each covered line crossed exactly once: a second line of the same
+    // shape would fail here, never slip by.
+    let counts = relay.shared.counts.lock().unwrap();
+    assert_eq!(
+        (
+            counts.identify,
+            counts.handover,
+            counts.handover_reply,
+            counts.adopted,
+            counts.adopt_done,
+            counts.exit
+        ),
+        (1, 1, 1, 1, 1, 1),
+        "each handover line crossed exactly once"
+    );
+    drop(counts);
+    relay.shutdown();
+    assert!(
+        relay.finished(deadline, "the relay to finish").is_ok(),
+        "the relay forwards to its end"
+    );
+    event(&session_lines, "fiber_started", setup.deadline);
+    let serving = Serving {
+        child: Some(child),
+        group,
+        watchdog: Some(watchdog),
+        socket: setup.session_socket(id),
+        link: None,
+        deadline: setup.deadline,
+        guard: Some(session_guard),
+    };
     serving.close();
     assert!(fakes::matching_exits(
-        &fixture.keeper_pattern,
+        &fixture.bound.keeper_pattern,
         setup.deadline.start_wait()
     ));
     assert!(fakes::matching_exits(
-        &fixture.marker,
+        &fixture.bound.marker,
         setup.deadline.start_wait()
     ));
     std::mem::forget(_guard);
     fixture
+        .bound
         .keeper_watchdog
         .stand_down(setup.deadline.cleanup_phase());
     fixture
+        .bound
         .job_watchdog
         .stand_down(setup.deadline.cleanup_phase());
 }
