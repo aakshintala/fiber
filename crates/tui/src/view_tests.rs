@@ -1439,6 +1439,80 @@ fn a_delegate_message_row_shows_its_recipient_description() {
 }
 
 #[test]
+fn a_parent_session_start_message_renders_markdown_in_the_delegate_view() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(at(
+        "job_started",
+        None,
+        0,
+        json!({"job_id": "j_markdown", "description": "Review the change", "output_path": "/o"}),
+    ));
+    app.on_line(at(
+        "delegate_started",
+        Some("a_1"),
+        0,
+        json!({"job_id": "j_markdown", "delegate_session_id": "s_bbbbbbbbbbbbbbbb",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+    assert_eq!(
+        app.open_session_view(crate::app::SessionView::Delegates),
+        crate::app::Effect::None
+    );
+    let serial = app
+        .serial_of_job(&contract::JobId("j_markdown".to_owned()))
+        .expect("the delegate row has a serial");
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Item(
+            serial
+        ))),
+        crate::app::Effect::None
+    );
+    assert!(app.item_open(), "the delegate view is open");
+    app.set_size(WIDTH, 24);
+    app.on_line(session_line(
+        "s_bbbbbbbbbbbbbbbb",
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "session",
+            "from_session_id": "s_aaaaaaaaaaaaaaaa",
+            "content": [{"type": "text", "text": "**bold**\n\n1. one\n2. two"}]}]}),
+        None,
+    ));
+    let area = Rect::new(0, 0, WIDTH, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(
+        shown.contains("s_aaaaaaaaaaaaaaaa"),
+        "the parent labels the start message: {shown}"
+    );
+    assert!(shown.lines().any(|row| row.contains("1. one")), "{shown}");
+    assert!(shown.lines().any(|row| row.contains("2. two")), "{shown}");
+    let row = shown
+        .lines()
+        .position(|row| row.contains("bold"))
+        .unwrap_or_else(|| panic!("the prompt's bold text is drawn: {shown}"));
+    let col = shown
+        .lines()
+        .nth(row)
+        .and_then(|line| {
+            line.find("bold")
+                .map(|byte| crate::format::width(&line[..byte]))
+        })
+        .and_then(|col| u16::try_from(col).ok())
+        .expect("the bold text has a column");
+    for offset in 0..4 {
+        assert!(
+            buf[(col + offset, u16::try_from(row).expect("a row"))]
+                .modifier
+                .contains(Modifier::BOLD),
+            "the delegate start prompt's bold text keeps its style: {shown}"
+        );
+    }
+}
+
+#[test]
 fn tool_group_ledger_open_with_a_call_open() {
     let mut app = empty();
     tool_turn(&mut app);
@@ -2075,6 +2149,13 @@ fn search_panel() {
         "run the tests",
         "Fix the docs\nand the build",
     ] {
+        for inner in [40, 54] {
+            assert_eq!(
+                crate::markdown::render(prompt, inner),
+                crate::markdown::render_prompt(prompt, inner),
+                "the prompt matches the reply renderer at width {inner}"
+            );
+        }
         app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", prompt));
     }
     for ch in "draft".chars() {
@@ -4071,9 +4152,24 @@ fn a_turn_past_the_last_row_is_clipped_to_it() {
         .map(|n| format!("line {n}"))
         .collect::<Vec<_>>()
         .join("\n");
+    assert_eq!(
+        crate::markdown::render(&long, 40),
+        crate::markdown::render_prompt(&long, 40),
+        "the prompt matches the reply renderer"
+    );
+    assert_eq!(
+        crate::markdown::render(&long[..40], 40),
+        crate::markdown::render_prompt(&long[..40], 40),
+        "the prompt matches the reply renderer"
+    );
     app.on_line(turn_started(S_A, &long));
     app.on_line(turn_started(S_A, &long[..40]));
-    app.jump(16);
+    let turns = app.shown(0, usize::MAX).turns;
+    let (_, first_turn) = turns
+        .iter()
+        .find(|(turn, _)| *turn == 0)
+        .expect("the first turn is counted");
+    app.jump(first_turn.end.saturating_sub(1));
     let (_, targets) = pointed(&mut app, WIDTH, 10, None);
     let turn = targets
         .iter()
