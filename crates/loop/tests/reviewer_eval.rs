@@ -414,6 +414,8 @@ fn recorded_verdict_rejects_bad_shapes() {
         shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer"}})),
         shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": "2"}})),
         shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 300}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 3}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 0}})),
     ] {
         let shaped = bad(recorded);
         let problem = parse_line(&shaped.to_string()).unwrap_err();
@@ -2697,6 +2699,13 @@ fn fold_until_deny(dir: &Path, action: &str) -> Vec<r#loop::Reviewed> {
     reviewed
 }
 
+// The deny tests below pin the `--reviewer-denies` output contract
+// (`docs/testing/fakes.md`, "Jigs"): one unlabelled sampled-kind line per
+// reviewer deny at the deny's seq, each reviewed prefix ending in the
+// entry's own call, no sample cap, the first deny per action winning,
+// and silence — not drops — for allows, native decisions, unreplayable
+// denies and calls without a decision.
+
 #[test]
 fn reviewer_denies_emit_deny_with_start_and_recorded_verdict() {
     let home = "/test/home";
@@ -2837,6 +2846,7 @@ fn reviewer_denies_skip_non_deny_decisions() {
             "a_no_reviewer_deny",
             native_resolved(DecidedBy::NoReviewer, Decision::Deny),
         ),
+        ("a_deny", reviewer_denied(Some("kept"))),
     ];
     for (action, decision) in decisions {
         fixture.append(&requested("shell", paris()), Some("t_1"), Some(action));
@@ -2853,7 +2863,11 @@ fn reviewer_denies_skip_non_deny_decisions() {
         Vec::new(),
     )
     .unwrap();
-    assert!(report.lines.is_empty());
+    // The replayable deny control proves the fold ran: only it emits.
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_deny");
+    assert_eq!(entry.recorded.unwrap().reason.as_deref(), Some("kept"));
     assert!(report.dropped.is_empty());
 }
 
@@ -2864,13 +2878,24 @@ fn reviewer_denies_exclude_unreplayable_denies_silently() {
     fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_bare"));
     fixture.append(&reviewer_denied(None), Some("t_1"), Some("a_bare"));
     fixture.append(&reviewer_denied_carrying(), Some("t_1"), Some("a_ghost"));
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_kept"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_kept"),
+    );
+    fixture.append(&reviewer_denied(Some("kept")), Some("t_1"), Some("a_kept"));
     let report = run_reviewer_denies(
         &[fixture.dir.to_string_lossy().into_owned()],
         &deny_opts(),
         Vec::new(),
     )
     .unwrap();
-    assert!(report.lines.is_empty());
+    // The replayable deny control proves the fold ran: the two
+    // unreplayable denies stay silent while it emits.
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_kept");
     assert!(report.dropped.is_empty());
 }
 
@@ -2930,7 +2955,7 @@ fn reviewer_denies_reject_dirs_outside_the_allowlist() {
 }
 
 #[test]
-fn reviewer_denies_emit_empty_output_without_denies() {
+fn reviewer_denies_skip_calls_without_a_decision() {
     let fixture = Fixture::new("s_rd_empty", "/home/u/work/fiber");
     fixture.append(&user_turn("go"), Some("t_1"), None);
     fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_plain"));
@@ -2939,13 +2964,24 @@ fn reviewer_denies_emit_empty_output_without_denies() {
         Some("t_1"),
         Some("a_plain"),
     );
+    fixture.append(&requested("shell", paris()), Some("t_1"), Some("a_kept"));
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_kept"),
+    );
+    fixture.append(&reviewer_denied(Some("kept")), Some("t_1"), Some("a_kept"));
     let report = run_reviewer_denies(
         &[fixture.dir.to_string_lossy().into_owned()],
         &deny_opts(),
         Vec::new(),
     )
     .unwrap();
-    assert!(report.lines.is_empty());
+    // The replayable deny control proves the fold ran: the call with no
+    // decision emits nothing while it emits.
+    assert_eq!(report.lines.len(), 1);
+    let entry = parse_line(&report.lines[0]).unwrap();
+    assert_eq!(entry.id, "a_kept");
     assert!(report.dropped.is_empty());
 }
 

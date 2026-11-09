@@ -439,7 +439,8 @@ fn recorded_value(recorded: &RecordedVerdict) -> Value {
 
 /// Parses one recorded reviewer verdict: absent or null reads as no
 /// verdict, anything else must carry a known decision word, a
-/// string-or-null reason and a null-or-shaped reviewer.
+/// string-or-null reason and a null-or-shaped reviewer whose stage is 1
+/// or 2 (`docs/events.md`, `permission_resolved`).
 fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
     let decision = match value.get("decision").and_then(Value::as_str) {
         Some("allow") => Decision::Allow,
@@ -476,6 +477,11 @@ fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
                 .ok_or_else(|| {
                     format!("review: bad set line {id}: the recorded reviewer names no stage")
                 })?;
+            if !(1..=2).contains(&stage) {
+                return Err(format!(
+                    "review: bad set line {id}: the recorded reviewer stage is not 1 or 2"
+                ));
+            }
             Some(ReviewerRef { model, stage })
         }
     };
