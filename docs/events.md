@@ -517,17 +517,6 @@ subscribes, at either level, is sent the latest.
 | `jobs` | integer | yes | jobs running, delegates excluded |
 | `clients` | integer | yes | the `full` connections attached, as the latest `clients` line counts them; `summary` connections are not counted |
 
-#### `keepers`
-
-Ephemeral. The hub feed's keeper set, for a client that counts the keepers
-of gone sessions: every keeper-held `run/` entry the hub's probe confirms,
-in id order, empty when none. Written when the set changes, and once to every
-new feed subscriber; the latest wins.
-
-| Key | Type | Required | Meaning |
-|---|---|---|---|
-| `keepers` | array of strings | yes | the keeper-held session ids, in id order; empty when none |
-
 #### `context_added`
 
 Durable.
@@ -1536,6 +1525,19 @@ A workspace move to the folder the session is already in answers:
 ```json
 {"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
 ```
+
+## Hub feed
+
+#### `keepers`
+
+Ephemeral. The hub feed's keeper set, for a client that counts the keepers
+of gone sessions: every keeper-held `run/` entry the hub's probe confirms,
+in id order, empty when none. Written when the set changes, and once to every
+new feed subscriber; the latest wins.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `keepers` | array of strings | yes | the keeper-held session ids, in id order; empty when none |
 
 ## Resume
 

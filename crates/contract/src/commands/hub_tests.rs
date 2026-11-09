@@ -74,6 +74,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "refresh", "args": {}}),
         json!({"id": "c", "command": "stop", "args": {}}),
         json!({"id": "c", "command": "stop", "args": {"sessions": true}}),
+        json!({"id": "c", "command": "stop_keepers", "args": {"keepers": ["s_1", "s_2"]}}),
         json!({"id": "c", "command": "placeholder_env",
             "args": {"names": ["DATABRICKS_HOST"]}}),
         json!({"id": "c", "command": "pairing_code", "args": {"device": "d"}}),
