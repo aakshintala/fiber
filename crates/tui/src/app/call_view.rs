@@ -698,7 +698,7 @@ impl App {
             view.pager.request = Some((id.clone(), offset));
             self.outbox.wait(&id, super::Waiting::ArtifactPage);
             session_line(
-                &id,
+                &contract::CommandId(id.clone()),
                 &session,
                 Command::ArtifactPage(ArtifactPageArgs { path, offset }),
             )

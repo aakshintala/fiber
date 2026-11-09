@@ -271,9 +271,14 @@ impl Connection {
                 .cloned()
                 .unwrap_or_else(|| session.clone());
             let command = session_line(
-                &id,
+                &contract::CommandId(id.clone()),
                 &top,
-                Command::History(history_args(&top, session, Some(from), Some(to))),
+                Command::History(history_args(
+                    &top,
+                    session,
+                    Some(contract::Seq(from)),
+                    Some(contract::Seq(to)),
+                )),
             );
             let written = self
                 .hub
@@ -353,7 +358,11 @@ impl Connection {
                 return Ok(());
             };
             let id = support::mint("c_");
-            let command = session_line(&id, session, Command::History(args));
+            let command = session_line(
+                &contract::CommandId(id.clone()),
+                session,
+                Command::History(args),
+            );
             let written = self
                 .hub
                 .as_ref()

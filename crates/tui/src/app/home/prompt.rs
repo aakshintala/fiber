@@ -288,7 +288,7 @@ impl App {
         }
         let id = support::mint("c_");
         lines.push(session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::Close(CloseArgs { now: true }),
         ));

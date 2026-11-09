@@ -26,7 +26,7 @@ pub(crate) fn parse(text: &str) -> Option<(&str, bool)> {
 /// The `shell` command line for `session`.
 pub(crate) fn command(id: &str, session: &SessionId, command: &str, send: bool) -> String {
     session_line(
-        id,
+        &contract::CommandId(id.to_owned()),
         session,
         Command::Shell(Shell {
             command: command.to_owned(),

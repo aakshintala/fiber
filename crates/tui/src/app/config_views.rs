@@ -462,7 +462,7 @@ impl App {
     fn send_config_command(&mut self, command: Command) -> Option<(String, String)> {
         let (session, _) = self.command_session()?;
         let id = support::mint("c_");
-        let line = super::session_line(&id, &session, command);
+        let line = super::session_line(&contract::CommandId(id.clone()), &session, command);
         Some((id, line))
     }
 

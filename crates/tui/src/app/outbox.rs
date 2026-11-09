@@ -348,9 +348,9 @@ impl Outbox {
 /// written as one JSON object line (`docs/invocation.md`, "The command
 /// line"). Key order is not a wire rule: the hub and the readers parse by
 /// key. The fallback never fires for typed structs.
-pub(crate) fn session_line(id: &str, session: &SessionId, command: Command) -> String {
+pub(crate) fn session_line(id: &CommandId, session: &SessionId, command: Command) -> String {
     let mut line = serde_json::to_value(CommandLine {
-        id: CommandId(id.to_owned()),
+        id: id.clone(),
         command,
     })
     .unwrap_or(Value::Null);
@@ -367,13 +367,13 @@ pub(crate) fn session_line(id: &str, session: &SessionId, command: Command) -> S
 pub(crate) fn history_args(
     own: &SessionId,
     segment: &SessionId,
-    from: Option<u64>,
-    to: Option<u64>,
+    from: Option<Seq>,
+    to: Option<Seq>,
 ) -> HistoryArgs {
     HistoryArgs {
         session_id: (segment != own).then(|| segment.clone()),
-        from_seq: from.map(Seq),
-        to_seq: to.map(Seq),
+        from_seq: from,
+        to_seq: to,
     }
 }
 

@@ -289,14 +289,14 @@ impl Fold {
                 serving,
                 &forked.session_id,
                 None,
-                Some(forked.seq.0),
+                Some(forked.seq),
             ));
         }
         Some(history_args(
             serving,
             &first.session_id,
             None,
-            Some(first_seq.saturating_sub(1)),
+            Some(contract::Seq(first_seq.saturating_sub(1))),
         ))
     }
 

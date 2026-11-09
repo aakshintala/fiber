@@ -65,7 +65,7 @@ impl Completion {
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let id = support::mint("c_");
-        let line = session_line(&id, session, Command::Commands);
+        let line = session_line(&contract::CommandId(id.clone()), session, Command::Commands);
         self.slash_rows = slash::rows(&[]);
         self.extensions.clear();
         self.commands_id = Some(id);

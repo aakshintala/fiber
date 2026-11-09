@@ -627,7 +627,7 @@ impl App {
         let job_id = open.job_id.clone();
         let id = support::mint("c_");
         let line = session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::JobStop(JobStop {
                 job_id: job_id.clone(),
@@ -684,7 +684,7 @@ impl App {
         let (session, job_id) = self.item_job_target()?;
         let id = support::mint("c_");
         let line = session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::JobInput(JobInput {
                 job_id: job_id.clone(),
@@ -740,7 +740,11 @@ impl App {
         }
         let id = support::mint("c_");
         let args = super::commands::content_arg(&self.draft);
-        let line = session_line(&id, &delegate.session, Command::Steer(args));
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &delegate.session,
+            Command::Steer(args),
+        );
         let draft = std::mem::take(&mut self.draft);
         self.outbox.pending.insert(id, (Kind::Steer, draft));
         Some(Effect::Send(vec![line]))

@@ -61,7 +61,7 @@ impl Source {
         self.asked = Some(id.to_owned());
         self.show(Shown::Loading);
         session_line(
-            id,
+            &contract::CommandId(id.to_owned()),
             session,
             Command::OfferedFile(OfferedFile {
                 request_id: request.clone(),

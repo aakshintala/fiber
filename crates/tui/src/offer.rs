@@ -422,7 +422,11 @@ impl Offer {
         };
         held.source = None;
         held.status = Status::Answered { by: id.to_owned() };
-        Some(session_line(id, session, Command::Reply(reply)))
+        Some(session_line(
+            &contract::CommandId(id.to_owned()),
+            session,
+            Command::Reply(reply),
+        ))
     }
 
     /// The reply `id` failed: the offer it answered opens again with the

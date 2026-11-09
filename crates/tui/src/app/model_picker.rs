@@ -238,7 +238,11 @@ impl App {
             );
         }
         let id = support::mint("c_");
-        let line = super::session_line(&id, &session, Command::Model(command_args(&choice)));
+        let line = super::session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::Model(command_args(&choice)),
+        );
         self.outbox.pending.insert(
             id.clone(),
             (super::Kind::Command, crate::input::Draft::default()),

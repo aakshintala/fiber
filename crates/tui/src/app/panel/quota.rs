@@ -196,7 +196,7 @@ impl App {
         }
         let session = self.session()?.clone();
         let id = CommandId(support::mint("c_"));
-        let line = session_line(&id.0, &session, Command::Quota(QuotaArgs { fetch: false }));
+        let line = session_line(&id, &session, Command::Quota(QuotaArgs { fetch: false }));
         self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Asked(id);
         Some(line)
@@ -234,7 +234,7 @@ impl App {
         }
         let session = self.session()?.clone();
         let id = CommandId(support::mint("c_"));
-        let line = session_line(&id.0, &session, Command::Quota(QuotaArgs { fetch: true }));
+        let line = session_line(&id, &session, Command::Quota(QuotaArgs { fetch: true }));
         self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Fetching(id);
         Some(line)

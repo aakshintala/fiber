@@ -338,7 +338,11 @@ impl Queue {
             request_id: RequestId(request.request_id.clone()),
             answer,
         };
-        let line = session_line(id, &request.session, Command::Reply(reply));
+        let line = session_line(
+            &contract::CommandId(id.to_owned()),
+            &request.session,
+            Command::Reply(reply),
+        );
         request.answered_by = Some(id.to_owned());
         self.show_after(at);
         Some(line)

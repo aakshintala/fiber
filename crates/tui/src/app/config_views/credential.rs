@@ -247,7 +247,11 @@ impl App {
             return Effect::None;
         };
         let id = support::mint("c_");
-        let line = session_line(&id, &session, Command::Credentials);
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::Credentials,
+        );
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, std::mem::take(&mut self.draft)));
@@ -321,7 +325,7 @@ impl App {
         self.say_cache_rebuild(Some(&label) != labels.credential.as_ref());
         let id = support::mint("c_");
         let line = session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::Credential(CredentialArgs {
                 label: label.to_owned(),

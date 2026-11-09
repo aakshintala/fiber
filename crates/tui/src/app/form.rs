@@ -154,7 +154,11 @@ impl App {
             return Vec::new();
         };
         let cancel = support::mint("c_");
-        let line = session_line(&cancel, &session, Command::Cancel);
+        let line = session_line(
+            &contract::CommandId(cancel.clone()),
+            &session,
+            Command::Cancel,
+        );
         self.outbox
             .pending
             .insert(cancel, (Kind::Cancel, Draft::default()));

@@ -142,7 +142,7 @@ impl App {
         self.rewind = Rewind::open(session.clone());
         let id = support::mint("c_");
         let line = session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::History(history_args(&session, &session, None, None)),
         );
@@ -184,7 +184,11 @@ impl App {
             return Vec::new();
         };
         let id = support::mint("c_");
-        let line = session_line(&id, &session, Command::History(args));
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::History(args),
+        );
         self.outbox.wait(&id, Waiting::RewindHistory);
         self.rewind.fold.begin_wait(self.motion().now_instant());
         vec![line]
@@ -358,7 +362,11 @@ impl App {
             return Effect::None;
         };
         let id = support::mint("c_");
-        let line = session_line(&id, &serving, Command::Rewind(RewindArgs::AtEnd));
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &serving,
+            Command::Rewind(RewindArgs::AtEnd),
+        );
         self.outbox.wait(&id, Waiting::Fork);
         Effect::Send(vec![line])
     }
@@ -582,7 +590,11 @@ impl App {
             summarise: self.rewind.send.summarise(),
         };
         let id = support::mint("c_");
-        let line = session_line(&id, &serving, Command::Rewind(args));
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &serving,
+            Command::Rewind(args),
+        );
         self.outbox.wait(&id, Waiting::RewindSend);
         self.rewind.send.begin();
         Effect::Send(vec![line])

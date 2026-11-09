@@ -1932,11 +1932,20 @@ fn reads_follow_the_answer_window_at_the_edges() {
     ] {
         let (asked, tail) = read_all(plain(count));
         let many = usize::try_from(count).unwrap_or(usize::MAX);
-        assert_eq!(asked, expected, "{count} lines");
-        assert!(tail.start_reached(), "{count} lines");
+        assert_eq!(
+            asked, expected,
+            // docs/invocation.md (`history`): at most 256 lines, last lines up to `to_seq`; docs/tui.md ("History and paging"): one window when the log fits, `to_seq` down to zero when it does not.
+            "{count} lines"
+        );
+        assert!(
+            tail.start_reached(),
+            // docs/tui.md ("History and paging"): the walk reaches the segment start.
+            "{count} lines"
+        );
         assert_eq!(
             tail.turn_lines().map(|lines| lines.len()),
             Some(many),
+            // docs/tui.md ("History and paging"): the held run is the whole log.
             "{count} lines"
         );
     }
@@ -3598,9 +3607,14 @@ fn the_tail_walks_the_chain_past_the_seam() {
                 to_seq: Some(contract::Seq(43))
             },
         ],
+        // docs/invocation.md (`history`): `session_id` names the ancestor, `from_seq`/`to_seq` count in its log, paging past the first line reads `forked_from`; docs/tui.md ("History and paging"): past the seam every window names its segment.
         "the own windows, then the ancestor's under its session"
     );
-    assert!(tail.chain_done(), "the root's first line ends the walk");
+    assert!(
+        tail.chain_done(),
+        // docs/tui.md ("History and paging"): the walk reaches the chain root.
+        "the root's first line ends the walk"
+    );
     let held: Vec<(String, u64)> = tail
         .turn_lines()
         .unwrap_or_else(|| panic!("the held run"))
@@ -3657,9 +3671,14 @@ fn the_tail_walks_a_cross_project_chain_by_session() {
                 to_seq: Some(contract::Seq(43))
             },
         ],
+        // docs/invocation.md (`history`): when `forked_from.project` is present the reader opens that project's directory, the request still names only the ancestor session; docs/tui.md ("History and paging"): past the seam every window names its segment.
         "the own windows, then the ancestor's under its session"
     );
-    assert!(tail.chain_done(), "the root's first line ends the walk");
+    assert!(
+        tail.chain_done(),
+        // docs/tui.md ("History and paging"): the walk reaches the chain root.
+        "the root's first line ends the walk"
+    );
     let held: Vec<(String, u64)> = tail
         .turn_lines()
         .unwrap_or_else(|| panic!("the held run"))
@@ -3782,11 +3801,20 @@ fn an_ancestor_longer_than_one_window_walks_every_window() {
             to_seq: None,
         }];
         wants.extend(expected);
-        assert_eq!(asked, wants, "{count} ancestor lines");
-        assert!(tail.chain_done(), "{count} ancestor lines");
+        assert_eq!(
+            asked, wants,
+            // docs/invocation.md (`history`): at most 256 lines per answer, `session_id` names the ancestor segment; docs/tui.md ("History and paging"): every window past the seam names its segment, 255/256 lines read one window, 257/258 read two.
+            "{count} ancestor lines"
+        );
+        assert!(
+            tail.chain_done(),
+            // docs/tui.md ("History and paging"): the walk reaches the chain root.
+            "{count} ancestor lines"
+        );
         assert_eq!(
             tail.turn_lines().map(|lines| lines.len()),
             Some(count + 3),
+            // docs/tui.md ("History and paging"): the held run is the joint ancestor-plus-own run.
             "{count} ancestor lines"
         );
     }

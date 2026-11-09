@@ -1167,7 +1167,7 @@ impl App {
             return Effect::None;
         }
         let id = support::mint("c_");
-        let line = super::session_line(&id, &session, Command::Hooks);
+        let line = super::session_line(&contract::CommandId(id.clone()), &session, Command::Hooks);
         self.outbox.wait(&id, super::Waiting::Hooks);
         self.session_views.hooks_request = Some(id);
         Effect::Send(vec![line])

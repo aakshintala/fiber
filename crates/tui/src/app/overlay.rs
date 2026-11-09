@@ -237,7 +237,7 @@ impl Tail {
                         &newest.session_id,
                         &forked.session_id,
                         None,
-                        Some(forked.seq.0),
+                        Some(forked.seq),
                     );
                 }
                 let Some(oldest) = self.lines.first() else {
@@ -251,7 +251,7 @@ impl Tail {
                     &newest.session_id,
                     &oldest.session_id,
                     None,
-                    Some(first.0.saturating_sub(1)),
+                    Some(contract::Seq(first.0.saturating_sub(1))),
                 )
             }
             None => HistoryArgs {

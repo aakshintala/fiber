@@ -513,9 +513,14 @@ impl App {
         // read: the command stays routed to the serving session, and
         // the args name the page's segment.
         let line = session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
-            Command::History(history_args(&session, &entry.session, Some(from), Some(to))),
+            Command::History(history_args(
+                &session,
+                &entry.session,
+                Some(contract::Seq(from)),
+                Some(contract::Seq(to)),
+            )),
         );
         self.find
             .send(id, page, entry.session.clone(), width, revision, held, line);

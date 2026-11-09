@@ -159,7 +159,7 @@ impl App {
         self.attach(session.clone());
         let id = support::mint("c_");
         let close = session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &pending.old,
             Command::Close(CloseArgs { now: pending.now }),
         );

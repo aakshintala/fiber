@@ -353,7 +353,7 @@ impl App {
         let taken = std::mem::take(&mut self.draft);
         self.draft.put_back(stash);
         lines.push(session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::Steer(super::commands::content_arg(&taken)),
         ));
@@ -376,7 +376,7 @@ impl App {
             .map(|row| {
                 let id = support::mint("c_");
                 let line = session_line(
-                    &id,
+                    &contract::CommandId(id.clone()),
                     &session,
                     Command::SteerDrop(SteerDrop {
                         command_id: CommandId(row),

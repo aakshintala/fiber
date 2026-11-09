@@ -978,7 +978,7 @@ impl App {
             return (Effect::None, None);
         };
         let id = support::mint("c_");
-        let line = session_line(&id, &session, command);
+        let line = session_line(&contract::CommandId(id.clone()), &session, command);
         let draft = std::mem::take(&mut self.draft);
         self.outbox.insert(id.clone(), kind, draft);
         (Effect::Send(vec![line]), Some(id))
@@ -992,7 +992,7 @@ impl App {
         };
         let id = support::mint("c_");
         let lines = vec![session_line(
-            &id,
+            &contract::CommandId(id.clone()),
             &session,
             Command::Close(CloseArgs { now: true }),
         )];
@@ -1158,7 +1158,10 @@ impl App {
                 } else {
                     (Kind::Prompt, Command::Prompt(args))
                 };
-                (kind, session_line(&id, session, command))
+                (
+                    kind,
+                    session_line(&contract::CommandId(id.clone()), session, command),
+                )
             }
         };
         if kind == Kind::Start {
@@ -1178,7 +1181,11 @@ impl App {
     /// the prompt. A rejection returns the draft to an empty box.
     pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
         let id = support::mint("c_");
-        let line = session_line(&id, session, Command::Prompt(content_arg(&draft)));
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            session,
+            Command::Prompt(content_arg(&draft)),
+        );
         self.outbox.insert(id, Kind::Prompt, draft);
         line
     }
@@ -1210,7 +1217,7 @@ impl App {
     /// One `cancel` of `session`'s turn, settled by its answer.
     fn send_cancel(&mut self, session: &SessionId) -> Effect {
         let id = support::mint("c_");
-        let line = session_line(&id, session, Command::Cancel);
+        let line = session_line(&contract::CommandId(id.clone()), session, Command::Cancel);
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }

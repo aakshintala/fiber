@@ -200,7 +200,7 @@ pub(super) fn subscribe_line(
 ) -> (String, String) {
     let id = support::mint("c_");
     let line = session_line(
-        &id,
+        &contract::CommandId(id.clone()),
         session,
         Command::Subscribe(SubscribeArgs {
             level,
