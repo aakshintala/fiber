@@ -3003,3 +3003,73 @@ fn reviewer_denies_ignore_the_sample_cap() {
     .unwrap();
     assert_eq!(report.lines.len(), 2);
 }
+
+/// The committed deny fixture through the built binary: the deny becomes
+/// the only line with its recorded verdict, the allow emits nothing, and
+/// the scan over the output stays clean.
+#[test]
+fn built_binary_reviewer_denies_emit_only_the_deny() {
+    let staged = fakes::TempDir::new("fiber-eval-reviewer-denies");
+    let session = staged.path().join("deny-and-allow");
+    fs::create_dir(&session).unwrap();
+    fs::write(
+        session.join("events.jsonl"),
+        include_str!("fixtures/reviewer_denies/deny-and-allow/events.jsonl"),
+    )
+    .unwrap();
+    let output = run_review(&[
+        "--reviewer-denies",
+        session.to_str().unwrap(),
+        "--scrub",
+        "--as-home",
+        "/synthetic/home",
+        "--owner-name",
+        "Synthetic Owner",
+        "--owner-email",
+        "owner@synthetic.example",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    let entry = parse_line(lines[0]).unwrap();
+    assert_eq!(entry.id, "a_deny");
+    assert_eq!(entry.source.seq, Some(4));
+    assert_eq!(entry.labels.family1, None);
+    assert_eq!(entry.labels.family2, None);
+    let recorded = entry.recorded.unwrap();
+    assert_eq!(recorded.decision, Decision::Deny);
+    assert_eq!(
+        recorded.reason.as_deref(),
+        Some("nightly runs need a person to approve")
+    );
+    let reviewer = recorded.reviewer.unwrap();
+    assert_eq!(reviewer.model, "synthetic/reviewer");
+    assert_eq!(reviewer.stage, 2);
+    assert!(
+        entry
+            .reviewed
+            .iter()
+            .all(|item| item.action.as_deref() != Some("a_allow")),
+        "the prefix at the deny holds no later call"
+    );
+    let file = staged.path().join("denies.jsonl");
+    fs::write(&file, format!("{}\n", lines[0])).unwrap();
+    let report = run_scan(&file, Vec::new(), Vec::new()).unwrap();
+    assert_eq!(report.clean.len(), 1);
+    assert!(report.dropped.is_empty());
+    let dir_rejected = run_review(&[
+        "--reviewer-denies",
+        session.to_str().unwrap(),
+        staged.path().to_str().unwrap(),
+    ]);
+    assert!(!dir_rejected.status.success(), "{dir_rejected:?}");
+    let stderr = String::from_utf8(dir_rejected.stderr).unwrap();
+    assert!(
+        stderr.contains("--reviewer-denies takes no session directory"),
+        "{stderr}"
+    );
+}

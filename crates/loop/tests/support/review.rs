@@ -88,7 +88,7 @@ pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<ReviewArg
             notes,
             keep_all,
         }),
-        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR | --scan FILE] [<session directory>]".to_owned()),
+        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR | --reviewer-denies DIR | --scan FILE] [<session directory>]".to_owned()),
     }
 }
 
