@@ -45,7 +45,7 @@ pub(crate) const SESSIONS_STOP_WITHIN: Duration = Duration::from_secs(10);
 /// [`SESSIONS_STOP_WITHIN`]: the hub client's own bind wait, so a wedged
 /// session holds one session, never the stop. The `stop_keepers`
 /// command shares it inside its own bound.
-pub(crate) const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
+const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long a `stop_keepers` command waits for every named keeper to
 /// confirm stopped: the serving thread's fan-out wait, with the connect

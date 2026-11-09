@@ -609,6 +609,7 @@ crates/tui/src/event_loop_tests.rs	3	docs/state.md:432-435
 crates/tui/src/history.rs	1	docs/state.md`, "Prompt\n//! history"
 crates/tui/src/home.rs	1	docs/invocation.md`, "Sessions"
 crates/tui/src/home_tests.rs	10	docs/invocation.md:1102
+crates/tui/src/home_tests.rs	2	docs/tui.md, "Quit"
 crates/tui/src/import_report_tests.rs	1	docs/testing.md, "Event streams"
 crates/tui/src/import_report_tests.rs	1	docs/tui.md, "Slash commands"
 crates/tui/src/look.rs	1	docs/tui.md, "Look"
