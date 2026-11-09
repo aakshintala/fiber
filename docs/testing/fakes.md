@@ -108,7 +108,7 @@ The contract-free helpers live in `fakes`: clocks, deadlines, temporary
 directories, HTTP servers, process helpers and fixtures. Its only workspace
 dependency is `support`. The contract-dependent helpers live in
 `fakes-contract`: scripted and blocking providers, event recorders, jobs,
-locks, rules, skills, handoff answers and tool-output helpers. It depends on
+locks, rules, skills, compaction answers and tool-output helpers. It depends on
 `contract`, `support` and `fakes`, and re-exports the free helpers without
 copying their types.
 
@@ -221,7 +221,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `tui` | `paging` | Generates a large session and measures the terminal paging it: the opening pass, the frames that load pages, jumps, a search of the whole log, a re-count at a new width, and appending to a running turn. |
 | `tui` | `hover` | Sends motion reports through the terminal's screen over an events file and prints the frames, bytes and time per report. |
 | `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
-| `loop` | `review` | Prints the reviewer's stage inputs and handoff selection requests for a session directory, including unreplayable calls. |
+| `loop` | `review` | Prints the reviewer's stage inputs and compaction selection requests for a session directory, including unreplayable calls. |
 | `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |
 | `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
 

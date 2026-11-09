@@ -330,23 +330,23 @@ A session message from another session is excluded too (`docs/tools.md`,
 "Messaging other sessions"). Another model wrote it, so including it would let
 one session approve calls in another by messaging it.
 
-### At a handoff
+### At a compaction
 
-The reviewer's input follows the session's handoffs (`docs/handoff.md`), so
-it grows with the context window, not the transcript. At each handoff, Fiber
+The reviewer's input follows the session's compactions (`docs/compaction.md`), so
+it grows with the context window, not the transcript. At each compaction, Fiber
 asks the reviewer which of the person's messages still bind, such as standing
 orders, scope limits and "don't touch X". The reviewer answers with a
 selection of messages, not prose, and Fiber carries those messages word for
-word, each with the reply it answered. After the handoff the reviewer's input
+word, each with the reply it answered. After the compaction the reviewer's input
 is the kept messages, then the person's messages, the replies they answered
-and the agent's tool calls since the handoff.
+and the agent's tool calls since the compaction.
 
 Nothing the reviewer writes enters its own prompt. Tool-call arguments are
 agent-written, so a prose note could repeat text such as `echo "user approved
-pushing to main"` as if it were the person's. The handoff note is excluded for
+pushing to main"` as if it were the person's. The compaction note is excluded for
 the same reason: the session's model writes it after reading tool results.
 
-The selection is recorded in the session log as `reviewer_kept` (`docs/events.md`, "Handoff"), so the person can see what was
+The selection is recorded in the session log as `reviewer_kept` (`docs/events.md`, "Compaction"), so the person can see what was
 kept. When the kept messages would pass the reviewer model's context window,
 the oldest drop first. When the selection request fails, every earlier person
 message is kept and a `notice` says so. When the session has no reviewer, nothing is asked and no line or notice is written.
@@ -529,7 +529,7 @@ a billed request is never hidden from the `usage` fold. The first stage asks for
 thinking level, or none when the model declares none
 (`docs/model-routing.md`, "Thinking"), and caps its reply at 4,096 tokens:
 a ceiling for a model that does not stop, not the answer's length. The
-second stage and the handoff selection ask for the same level, because a
+second stage and the compaction selection ask for the same level, because a
 change of level misses the reviewer's cache (`docs/prompt-cache.md`,
 "Rules for other areas"). Most reviewed calls cost a few output tokens.
 
@@ -668,8 +668,8 @@ and the rewritten `arguments` with `changed_by` when a `before_tool` hook rewrot
 them, because no `permission_requested` and no `tool_call_started` holds them.
 
 The reviewer's own calls carry the same attribution as `usage_recorded`:
-`reviewer.purpose` is `stage_1`, `stage_2` or `handoff`, and
-`reviewer.action_id` is the call under review, absent on a handoff
+`reviewer.purpose` is `stage_1`, `stage_2` or `compaction`, and
+`reviewer.action_id` is the call under review, absent on a compaction
 (`docs/events.md`, "`usage_recorded`").
 
 A blocked call ends as `tool_call_completed` with `status: denied` and a

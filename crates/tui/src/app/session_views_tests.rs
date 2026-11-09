@@ -558,10 +558,10 @@ fn context_tool_for(session: &str, name: &str, result: &str) -> [Line; 2] {
     ]
 }
 
-fn context_handoff() -> Line {
+fn context_compaction() -> Line {
     session_line(
         SESSION,
-        "handoff_completed",
+        "compaction_completed",
         json!({"outcome": "completed"}),
         Some("a_1"),
     )
@@ -597,7 +597,7 @@ fn slash_context_opens_the_view_and_clears_the_draft() {
 }
 
 #[test]
-fn context_folds_the_preamble_rate_total_handoff_and_tool_results() {
+fn context_folds_the_preamble_rate_total_compaction_and_tool_results() {
     let mut app = attached(100, 40);
     app.on_line(context_preamble());
     app.on_line(context_status(50, 100));
@@ -609,7 +609,7 @@ fn context_folds_the_preamble_rate_total_handoff_and_tool_results() {
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
     for expected in [
-        "50 tokens · 50% of the 100 window · automatic handoff at 80",
+        "50 tokens · 50% of the 100 window · automatic compaction at 80",
         "■ system prompt",
         "~3 6%",
         "■ tool definitions",
@@ -618,7 +618,7 @@ fn context_folds_the_preamble_rate_total_handoff_and_tool_results() {
         "~5 10%",
         "■ messages",
         "~35 70%",
-        "handoff 80",
+        "compaction 80",
         "read  ~5 tokens",
     ] {
         assert!(shown.contains(expected), "missing {expected:?} in {shown}");
@@ -665,7 +665,7 @@ fn a_request_with_input_media_keeps_result_sizes_in_bytes() {
 }
 
 #[test]
-fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
+fn a_fork_counts_its_own_results_and_completed_compaction_clears_them() {
     let mut app = attached(100, 40);
     app.on_line(session_line(
         SESSION,
@@ -697,17 +697,17 @@ fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
     assert!(shown.contains("read  ~5 tokens"), "{shown}");
     assert!(shown.contains("write  ~7 tokens"), "{shown}");
     assert!(!shown.contains("ancestor"), "{shown}");
-    app.on_line(context_handoff());
+    app.on_line(context_compaction());
     let after = screen(&app, 100, 40).0;
     assert!(after.contains("■ tool results"), "{after}");
     assert!(after.contains("~0 0%"), "{after}");
-    assert!(after.contains("none since the last handoff"), "{after}");
+    assert!(after.contains("none since the last compaction"), "{after}");
 }
 
 /// A session that continues another log without a `preamble_built` of its
 /// own, as after a move, a rewind or a fork (see #3756): the total comes
 /// from its `session_status`, the window from the one that status reports,
-/// and the unknown handoff point draws no marker and no off row.
+/// and the unknown compaction point draws no marker and no off row.
 #[test]
 fn context_without_an_own_preamble_uses_the_reported_window() {
     let mut app = attached(100, 40);
@@ -722,14 +722,14 @@ fn context_without_an_own_preamble_uses_the_reported_window() {
         !shown.contains("The context shows after the session's first request."),
         "{shown}"
     );
-    assert!(!shown.contains("automatic handoff"), "{shown}");
-    assert!(shown.contains("none since the last handoff"), "{shown}");
+    assert!(!shown.contains("automatic compaction"), "{shown}");
+    assert!(shown.contains("none since the last compaction"), "{shown}");
     // A later preamble of its own replaces the inherited window and the
-    // unknown handoff point.
+    // unknown compaction point.
     app.on_line(context_preamble());
     let after = screen(&app, 100, 40).0;
     assert!(
-        after.contains("50 tokens · 50% of the 100 window · automatic handoff at 80"),
+        after.contains("50 tokens · 50% of the 100 window · automatic compaction at 80"),
         "{after}"
     );
 }
@@ -784,8 +784,8 @@ fn rewound_context_does_not_reuse_parent_preamble_sizes() {
     assert!(!shown.contains("■ tool results"), "{shown}");
 }
 
-/// An own `preamble_built` without a handoff point means automatic
-/// handoff is off, not unknown (see #3756): the breakdown keeps the
+/// An own `preamble_built` without a compaction point means automatic
+/// compaction is off, not unknown (see #3756): the breakdown keeps the
 /// existing off row.
 #[test]
 fn context_with_a_triggerless_preamble_keeps_the_off_row() {
@@ -809,8 +809,8 @@ fn context_with_a_triggerless_preamble_keeps_the_off_row() {
         shown.contains("50 tokens · 50% of the 100 window"),
         "{shown}"
     );
-    assert!(shown.contains("automatic handoff off"), "{shown}");
-    assert!(!shown.contains("handoff at"), "{shown}");
+    assert!(shown.contains("automatic compaction off"), "{shown}");
+    assert!(!shown.contains("compaction at"), "{shown}");
 }
 
 /// Attaching another session preserves the old status payload but cannot
@@ -1556,14 +1556,42 @@ fn jobs_list_draws_one_row_per_job_and_opens_on_click() {
 
 #[test]
 fn all_delegates_list_draws_every_delegate_with_no_heading() {
+    let clock = fakes::clock::FakeClock::new();
     let mut app = attached(80, 24);
+    app.set_now(clock.origin(), 8_000);
     start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
     start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    for session in ["s_dddddddddddddddd", "s_eeeeeeeeeeeeeeee"] {
+        app.on_line(session_line(
+            session,
+            "session_status",
+            json!({
+                "name": "delegate", "workspace": "/w", "project": "-w", "state": "idle",
+                "parent": SESSION, "started": 2_000, "since": 0, "calls": 3,
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+                "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                    "cost": 0.42, "subscription_cost": 0.75}
+            }),
+            None,
+        ));
+    }
+    let mut completed = session_line(
+        SESSION,
+        "job_completed",
+        json!({"job_id": "j_2", "status": "completed"}),
+        Some("a_1"),
+    );
+    if let Line::Session(line) = &mut completed {
+        line.ts = 8_000;
+    }
+    app.on_line(completed);
     open_all_delegates(&mut app);
     let (shown, _) = screen(&app, 80, 24);
     assert!(shown.contains("Delegates"));
     assert!(shown.contains("task j_1"));
-    assert!(shown.contains("task j_2"));
+    assert!(shown.contains("✓ task j_2"));
+    assert!(shown.contains("3 calls · 6s · $0.42 · $0.75 sub"));
+    assert!(shown.contains("3 calls · 6s · $0.42 · $0.75 sub · done"));
     assert!(!shown.contains("Running delegates"));
     assert!(!shown.contains("Nothing running."));
     // Row data starts at once: the first frame row holds the first

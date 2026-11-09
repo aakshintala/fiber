@@ -430,7 +430,7 @@ impl App {
     /// Opening closes the other views and search first, so drawing,
     /// scrolling and focus act on the shown transcript with no per-call
     /// routing.
-    pub(super) fn open_item(&mut self, job: &JobId) -> Effect {
+    pub(crate) fn open_item(&mut self, job: &JobId) -> Effect {
         let Some(record) = self.items.jobs.get(job).cloned() else {
             return Effect::None;
         };
@@ -740,6 +740,7 @@ impl App {
         let args = super::commands::content_arg(&self.draft);
         let line = session_command(&id, "steer", &delegate.session, Some(args)).to_string();
         let draft = std::mem::take(&mut self.draft);
+        self.outbox.wait(&id, super::Waiting::Steer);
         self.outbox.pending.insert(id, (Kind::Steer, draft));
         Some(Effect::Send(vec![line]))
     }
@@ -878,8 +879,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

@@ -14,8 +14,8 @@ mod support;
 
 mod approval_look;
 mod ask_user_form_look;
+mod compaction_look;
 mod group_look;
-mod handoff_look;
 mod hover_look;
 mod item_views_look;
 mod light_no_color_look;

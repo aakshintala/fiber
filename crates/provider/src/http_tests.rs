@@ -2220,11 +2220,15 @@ impl TimingCapture {
 
     fn timing(self: &std::sync::Arc<Self>) -> contract::diag::Timing {
         let me = std::sync::Arc::clone(self);
-        std::sync::Arc::new(move |op, tool, started| {
-            me.calls
-                .lock()
-                .unwrap()
-                .push((op, tool.map(str::to_owned), started.is_some()));
+        std::sync::Arc::new(move |op, name, started| {
+            me.calls.lock().unwrap().push((
+                op,
+                name.and_then(|name| match name {
+                    contract::diag::TimingName::Tool(tool) => Some(tool.to_owned()),
+                    contract::diag::TimingName::Job(_) => None,
+                }),
+                started.is_some(),
+            ));
             let guard = TimingGuard {
                 drops: std::sync::Arc::clone(&me.drops),
             };

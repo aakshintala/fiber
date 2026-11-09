@@ -299,7 +299,7 @@ fn duplicate_run_after_source_removal_succeeds_unchanged() {
 
 #[test]
 fn failed_run_writes_no_receipt_and_retry_completes() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     claude_home(setup.root.path());
     // A directory where the global file goes aborts the import before
     // anything is written.
@@ -389,7 +389,7 @@ impl Driven {
             tx.send(text).unwrap();
         });
         let deadline = setup.deadline;
-        first_line(deadline, &lines);
+        first_line(deadline, &lines, None);
         let client = Socket::connect(deadline, &setup.session_socket(&session));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
         // The startup every command needs: `clients` for the subscribe

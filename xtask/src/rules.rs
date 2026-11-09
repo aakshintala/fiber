@@ -1303,18 +1303,11 @@ const LABEL_ALLOWANCES: &[LabelAllowance] = &[
         reason: "labels a listed command",
     },
     LabelAllowance {
-        path: "crates/loop/src/handoff/carry.rs",
+        path: "crates/loop/src/compaction/carry.rs",
         function: "restart",
         context: "template-key",
         name: "jobs",
-        reason: "fills the handoff template",
-    },
-    LabelAllowance {
-        path: "crates/loop/src/reviewer.rs",
-        function: "sections",
-        context: "prompt-section",
-        name: "handoff",
-        reason: "selects the handoff section",
+        reason: "fills the compaction template",
     },
 ];
 
@@ -2603,7 +2596,7 @@ fn label_context(
     {
         return Some(("commands", "labels a listed command"));
     }
-    if path == "crates/loop/src/handoff/carry.rs"
+    if path == "crates/loop/src/compaction/carry.rs"
         && context == "fn restart"
         && name == "jobs"
         && previous_punct(tokens, i, 1, '(')
@@ -2612,19 +2605,7 @@ fn label_context(
         && next_punct(tokens, i, 3, '.')
         && next_ident(tokens, i, 4, "join")
     {
-        return Some(("restart", "fills the handoff template"));
-    }
-    if path == "crates/loop/src/reviewer.rs"
-        && context == "fn sections"
-        && name == "handoff"
-        && previous_punct(tokens, i, 1, ',')
-        && previous_ident(tokens, i, 2, "md")
-        && previous_ident(tokens, i, 4, "section")
-        && previous_ident(tokens, i, 7, "prompt")
-        && previous_ident(tokens, i, 10, "crate")
-        && previous_ident(tokens, i, 12, "handoff")
-    {
-        return Some(("sections", "selects the handoff section"));
+        return Some(("restart", "fills the compaction template"));
     }
     None
 }
@@ -2699,8 +2680,7 @@ fn loop_sites_with_tokens(
                 ("crates/loop/src/opening.rs", "shell") => Some("environment-template"),
                 ("crates/loop/src/status.rs", "jobs") => Some("state-key"),
                 ("crates/loop/src/skills.rs", "skill") => Some("command-tag"),
-                ("crates/loop/src/handoff/carry.rs", "jobs") => Some("template-key"),
-                ("crates/loop/src/reviewer.rs", "handoff") => Some("prompt-section"),
+                ("crates/loop/src/compaction/carry.rs", "jobs") => Some("template-key"),
                 _ => None,
             };
             let exception = label.is_some_and(|label| {

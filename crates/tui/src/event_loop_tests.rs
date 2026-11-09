@@ -20,7 +20,7 @@ use std::time::Duration;
 
 /// The launch description `run` tests start from: `/w`, outside git.
 pub(super) fn launch() -> super::Launch {
-    super::Launch {
+    let mut launch = super::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -36,7 +36,62 @@ pub(super) fn launch() -> super::Launch {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    }
+    };
+    launch.models = Some(test_catalogue());
+    launch.configure = Some(Arc::new(crate::configure_fake::Fake::new(Vec::new())));
+    launch
+}
+
+/// A no-provider, no-model launch for first-run tests.
+pub(super) fn launch_without_model() -> super::Launch {
+    let mut launch = launch();
+    launch.model = None;
+    launch.models = Some(Arc::new(|_| Ok(Catalogue::default())));
+    launch
+}
+
+fn test_catalogue() -> crate::ReadModels {
+    Arc::new(|_| {
+        Ok(Catalogue {
+            models: vec![ModelEntry {
+                reference: "p/m".to_owned(),
+                provider: "p".to_owned(),
+                id: "m".to_owned(),
+                name: None,
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+                price: None,
+            }],
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn launch_starts_with_configured_test_catalogue() {
+    let launch = launch();
+    assert_eq!(launch.model.as_deref(), Some("p/m"));
+    let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
+    assert!(
+        catalogue
+            .models
+            .iter()
+            .any(|model| model.reference == "p/m"),
+        "test catalogue contains p/m: {catalogue:?}"
+    );
+    assert!(catalogue.logged_out.is_empty());
+    assert!(launch.configure.is_some());
+}
+
+#[test]
+fn launch_without_model_has_no_provider_or_catalogue() {
+    let launch = launch_without_model();
+    assert!(launch.model.is_none());
+    let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
+    assert!(catalogue.models.is_empty());
+    assert!(catalogue.logged_out.is_empty());
 }
 
 /// One named wall-clock deadline for every blocking wait.
@@ -3292,8 +3347,7 @@ fn with_no_model_the_picker_opens_at_start() {
         }
         Ok(one_model())
     });
-    let mut launch = launch();
-    launch.model = None;
+    let mut launch = launch_without_model();
     launch.models = Some(read);
     launch.configure = Some(seam.clone() as std::sync::Arc<dyn crate::Configure>);
     let (done, finished) = mpsc::channel();
@@ -3597,4 +3651,47 @@ fn attached_frame_is_discarded_without_a_stream() {
         .join(format!("tui-{}.log", std::process::id()));
     // docs/state.md:432-435: an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
+}
+
+/// Typing `/feedback` plus Enter hands the writer the screen's ring:
+/// the snapshot the worker receives equals the ring as of the
+/// `Effect::Feedback` handling, with the typed description.
+#[test]
+fn feedback_hands_the_screen_ring_to_the_writer() {
+    use contract::feedback::FrameShape;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let done = crate::FeedbackDone {
+        path: PathBuf::from("/w/fiber-feedback-7.md"),
+        link: "https://example.test/new?title=x".to_owned(),
+    };
+    let (tx, rx) = mpsc::channel();
+    let writer: crate::WriteFeedback = Arc::new(
+        move |description: &str, session: Option<&contract::SessionId>, shapes: &[FrameShape]| {
+            tx.send((description.to_owned(), session.cloned(), shapes.to_vec()))
+                .unwrap_or_else(|err| panic!("record shapes: {err}"));
+            Ok(done.clone())
+        },
+    );
+    lp.app.set_feedback(Some(writer));
+    lp.screen
+        .draw(&mut lp.app, None)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    let want = lp.screen.frame_shapes();
+    assert!(!want.is_empty(), "the draw captured a frame");
+    let mut events: Vec<crate::keys::Event> = "/feedback hi"
+        .chars()
+        .map(|ch| crate::keys::Event::Key(crate::keys::Key::Char(ch)))
+        .collect();
+    events.push(crate::keys::Event::Key(crate::keys::Key::Enter));
+    assert_eq!(lp.handle_events_inner(events), None);
+    let (description, session, shapes) =
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "feedback shapes");
+    assert_eq!(description, "hi");
+    assert_eq!(
+        session,
+        Some(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+    );
+    assert_eq!(shapes, want);
 }

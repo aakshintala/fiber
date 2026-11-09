@@ -103,9 +103,9 @@ impl StateHooks {
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|entry| entry == "before_handoff")
+                .any(|entry| entry == "before_compaction")
         {
-            let mut event = state_event("before_handoff");
+            let mut event = state_event("before_compaction");
             if let contract::events::Event::ExtensionStateSet(set) = &mut event {
                 set.value = serde_json::json!("B");
             }
@@ -197,13 +197,13 @@ impl Hooks for StateHooks {
             notices: vec![state_notice()],
         }
     }
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
-        self.called("before_handoff");
-        contract::hook::BeforeHandoffAnswer {
-            outcome: contract::hook::BeforeHandoffOutcome::Note {
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
+        self.called("before_compaction");
+        contract::hook::BeforeCompactionAnswer {
+            outcome: contract::hook::BeforeCompactionOutcome::Note {
                 text: "note".into(),
                 extension: "state".into(),
             },
@@ -248,7 +248,7 @@ impl Hooks for StateHooks {
         } else {
             lines
                 .into_iter()
-                .filter(|line| !self.cases.supersede_note || line.key != "before_handoff")
+                .filter(|line| !self.cases.supersede_note || line.key != "before_compaction")
                 .map(|line| line.into_event())
                 .collect()
         }
@@ -289,7 +289,7 @@ fn state_lines_take_follows_every_hook_call() {
         "message context",
     )]));
     inner.answer_session_start(added(vec![("state", "start context")]));
-    inner.answer_session_start(added(vec![("state", "handoff context")]));
+    inner.answer_session_start(added(vec![("state", "compaction context")]));
     inner.answer_turn_start(added(vec![("state", "turn context")]));
     inner.answer_turn_end(added(vec![("state", "continue")]));
     let mut world = started_with_tools(
@@ -306,13 +306,18 @@ fn state_lines_take_follows_every_hook_call() {
         vec![Arc::new(Probe)],
     );
     let hooks = state_attached(&mut world, inner, StateCases::default());
-    world.looped = Some(world.looped.take().unwrap().hooks(hooks.clone()).handoff(
-        crate::HandoffSettings {
-            tokens: 1000,
-            nudge: false,
-            ..Default::default()
-        },
-    ));
+    world.looped = Some(
+        world
+            .looped
+            .take()
+            .unwrap()
+            .hooks(hooks.clone())
+            .compaction(crate::CompactionSettings {
+                tokens: 1000,
+                nudge: false,
+                ..Default::default()
+            }),
+    );
     let (ack, answered) = capture();
     world
         .inbox
@@ -337,7 +342,7 @@ fn state_lines_take_follows_every_hook_call() {
         "before_tool",
         "check_tool",
         "after_tool",
-        "before_handoff",
+        "before_compaction",
         "before_model_call",
         "turn_end",
     ] {
@@ -370,7 +375,9 @@ fn state_lines_take_follows_every_hook_call() {
                 "turn_end" => assert_eq!(all[index + 1].kind(), EventKind::SteeringApplied),
                 "before_tool" => assert_eq!(all[index + 1].kind(), EventKind::ToolCallStarted),
                 "after_tool" => assert_eq!(all[index + 1].kind(), EventKind::ToolCallCompleted),
-                "before_handoff" => assert_eq!(all[index + 1].kind(), EventKind::HandoffCompleted),
+                "before_compaction" => {
+                    assert_eq!(all[index + 1].kind(), EventKind::CompactionCompleted)
+                }
                 key => assert!(key.starts_with("timer-")),
             }
         }
@@ -623,7 +630,7 @@ fn state_lines_held_contexts_and_continuations_share_their_commits() {
 }
 
 #[test]
-fn state_lines_handoff_note_and_contexts_follow_the_completion_decision() {
+fn state_lines_compaction_note_and_contexts_follow_the_completion_decision() {
     for mode in ["completed", "failed", "refused"] {
         let inner = Arc::new(FakeHooks::new());
         inner.answer_session_start(added(Vec::new()));
@@ -645,7 +652,7 @@ fn state_lines_handoff_note_and_contexts_follow_the_completion_decision() {
             vec![Arc::new(Probe)],
         );
         if mode == "refused" {
-            *inner.shutdown_after_handoff_check.lock().unwrap() =
+            *inner.shutdown_after_compaction_check.lock().unwrap() =
                 Some(world.looped.as_ref().unwrap().cancel.clone());
         }
         state_attached(&mut world, inner, StateCases::default());
@@ -654,7 +661,7 @@ fn state_lines_handoff_note_and_contexts_follow_the_completion_decision() {
                 .looped
                 .take()
                 .unwrap()
-                .handoff(crate::HandoffSettings {
+                .compaction(crate::CompactionSettings {
                     tokens: 1000,
                     nudge: false,
                     ..Default::default()
@@ -663,16 +670,16 @@ fn state_lines_handoff_note_and_contexts_follow_the_completion_decision() {
         let (ack, _) = capture();
         world
             .inbox
-            .send(Delivery::Prompt(driver("handoff", "hello"), ack))
+            .send(Delivery::Prompt(driver("compaction", "hello"), ack))
             .unwrap();
         let done = run_turn(&mut world);
         let _outcome = finish_turn(&mut world, &done);
         if mode == "completed" {
-            state_adjacent(&world, "before_handoff", "handoff_completed");
+            state_adjacent(&world, "before_compaction", "compaction_completed");
             state_adjacent(&world, "session_start", "context_added");
             assert_eq!(state_written(&world, "session_start").len(), 2);
         } else {
-            assert!(state_written(&world, "before_handoff").is_empty());
+            assert!(state_written(&world, "before_compaction").is_empty());
             assert!(state_written(&world, "session_start").is_empty());
         }
     }
@@ -1282,7 +1289,7 @@ fn state_lines_cap_failure_never_writes_the_changed_outputs_state() {
 }
 
 #[test]
-fn state_lines_later_unchanged_start_write_supersedes_a_carried_handoff_note() {
+fn state_lines_later_unchanged_start_write_supersedes_a_carried_compaction_note() {
     let inner = Arc::new(FakeHooks::new());
     let mut world = started_with_tools(
         vec![
@@ -1309,7 +1316,7 @@ fn state_lines_later_unchanged_start_write_supersedes_a_carried_handoff_note() {
             .looped
             .take()
             .unwrap()
-            .handoff(crate::HandoffSettings {
+            .compaction(crate::CompactionSettings {
                 tokens: 1000,
                 nudge: false,
                 ..Default::default()
@@ -1318,17 +1325,17 @@ fn state_lines_later_unchanged_start_write_supersedes_a_carried_handoff_note() {
     let (ack, _) = capture();
     world
         .inbox
-        .send(Delivery::Prompt(driver("handoff", "hello"), ack))
+        .send(Delivery::Prompt(driver("compaction", "hello"), ack))
         .unwrap();
     let done = run_turn(&mut world);
     assert_eq!(finish_turn(&mut world, &done), Some(TurnOutcome::Completed));
-    let state = state_written(&world, "before_handoff");
+    let state = state_written(&world, "before_compaction");
     assert_eq!(state.len(), 1);
     assert_eq!(state[0].payload["value"], "B");
     assert!(
         lines(&world)
             .iter()
-            .any(|line| line.kind() == EventKind::HandoffCompleted)
+            .any(|line| line.kind() == EventKind::CompactionCompleted)
     );
 }
 
@@ -1343,7 +1350,7 @@ struct FakeHooks {
     cancel_in_session: Mutex<Option<Arc<crate::TurnCancel>>>,
     shutdown_in_session: Mutex<Option<Arc<crate::TurnCancel>>>,
     pause_in_session: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
-    shutdown_after_handoff_check: Mutex<Option<Arc<crate::TurnCancel>>>,
+    shutdown_after_compaction_check: Mutex<Option<Arc<crate::TurnCancel>>>,
     turn_start: Mutex<VecDeque<ContextAnswer>>,
     before_model_call: Mutex<VecDeque<CheckAnswer>>,
     turn_end: Mutex<VecDeque<ContextAnswer>>,
@@ -1371,7 +1378,7 @@ impl FakeHooks {
             cancel_in_session: Mutex::new(None),
             shutdown_in_session: Mutex::new(None),
             pause_in_session: Mutex::new(None),
-            shutdown_after_handoff_check: Mutex::new(None),
+            shutdown_after_compaction_check: Mutex::new(None),
             turn_start: Mutex::new(VecDeque::new()),
             before_model_call: Mutex::new(VecDeque::new()),
             turn_end: Mutex::new(VecDeque::new()),
@@ -1578,11 +1585,11 @@ impl Hooks for FakeHooks {
             cancel.shutdown(143);
         }
         // On the turn thread: a shutdown forced after this call's final
-        // check, before the handoff's guarded completion write.
-        if start.reason == contract::hook::StartReason::Handoff
-            && let Some(signal) = self.shutdown_after_handoff_check.lock().unwrap().clone()
+        // check, before the compaction's guarded completion write.
+        if start.reason == contract::hook::StartReason::Compaction
+            && let Some(signal) = self.shutdown_after_compaction_check.lock().unwrap().clone()
         {
-            super::pause_after_handoff_start(Box::new(move || signal.shutdown(143)));
+            super::pause_after_compaction_start(Box::new(move || signal.shutdown(143)));
         }
         self.session_start
             .lock()
@@ -1600,7 +1607,7 @@ impl Hooks for FakeHooks {
                 .map(|item| match item {
                     InputItem::Message { content, .. } => crate::conversation::text(content),
                     InputItem::Jobs { .. } => "jobs".to_owned(),
-                    InputItem::Handoff { .. } => "handoff".to_owned(),
+                    InputItem::Compaction { .. } => "compaction".to_owned(),
                     InputItem::ShellCommand { .. }
                     | InputItem::Rewind { .. }
                     | InputItem::Unknown => "other".to_owned(),
@@ -1661,10 +1668,10 @@ impl Hooks for FakeHooks {
             .unwrap_or_else(|| added(Vec::new()))
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -2847,7 +2854,7 @@ fn a_shutdown_around_session_start_runs_no_hook_and_starts_no_turn() {
 }
 
 #[test]
-fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
+fn a_shutdown_between_the_compaction_hook_and_its_commit_cancels_the_compaction() {
     for fails in [false, true] {
         let hooks = Arc::new(FakeHooks::new());
         hooks.answer_session_start(added(Vec::new()));
@@ -2871,18 +2878,18 @@ fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
         );
         {
             let looped = world.looped.take().unwrap();
-            // After the handoff hook's final check, before the guarded
+            // After the compaction hook's final check, before the guarded
             // completion write: the shutdown applies none of the answer.
             // Armed from the hook itself, which runs on the turn thread.
             hooks
-                .shutdown_after_handoff_check
+                .shutdown_after_compaction_check
                 .lock()
                 .unwrap()
                 .replace(Arc::clone(&looped.cancel));
-            world.looped = Some(looped.handoff(crate::HandoffSettings {
+            world.looped = Some(looped.compaction(crate::CompactionSettings {
                 tokens: 1_000,
                 nudge: false,
-                ..crate::HandoffSettings::default()
+                ..crate::CompactionSettings::default()
             }));
         }
         let (ack, _) = capture();
@@ -2913,12 +2920,12 @@ fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
                 "tool_call_started",
                 "tool_call_completed",
                 "step_started",
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "turn_completed",
             ]
             .map(EventKind::from_name),
@@ -2926,7 +2933,7 @@ fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
         );
         let done: Vec<&Envelope> = all
             .iter()
-            .filter(|line| line.kind() == EventKind::HandoffCompleted)
+            .filter(|line| line.kind() == EventKind::CompactionCompleted)
             .collect();
         assert_eq!(done.len(), 1);
         assert_eq!(
@@ -3233,7 +3240,7 @@ fn a_retried_request_runs_the_hook_once() {
 }
 
 #[test]
-fn a_handoff_for_size_runs_the_hook_again_on_the_rebuilt_request() {
+fn a_compaction_for_size_runs_the_hook_again_on_the_rebuilt_request() {
     let hooks = Arc::new(FakeHooks::new());
     let mut world = started(
         vec![
@@ -3276,12 +3283,12 @@ fn a_handoff_for_size_runs_the_hook_again_on_the_rebuilt_request() {
             "assistant_message_started",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "assistant_message_started",
             "text_completed",
@@ -3341,7 +3348,7 @@ fn an_over_budget_session_never_calls_the_hook() {
 }
 
 #[test]
-fn a_handoff_note_request_never_reaches_the_hook() {
+fn a_compaction_note_request_never_reaches_the_hook() {
     let hooks = Arc::new(FakeHooks::new());
     let mut world = started_with_tools(
         vec![
@@ -3356,9 +3363,9 @@ fn a_handoff_note_request_never_reaches_the_hook() {
         Some(hooks.clone()),
         vec![Arc::new(Probe) as Arc<dyn Tool>],
     );
-    // Any reply overflows the context, so the next step hands off first.
+    // Any reply overflows the context, so the next step compacts first.
     world.looped = world.looped.take().map(|looped| {
-        looped.handoff(crate::HandoffSettings {
+        looped.compaction(crate::CompactionSettings {
             enabled: true,
             tokens: 1,
             window_fraction: 1.0,
@@ -3398,12 +3405,12 @@ fn a_handoff_note_request_never_reaches_the_hook() {
             "tool_call_started",
             "tool_call_completed",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "assistant_message_started",
             "text_completed",
@@ -3556,7 +3563,7 @@ impl Tool for Asking {
                 text: "a question".into(),
             }],
             control: Some(contract::events::Control {
-                handoff: None,
+                compact: None,
                 questions: Some(vec![contract::shapes::Question {
                     header: "Pick".into(),
                     question: "Which?".into(),
@@ -4402,4 +4409,19 @@ fn a_cancel_between_a_turn_end_failure_and_end_turn_ends_interrupted() {
         line(&all, "turn_completed").payload["outcome"],
         "interrupted"
     );
+}
+
+#[test]
+fn a_sandbox_rebuild_continues_the_session() {
+    use contract::events::PreambleReason;
+    use contract::{SessionId, hook::StartReason};
+    let session = SessionId("s_sandbox".into());
+    let state = crate::lifecycle::State::new(PreambleReason::Sandbox, &session);
+    assert_eq!(
+        state.reason,
+        StartReason::Resume,
+        "a sandbox rebuild continues rather than starts"
+    );
+    let start = crate::lifecycle::State::new(PreambleReason::Start, &session);
+    assert_eq!(start.reason, StartReason::Start);
 }

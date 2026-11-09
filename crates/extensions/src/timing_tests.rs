@@ -1442,7 +1442,7 @@ fn spawn_failure_starts_no_request_or_record() {
 /// Registered by no other test in this file. The pause is a process-wide
 /// hook, and nextest runs each test in its own process, so tests elsewhere
 /// never meet it.
-const PAUSE_POINT: &str = "before_handoff";
+const PAUSE_POINT: &str = "before_compaction";
 
 fn pausing_hook(url: &str) -> String {
     format!(

@@ -1,7 +1,7 @@
 //! Binary-level tests of the panel's look (`docs/tui.md`, "The panel",
 //! "The narrow layout"): the real binary with a scripted session holding
 //! three edited files, a running delegate, a running job and 268k of a
-//! 400k handoff. The 160x48 truecolour run pins the slab's surface,
+//! 400k compaction. The 160x48 truecolour run pins the slab's surface,
 //! edges, padding and bar; the 100x40 run pins the narrow status rows;
 //! the 256-colour run pins the panel tint's quantisation.
 
@@ -61,7 +61,7 @@ fn locate(row: &str, needle: &str) -> u16 {
 /// The scripted turn: three edits, a delegate whose model hangs
 /// mid-stream, a background shell call waiting on the hold FIFO, and a
 /// text step reporting 268k of context, so the panel holds three changed
-/// files, a running delegate, a running job and 268k of the 400k handoff
+/// files, a running delegate, a running job and 268k of the 400k compaction
 /// at once. The background call moves to a job at once, so no timing
 /// decides when the count appears; writing a line to the FIFO releases
 /// it, so nothing leaks.
@@ -90,7 +90,7 @@ fn script(job: &str) -> serde_json::Value {
 }
 
 /// A setup with the scripted session above: the files, the scripts, the
-/// 400k handoff, the pinned panel, the fake provider serving the
+/// 400k compaction, the pinned panel, the fake provider serving the
 /// delegate's hung stream, and a reviewer allowing every call, so no
 /// approval stalls the turn. Returns the setup with its provider
 /// server, held to the test's end, and the hold helper that parks the
@@ -147,7 +147,7 @@ fn panel_setup() -> (Setup, ProviderServer, Hold) {
         &json!({
             "model": "scripted/s.json",
             "reviewer": {"model": "scripted/r.json"},
-            "handoff": {"tokens": 400000},
+            "compaction": {"tokens": 400000},
             "tui": {"panel": {"width": PANEL_SHARE}},
             "hub": {"idle_exit_ms": 200},
         }),
@@ -320,19 +320,29 @@ fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
         };
         let text = next[start..].trim_end();
         let parts: Vec<_> = text.split(" · ").collect();
-        if parts.len() != 3 || parts[0] != "2 calls" || !delegate_duration(parts[1]) {
+        if !matches!(parts.len(), 3 | 4)
+            || parts[0] != "2 calls"
+            || !delegate_duration(parts[1])
+            || (parts.len() == 4 && parts[2] != "$0.00")
+        {
             return false;
         }
+        let subject = parts[parts.len() - 1];
         let Some((x, progress_y)) = grid.text_at(text) else {
             return false;
         };
         if usize::from(progress_y) != y + 1 {
             return false;
         }
-        let prefix_width = Span::raw(format!("2 calls · {} · ", parts[1])).width();
+        let prefix = if parts.len() == 4 {
+            format!("2 calls · {} · $0.00 · ", parts[1])
+        } else {
+            format!("2 calls · {} · ", parts[1])
+        };
+        let prefix_width = Span::raw(prefix).width();
         let subject_x = usize::from(x) + prefix_width;
         let content_end = usize::from(grid.size().0.saturating_sub(1));
-        if !delegate_subject_matches(parts[2], tail, content_end.saturating_sub(subject_x)) {
+        if !delegate_subject_matches(subject, tail, content_end.saturating_sub(subject_x)) {
             return false;
         }
         let y = progress_y;
@@ -409,6 +419,10 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
     )
     .unwrap();
     let subject = format!("shell {command}");
+    let hub = Arc::new(Mutex::new(None));
+    let (feed, _) = connect_hub(&setup, &hub);
+    feed.send(r#"{"id":"c_feed","command":"feed"}"#);
+    support::recv_answer(&feed, "c_feed", "the registered status feed");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
@@ -416,12 +430,34 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         delegate_progress(grid, &subject, false)
     });
     std::io::Write::write_all(hold.release(), b"done\n").unwrap();
+    // The final parent summary carries the last usage that can move the panel.
+    until(&feed, "the final idle parent summary", |line| {
+        line["kind"] == "session_status"
+            && line["payload"]["parent"].is_null()
+            && line["payload"]["state"] == "idle"
+            && line["payload"]["turns"] == 2
+            && line["payload"]["delegates"] == 0
+    });
+    run.wait_screen("the final summary and folded row rendered", |grid| {
+        grid.contents.contains("1 finished ▸")
+            && grid.contents.contains("Waiting.")
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("tokens in / out") && row.trim_end().ends_with("0 / 0"))
+    });
+    run.click_where("the finished delegates fold", |grid| {
+        grid.text_at("1 finished ▸").filter(|&(x, _)| x >= 100)
+    });
     run.wait_screen(
-        "the finished delegate's calls, elapsed and done, dim",
+        "the finished delegate's calls, elapsed, known-zero cost and done, dim",
         |grid| delegate_progress(grid, "done", true),
     );
     hold.stand_down(setup.deadline.cleanup_phase());
+    drop(feed);
     quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
 }
 
 #[test]
@@ -520,7 +556,7 @@ fn panel_cards_match_the_doc() {
     }
 
     // The context bar: 17 cells of `▆`, eleven in info toward the 400k
-    // handoff, then the marker.
+    // compaction, then the marker.
     let bar = (top + 1..bottom)
         .find(|y| {
             grid.rows[*y as usize].contains("268.0k")
@@ -531,7 +567,7 @@ fn panel_cards_match_the_doc() {
     let fill = (0..17)
         .filter(|n| grid.cell(slab + 2 + n, bar).fg == INFO)
         .count();
-    assert_eq!(fill, 11, "eleven cells toward the handoff");
+    assert_eq!(fill, 11, "eleven cells toward the compaction");
 
     // No empty track anywhere in the panel's columns.
     for y in 0..48 {

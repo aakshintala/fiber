@@ -182,6 +182,7 @@ pub(crate) fn frame(
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Quota".to_owned(),
         command: if fetching {
             "/quota · fetching".to_owned()

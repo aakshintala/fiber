@@ -159,7 +159,7 @@ fn a_path_the_conversation_no_longer_names_is_encoded_afresh_when_it_returns() {
     let cache = Cache::default();
 
     cache.resolve(&dir.path, &user(&["artifacts/a.png"]));
-    // A handoff dropped the image: a request without it evicts its encoding.
+    // A compaction dropped the image: a request without it evicts its encoding.
     cache.resolve(&dir.path, &user(&["artifacts/b.png"]));
     dir.write("artifacts/a.png", b"zzzz");
     let media = cache.resolve(&dir.path, &user(&["artifacts/a.png"]));

@@ -36,7 +36,19 @@ pub(crate) fn delegates_frame(app: &App, list: List) -> Frame {
 pub(crate) fn all_delegates_frame(app: &App, list: List) -> Frame {
     let mut rows: Vec<Row> = Vec::new();
     for (started, description) in app.panel_state().running_delegates() {
-        rows.extend(running_delegate_rows(app, started, description));
+        let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
+        rows.extend(
+            crate::view::panel::delegates::running_rows(app, started, description)
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    vec![(
+                        row.line.to_string(),
+                        spot,
+                        if index == 0 { Ink::Plain } else { Ink::Muted },
+                    )]
+                }),
+        );
     }
     for (started, description, outcome) in app.panel_state().finished_delegates() {
         rows.extend(finished_delegate_rows(app, started, description, outcome));
@@ -52,6 +64,7 @@ pub(crate) fn all_delegates_frame(app: &App, list: List) -> Frame {
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Delegates".to_owned(),
         command: "/delegates".to_owned(),
         rows,
@@ -93,11 +106,16 @@ fn finished_delegate_rows(
     };
     let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
     let second = match app.panel_state().finished_figures(&started.job_id) {
-        Some((calls, elapsed)) => format!(
-            "  {} · {} · {word}",
-            crate::format::count(calls, "call", "calls"),
-            crate::format::duration(elapsed)
-        ),
+        Some((calls, elapsed)) => {
+            let mut line = format!(
+                "  {} · {}",
+                crate::format::count(calls, "call", "calls"),
+                crate::format::duration(elapsed)
+            );
+            append_cost(&mut line, app.panel_state().finished_cost(&started.job_id));
+            line.push_str(&format!(" · {word}"));
+            line
+        }
         None => format!("  {word}"),
     };
     [
@@ -130,6 +148,21 @@ pub(crate) fn jobs_frame(app: &App, list: List) -> Frame {
     )
 }
 
+fn append_cost(line: &mut String, cost: Option<(Option<f64>, f64)>) {
+    let Some((billed, subscription)) = cost else {
+        return;
+    };
+    if let Some(billed) = billed.filter(|amount| *amount > 0.0) {
+        line.push_str(&format!(" · {}", crate::format::money(billed)));
+    }
+    if subscription > 0.0 {
+        line.push_str(&format!(" · {} sub", crate::format::money(subscription)));
+    }
+    if billed == Some(0.0) && subscription == 0.0 {
+        line.push_str(" · $0.00");
+    }
+}
+
 fn elapsed(app: &App, job: &contract::JobId) -> String {
     app.started_of_job(job)
         .map(|started| {
@@ -153,12 +186,12 @@ fn delegate_detail(app: &App, started: &DelegateStarted, spot: Option<Spot>) -> 
         .map(|level| format!(" · {level}"))
         .unwrap_or_default();
     let calls = crate::format::count(status.calls, "call", "calls");
-    let spend = crate::format::money(row.spend);
-    let mut cells = vec![(
-        format!("  {}{level} · {calls} · {session} · {spend} ", status.model),
-        spot,
-        Ink::Muted,
-    )];
+    let mut detail = format!("  {}{level} · {calls} · {session}", status.model);
+    append_cost(
+        &mut detail,
+        Some((status.spend.cost, status.spend.subscription_cost)),
+    );
+    let mut cells = vec![(detail, spot, Ink::Muted)];
     if let Some(context) = status.context.as_ref().filter(|context| context.window > 0) {
         let (filled, role, pct) = bar(context.tokens, context.window);
         cells.push(("▆".repeat(filled), spot, Ink::Role(role)));
@@ -205,6 +238,7 @@ fn frame(
     }
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: title.to_owned(),
         command: "delegates · jobs".to_owned(),
         rows,

@@ -21,8 +21,8 @@ use contract::{ActionId, Envelope, ErrorCode, GenerationId, JobId, SessionId, Tu
 
 use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
+use crate::compaction::Carry;
 use crate::completion::resolved;
-use crate::handoff::Carry;
 use crate::jobs::OrphanEnd;
 use crate::reviewer::Reviewed;
 use crate::suspend::Pending;
@@ -45,7 +45,7 @@ fn settled_reason(completed: &ToolCallCompleted) -> String {
 /// `session_started` recorded, the model the last `preamble_built` or
 /// `model_changed` names, if any, and the session-wide state a resumed loop restores. The pass
 /// also finds the window a resume reads: the lines from the last completed
-/// handoff on (`docs/handoff.md`, "Resume").
+/// compaction on (`docs/compaction.md`, "Resume").
 pub struct Resumed {
     /// The own session's id, from its directory name: the diagnostic log
     /// and the reviewer key are built from it (`docs/prompt-cache.md`,
@@ -81,8 +81,8 @@ pub struct Resumed {
     pub(crate) settings: Option<ModelSettings>,
     /// The window's start, as a position in the chain: the segment and
     /// the `seq` the window starts at: the latest `turn_started` of the
-    /// latest completed handoff's turn, before that handoff; the chain's
-    /// start with no completed handoff, or none of its turn's
+    /// latest completed compaction's turn, before that compaction; the chain's
+    /// start with no completed compaction, or none of its turn's
     /// `turn_started` lines.
     pub(crate) window: (usize, u64),
     /// How many lines the own log holds: the window ends there, before any
@@ -109,7 +109,7 @@ pub struct Resumed {
     /// The reviewer's blocks this session.
     pub(crate) session_blocks: u64,
     /// What the reviewer is shown: the latest `reviewer_kept`'s messages,
-    /// then what followed (`docs/permissions.md`, "At a handoff").
+    /// then what followed (`docs/permissions.md`, "At a compaction").
     pub(crate) reviewed: Vec<Reviewed>,
     /// The jobs started and never ended, each as its `orphaned` completion.
     pub(crate) orphans: Vec<JobCompleted>,
@@ -164,7 +164,7 @@ impl Resumed {
     /// What the model's context has seen: each resolved path the log's
     /// completed file calls recorded with its whole-file hash, the last
     /// hash-bearing entry winning (`docs/tools.md`, "Stale files"). A
-    /// completed handoff clears it; a missing or malformed legacy entry
+    /// completed compaction clears it; a missing or malformed legacy entry
     /// creates nothing and erases nothing. The main crate seeds the
     /// session's file tools from this, and replay never touches disk bytes.
     pub fn seen_files(&self) -> &BTreeMap<PathBuf, u64> {
@@ -413,19 +413,19 @@ impl Loop {
         // A log that already holds an opening message keeps it: the
         // conversation rebuild renders it from the log, so the first turn
         // writes none. A log with none gets one at its first turn.
-        // A completed handoff starts a new context, which needs a new
+        // A completed compaction starts a new context, which needs a new
         // opening message: one the crash cut off is written at the next turn.
         let mut opened = false;
         for line in &lines {
             if line.kind() == EventKind::OpeningMessage {
                 opened = true;
-            } else if line.kind() == EventKind::HandoffCompleted
+            } else if line.kind() == EventKind::CompactionCompleted
                 && line.payload.get("outcome").and_then(|v| v.as_str()) == Some("completed")
             {
                 opened = false;
             }
         }
-        // Only the current context's lines: a completed handoff starts the
+        // Only the current context's lines: a completed compaction starts the
         // tracked state afresh, as it does live.
         let context = if opened {
             let start = lines

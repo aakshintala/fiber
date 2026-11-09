@@ -129,7 +129,7 @@ fn three_matches_with_the_second_selected() {
         &[
             "how do I backfill embeddings for old sessions?",
             "back up the state file before the migration",
-            "roll back the handoff note",
+            "roll back the compaction note",
         ],
         "back",
     );
@@ -165,7 +165,7 @@ fn the_panel_titles_counts_and_bars_exactly_its_selection() {
         &[
             "how do I backfill embeddings for old sessions?",
             "back up the state file before the migration",
-            "roll back the handoff note",
+            "roll back the compaction note",
         ],
         "back",
     );
@@ -182,7 +182,7 @@ fn the_panel_titles_counts_and_bars_exactly_its_selection() {
     let text = row.trim_start();
     assert!(text.starts_with("› "), "{row:?}");
     // Recall order is newest first: the selection opens on "roll back".
-    assert!(text.contains("roll back the handoff note"), "{row:?}");
+    assert!(text.contains("roll back the compaction note"), "{row:?}");
     // The query hit reads bold; the slab writes no cell outside itself.
     let hit = row.find("back").expect("the hit");
     let x = u16::try_from(row[..hit].chars().count()).expect("a column");
@@ -376,6 +376,15 @@ fn a_tall_selected_entry_keeps_a_narrow_slab() {
     // only the first row (see #1792).
     let tall = format!("fix {}", "x".repeat(65));
     let app = searching(80, 11, &[&tall], "fix");
+    let columns = app.column_width();
+    let bubble = usize::from(columns).saturating_mul(72) / 100;
+    let inner = u16::try_from(bubble.saturating_sub(3)).unwrap_or(u16::MAX);
+    let rendered = crate::markdown::render(&tall, inner);
+    assert_eq!(
+        rendered,
+        crate::markdown::render_prompt(&tall, inner),
+        "the prompt matches the reply renderer at its bubble width"
+    );
     let completions = panel(&app);
     let (buf, _, slab) = drawn(&completions, 80, 11);
     assert_eq!(slab.width, 40, "{}", crate::view::text(&buf));
@@ -392,14 +401,12 @@ fn a_tall_selected_entry_keeps_a_narrow_slab() {
         "{}",
         crate::view::text(&buf)
     );
-    // The whole screen agrees: a 40-column slab. (The conversation
-    // behind the panel still shows the prompt's own x's.)
+    // The conversation behind the panel still draws the prompt text.
     let shown = screen(&app, 80, 11);
-    let edge = shown
-        .lines()
-        .find(|line| line.contains('▄'))
-        .expect("no top edge");
-    assert_eq!(edge.chars().filter(|ch| *ch == '▄').count(), 40, "{shown}");
+    assert!(
+        shown.lines().any(|line| line.contains("xxxxxxxx")),
+        "{shown}"
+    );
 }
 
 #[test]

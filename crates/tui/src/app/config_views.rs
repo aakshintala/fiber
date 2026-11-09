@@ -26,7 +26,7 @@ use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWor
 use crate::logout_view::Logout;
 use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
-use crate::settings_view::{Act, BUILT_IN_THEMES, Ctx, Settings, THEME};
+use crate::settings_view::{Act, BUILT_IN_THEMES, Ctx, Request, Screen, Settings, THEME};
 use crate::skills_view::Skills;
 use crate::swapped::{Frame, Spot};
 use crate::tools_view::Tools;
@@ -63,7 +63,7 @@ pub(crate) enum ConfigView {
 #[derive(Debug)]
 enum Open {
     /// `/settings`.
-    Settings(Settings),
+    Settings(Box<Settings>),
     /// `/tools`.
     Tools(Tools),
     /// `/skills`.
@@ -409,15 +409,19 @@ impl App {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
-                Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
+                Open::Settings(Box::new(Settings::open(
+                    &self.config_ctx(seam.as_ref(), &workspace),
+                    self.launch_overrides.clone(),
+                )))
             }
             ConfigView::Theme => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
-                Open::Settings(Settings::open_theme(
+                Open::Settings(Box::new(Settings::open_theme(
                     &self.config_ctx(seam.as_ref(), &workspace),
-                ))
+                    self.launch_overrides.clone(),
+                )))
             }
             ConfigView::Tools => {
                 return self.open_asking(seam, "tools", build_tools);
@@ -561,6 +565,7 @@ impl App {
         let Some(workspace) = self.view_workspace() else {
             return Some(Effect::None);
         };
+        self.settle_settings_picker();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         let act = match &mut self.config_views.open {
             Some(Open::Settings(settings)) => settings.key(key, &ctx),
@@ -575,7 +580,7 @@ impl App {
             Some(Open::Doctor(..)) => esc(key),
             Some(Open::Credential(_)) | None => esc(key),
         };
-        Some(self.config_act(act))
+        Some(self.config_act_then_requests(act))
     }
 
     /// Shifts the open configuration view's window one wheel step through
@@ -599,6 +604,7 @@ impl App {
         let Some(workspace) = self.view_workspace() else {
             return Some(Effect::None);
         };
+        self.settle_settings_picker();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         let act = match &mut self.config_views.open {
             Some(Open::Settings(settings)) => settings.wheel(up, &ctx),
@@ -628,12 +634,10 @@ impl App {
         let Some(workspace) = self.view_workspace() else {
             return Some(Effect::None);
         };
+        self.settle_settings_picker();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         let act = match &mut self.config_views.open {
-            Some(Open::Settings(settings)) => {
-                settings.edit_key(edit.clone());
-                Act::Stay
-            }
+            Some(Open::Settings(settings)) => settings.edit_key(edit.clone(), &ctx),
             Some(Open::Tools(tools)) => {
                 tools.edit_key(edit);
                 Act::Stay
@@ -655,7 +659,7 @@ impl App {
             Some(Open::Doctor(..)) => Act::Stay,
             Some(Open::Credential(_)) | None => Act::Stay,
         };
-        Some(self.config_act(act))
+        Some(self.config_act_then_requests(act))
     }
 
     /// A click on the open view's `spot`.
@@ -695,6 +699,7 @@ impl App {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
+                self.settle_settings_picker();
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
@@ -714,7 +719,90 @@ impl App {
             // own; here a cell is never pushed.
             Spot::Cell(_, _) => Act::Stay,
         };
-        self.config_act(act)
+        self.config_act_then_requests(act)
+    }
+
+    /// Whether `/settings` is open and waiting on the model picker.
+    #[cfg(test)]
+    pub(in crate::app) fn settings_awaiting_model(&self) -> bool {
+        matches!(&self.config_views.open, Some(Open::Settings(settings)) if settings.awaiting_model())
+    }
+
+    /// A model picker that closed without choosing leaves `/settings`
+    /// waiting for nothing: it wrote nothing, and its row stays focused.
+    fn settle_settings_picker(&mut self) {
+        if !self.model_picker_open()
+            && let Some(Open::Settings(settings)) = &mut self.config_views.open
+        {
+            settings.model_cancelled();
+        }
+    }
+
+    /// Carries out what the view asked, then what `/settings` asked of the
+    /// app: a screen row opens its screen, and a model row opens the model
+    /// picker over the view. The view names no slash command and writes
+    /// no pseudo-key for either.
+    fn config_act_then_requests(&mut self, act: Act) -> Effect {
+        let effect = self.config_act(act);
+        let request = match &mut self.config_views.open {
+            Some(Open::Settings(settings)) => settings.take_request(),
+            _ => None,
+        };
+        let asked = match request {
+            None => Effect::None,
+            Some(Request::Screen(screen)) => match screen {
+                Screen::Keys => self.open_keys(),
+                Screen::Credentials => self.open_config_view(ConfigView::Credential),
+                Screen::Rules => self.open_config_view(ConfigView::Rules),
+                Screen::Tools => self.open_config_view(ConfigView::Tools),
+                Screen::Skills => self.open_config_view(ConfigView::Skills),
+                Screen::Mcp => self.open_config_view(ConfigView::Mcp),
+            },
+            Some(Request::Model) => self.open_model_picker_over_settings(),
+        };
+        if matches!(effect, Effect::None) {
+            asked
+        } else {
+            effect
+        }
+    }
+
+    /// The model picker's choice, when it was opened for a `/settings`
+    /// row: saved to that row's key and layer, byte for byte, and nothing
+    /// else. No session is commanded, no home chip changes and no global
+    /// default is written. A refused save keeps the picker open and says
+    /// why. `None` when the picker was opened for anything else.
+    pub(in crate::app) fn settings_choice(
+        &mut self,
+        choice: &crate::model_picker::Choice,
+    ) -> Option<Effect> {
+        let Some(Open::Settings(settings)) = &self.config_views.open else {
+            return None;
+        };
+        if !settings.awaiting_model() {
+            return None;
+        }
+        if choice.session_only {
+            self.push_notice(
+                ErrorCode::Usage,
+                "A setting is saved, never for one session only.".to_owned(),
+            );
+            return Some(Effect::None);
+        }
+        let seam = self.configure_seam();
+        let Some(workspace) = self.view_workspace() else {
+            return Some(Effect::None);
+        };
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let Some(Open::Settings(settings)) = &mut self.config_views.open else {
+            return None;
+        };
+        if settings.choose_model(&choice.reference, &ctx) {
+            self.model_picker.close();
+        } else if let Some(said) = settings.last_said().map(str::to_owned) {
+            self.push_notice(ErrorCode::IoFailed, said);
+        }
+        Some(Effect::None)
     }
 
     /// Carries out what the view asked.
@@ -902,7 +990,9 @@ impl App {
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
-            Open::Settings(settings) => settings.frame(self.config_view_width(), usage),
+            Open::Settings(settings) => {
+                settings.frame(self.config_view_width(), self.config_view_height(), usage)
+            }
             Open::Tools(tools) => {
                 tools.frame(self.config_view_width(), self.reload_cost().as_deref())
             }
@@ -1022,6 +1112,15 @@ impl App {
                 }
                 return self.credential_line(envelope);
             }
+            Some(
+                super::Waiting::Find
+                | super::Waiting::Commands
+                | super::Waiting::Model
+                | super::Waiting::Reply
+                | super::Waiting::OfferFile
+                | super::Waiting::Steer
+                | super::Waiting::Shell,
+            ) => {}
             Some(
                 super::Waiting::Dismiss(_)
                 | super::Waiting::Fork
@@ -1188,8 +1287,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

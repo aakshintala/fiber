@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use contract::ErrorCode;
 use contract::ThinkingLevel;
 use contract::events::Notice;
-use contract::settings::{SettingsMetadata, SettingsTab};
+use contract::settings::{SettingControl, SettingsMetadata, SettingsTab};
 
 use crate::Source;
 use crate::error::ConfigError;
@@ -24,6 +24,13 @@ use crate::secret::CredentialSource;
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
     Str,
+    /// A model reference string: `model`, `reviewer.model`. Accepts what
+    /// `Str` does; the settings view picks it from the model picker.
+    Model,
+    /// A theme name string: `tui.theme`. Accepts what `Str` does, so a
+    /// theme file's name passes; the settings view steps through the
+    /// themes it can find.
+    Theme,
     Bool,
     /// A whole number of zero or more.
     Count,
@@ -57,7 +64,7 @@ pub(crate) enum Kind {
 impl Kind {
     pub(crate) fn accepts(self, value: &Value) -> bool {
         match self {
-            Self::Str => value.is_string(),
+            Self::Str | Self::Model | Self::Theme => value.is_string(),
             Self::Bool => value.is_boolean(),
             Self::Count => value.is_u64(),
             Self::CountBelow(ceiling) => value.as_u64().is_some_and(|n| n < ceiling),
@@ -109,9 +116,32 @@ impl Kind {
         }
     }
 
+    /// How `/settings` edits a value of this type. Exhaustive, so a new
+    /// kind cannot reach the view without a control.
+    pub(crate) fn control(self) -> SettingControl {
+        match self {
+            Self::Str | Self::Duration => SettingControl::Text,
+            Self::Model => SettingControl::Model,
+            Self::Theme => SettingControl::Theme,
+            Self::Bool => SettingControl::Boolean,
+            Self::Count | Self::CountBelow(_) | Self::Number => SettingControl::Number,
+            Self::OneOf(allowed) => {
+                SettingControl::Fixed(allowed.iter().map(|name| (*name).to_owned()).collect())
+            }
+            Self::StrList => SettingControl::StringList,
+            Self::RepositoryExtensions => SettingControl::RepositoryExtensions,
+            Self::StrOrStrList
+            | Self::Role
+            | Self::EnvMap
+            | Self::BoolMap
+            | Self::Credential
+            | Self::RequestTags => SettingControl::Json,
+        }
+    }
+
     pub(crate) fn expected(self) -> String {
         match self {
-            Self::Str => "a string".into(),
+            Self::Str | Self::Model | Self::Theme => "a string".into(),
             Self::Bool => "true or false".into(),
             Self::Count => "a whole number of zero or more".into(),
             Self::CountBelow(ceiling) => format!("a whole number less than {ceiling}"),
@@ -284,8 +314,8 @@ const fn entry_replaced(path: &'static str, kind: Kind, metadata: SettingsMetada
 }
 
 use Kind::{
-    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Number, OneOf,
-    RepositoryExtensions, RequestTags, Role, Str, StrList, StrOrStrList,
+    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Model, Number,
+    OneOf, RepositoryExtensions, RequestTags, Role, Str, StrList, StrOrStrList, Theme,
 };
 
 /// Metadata for a key `/settings` lists on `tab`.
@@ -331,7 +361,7 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         "model",
-        Str,
+        Model,
         YES,
         None,
         tabbed(
@@ -428,7 +458,7 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         "reviewer.model",
-        Str,
+        Model,
         NO,
         None,
         tabbed(
@@ -460,47 +490,47 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
-        "handoff.enabled",
+        "compaction.enabled",
         Bool,
         YES,
         Some("true"),
         tabbed(
             SettingsTab::Sessions,
-            "Automatic handoff",
-            "Whether a handoff starts automatically when the context grows.",
+            "Automatic compaction",
+            "Whether a compaction starts automatically when the context grows.",
         ),
     ),
     key(
-        "handoff.tokens",
+        "compaction.tokens",
         Count,
         YES,
         Some("400000"),
         tabbed(
             SettingsTab::Sessions,
-            "Handoff tokens",
-            "The context size, in tokens, at which an automatic handoff starts.",
+            "Compaction tokens",
+            "The context size, in tokens, at which an automatic compaction starts.",
         ),
     ),
     key(
-        "handoff.window_fraction",
+        "compaction.window_fraction",
         Number,
         YES,
         Some("0.7"),
         tabbed(
             SettingsTab::Sessions,
-            "Handoff window fraction",
+            "Compaction window fraction",
             "The trigger as a fraction of the model's context window, such as 0.7.",
         ),
     ),
     key(
-        "handoff.nudge",
+        "compaction.nudge",
         Bool,
         YES,
         Some("true"),
         tabbed(
             SettingsTab::Sessions,
-            "Handoff nudge",
-            "Whether Fiber tells the model its context is filling and that a handoff keeps the work going.",
+            "Compaction nudge",
+            "Whether Fiber tells the model its context is filling and that a compaction keeps the work going.",
         ),
     ),
     key(
@@ -559,43 +589,43 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
-        "models.*.handoff.enabled",
+        "models.*.compaction.enabled",
         Bool,
         YES,
         None,
         untabbed(
-            "Model automatic handoff",
-            "Whether automatic handoff runs for one model.",
+            "Model automatic compaction",
+            "Whether automatic compaction runs for one model.",
         ),
     ),
     key(
-        "models.*.handoff.tokens",
+        "models.*.compaction.tokens",
         Count,
         YES,
         None,
         untabbed(
-            "Model handoff tokens",
-            "The context size, in tokens, at which an automatic handoff starts for one model.",
+            "Model compaction tokens",
+            "The context size, in tokens, at which an automatic compaction starts for one model.",
         ),
     ),
     key(
-        "models.*.handoff.window_fraction",
+        "models.*.compaction.window_fraction",
         Number,
         YES,
         None,
         untabbed(
-            "Model handoff window fraction",
-            "The handoff trigger for one model, as a fraction of its context window.",
+            "Model compaction window fraction",
+            "The compaction trigger for one model, as a fraction of its context window.",
         ),
     ),
     key(
-        "models.*.handoff.nudge",
+        "models.*.compaction.nudge",
         Bool,
         YES,
         None,
         untabbed(
-            "Model handoff nudge",
-            "Whether the handoff nudge is given for one model.",
+            "Model compaction nudge",
+            "Whether the compaction nudge is given for one model.",
         ),
     ),
     key(
@@ -1017,7 +1047,7 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         "tui.theme",
-        Str,
+        Theme,
         NO,
         None,
         tabbed(
@@ -1186,7 +1216,7 @@ pub(crate) fn leaf(path: &[String]) -> Option<&'static Key> {
         .find(|k| segments(k).count() == path.len() && prefix_matches(k, path))
 }
 
-/// Whether a path is an object that holds keys, such as `handoff`.
+/// Whether a path is an object that holds keys, such as `compaction`.
 fn interior(path: &[String]) -> bool {
     KEYS.iter()
         .any(|k| segments(k).nth(path.len()).is_some() && prefix_matches(k, path))

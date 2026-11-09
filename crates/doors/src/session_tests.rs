@@ -2328,10 +2328,10 @@ impl contract::hook::Hooks for InboxHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -6753,6 +6753,11 @@ fn close_ends_the_writers_while_another_handle_keeps_the_log() {
     reset();
     let opened = Opened::open(Vec::new());
     let client = subscribed_client(&opened);
+    // The subscribe ack is written through the pre-writer halves before
+    // `spawn_writer` runs, so it is no proof the writer exists. The
+    // `clients` line only the writer streams is: wait for it before
+    // closing, so `wait_writers` sees a writer that has begun.
+    let _ = support::until(&client, |line| line["kind"] == "clients");
     // A resumed process keeps its own `Arc<Log>` until it exits.
     let keep = Arc::clone(&opened.log);
     keep.append(&exited(), None, None).unwrap();

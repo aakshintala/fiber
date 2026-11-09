@@ -21,6 +21,19 @@ A doc table that mirrors the code has a check that fails when the two
 differ. The `unsafe` table below and the crate list in `docs/dependencies.md`
 are two. A new table of that kind comes with its check.
 
+`cargo xtask narrating-comments --base REV` checks added `.rs`, `.sh`, `.py`,
+`.toml`, `.yaml` and `.yml` lines, plus every file under `scripts/`. It matches
+the four literal phrases in [`docs/code-quality.md`, "Comments"](../code-quality.md#comments)
+case-insensitively, with word boundaries and spaces or tabs between words.
+For `//` lines it checks text after the first `//`, or the whole line when it
+starts with `/*` or `*` after trimming. For hash-language lines it checks text
+after the first `#` at the start of the line or after whitespace. It reads each
+line alone: strings, quotes, heredocs and block depth do not affect matching.
+This can flag markers inside strings or heredocs, and misses block continuation
+text without a leading `*`, inline `/*` after code, or phrases split across
+lines. A violation prints
+`narrating-comments: crates/a/src/lib.rs:7: comment narrates history`.
+
 What no tool can check is in "What a reviewer checks", and nowhere else.
 
 ## Formatting

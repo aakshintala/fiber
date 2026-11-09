@@ -511,7 +511,7 @@ fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a keeper-held
     // 60 s timeout stops the job at 2023-11-14T22:14:20Z. The drive keeps no
     // local deadline for a hosted command, so the receipt reads the wall the
-    // host handoff stored.
+    // host transfer stored.
     let dir = fakes::TempDir::new("fiber-hosted-receipt-deadline");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let (calls, started) = mpsc::channel();

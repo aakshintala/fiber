@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use contract::settings::{SettingControl, SettingPresentation};
 use serde_json::Value;
 
 use crate::keys::{self, WriteScope};
@@ -35,6 +36,10 @@ pub struct SettingInfo {
     pub value: SettingValue,
     /// The files it may be written to.
     pub scope: WriteScope,
+    /// The schema's tab, label and description for the key.
+    pub presentation: SettingPresentation,
+    /// How the view edits the key, from the type the schema checks.
+    pub control: SettingControl,
 }
 
 /// One notes layer's file with its own `reviewer.context` text.
@@ -122,6 +127,8 @@ impl Config {
                     key,
                     value,
                     scope: row.scope,
+                    presentation: row.metadata.into(),
+                    control: row.kind.control(),
                 })
             })
             .collect()

@@ -2,11 +2,11 @@
 //! (`docs/architecture.md`).
 
 mod ask_user;
+mod compact;
 mod edit;
 mod error;
 mod files;
 mod guidelines;
-mod handoff;
 mod image;
 #[cfg(test)]
 #[path = "job_timing_tests.rs"]
@@ -32,9 +32,9 @@ mod web_search;
 mod write;
 
 pub use ask_user::AskUser;
+pub use compact::Compact;
 pub use edit::Edit;
 pub use files::{Files, PathGuard, PathLocks};
-pub use handoff::Handoff;
 pub use image::ImageChild;
 pub use name_session::NameSession;
 pub use read::Read;

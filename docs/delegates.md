@@ -377,7 +377,7 @@ path is `invalid_arguments` and a git failure is `io_failed`.
 - With `isolation: worktree`, the fork records its own worktree on
   `session_started`, separately from the worktree in its inherited history.
   It shares both worktree locks for its life. Its parent releases the new
-  worktree's handoff share only after the durable `session_started`
+  worktree's transfer share only after the durable `session_started`
   acknowledges adoption; failed startup retains that share through child exit.
 - When the fork's workspace differs from its parent's, its first user message
   includes this paragraph before the unattended instruction and task:

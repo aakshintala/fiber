@@ -165,7 +165,7 @@ fn is_hook_point(point: &str) -> bool {
             | "before_model_call"
             | "after_tool"
             | "turn_end"
-            | "before_handoff"
+            | "before_compaction"
     )
 }
 

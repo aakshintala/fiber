@@ -1,5 +1,5 @@
-//! The handoff selection (`docs/permissions.md`, "At a handoff"): which of
-//! the person's messages still bind, asked at each completed handoff and
+//! The compaction selection (`docs/permissions.md`, "At a compaction"): which of
+//! the person's messages still bind, asked at each completed compaction and
 //! recorded as `reviewer_kept`.
 
 use std::sync::Arc;
@@ -88,15 +88,15 @@ pub(crate) fn fallback_notice(why: &str, dropped: usize) -> String {
 }
 
 impl Loop {
-    /// At a completed handoff (`docs/permissions.md`, "At a handoff"): asks
+    /// At a completed compaction (`docs/permissions.md`, "At a compaction"): asks
     /// the reviewer which of the person's messages still bind, records its
     /// selection as `reviewer_kept`, and resets the reviewer's input to
     /// those messages, word for word, then what follows. Only the numbers
     /// leave a selection reply: no reviewer text enters a later prompt.
     ///
     /// Public for the `review` jig's replay, which replays a source log's
-    /// handoffs through the same selection (`docs/testing.md`, "Jigs").
-    pub fn reviewer_handoff(&mut self, turn: &TurnId) -> Result<(), Error> {
+    /// compactions through the same selection (`docs/testing.md`, "Jigs").
+    pub fn reviewer_compaction(&mut self, turn: &TurnId) -> Result<(), Error> {
         let (endpoint, window) = match &self.reviewer {
             Ok(reviewer) => (
                 ReviewEndpoint {
@@ -120,7 +120,7 @@ impl Loop {
         for item in &self.reviewed {
             match &item.shown {
                 Shown::Reply(_) => {
-                    pending = pending.saturating_add(crate::handoff::estimate(&item.input));
+                    pending = pending.saturating_add(crate::compaction::estimate(&item.input));
                 }
                 Shown::Person(message) => {
                     // A person item is always a user item (`shown.rs` only builds
@@ -129,7 +129,7 @@ impl Loop {
                         persons.push((
                             *message,
                             text.clone(),
-                            pending.saturating_add(crate::handoff::estimate(&item.input)),
+                            pending.saturating_add(crate::compaction::estimate(&item.input)),
                         ));
                         pending = 0;
                     }
@@ -150,7 +150,7 @@ impl Loop {
             return Ok(());
         }
         let prompt = sections();
-        let mut listing = prompt.handoff.clone();
+        let mut listing = prompt.compaction.clone();
         for (n, (_, text, _)) in persons.iter().enumerate() {
             listing.push_str(&format!("\n{}. {text}", n + 1));
         }
@@ -185,7 +185,7 @@ impl Loop {
             match self.send_review(
                 turn,
                 &endpoint,
-                ReviewerUse::Handoff,
+                ReviewerUse::Compaction,
                 &prompt.shared,
                 conversation,
                 self.reviewer_sent,
@@ -203,7 +203,7 @@ impl Loop {
                             // reply's parse error never reaches the model. It stays in
                             // `why` for the fallback notice, which the person reads.
                             why = error;
-                            note = Some(prompt.handoff_reask.clone());
+                            note = Some(prompt.compaction_reask.clone());
                         }
                     }
                 }

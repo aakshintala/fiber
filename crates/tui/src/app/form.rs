@@ -44,6 +44,7 @@ impl App {
         let Some(line) = make(&mut self.queue, &id) else {
             return Effect::None;
         };
+        self.outbox.wait(&id, super::Waiting::Reply);
         self.outbox
             .pending
             .insert(id, (Kind::Reply, Draft::default()));
@@ -115,8 +116,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -146,9 +147,11 @@ impl App {
         }
         if let Some((code, message)) = rejection {
             self.rejected(&id, code, message);
+            self.outbox.settled(&id);
             return Vec::new();
         }
         self.outbox.pending.remove(&id);
+        self.outbox.settled(&id);
         let Some(session) = self.queue.declined(&id) else {
             return Vec::new();
         };

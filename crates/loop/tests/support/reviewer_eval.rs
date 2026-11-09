@@ -7,7 +7,7 @@
 //! `user` line's text is the person's message, an `assistant` line's text
 //! is the pending reply, a `tool_use`/`toolcall` block is the effectful
 //! call, a result block is stripped, and a `summary`/`compaction` line acts
-//! as a handoff. A line carrying conversation the pinned shapes do not
+//! as a compaction. A line carrying conversation the pinned shapes do not
 //! cover is a hard error naming the file and line, so native-shape drift
 //! surfaces at lane-build time instead of silently skipping calls. Lines
 //! carrying no conversation skip.
@@ -27,6 +27,8 @@ pub(crate) enum SourceKind {
     Sampled,
     /// A hand-written bad call.
     Seeded,
+    /// A call converted from a committed synthetic fixture.
+    Synthetic,
 }
 
 impl SourceKind {
@@ -36,6 +38,7 @@ impl SourceKind {
         match self {
             SourceKind::Sampled => "sampled",
             SourceKind::Seeded => "seeded",
+            SourceKind::Synthetic => "synthetic",
         }
     }
 
@@ -44,6 +47,7 @@ impl SourceKind {
         match raw {
             "sampled" => Some(SourceKind::Sampled),
             "seeded" => Some(SourceKind::Seeded),
+            "synthetic" => Some(SourceKind::Synthetic),
             _ => None,
         }
     }
@@ -797,12 +801,14 @@ pub(crate) struct SampleOpts {
     pub import_claude: Vec<String>,
     /// `--import-pi PATH`, repeatable: native pi session files.
     pub import_pi: Vec<String>,
+    /// `--synthetic DIR`, repeatable: committed synthetic fixture dirs.
+    pub synthetic: Vec<String>,
     /// `--scan FILE`: the final-set scan over the committed file.
     pub scan: Option<String>,
 }
 
 impl SampleOpts {
-    /// Whether sampling, scrub-context or importer flags ask for
+    /// Whether sampling, scrub-context, importer or synthetic flags ask for
     /// label-input emission. Scrub-context values alone imply emission, so
     /// raw owner values never reach the default path by accident.
     pub(crate) fn wants_sampled(&self) -> bool {
@@ -813,6 +819,7 @@ impl SampleOpts {
             || self.owner_email.is_some()
             || !self.import_claude.is_empty()
             || !self.import_pi.is_empty()
+            || !self.synthetic.is_empty()
     }
 }
 
@@ -861,6 +868,9 @@ pub(crate) fn parse_sample_flags(args: &[String]) -> Result<(SampleOpts, Vec<Str
         } else if arg == "--import-pi" {
             opts.import_pi
                 .push(flag_value(args, &mut at, "--import-pi")?);
+        } else if arg == "--synthetic" {
+            opts.synthetic
+                .push(flag_value(args, &mut at, "--synthetic")?);
         } else if arg == "--scan" {
             opts.scan = Some(flag_value(args, &mut at, "--scan")?);
         } else {
@@ -898,7 +908,7 @@ pub(crate) enum NativeLine {
     },
     /// A tool result: stripped before any prompt is built.
     Result,
-    /// A compaction marker: the fold acts as a handoff.
+    /// A compaction marker: the fold acts as a compaction.
     Compaction,
     /// A line carrying no conversation.
     Skip,
@@ -1681,7 +1691,7 @@ impl FileFold {
         self.reviewed.clone()
     }
 
-    /// Acts as a handoff: keeps every earlier person message, each with the
+    /// Acts as a compaction: keeps every earlier person message, each with the
     /// reply it answered, and drops every call. A held reply with no person
     /// message after it answers nothing, so it goes with the calls.
     fn compact(&mut self) {

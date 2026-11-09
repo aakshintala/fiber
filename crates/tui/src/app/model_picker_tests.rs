@@ -1143,7 +1143,7 @@ fn label_only_logged_out_rows_keep_the_picker_open_on_enter_and_click() {
 }
 
 #[test]
-fn a_login_handoff_during_a_remote_install_keeps_the_picker_and_reports_the_guard() {
+fn a_login_transfer_during_a_remote_install_keeps_the_picker_and_reports_the_guard() {
     use crate::app::Link;
     use crate::configure_fake::Fake;
     use crate::remote::{Remote, Router};
@@ -3478,6 +3478,146 @@ fn a_session_only_rejection_drops_the_wait() {
 }
 
 #[test]
+fn model_answer_reaches_its_handler() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Model));
+    app.on_line(accepted(SESSION, &id));
+    // The accept marks the row for this session only and clears the
+    // wait the choice registered.
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn model_tag_is_gone_after_answer() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn model_after_refusal() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(refused(SESSION, &id, "invalid_arguments", "gone."));
+    // One notice names the refusal, and the wait goes with the entry.
+    assert_eq!(app.notice(), Some("gone."));
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_model_refusal_routes_once_by_tag() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(refused(SESSION, &id, "stale_request", "replaced."));
+    // The refusal routes once: a single notice, cleared maps, and a
+    // settled wait. A duplicate refusal for the same id reports
+    // nothing new and keeps no new wait.
+    assert_eq!(app.notice(), Some("replaced."));
+    assert!(app.model_picker.sent.is_empty());
+    assert!(app.model_picker.awaiting.is_empty());
+    assert!(app.model_picker.only_pending.is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+    app.on_line(refused(SESSION, &id, "stale_request", "replaced."));
+    assert_eq!(app.notice(), Some("replaced."));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn a_model_accept_from_another_session_attaches_nothing() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    // Another session's accept for the wait attaches nothing: the row
+    // stays unmarked while the wait settles generically. The own
+    // session's accept marks the row instead (see
+    // `a_session_only_accept_sets_the_row`): the two sides of the
+    // session check.
+    app.on_line(accepted(OTHER, &id));
+    assert_eq!(app.model_picker.session_only, None);
+    assert!(app.model_picker.only_pending.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Model));
+    // The own session's accept still marks the row and settles the
+    // wait the other session's answer left standing.
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn a_lost_model_steer_shell_line_settles_its_tag() {
+    use crate::app::commands::commands_testkit::attached;
+    use crate::keys::Key;
+    let mut app = attached();
+    // One send of each kind with a pending entry: a session-only
+    // model choice, a steering amend, and a `!` shell run.
+    let choice = crate::model_picker::Choice {
+        reference: "acme/m1".to_owned(),
+        level: None,
+        level_chosen: false,
+        save_model: false,
+        session_only: true,
+    };
+    let Effect::Send(model) = app.choose(choice) else {
+        panic!("choosing sends");
+    };
+    let queue = crate::link::Line::Session(contract::Envelope {
+        kind: EventKind::from_name("steering_queue"),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "one"}],
+                "source": "driver", "command_id": "c_1"}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    assert!(app.on_line(queue).is_empty());
+    app.select_steering(0);
+    let Effect::Send(mut steer) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter amends");
+    };
+    assert_eq!(steer.len(), 2);
+    app.draft.set("!ls");
+    let Effect::Send(shell) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the shell run");
+    };
+    assert_eq!(shell.len(), 1);
+    // Losing every line settles each wait with its entry.
+    let mut unsent = model;
+    unsent.append(&mut steer);
+    unsent.extend(shell);
+    app.write_failed_inner(&unsent);
+    for line in &unsent {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap();
+        let id = line["id"].as_str().unwrap_or_default();
+        assert_eq!(app.outbox.waiting(id), None, "{id}");
+        assert!(!app.outbox.pending.contains_key(id), "{id}");
+    }
+}
+
+#[test]
 fn a_saved_choice_accepted_clears_the_session_only_mark() {
     let (mut app, _) = choosing_app();
     let first = session_only_id(&mut app);
@@ -3794,10 +3934,13 @@ fn choosing(mut app: App, workspace: &str) -> App {
 fn chip_rows() -> Value {
     json!({"rows": [
         {"key": "model", "shown": "value", "value": "\"hub/m\"",
-         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-        {"key": "models.hub/m.thinking", "shown": "value", "value": "\"high\"",         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+         "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
+        {"key": "models.hub/m.thinking", "shown": "value", "value": "\"high\"",         "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
         {"key": "scoped_models", "shown": "value", "value": "[\"hub/m\"]",
-         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+         "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
     ]})
 }
 
@@ -3872,7 +4015,8 @@ fn chip_settings_scoped(scoped: &str) -> (String, Value, Result<Value, Rejection
         json!({"operation": "settings", "workspace": "/hub"}),
         Ok(json!({"rows": [
             {"key": "scoped_models", "shown": "value", "value": scoped,
-             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+             "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
         ]})),
     )
 }
@@ -3897,7 +4041,8 @@ fn chip_settings_scoped_at(
         json!({"operation": "settings", "workspace": workspace}),
         Ok(json!({"rows": [
             {"key": "scoped_models", "shown": "value", "value": scoped,
-             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+             "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
         ]})),
     )
 }
@@ -4359,10 +4504,11 @@ fn the_chip_answer_keeps_each_toggle() {
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
             Ok(json!({"rows": [
-                {"key": "scoped_models", "shown": "value",
-                 "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
-                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-            ]})),
+                   {"key": "scoped_models", "shown": "value",
+                    "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
+                    "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+            "label": "L", "description": "D", "control": {"kind": "text"}},
+               ]})),
         ),
         set_saved(),
     ]);
@@ -4405,9 +4551,10 @@ fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
             Ok(json!({"rows": [
-                {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
-                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-            ]})),
+                   {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
+                    "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+            "label": "L", "description": "D", "control": {"kind": "text"}},
+               ]})),
         ),
     ]);
     app.on_models(Ok(three()));
@@ -4522,10 +4669,11 @@ fn a_mark_cell_click_joins_the_toggled_set() {
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
             Ok(json!({"rows": [
-                {"key": "scoped_models", "shown": "value",
-                 "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
-                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-            ]})),
+                   {"key": "scoped_models", "shown": "value",
+                    "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
+                    "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+            "label": "L", "description": "D", "control": {"kind": "text"}},
+               ]})),
         ),
         set_saved(),
     ]);
@@ -5250,4 +5398,176 @@ fn an_untagged_model_answer_leaves_a_credential_tag_alone() {
         app.outbox.waiting("c_other"),
         Some(Waiting::CredentialSwitch)
     );
+}
+
+// The picker opened from a `/settings` model row saves its choice to that
+// row and does nothing else.
+
+/// A seam with the two model rows on the Models tab.
+fn model_rows_seam() -> Arc<crate::configure_fake::Fake> {
+    use crate::configure::{SettingControl, Shown, WriteScope};
+    use crate::configure_fake::{controlled, placed};
+    use contract::settings::SettingsTab::Models;
+
+    let model = |key: &str, label: &str, layer: &str| {
+        placed(
+            controlled(
+                key,
+                Shown::Value("\"old/ref\"".to_owned()),
+                layer,
+                WriteScope::GlobalOnly,
+                SettingControl::Model,
+            ),
+            Models,
+            label,
+        )
+    };
+    Arc::new(crate::configure_fake::Fake::new(vec![
+        model("model", "Default model", "global"),
+        model("reviewer.model", "Reviewer model", "global"),
+    ]))
+}
+
+/// `app` with `/settings` open on the Models tab and the picker open from
+/// the row at `down` rows below the first.
+fn settings_picker(app: &mut App, down: usize) {
+    app.on_models(Ok(three()));
+    app.open_config_view(super::super::ConfigView::Settings);
+    for _ in 0..2 {
+        assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    }
+    for _ in 0..down {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.config_view_open(), "the picker opens over /settings");
+}
+
+/// The saved writes as (key, text).
+fn saved(seam: &crate::configure_fake::Fake) -> Vec<(String, String)> {
+    seam.writes()
+        .into_iter()
+        .map(|(_, _, key, text)| (key, text))
+        .collect()
+}
+
+#[test]
+fn a_settings_model_choice_saves_its_reference_to_the_row_on_home_and_attached() {
+    for attach in [false, true] {
+        for (down, key) in [(0, "model"), (1, "reviewer.model")] {
+            let seam = model_rows_seam();
+            let mut app = if attach { attached() } else { home() };
+            app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+            let before = app.home_model();
+            settings_picker(&mut app, down);
+            // The first picker row is acme/m1.
+            assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+            assert_eq!(
+                saved(&seam),
+                [(key.to_owned(), "\"acme/m1\"".to_owned())],
+                "attached {attach}, {key}"
+            );
+            assert!(!app.model_picker_open(), "{key}");
+            assert!(app.config_view_open(), "settings stays open: {key}");
+            assert_eq!(app.home_model(), before, "the home chip is unchanged");
+        }
+    }
+}
+
+#[test]
+fn a_settings_model_choice_commands_no_session_and_writes_no_thinking_key() {
+    let seam = model_rows_seam();
+    let mut app = attached();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    // acme/m1 has levels: a level chip may be picked, and it only shapes
+    // the reference.
+    assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(saved(&seam).len(), 1, "{:?}", saved(&seam));
+    assert_eq!(saved(&seam)[0].0, "model");
+    assert!(
+        !saved(&seam)[0].1.contains("thinking"),
+        "no thinking key is written"
+    );
+}
+
+#[test]
+fn the_session_only_key_in_a_settings_picker_saves_nothing_and_keeps_it_open() {
+    let seam = model_rows_seam();
+    let mut app = home();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    assert_eq!(app.on_action("session_only"), Effect::None);
+    assert!(saved(&seam).is_empty());
+    assert!(app.model_picker_open());
+    // The picker still chooses afterwards.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(saved(&seam).len(), 1);
+}
+
+#[test]
+fn a_refused_settings_model_save_keeps_the_picker_for_a_retry() {
+    let seam = model_rows_seam();
+    let mut app = home();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    *seam.refuse.lock().unwrap() = Some("disk full".to_owned());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open(), "the picker stays for a retry");
+    // The refused attempt is the only write so far, to the row's key.
+    let attempt = ("model".to_owned(), "\"acme/m1\"".to_owned());
+    assert_eq!(saved(&seam), std::slice::from_ref(&attempt));
+    *seam.refuse.lock().unwrap() = None;
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(saved(&seam), [attempt.clone(), attempt]);
+}
+
+#[test]
+fn closing_a_settings_picker_writes_nothing_and_leaves_no_target_behind() {
+    let seam = model_rows_seam();
+    let mut app = home();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    assert!(app.settings_awaiting_model());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert!(app.config_view_open(), "settings is back with its row");
+    assert!(saved(&seam).is_empty());
+    // The next input to the view settles it: it waits for nothing.
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert!(!app.settings_awaiting_model());
+    // An ordinary picker opened next chooses as it always did: the home
+    // model, not the settings row.
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(!app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.home_model().map(|(model, _)| model),
+        Some("acme/m1".to_owned())
+    );
+}
+
+#[test]
+fn a_name_click_in_a_settings_picker_saves_the_reference_to_the_row() {
+    let seam = model_rows_seam();
+    let mut app = attached();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 1);
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1`.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            3, 0,
+        ))),
+        Effect::None
+    );
+    assert_eq!(
+        saved(&seam),
+        [("reviewer.model".to_owned(), "\"acme/m1\"".to_owned())]
+    );
+    assert!(!app.model_picker_open());
+    assert!(app.config_view_open());
 }

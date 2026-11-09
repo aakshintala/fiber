@@ -540,7 +540,7 @@ impl App {
                     Some(Sized {
                         total: context.tokens,
                         window: self.panel_state.window_for(session)?,
-                        trigger: self.panel_state.handoff(),
+                        trigger: self.panel_state.compaction(),
                     })
                 });
                 Some(context_view::frame(
@@ -939,6 +939,15 @@ impl App {
                         return self.call_view_answered(&accepted);
                     }
                     Some(
+                        super::Waiting::Find
+                        | super::Waiting::Commands
+                        | super::Waiting::Model
+                        | super::Waiting::Reply
+                        | super::Waiting::OfferFile
+                        | super::Waiting::Steer
+                        | super::Waiting::Shell,
+                    ) => return Vec::new(),
+                    Some(
                         super::Waiting::Branch
                         | super::Waiting::Quota
                         | super::Waiting::ConfigAsk
@@ -1021,6 +1030,15 @@ impl App {
                         self.call_view_refused(&rejected);
                         return Vec::new();
                     }
+                    Some(
+                        super::Waiting::Find
+                        | super::Waiting::Commands
+                        | super::Waiting::Model
+                        | super::Waiting::Reply
+                        | super::Waiting::OfferFile
+                        | super::Waiting::Steer
+                        | super::Waiting::Shell,
+                    ) => return Vec::new(),
                     Some(
                         super::Waiting::Branch
                         | super::Waiting::Quota

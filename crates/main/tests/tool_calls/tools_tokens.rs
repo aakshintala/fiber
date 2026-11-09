@@ -115,7 +115,7 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     setup.provider(&server);
     server.hold();
     let running = start(&setup, &["ask", "read the note"]);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline),

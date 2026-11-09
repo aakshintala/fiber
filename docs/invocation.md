@@ -208,7 +208,7 @@ none gets the hub's lines only. An id that is not `s_` and 16 lowercase hex
 digits is a usage error, exit 2. An id that names no session, a session
 whose log cannot be read, or a delegate fails with `session_not_found`, exit
 1, and writes no report. The Diagnostics section is in the saved file and
-never in the issue link, in either of its forms.
+never in the issue link, in either of its forms. It also holds the shapes of the last 20 painted frames with the scroll state that produced each one — per cell its width class, style and whether it is blank, plus the frame geometry, never glyphs — captured on every frame with no flag set in advance. Each row lists its cells in column order, left to right. Rows run top to bottom. Palette entries appear in first-appearance order, numbered from 0. The headless door draws no frames, so its report says no frames were captured.
 
 **Setting up.** `fiber setup` asks, in this order, and each answer runs the
 command that already does that job:
@@ -461,7 +461,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `thinking` (string, optional) |
 | `credential` | `label` (string), a credential label of the session model's provider, or of the queued model's provider while a model switch is queued |
 | `name` | `text` (string); empty clears the name |
-| `handoff` | `instructions` (string, optional) |
+| `compact` | `instructions` (string, optional) |
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false), `at_end` (boolean, default false) |
 | `change_workspace` | `path` (string) |
 | `shell` | `command` (string); `send` (boolean, default false) |
@@ -504,7 +504,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model, and with the credential's own code, such as `credential_missing`, when the new model's credential cannot be read (`docs/model-routing.md`, "When a credential is missing or fails"). |
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). Accepted while a model switch is queued, it applies to the queued model's provider. The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Its `command_accepted` names `provider`, the provider the switch applies to, which the terminal saves the label under. Rejected `credential_missing` for a label the provider does not have, naming its labels, and with the credential's own code when the label's source cannot be read. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
-| `handoff` | Starts a handoff: the model's context restarts from a note the model, or an extension's `before_handoff` hook, writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
+| `compact` | Starts a compaction: the model's context restarts from a note the model, or an extension's `before_compaction` hook, writes (`docs/compaction.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id, or the code the new session's start failed with, when its process could not start. Takes an optional `from_session_id`, default this session: this session or one its `forked_from` chain passes through, the session whose log `seq` counts in, and any other is rejected `invalid_arguments`, since it is rewound through the hub; an optional `seq`, default the start of the latest turn that is not a summary's (`docs/events.md`, `turn_started`, `rewind`); and whether to summarise, which first runs the old session's model in a turn of its own (`docs/events.md`, "Rewind"). With `at_end`, the point is the log's last line, resolved at admission; `at_end` with `seq`, `from_session_id` or `summarise` is refused `invalid_arguments`, and a log with a tool call with no recorded result is refused `not_step_boundary`. Every job still running stops (`docs/events.md`, "Rewind"). Rejected `busy` if a turn is running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
 | `change_workspace` | Starts a new session process as a rewind from this session's tip into another workspace (`docs/events.md`, "Change workspace"). Takes `path`: a relative path resolves at admission against the admitting session's workspace; a bare `~` or leading `~/` resolves against the hub's home. An empty path, an unusable home, or a missing or non-directory path is rejected `invalid_arguments` before anything starts, naming the path as typed. Compare resolved paths: the current workspace is rejected `invalid_arguments`, exactly `already in that folder`, without a log event, session start or prompt-cache miss. Every running job stops before the final `moved` event. The event names the new session, the last durable line before `moved`, and the resolved target workspace. The child continues from that point without a summary; its `session_started.forked_from` names this session and point, with `project` when the parent is in another project. Answers with the child id or its start failure code. A concurrent `change_workspace` or `rewind` is rejected `busy` until `moved` is durable, then `closing`; also rejected `session_held` when another process holds the session, and `delegate_session` for a delegate. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
@@ -973,7 +973,7 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 
 **What is written.** The turn in flight ends as the cancel key ends it
 (`docs/architecture.md`, "Cancellation"): each tool call completes
-`cancelled` once its group is empty, each job `cancelled`, a handoff in
+`cancelled` once its group is empty, each job `cancelled`, a compaction in
 flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`. Two
 things differ from a cancel: a pending approval, question or repository offer stays pending, so
 resuming raises it again (below), and queued steering messages start no turn. They
@@ -1297,8 +1297,9 @@ required unless marked optional; unknown keys, wrong types and explicit
 
 | Operation | Arguments besides `operation` | Result |
 |---|---|---|
-| `settings` | `workspace` (string) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted |
+| `settings` | `workspace` (string); optional `overrides` (array of strings) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted. `overrides` are the run's `-c` arguments as `key=value`, in the order given: the last for a key wins and its row reads `-c` with no `file`. Omitting it means none; an explicit `null`, a non-array or a non-string member is `invalid_arguments` |
 | `set` | `workspace`, `layer`, `key`, `text` (strings) | `file` (string) and `warnings` (array of strings); `layer` is `global`, `project` or `repository`; a client-owned key is rejected `invalid_arguments` without writing |
+| `reset` | `workspace`, `layer`, `key`, `expected` (strings) | `file` (string) and `warnings` (array of strings); removes `key` from that layer's file so the value below applies, only when the file still holds `expected`, JSON text, compared under the file's lock. A layer that sets nothing succeeds without writing; a changed value is `stale_request` and nothing is written; `expected` that is not JSON, a key the layer may not hold and a client-owned key are `invalid_arguments` or the check's own refusal, without writing |
 | `global_file` | none | `file` (string), the hub's global configuration file |
 | `rules` | `workspace` (string) | `global` and `project`, each with `file` and either `rows` or `error`; a row holds `line` (integer), `text` (string) and `rule` (the standing rule object from `docs/configuration.md`) |
 | `revoke` | `workspace`, `scope`, `text` (strings), `line` (integer) | `revoked`, either `removed` or `stale`; `scope` is `global` or `project` |
@@ -1326,6 +1327,17 @@ when that layer has one. `shown` is `unset`, `value`, `redacted` or `union`.
 (`[name, layer]` pairs) and `own` (`[layer, json]` pairs).
 `scope` is `any` (with `repo`, a boolean), `global_only`, `repo_only` or
 `person_files`. Values are JSON text, not decoded values.
+
+A row also holds `label` and `description` (strings, from the schema), `tab`
+when the schema gives the key one (`appearance`, `notifications`, `models`,
+`permissions`, `sessions` or `advanced`), and `control`, an object whose
+`kind` is `boolean`, `number`, `text`, `fixed`, `model`, `theme`,
+`string_list`, `repository_extensions` or `json`. Only `fixed` carries
+`choices`, an array of strings in the schema's order; no other kind has the
+field. An unknown `tab` or `kind`, a missing field or a malformed `choices`
+fails the whole reply, never a subset of its rows. The control is derived
+from the type `fiber config set` checks, so the view holds no type table of
+its own.
 
 `keys` and every `tui.*` key belong to the terminal that draws, including
 `/keys`, `/settings` rows for those keys and the theme picker. They stay in

@@ -94,24 +94,24 @@ fn sections_run_heading_to_heading_with_blank_ends_removed() {
         split.second
     );
     assert!(
-        split.handoff.starts_with("## handoff\n"),
+        split.compaction.starts_with("## compaction\n"),
         "{:?}",
-        split.handoff
+        split.compaction
     );
     assert!(
-        split.handoff_reask.starts_with("## handoff-reask\n"),
+        split.compaction_reask.starts_with("## compaction-reask\n"),
         "{:?}",
-        split.handoff_reask
+        split.compaction_reask
     );
     assert!(!split.shared.ends_with('\n'));
     assert!(!split.first.ends_with('\n'));
-    assert!(!split.handoff.ends_with('\n'));
-    assert!(!split.handoff_reask.ends_with('\n'));
+    assert!(!split.compaction.ends_with('\n'));
+    assert!(!split.compaction_reask.ends_with('\n'));
     assert!(!split.second.ends_with('\n'));
     assert_eq!(
         format!(
             "{}\n\n{}\n\n{}\n\n{}\n\n{}\n",
-            split.shared, split.first, split.handoff, split.handoff_reask, split.second
+            split.shared, split.first, split.compaction, split.compaction_reask, split.second
         ),
         PROMPT,
     );
@@ -296,7 +296,7 @@ fn the_prompt_shows_each_person_message_with_the_reply_it_answers() {
     );
     assert!(
         PROMPT.contains("A kept message keeps the reply it answered."),
-        "reviewer.md keeps replies across the handoff"
+        "reviewer.md keeps replies across the compaction"
     );
     assert!(
         !PROMPT.contains("You are not shown what the agent said"),

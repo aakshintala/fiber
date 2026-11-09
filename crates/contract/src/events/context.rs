@@ -1,5 +1,5 @@
 //! Payloads of `docs/events.md`, "Usage and notices", "Preamble", "Opening
-//! message" and "Handoff".
+//! message" and "Compaction".
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -48,14 +48,14 @@ pub struct UsageRecorded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warming: Option<bool>,
     /// What the reviewer was doing on a call the reviewer made; absent on
-    /// every other call (`docs/permissions.md`, "At a handoff").
+    /// every other call (`docs/permissions.md`, "At a compaction").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<ReviewerUse>,
 }
 
 /// What a reviewer's call was for (`docs/events.md`, `usage_recorded`).
 /// One variant per request: a stage names the call it reviewed, and the
-/// handoff selection names none, so no combination can contradict itself.
+/// compaction selection names none, so no combination can contradict itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "purpose")]
 pub enum ReviewerUse {
@@ -71,9 +71,9 @@ pub enum ReviewerUse {
         /// The tool call under review.
         action_id: ActionId,
     },
-    /// The handoff selection, which reviews no call.
-    #[serde(rename = "handoff")]
-    Handoff,
+    /// The compaction selection, which reviews no call.
+    #[serde(rename = "compaction")]
+    Compaction,
 }
 
 /// `quota_noticed`.
@@ -230,6 +230,8 @@ pub enum PreambleReason {
     Reload,
     /// A model switch.
     Switch,
+    /// A session sandbox toggle that changed the setting.
+    Sandbox,
 }
 
 /// A prompt cache lifetime.
@@ -265,8 +267,8 @@ pub struct PreambleBuilt {
     pub model: String,
     /// The model's context window, in tokens.
     pub context_window: u64,
-    /// The context size at which an automatic handoff runs; absent when
-    /// automatic handoff is off.
+    /// The context size at which an automatic compaction runs; absent when
+    /// automatic compaction is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_at: Option<u64>,
     /// The session's `budget.usd`, after every configuration layer and `-c`;
@@ -519,21 +521,21 @@ pub struct SkillsResent {
     pub skills: Vec<SkillSent>,
 }
 
-/// One skill sent again after a handoff.
+/// One skill sent again after a compaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillSent {
     /// The skill's name.
     pub name: String,
     /// The path of its `SKILL.md`.
     pub path: String,
-    /// The body sent, read from disk at the handoff.
+    /// The body sent, read from disk at the compaction.
     pub content: String,
 }
 
-/// What started a handoff.
+/// What started a compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HandoffTrigger {
+pub enum CompactionTrigger {
     /// The automatic threshold.
     Auto,
     /// A person.
@@ -542,14 +544,14 @@ pub enum HandoffTrigger {
     Overflow,
 }
 
-/// `handoff_started` (`docs/handoff.md`).
+/// `compaction_started` (`docs/compaction.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HandoffStarted {
+pub struct CompactionStarted {
     /// What started it.
-    pub trigger: HandoffTrigger,
+    pub trigger: CompactionTrigger,
 }
 
-/// How a handoff or a job ended.
+/// How a compaction or a job ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -561,11 +563,11 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// `handoff_completed`. A line with both `note` and `note_text`, or with
+/// `compaction_completed`. A line with both `note` and `note_text`, or with
 /// `extension` apart from `note_text`, fails to read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "HandoffCompletedLine")]
-pub struct HandoffCompleted {
+#[serde(try_from = "CompactionCompletedLine")]
+pub struct CompactionCompleted {
     /// How it ended.
     pub outcome: Outcome,
     /// On `failed`.
@@ -574,14 +576,14 @@ pub struct HandoffCompleted {
     /// The note, when there is one.
     #[serde(flatten)]
     pub note: Option<Note>,
-    /// The context size before the handoff, in tokens.
+    /// The context size before the compaction, in tokens.
     pub tokens_before: u64,
     /// The person's instructions, when there were any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
 }
 
-/// A handoff's note: the actions carrying it, or a note a hook wrote in their
+/// A compaction's note: the actions carrying it, or a note a hook wrote in their
 /// place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
@@ -591,7 +593,7 @@ pub enum Note {
         /// The actions carrying the note, in call order.
         note: Vec<ActionId>,
     },
-    /// A note a `before_handoff` hook wrote.
+    /// A note a `before_compaction` hook wrote.
     Hook {
         /// The note.
         note_text: String,
@@ -600,10 +602,10 @@ pub enum Note {
     },
 }
 
-/// `handoff_completed` as a line carries it, before its note keys are
+/// `compaction_completed` as a line carries it, before its note keys are
 /// checked.
 #[derive(Deserialize)]
-struct HandoffCompletedLine {
+struct CompactionCompletedLine {
     outcome: Outcome,
     error: Option<Failure>,
     note: Option<Vec<ActionId>>,
@@ -613,10 +615,10 @@ struct HandoffCompletedLine {
     instructions: Option<String>,
 }
 
-impl TryFrom<HandoffCompletedLine> for HandoffCompleted {
+impl TryFrom<CompactionCompletedLine> for CompactionCompleted {
     type Error = &'static str;
 
-    fn try_from(line: HandoffCompletedLine) -> Result<Self, Self::Error> {
+    fn try_from(line: CompactionCompletedLine) -> Result<Self, Self::Error> {
         let note = match (line.note, line.note_text, line.extension) {
             (None, None, None) => None,
             (Some(note), None, None) => Some(Note::Actions { note }),
@@ -624,7 +626,7 @@ impl TryFrom<HandoffCompletedLine> for HandoffCompleted {
                 note_text,
                 extension,
             }),
-            _ => return Err("a handoff note is its actions or a hook's text, never both"),
+            _ => return Err("a compaction note is its actions or a hook's text, never both"),
         };
         Ok(Self {
             outcome: line.outcome,
@@ -641,11 +643,11 @@ impl TryFrom<HandoffCompletedLine> for HandoffCompleted {
 pub struct ContextNudged {
     /// The context size when the nudge was given.
     pub tokens: u64,
-    /// The context size at which an automatic handoff runs.
+    /// The context size at which an automatic compaction runs.
     pub trigger_at: u64,
 }
 
-/// `reviewer_kept`: the person's messages the reviewer keeps across a handoff.
+/// `reviewer_kept`: the person's messages the reviewer keeps across a compaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewerKept {
     /// The kept messages, oldest first, after the window cap.

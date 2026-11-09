@@ -395,7 +395,7 @@ fn hook_output_never_reaches_fiber_s_streams() {
 
 #[test]
 fn a_startup_failure_after_creating_the_worktree_removes_it() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     init_repo(setup.deadline, &setup.workspace());
 
     // No provider installed: the model cannot resolve, after the

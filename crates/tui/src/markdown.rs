@@ -81,6 +81,15 @@ fn tinted(role: Role) -> Style {
 /// Renders `text` at `width` columns. Pure: the same input gives the same
 /// output. An unclosed fence is a code block to the end of the text.
 pub(crate) fn render(text: &str, width: u16) -> Rendered {
+    render_mode(text, width, false)
+}
+
+/// Renders prompt text like a reply, retaining heading markers as styled text.
+pub(crate) fn render_prompt(text: &str, width: u16) -> Rendered {
+    render_mode(text, width, true)
+}
+
+fn render_mode(text: &str, width: u16, prompt: bool) -> Rendered {
     let mut writer = Writer {
         width,
         out: Rendered::default(),
@@ -88,6 +97,7 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
         link_stack: Vec::new(),
         inline_links: Vec::new(),
         heading: false,
+        prompt,
         strong: 0,
         emphasis: 0,
         strike: 0,
@@ -117,6 +127,15 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
 
 /// Counts the rows at `width` without constructing their styled lines.
 pub(crate) fn render_count(text: &str, width: u16) -> Counted {
+    render_count_mode(text, width, false)
+}
+
+/// Counts prompt-rendered rows without constructing styled lines.
+pub(crate) fn render_prompt_count(text: &str, width: u16) -> Counted {
+    render_count_mode(text, width, true)
+}
+
+fn render_count_mode(text: &str, width: u16, prompt: bool) -> Counted {
     if plain_words(text) {
         return Counted {
             rows: plain_word_rows(text, width),
@@ -131,6 +150,7 @@ pub(crate) fn render_count(text: &str, width: u16) -> Counted {
         link_stack: Vec::new(),
         inline_links: Vec::new(),
         heading: false,
+        prompt,
         strong: 0,
         emphasis: 0,
         strike: 0,
@@ -221,6 +241,7 @@ struct Writer {
     /// into it.
     inline_links: Vec<(Range<usize>, String)>,
     heading: bool,
+    prompt: bool,
     strong: usize,
     emphasis: usize,
     strike: usize,
@@ -276,9 +297,13 @@ impl Writer {
     fn start(&mut self, tag: Tag<'_>) {
         match tag {
             Tag::Paragraph | Tag::HtmlBlock => self.block(),
-            Tag::Heading { .. } => {
+            Tag::Heading { level, .. } => {
                 self.block();
                 self.heading = true;
+                if self.prompt {
+                    self.push(&"#".repeat(level as usize), self.style());
+                    self.push(" ", self.style());
+                }
             }
             Tag::BlockQuote(_) => {
                 self.flush();

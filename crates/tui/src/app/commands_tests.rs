@@ -59,17 +59,17 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
 }
 
 #[test]
-fn handoff_sends_its_instructions() {
+fn compact_sends_its_instructions() {
     let mut app = attached();
-    let lines = sent(enter(&mut app, "/handoff  do x "));
+    let lines = sent(enter(&mut app, "/compact  do x "));
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "handoff");
+    assert_eq!(lines[0]["command"], "compact");
     assert_eq!(lines[0]["session_id"], SESSION);
     assert_eq!(lines[0]["args"], json!({"instructions": "do x"}));
     assert_eq!(app.draft(), "");
-    let lines = sent(enter(&mut app, "/handoff"));
+    let lines = sent(enter(&mut app, "/compact"));
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "handoff");
+    assert_eq!(lines[0]["command"], "compact");
     assert_eq!(lines[0].get("args"), None);
 }
 
@@ -742,23 +742,23 @@ fn a_rejected_import_keeps_the_existing_notice_path() {
 }
 
 #[test]
-fn a_rejected_handoff_returns_its_draft_with_the_notice() {
+fn a_rejected_compaction_returns_its_draft_with_the_notice() {
     let mut app = attached();
-    let lines = sent(enter(&mut app, "/handoff do x"));
+    let lines = sent(enter(&mut app, "/compact do x"));
     let id = lines[0]["id"].clone();
     let rejected = session_line(
         "command_rejected",
         json!({"command_id": id, "code": "busy", "message": "Busy."}),
     );
     assert!(app.on_line(rejected).is_empty());
-    assert_eq!(app.draft(), "/handoff do x");
+    assert_eq!(app.draft(), "/compact do x");
     assert_eq!(app.notice(), Some("Busy."));
 }
 
 #[test]
 fn a_command_with_no_session_says_so() {
     for command in [
-        "/handoff x",
+        "/compact x",
         "/name x",
         "/reload",
         "/import",
@@ -955,7 +955,7 @@ fn pwd_pending_cancels_on_detach_or_switch() {
 #[test]
 fn a_command_with_the_link_down_keeps_its_draft() {
     for command in [
-        "/handoff x",
+        "/compact x",
         "/name x",
         "/reload",
         "/import",
@@ -1677,7 +1677,11 @@ fn a_rejected_extension_command_returns_its_draft_with_the_notice() {
 
 /// A writer answering `done` for every description.
 fn feedback_writer(done: crate::FeedbackDone) -> crate::WriteFeedback {
-    std::sync::Arc::new(move |_: &str, _: Option<&contract::SessionId>| Ok(done.clone()))
+    std::sync::Arc::new(
+        move |_: &str, _: Option<&contract::SessionId>, _: &[contract::feedback::FrameShape]| {
+            Ok(done.clone())
+        },
+    )
 }
 
 fn feedback_done() -> crate::FeedbackDone {
@@ -1717,7 +1721,13 @@ fn feedback_without_a_writer_lands_the_notice_through_the_loop() {
     // No writer, so nothing starts: the loop lands the same notice.
     let (tx, _rx) = mpsc::channel();
     assert_eq!(
-        crate::feedback::start(app.feedback_writer(), Some(&tx), description, None),
+        crate::feedback::start(
+            app.feedback_writer(),
+            Some(&tx),
+            description,
+            None,
+            Vec::new()
+        ),
         Some(crate::feedback::NO_WRITER.to_owned())
     );
     app.on_feedback(Err(crate::feedback::NO_WRITER.to_owned()));
@@ -1778,7 +1788,13 @@ fn feedback_renders_the_prompt_then_the_written_report() {
     };
     let (tx, rx) = mpsc::channel();
     assert_eq!(
-        crate::feedback::start(app.feedback_writer(), Some(&tx), description, None),
+        crate::feedback::start(
+            app.feedback_writer(),
+            Some(&tx),
+            description,
+            None,
+            Vec::new()
+        ),
         None
     );
     let crate::Input::Feedback(result) = fakes::Deadline::after(std::time::Duration::from_secs(10))

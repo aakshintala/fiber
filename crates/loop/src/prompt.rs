@@ -409,7 +409,7 @@ pub(crate) fn catalogue_and_sources(
 /// (`docs/prompt-cache.md`, "The preamble" and `docs/events.md`,
 /// "`preamble_built`"). `thinking` is the inputs' level, absent when none;
 /// `credential` is the inputs' label. `trigger_at` is
-/// the automatic handoff's trigger, absent when it is off. `factory`
+/// the automatic compaction's trigger, absent when it is off. `factory`
 /// builds the search tool the build declares when due (`docs/tools.md`,
 /// "Tool search"): on a model without deferral, or without a factory,
 /// every tool is sent in full and no search is built. The fourth part is

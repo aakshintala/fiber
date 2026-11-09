@@ -30,7 +30,7 @@ fn grouped(notices: Vec<Notice>) -> Vec<Notice> {
 /// Runs every `session_start` hook, in order: each is shown the same input
 /// and every return is kept, in run order. Before the chain runs, the
 /// mapped latest reason is recorded on the session and every live process
-/// owner, so a restart after handoff resends the handoff reason.
+/// owner, so a restart after compaction resends the compaction reason.
 pub(super) fn session_start(
     session: &SessionExtensions,
     start: &SessionStart<'_>,
@@ -40,7 +40,7 @@ pub(super) fn session_start(
         StartReason::Resume => contract::events::ExtensionReason::Resume,
         StartReason::Fork => contract::events::ExtensionReason::Fork,
         StartReason::Rewind => contract::events::ExtensionReason::Rewind,
-        StartReason::Handoff => contract::events::ExtensionReason::Handoff,
+        StartReason::Compaction => contract::events::ExtensionReason::Compaction,
     };
     session.record_start_reason(reason);
     run_additive(
@@ -220,7 +220,7 @@ fn shown_start(start: &SessionStart<'_>) -> Value {
         StartReason::Resume => "resume",
         StartReason::Fork => "fork",
         StartReason::Rewind => "rewind",
-        StartReason::Handoff => "handoff",
+        StartReason::Compaction => "compaction",
     };
     let mut shown = Map::new();
     shown.insert("reason".into(), Value::String(reason.to_owned()));

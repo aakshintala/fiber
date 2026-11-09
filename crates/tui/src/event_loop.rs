@@ -470,7 +470,7 @@ struct Loop<B: Backend> {
     /// thread's permit, reached only through its interface.
     hub: Connection,
     /// The image writer thread, spawned lazily on the first non-empty
-    /// handoff: the sole owner of its teardown.
+    /// compaction: the sole owner of its teardown.
     kitty_writer: Option<KittyWriter>,
     /// The terminal-output lock arbitrating loop writes against writer
     /// chunks. Guards cover actual tty writes only, never event dispatch.
@@ -543,6 +543,8 @@ impl<B: Backend> Loop<B> {
             // changed line, and the batch settles once at its end, when
             // the counts are exact.
             let held = batchable(first.first());
+            #[cfg(test)]
+            pause::page_zero_before(&self.app, first.first());
             // The batch's inputs already folded, in arrival order.
             if held {
                 self.app.begin_batch();
@@ -761,6 +763,7 @@ impl<B: Backend> Loop<B> {
                         Some(&self.files_out),
                         description,
                         self.app.session().cloned(),
+                        self.screen.frame_shapes(),
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.
@@ -1256,8 +1259,8 @@ impl<B: Backend> Loop<B> {
         self.start_next_convert();
     }
 
-    /// Spawns the writer on the first non-empty handoff, cloning the
-    /// loop's current tty then. Empty handoffs never spawn. False when the
+    /// Spawns the writer on the first non-empty compaction, cloning the
+    /// loop's current tty then. Empty compactions never spawn. False when the
     /// tty cannot be cloned or the thread cannot start: the terminal is
     /// failing, so the loop takes the terminal-failure path.
     fn ensure_kitty_writer(&mut self) -> bool {
