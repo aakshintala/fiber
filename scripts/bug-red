@@ -154,7 +154,7 @@ trap 'git worktree remove --force "$tree"; rm -f "$list"' EXIT
 # Build the red commit into the checkout's persistent target/bug-red dir:
 # reusing one target keeps the compiled dependencies across runs while
 # keeping red-tree artifacts out of the checkout's target/.
-target_dir=$(git rev-parse --show-toplevel)/target/bug-red
+target_dir="$top/target/bug-red"
 mkdir -p "$target_dir"
 # A restored target/debug seeds target/bug-red once, so the dependencies it
 # already built are not rebuilt. The copy is never a hard link: a link would
