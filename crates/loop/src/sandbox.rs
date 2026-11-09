@@ -2,13 +2,13 @@
 //! side of the `sandbox` driver command. The session owns the switch through
 //! the [`ApplySandbox`] seam main wires in; the loop applies nothing itself,
 //! so the toggle flips one handle and reports on the notice path, and
-//! invalidates nothing.
+//! invalidates through the turn seam.
 
 use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::commands::SandboxArgs;
-use contract::events::{Event, Notice};
+use contract::events::{Event, Notice, PreambleReason};
 use contract::inbox::Ack;
 
 use crate::inbox::{CLOSING, accept, reject};
@@ -54,9 +54,21 @@ pub enum Availability {
     },
 }
 
+/// What a toggle flipped: whether the sandbox applies, paired with whether
+/// `enabled` changed under the handle lock. A no-op toggle skips the seam
+/// and builds nothing.
+#[derive(Debug)]
+pub struct Applied {
+    /// Whether the sandbox applies after the flip.
+    pub availability: Availability,
+    /// Whether `enabled` flipped.
+    pub changed: bool,
+}
+
 /// The session's sandbox switch, wired by the session's assembly: flips the
-/// shared setting first, then reports whether the sandbox applies.
-pub type ApplySandbox = Arc<dyn Fn(bool) -> Availability + Send + Sync>;
+/// shared setting first, then reports whether the sandbox applies, paired
+/// with whether the value flipped.
+pub type ApplySandbox = Arc<dyn Fn(bool) -> Applied + Send + Sync>;
 
 /// The toggle's on reply: the setting holds until `/reload` drops it.
 pub(crate) const SANDBOX_ON: &str = "Sandbox on for this session until /reload.";
@@ -72,11 +84,14 @@ impl Loop {
     }
 
     /// Takes a `sandbox` command: flips the session setting, then reports
-    /// on the notice path. Enabling while unavailable sets the setting on
-    /// and accepts with no result; the notice goes out only when the shared
-    /// latch is unset. Disabling never needs availability. A toggle on an
-    /// already-on setting is a no-op with its reply. After `close` the
-    /// command is rejected `closing`, as a turn can no longer start.
+    /// on the notice path. On a flip the notice is appended first and the
+    /// seam rebuilds with reason `sandbox` after it; on a no-op the seam is
+    /// skipped and nothing builds. Enabling while unavailable sets the
+    /// setting on and accepts with no result; the notice goes out only when
+    /// the shared latch is unset. Disabling never needs availability. A
+    /// toggle on an already-on setting is a no-op with its reply. After
+    /// `close` the command is rejected `closing`, as a turn can no longer
+    /// start.
     pub(crate) fn take_sandbox(&mut self, args: SandboxArgs, ack: Ack) -> Result<(), Error> {
         if self.closing {
             reject(ack, contract::ErrorCode::Closing, CLOSING);
@@ -90,7 +105,8 @@ impl Loop {
             );
             return Ok(());
         };
-        match apply(args.enabled) {
+        let applied = apply(args.enabled);
+        match applied.availability {
             Availability::Available => {
                 let message = if args.enabled {
                     SANDBOX_ON
@@ -106,11 +122,17 @@ impl Loop {
                     None,
                     None,
                 )?;
+                if applied.changed {
+                    self.invalidate_sandbox(PreambleReason::Sandbox)?;
+                }
                 accept(ack);
             }
             Availability::Unavailable { notice, .. } => {
                 if let Some(notice) = notice {
                     self.log.append(&Event::Notice(notice), None, None)?;
+                }
+                if applied.changed {
+                    self.invalidate_sandbox(PreambleReason::Sandbox)?;
                 }
                 accept(ack);
             }

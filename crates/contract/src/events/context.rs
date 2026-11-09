@@ -230,6 +230,8 @@ pub enum PreambleReason {
     Reload,
     /// A model switch.
     Switch,
+    /// A session sandbox toggle that changed the setting.
+    Sandbox,
 }
 
 /// A prompt cache lifetime.

@@ -3501,3 +3501,109 @@ fn sandbox_handles_are_isolated_between_sessions() {
         "a reload in one session leaves the other session's sandbox alone"
     );
 }
+
+fn flip_notices(prepared: &r#loop::ReloadPrepared) -> Vec<String> {
+    prepared
+        .notices
+        .iter()
+        .filter(|notice| {
+            notice.message == "Sandbox on after /reload."
+                || notice.message == "Sandbox off after /reload."
+        })
+        .map(|notice| notice.message.clone())
+        .collect()
+}
+
+#[test]
+fn a_reload_flip_notice_fires_exactly_on_effective_change() {
+    // (`docs/events.md`, "`reloaded`": one flip notice exactly when the effective
+    // setting changes, none otherwise.)
+    let fixture = Fixture::new();
+    assert!(
+        flip_notices(&fixture.prepare()).is_empty(),
+        "no change stages no flip"
+    );
+    fixture
+        .rig
+        .write_global(&json!({"model":"scripted/s.json", "sandbox": {"enabled": true}}));
+    let enabled = fixture.prepare();
+    assert_eq!(
+        flip_notices(&enabled),
+        vec!["Sandbox on after /reload.".to_owned()],
+        "off to on stages one flip line"
+    );
+    (enabled.installed)();
+    fixture
+        .rig
+        .write_global(&json!({"model":"scripted/s.json", "sandbox": {"enabled": false}}));
+    let disabled = fixture.prepare();
+    assert_eq!(
+        flip_notices(&disabled),
+        vec!["Sandbox off after /reload.".to_owned()],
+        "on to off stages one flip line"
+    );
+    (disabled.installed)();
+    assert!(
+        flip_notices(&fixture.prepare()).is_empty(),
+        "no change stages none"
+    );
+}
+
+#[test]
+fn an_enable_to_unavailable_reload_stages_flip_and_unavailable_once() {
+    let fixture = Fixture::new();
+    let home_base = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    fixture.state.sandbox.lock().unwrap().fiber_home =
+        home_base.join(format!("fiber-reload-flip-overlap-{}", std::process::id()));
+    let denied = fixture.rig.workspace.join("secret");
+    std::fs::write(&denied, "shh").unwrap();
+    fixture
+        .rig
+        .write_global(&json!({"model": "scripted/s.json", "sandbox": {
+            "enabled": true,
+            "deny_read": [denied.to_string_lossy()],
+        }}));
+    let prepared = fixture.prepare();
+    let messages: Vec<String> = prepared
+        .notices
+        .iter()
+        .map(|notice| notice.message.clone())
+        .collect();
+    // (`docs/events.md`, "`reloaded`": the flip stages one notice on effective
+    // change. No doc orders it against the unavailable notice, so both are
+    // asserted as a set.)
+    assert!(
+        messages
+            .iter()
+            .any(|message| message == "Sandbox on after /reload."),
+        "the flip fires on enable: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.starts_with("sandbox unavailable")),
+        "the unavailable fires on the same reload: {messages:?}"
+    );
+    assert_eq!(
+        flip_notices(&prepared),
+        vec!["Sandbox on after /reload.".to_owned()]
+    );
+    (prepared.installed)();
+    let again = fixture.prepare();
+    // (`docs/events.md`, "`reloaded`": a flip fires only on effective change.
+    // `docs/invocation.md`, "What each command does": the unavailable notice fires once.)
+    assert!(
+        flip_notices(&again).is_empty(),
+        "a second identical reload stages no flip"
+    );
+    assert!(
+        again
+            .notices
+            .iter()
+            .all(|notice| !notice.message.starts_with("sandbox unavailable")),
+        "the unavailable latch stays once per session"
+    );
+}
