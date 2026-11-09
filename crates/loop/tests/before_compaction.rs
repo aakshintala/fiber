@@ -1,6 +1,6 @@
-//! A `before_handoff` hook at the loop (`docs/extensions.md`, "The hook
-//! points"; `docs/handoff.md`, "The handoff note"): a hook's note replaces
-//! the note request, and `handoff_completed` carries it with the
+//! A `before_compaction` hook at the loop (`docs/extensions.md`, "The hook
+//! points"; `docs/compaction.md`, "The compaction note"): a hook's note replaces
+//! the note request, and `compaction_completed` carries it with the
 //! extension's name.
 
 #![allow(
@@ -18,10 +18,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use contract::events::{EventKind, HandoffTrigger, Notice, TurnOutcome};
+use contract::events::{CompactionTrigger, EventKind, Notice, TurnOutcome};
 use contract::hook::{
-    BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, ContextAnswer, ContextOutcome,
-    HookFailure, Hooks,
+    BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, ContextAnswer,
+    ContextOutcome, HookFailure, Hooks,
 };
 use contract::inbox::Delivery;
 use contract::provider::Input;
@@ -29,34 +29,34 @@ use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{Envelope, ErrorCode};
 use fakes::Scripted;
-use r#loop::{HandoffSettings, Retry};
+use r#loop::{CompactionSettings, Retry};
 use serde_json::{Map, Value, json};
 
 use support::{
     ENDED, Gate, OPENING, REPLY, STEP, Script, Session, Tap, TestTool, assert_kinds,
-    assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, handoff, kinds, of_kind,
+    assert_no_stored_attempt, attempt_numbers, calls_reply, compaction, delivery, kinds, of_kind,
     start_added, start_empty, start_failed, tool_call_reply, with_tokens,
 };
 
-/// What one `before_handoff` call was shown.
+/// What one `before_compaction` call was shown.
 struct Seen {
-    trigger: HandoffTrigger,
+    trigger: CompactionTrigger,
     instructions: Option<String>,
     conversation: Vec<Input>,
 }
 
-/// A scripted `Hooks` fake: a queue of `before_handoff` answers, what each
+/// A scripted `Hooks` fake: a queue of `before_compaction` answers, what each
 /// call was shown, and an optional cancel inside the call. Every other
 /// point passes empty.
-struct HandoffHooks {
-    answers: Mutex<VecDeque<BeforeHandoffAnswer>>,
+struct CompactionHooks {
+    answers: Mutex<VecDeque<BeforeCompactionAnswer>>,
     calls: AtomicUsize,
     seen: Mutex<Vec<Seen>>,
     cancel_in_call: Mutex<Option<Arc<r#loop::TurnCancel>>>,
     start_answers: Mutex<VecDeque<ContextAnswer>>,
 }
 
-impl HandoffHooks {
+impl CompactionHooks {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             answers: Mutex::new(VecDeque::new()),
@@ -67,15 +67,15 @@ impl HandoffHooks {
         })
     }
 
-    /// Answers the next `before_handoff` call with `answer`.
-    fn answer(&self, answer: BeforeHandoffAnswer) {
+    /// Answers the next `before_compaction` call with `answer`.
+    fn answer(&self, answer: BeforeCompactionAnswer) {
         self.answers.lock().unwrap().push_back(answer);
     }
 
-    /// Answers the next `before_handoff` call with a hook's note.
+    /// Answers the next `before_compaction` call with a hook's note.
     fn note(&self, text: &str, extension: &str) {
-        self.answer(BeforeHandoffAnswer {
-            outcome: BeforeHandoffOutcome::Note {
+        self.answer(BeforeCompactionAnswer {
+            outcome: BeforeCompactionOutcome::Note {
                 text: text.into(),
                 extension: extension.into(),
             },
@@ -83,10 +83,10 @@ impl HandoffHooks {
         });
     }
 
-    /// Answers the next `before_handoff` call with a `blocking` failure.
+    /// Answers the next `before_compaction` call with a `blocking` failure.
     fn failed(&self, extension: &str, message: &str) {
-        self.answer(BeforeHandoffAnswer {
-            outcome: BeforeHandoffOutcome::Failed(HookFailure {
+        self.answer(BeforeCompactionAnswer {
+            outcome: BeforeCompactionOutcome::Failed(HookFailure {
                 extension: extension.into(),
                 message: message.into(),
             }),
@@ -94,7 +94,7 @@ impl HandoffHooks {
         });
     }
 
-    /// Cancels the turn inside the next `before_handoff` call.
+    /// Cancels the turn inside the next `before_compaction` call.
     fn cancel_inside(&self, cancel: Arc<r#loop::TurnCancel>) {
         *self.cancel_in_call.lock().unwrap() = Some(cancel);
     }
@@ -104,7 +104,7 @@ impl HandoffHooks {
         self.start_answers.lock().unwrap().push_back(answer);
     }
 
-    /// How many `before_handoff` calls ran.
+    /// How many `before_compaction` calls ran.
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
@@ -115,9 +115,9 @@ impl HandoffHooks {
     }
 }
 
-fn no_note(notices: Vec<Notice>) -> BeforeHandoffAnswer {
-    BeforeHandoffAnswer {
-        outcome: BeforeHandoffOutcome::NoNote,
+fn no_note(notices: Vec<Notice>) -> BeforeCompactionAnswer {
+    BeforeCompactionAnswer {
+        outcome: BeforeCompactionOutcome::NoNote,
         notices,
     }
 }
@@ -130,7 +130,7 @@ fn hook_failed(extension: &str, message: &str) -> Notice {
     }
 }
 
-impl Hooks for HandoffHooks {
+impl Hooks for CompactionHooks {
     fn after_tool(
         &self,
         _call: &contract::hook::AfterToolCall<'_>,
@@ -213,12 +213,12 @@ impl Hooks for HandoffHooks {
         }
     }
 
-    fn before_handoff(&self, handoff: &BeforeHandoff<'_>) -> BeforeHandoffAnswer {
+    fn before_compaction(&self, compaction: &BeforeCompaction<'_>) -> BeforeCompactionAnswer {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(Seen {
-            trigger: handoff.trigger,
-            instructions: handoff.instructions.map(str::to_owned),
-            conversation: handoff.conversation.to_vec(),
+            trigger: compaction.trigger,
+            instructions: compaction.instructions.map(str::to_owned),
+            conversation: compaction.conversation.to_vec(),
         });
         if let Some(cancel) = self.cancel_in_call.lock().unwrap().take() {
             cancel.cancel();
@@ -233,18 +233,22 @@ impl Hooks for HandoffHooks {
     fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
 }
 
-/// A handoff whose note a hook wrote: no note request, then the opening.
-const HOOK_HANDED_OFF: &[&str] = &["handoff_started", "handoff_completed", "opening_message"];
-/// A handoff whose note the model wrote, to the new opening message.
-const MODEL_HANDED_OFF: &[&str] = &[
-    "handoff_started",
+/// A compaction whose note a hook wrote: no note request, then the opening.
+const HOOK_COMPACTED: &[&str] = &[
+    "compaction_started",
+    "compaction_completed",
+    "opening_message",
+];
+/// A compaction whose note the model wrote, to the new opening message.
+const MODEL_COMPACTED: &[&str] = &[
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
     "opening_message",
 ];
 /// A reply calling the weather tool, with its streamed fragments, and the
@@ -263,11 +267,11 @@ const CALL_BODY: &[&str] = &[
 /// The trigger in these tests.
 const TRIGGER: u64 = 1_000;
 
-fn settings() -> HandoffSettings {
-    HandoffSettings {
+fn settings() -> CompactionSettings {
+    CompactionSettings {
         tokens: TRIGGER,
         nudge: false,
-        ..HandoffSettings::default()
+        ..CompactionSettings::default()
     }
 }
 
@@ -287,9 +291,9 @@ fn said(text: &str, tokens: u64) -> Scripted {
     with_tokens(Scripted::text(text), tokens, 0)
 }
 
-fn hooked(script: Vec<Scripted>, hooks: Arc<HandoffHooks>) -> Session {
+fn hooked(script: Vec<Scripted>, hooks: Arc<CompactionHooks>) -> Session {
     Session::with_tools(script, None, vec![weather()])
-        .handoff(settings())
+        .compaction(settings())
         .retry(no_wait())
         .hooks(hooks as Arc<dyn Hooks>)
 }
@@ -321,8 +325,8 @@ fn is_opening(input: &Input) -> bool {
 }
 
 #[test]
-fn a_hook_note_completes_the_handoff_with_no_note_request() {
-    let hooks = HandoffHooks::new();
+fn a_hook_note_completes_the_compaction_with_no_note_request() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = hooked(
         vec![called(TRIGGER - 1), said("Done.", 50)],
@@ -332,19 +336,11 @@ fn a_hook_note_completes_the_handoff_with_no_note_request() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HOOK_HANDED_OFF,
-            REPLY,
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HOOK_COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
@@ -365,7 +361,7 @@ fn a_hook_note_completes_the_handoff_with_no_note_request() {
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Hook note."));
     assert_eq!(requests[1].previous_end, None);
@@ -375,7 +371,7 @@ fn a_hook_note_completes_the_handoff_with_no_note_request() {
     assert_eq!(hooks.calls(), 1);
     let seen = hooks.seen();
     assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].trigger, HandoffTrigger::Auto);
+    assert_eq!(seen[0].trigger, CompactionTrigger::Auto);
     assert_eq!(seen[0].instructions, None);
     let first = &requests[0].conversation;
     assert_eq!(seen[0].conversation.len(), first.len() + 2);
@@ -391,7 +387,7 @@ fn a_hook_note_completes_the_handoff_with_no_note_request() {
 
 #[test]
 fn no_hook_note_leaves_the_note_to_the_model() {
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     let mut session = hooked(
         vec![
             called(TRIGGER - 1),
@@ -409,7 +405,7 @@ fn no_hook_note_leaves_the_note_to_the_model() {
             STEP,
             CALL_BODY,
             STEP,
-            MODEL_HANDED_OFF,
+            MODEL_COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -417,14 +413,14 @@ fn no_hook_note_leaves_the_note_to_the_model() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(hooks.calls(), 1);
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert!(done[0].payload.contains_key("note"));
     assert!(!done[0].payload.contains_key("note_text"));
 }
 
 #[test]
-fn a_blocking_hook_failure_fails_the_handoff_and_blocks_the_rest_of_the_turn() {
-    let hooks = HandoffHooks::new();
+fn a_blocking_hook_failure_fails_the_compaction_and_blocks_the_rest_of_the_turn() {
+    let hooks = CompactionHooks::new();
     hooks.failed("fiber.test/notes", "boom");
     let mut session = hooked(
         vec![called(TRIGGER - 1), said("Done.", 50)],
@@ -439,21 +435,21 @@ fn a_blocking_hook_failure_fails_the_handoff_and_blocks_the_rest_of_the_turn() {
             STEP,
             CALL_BODY,
             STEP,
-            &["handoff_started", "handoff_completed"],
+            &["compaction_started", "compaction_completed"],
             REPLY,
             ENDED,
         ],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
         json!({
             "outcome": "failed",
             "error": {
                 "code": "hook_failed",
-                "message": "The `before_handoff` hook of extension fiber.test/notes failed, so the handoff did not complete: boom",
+                "message": "The `before_compaction` hook of extension fiber.test/notes failed, so the compaction did not complete: boom",
             },
             "tokens_before": TRIGGER,
         })
@@ -465,18 +461,18 @@ fn a_blocking_hook_failure_fails_the_handoff_and_blocks_the_rest_of_the_turn() {
         requests[1].conversation[2],
         Input::ToolCall { .. }
     ));
-    // The failed handoff blocks the automatic trigger for the rest of the
+    // The failed compaction blocks the automatic trigger for the rest of the
     // turn: the hook ran once.
     assert_eq!(hooks.calls(), 1);
 }
 
 #[test]
-fn hook_notices_ride_with_the_handoff_and_the_note_request() {
-    // A hook note: the notice lands after `handoff_started` and before
-    // `handoff_completed`.
-    let hooks = HandoffHooks::new();
-    hooks.answer(BeforeHandoffAnswer {
-        outcome: BeforeHandoffOutcome::Note {
+fn hook_notices_ride_with_the_compaction_and_the_note_request() {
+    // A hook note: the notice lands after `compaction_started` and before
+    // `compaction_completed`.
+    let hooks = CompactionHooks::new();
+    hooks.answer(BeforeCompactionAnswer {
+        outcome: BeforeCompactionOutcome::Note {
             text: "Hook note.".into(),
             extension: "fiber.test/notes".into(),
         },
@@ -495,9 +491,9 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "notice",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
@@ -505,7 +501,7 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
         ],
     );
     // No note: the notice lands before the note request.
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     hooks.answer(no_note(vec![hook_failed(
         "fiber.test/notes",
         "a soft failure",
@@ -527,7 +523,7 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "notice",
                 "assistant_message_started",
                 "assistant_message_delta",
@@ -535,7 +531,7 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
@@ -545,54 +541,46 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
 }
 
 #[test]
-fn a_person_handoff_hands_the_hook_its_instructions() {
-    let hooks = HandoffHooks::new();
+fn a_person_compaction_hands_the_hook_its_instructions() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = Session::with_tools_injecting(
         vec![called(100), said("Done.", 50)],
-        vec![handoff("c_h", Some("focus on tests"))],
+        vec![compaction("c_h", Some("focus on tests"))],
         vec![weather()],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait())
     .hooks(Arc::clone(&hooks) as Arc<dyn Hooks>);
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HOOK_HANDED_OFF,
-            REPLY,
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HOOK_COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let seen = hooks.seen();
     assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].trigger, HandoffTrigger::Person);
+    assert_eq!(seen[0].trigger, CompactionTrigger::Person);
     assert_eq!(seen[0].instructions.as_deref(), Some("focus on tests"));
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["instructions"],
+        of_kind(&lines, "compaction_completed")[0].payload["instructions"],
         "focus on tests"
     );
 }
 
 #[test]
-fn a_person_handoff_turn_with_no_input_ends_completed_after_the_hook_note() {
-    let hooks = HandoffHooks::new();
+fn a_person_compaction_turn_with_no_input_ends_completed_after_the_hook_note() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = Session::with_tools(Vec::new(), None, vec![weather()])
-        .handoff(settings())
+        .compaction(settings())
         .retry(no_wait())
         .hooks(Arc::clone(&hooks) as Arc<dyn Hooks>);
     session
         .inbox
-        .send(handoff("c_h", Some("focus on tests")))
+        .send(compaction("c_h", Some("focus on tests")))
         .unwrap();
 
     let outcome = session.turn();
@@ -603,17 +591,21 @@ fn a_person_handoff_turn_with_no_input_ends_completed_after_the_hook_note() {
         &[
             OPENING,
             STEP,
-            &["handoff_started", "handoff_completed", "opening_message"],
+            &[
+                "compaction_started",
+                "compaction_completed",
+                "opening_message",
+            ],
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     // No reply measured this context, so its size is estimated from the
     // conversation the hook saw. That starts with the opening message,
     // which embeds the temp workspace and session-log paths (plus
     // os/arch), so its length differs between macOS and Linux: derive
     // the expectation with the same `ceil(bytes / 4)` estimate instead
-    // of hardcoding it (as `handoff.rs`'s person-handoff test does).
+    // of hardcoding it (as `compaction.rs`'s person-compaction test does).
     let seen = hooks.seen();
     assert_eq!(seen.len(), 1);
     let expected_tokens: u64 = seen[0]
@@ -672,15 +664,15 @@ fn failed(code: ErrorCode) -> Scripted {
 }
 
 #[test]
-fn an_overflow_handoff_hands_the_hook_the_moved_results() {
-    let hooks = HandoffHooks::new();
+fn an_overflow_compaction_hands_the_hook_the_moved_results() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = Session::with_tools(
         vec![called_both(100), overflowing(), said("Done.", 50)],
         None,
         vec![weather(), long()],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait())
     .hooks(Arc::clone(&hooks) as Arc<dyn Hooks>);
 
@@ -693,7 +685,7 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
             TWO_CALLS,
             STEP,
             REJECTED,
-            HOOK_HANDED_OFF,
+            HOOK_COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -701,7 +693,7 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "overflow"
     );
     // The hook saw the conversation with the last step's results moved out.
@@ -729,7 +721,7 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Hook note."));
     assert_eq!(attempt_numbers(&lines), [1, 1, 1]);
@@ -761,14 +753,14 @@ const REJECTED: &[&str] = &[
 
 #[test]
 fn a_failed_overflow_hook_fails_the_turn_context_overflow() {
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     hooks.failed("fiber.test/notes", "boom");
     let mut session = Session::with_tools(
         vec![called_both(100), overflowing()],
         None,
         vec![weather(), long()],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait())
     .hooks(Arc::clone(&hooks) as Arc<dyn Hooks>);
 
@@ -778,16 +770,16 @@ fn a_failed_overflow_hook_fails_the_turn_context_overflow() {
         lines.last().unwrap().payload["error"]["code"],
         "context_overflow"
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
 }
 
-/// A tool that returns no content and `control.handoff` of `note`.
+/// A tool that returns no content and `control.compact` of `note`.
 fn wrapping(name: &'static str, note: &str) -> Arc<TestTool> {
     let mut tool = TestTool::reads(name, "");
     tool.output.content = Vec::new();
     tool.output.control = Some(contract::events::Control {
-        handoff: Some(note.into()),
+        compact: Some(note.into()),
         ..Default::default()
     });
     Arc::new(tool)
@@ -805,15 +797,15 @@ fn calling(names: &[&str], tokens: u64) -> Scripted {
 }
 
 #[test]
-fn a_tool_started_handoff_never_calls_the_hook() {
-    let hooks = HandoffHooks::new();
+fn a_tool_started_compaction_never_calls_the_hook() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = Session::with_tools(
         vec![calling(&["wrapup"], 500), said("Done.", 50)],
         None,
         vec![wrapping("wrapup", "Tool note.")],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait())
     .hooks(Arc::clone(&hooks) as Arc<dyn Hooks>);
 
@@ -821,7 +813,7 @@ fn a_tool_started_handoff_never_calls_the_hook() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(hooks.calls(), 0);
     // The tool's argument is the note, as today: no hook text anywhere.
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert!(done[0].payload.contains_key("note"));
     assert!(!done[0].payload.contains_key("note_text"));
@@ -830,7 +822,7 @@ fn a_tool_started_handoff_never_calls_the_hook() {
 
 #[test]
 fn a_cancel_during_the_hook_ends_the_turn_interrupted() {
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = hooked(
         vec![called(TRIGGER - 1), said("Done.", 50)],
@@ -841,7 +833,7 @@ fn a_cancel_during_the_hook_ends_the_turn_interrupted() {
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
         json!({"outcome": "cancelled", "tokens_before": TRIGGER})
@@ -921,18 +913,18 @@ impl Tool for TripTool {
 }
 
 #[test]
-fn a_cancel_before_the_handoff_check_runs_no_hook() {
+fn a_cancel_before_the_compaction_check_runs_no_hook() {
     let trip = Arc::new(TripTool {
         cancel: Mutex::new(None),
     });
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = Session::with_tools(
         vec![tripping(TRIGGER - 1), said("Done.", 50)],
         None,
         vec![Arc::clone(&trip) as Arc<dyn Tool>, weather()],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait())
     .hooks(Arc::clone(&hooks) as Arc<dyn Hooks>);
     trip.cancel
@@ -945,7 +937,7 @@ fn a_cancel_before_the_handoff_check_runs_no_hook() {
     // check: the hook is never called.
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     assert_eq!(hooks.calls(), 0);
-    assert!(!kinds(&lines).contains(&EventKind::HandoffStarted));
+    assert!(!kinds(&lines).contains(&EventKind::CompactionStarted));
 }
 
 /// A reply calling the trip tool, with `tokens` in its prompt.
@@ -964,14 +956,14 @@ fn a_shutdown_while_the_step_tool_runs_runs_no_hook() {
         let mut tool = TestTool::reads("parker", "parked");
         tool.script = vec![Script::Wait(Arc::clone(&gate))];
         let tool = Arc::new(tool);
-        let hooks = HandoffHooks::new();
+        let hooks = CompactionHooks::new();
         hooks.note("Hook note.", "fiber.test/notes");
         let mut session = Session::with_tools(
             vec![parking(TRIGGER - 1), said("Done.", 50)],
             None,
             vec![tool],
         )
-        .handoff(settings())
+        .compaction(settings())
         .retry(no_wait());
         if with_hooks {
             session.looped = session
@@ -985,7 +977,7 @@ fn a_shutdown_while_the_step_tool_runs_runs_no_hook() {
         std::thread::scope(|scope| {
             let turn = scope.spawn(|| session.turn());
             // The tool started its call and waits at its gate: the shutdown
-            // lands while the step runs, before the handoff check.
+            // lands while the step runs, before the compaction check.
             tap.wait_for("tool_call_started");
             cancel.shutdown(143);
             gate.open();
@@ -1026,7 +1018,7 @@ fn text_of(input: &Input) -> &str {
 
 #[test]
 fn the_live_conversation_after_a_hook_note_is_what_a_rebuild_renders() {
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     let mut session = hooked(
         vec![
@@ -1040,31 +1032,23 @@ fn the_live_conversation_after_a_hook_note_is_what_a_rebuild_renders() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HOOK_HANDED_OFF,
-            REPLY,
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HOOK_COMPACTED, REPLY, ENDED],
     );
 
     let requests = session.requests();
     let rebuilt = session.rebuilt();
-    // The request after the handoff, then the reply it got.
+    // The request after the compaction, then the reply it got.
     assert_eq!(rebuilt.len(), 4);
     assert_eq!(rebuilt[..3], requests[1].conversation[..]);
     assert_eq!(text_of(&rebuilt[3]), "Done.");
 }
 
 #[test]
-fn a_hook_note_runs_session_start_with_reason_handoff() {
-    let hooks = HandoffHooks::new();
+fn a_hook_note_runs_session_start_with_reason_compaction() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     hooks.start_answer(start_empty());
-    hooks.start_answer(start_added("fiber.test/inbox", "at handoff"));
+    hooks.start_answer(start_added("fiber.test/inbox", "at compaction"));
     let mut session = hooked(
         vec![called(TRIGGER - 1), said("Done.", 50)],
         Arc::clone(&hooks),
@@ -1080,8 +1064,8 @@ fn a_hook_note_runs_session_start_with_reason_handoff() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
-                "handoff_completed",
+                "compaction_started",
+                "compaction_completed",
                 "opening_message",
                 "context_added",
             ],
@@ -1096,15 +1080,15 @@ fn a_hook_note_runs_session_start_with_reason_handoff() {
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
-    assert!(text_of(&next[1]).contains("at handoff"), "{next:?}");
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert!(text_of(&next[1]).contains("at compaction"), "{next:?}");
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
     assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("Hook note."));
 }
 
 #[test]
-fn a_session_start_failure_after_a_hook_note_fails_the_handoff_with_no_note() {
-    let hooks = HandoffHooks::new();
+fn a_session_start_failure_after_a_hook_note_fails_the_compaction_with_no_note() {
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     hooks.start_answer(start_empty());
     hooks.start_answer(start_failed("fiber.test/inbox", "no context"));
@@ -1114,7 +1098,7 @@ fn a_session_start_failure_after_a_hook_note_fails_the_handoff_with_no_note() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
-    // The handoff failed, but the turn goes on from the old context.
+    // The compaction failed, but the turn goes on from the old context.
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_kinds(
         &lines,
@@ -1123,12 +1107,12 @@ fn a_session_start_failure_after_a_hook_note_fails_the_handoff_with_no_note() {
             STEP,
             CALL_BODY,
             STEP,
-            &["handoff_started", "handoff_completed"],
+            &["compaction_started", "compaction_completed"],
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
@@ -1145,12 +1129,12 @@ fn a_session_start_failure_after_a_hook_note_fails_the_handoff_with_no_note() {
 }
 
 #[test]
-fn a_failed_hook_note_handoff_blocks_the_rest_of_the_turn() {
-    // A hook note whose `session_start` fails ends the handoff `failed`:
+fn a_failed_hook_note_compaction_blocks_the_rest_of_the_turn() {
+    // A hook note whose `session_start` fails ends the compaction `failed`:
     // the automatic trigger does not fire again in that turn, so a later
     // step that crosses the trigger runs no second hook. Under `!=` the
     // block is never set on failure and the hook runs twice.
-    let hooks = HandoffHooks::new();
+    let hooks = CompactionHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
     hooks.note("Second note.", "fiber.test/notes");
     hooks.start_answer(start_empty());
@@ -1165,11 +1149,11 @@ fn a_failed_hook_note_handoff_blocks_the_rest_of_the_turn() {
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    // The failed handoff blocks the automatic trigger for the rest of
+    // The failed compaction blocks the automatic trigger for the rest of
     // the turn: the hook ran once, even though the later step stays over
     // the trigger.
     assert_eq!(hooks.calls(), 1);
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");

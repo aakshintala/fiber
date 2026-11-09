@@ -65,7 +65,7 @@ pub(crate) enum Role {
     /// Inline code, a call's kind, an approval's tool name and rule prefix,
     /// the input box's ›, "Copied", the context bar's fill.
     Info,
-    /// The git branch, the handoff band's label, the question form's
+    /// The git branch, the compaction band's label, the question form's
     /// stripe, title and marks, the delegates' ◆.
     Secondary,
     /// Rules, line numbers, a bar's empty cells, the pill, a grip's column
@@ -95,8 +95,8 @@ pub(crate) enum Role {
     Prompt,
     /// Code blocks.
     Code,
-    /// The handoff band.
-    Handoff,
+    /// The compaction band.
+    Compaction,
     /// The approval panel for a standing ask, and the question form.
     Approval,
     /// The approval panel for a reviewer's escalation.
@@ -148,7 +148,7 @@ impl Role {
         Self::Turn,
         Self::Prompt,
         Self::Code,
-        Self::Handoff,
+        Self::Compaction,
         Self::Approval,
         Self::Alert,
         Self::Hover,
@@ -200,7 +200,7 @@ impl Role {
             Self::Turn => "turn",
             Self::Prompt => "prompt",
             Self::Code => "code",
-            Self::Handoff => "handoff",
+            Self::Compaction => "compaction",
             Self::Approval => "approval",
             Self::Alert => "alert",
             Self::Hover => "hover",
@@ -229,7 +229,7 @@ impl Role {
             | Self::Turn
             | Self::Prompt
             | Self::Code
-            | Self::Handoff
+            | Self::Compaction
             | Self::Approval
             | Self::Alert
             | Self::Hover
@@ -302,7 +302,7 @@ impl Role {
             | Self::Scroll
             | Self::CardRetrying
             | Self::CardNeedsInput
-            | Self::Handoff
+            | Self::Compaction
             | Self::Alert
             | Self::Selection
             | Self::Match
@@ -407,7 +407,7 @@ impl Theme {
             Shade::Rgb((0x10, 0x10, 0x17)), // turn
             Shade::Rgb((0x34, 0x35, 0x41)), // prompt
             Shade::Rgb((0x18, 0x18, 0x21)), // code
-            Shade::Rgb((0x1f, 0x1a, 0x2e)), // handoff
+            Shade::Rgb((0x1f, 0x1a, 0x2e)), // compaction
             Shade::Rgb((0x1a, 0x1a, 0x22)), // approval
             Shade::Rgb((0x50, 0x1c, 0x20)), // alert
             Shade::Rgb((0x1e, 0x1e, 0x26)), // hover
@@ -454,7 +454,7 @@ impl Theme {
             Shade::Rgb((0xf3, 0xf5, 0xf8)), // turn
             Shade::Rgb((0xdd, 0xe3, 0xea)), // prompt
             Shade::Rgb((0xef, 0xf1, 0xf4)), // code
-            Shade::Rgb((0xef, 0xe9, 0xf9)), // handoff
+            Shade::Rgb((0xef, 0xe9, 0xf9)), // compaction
             Shade::Rgb((0xea, 0xee, 0xf2)), // approval
             Shade::Rgb((0xff, 0xd7, 0xd9)), // alert
             Shade::Rgb((0xe3, 0xe7, 0xec)), // hover

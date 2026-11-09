@@ -12,7 +12,6 @@
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Deadline;
 use fakes::alloc::{CHAIN, Counting, LARGE, bytes_during, large_blocks_during};
@@ -22,9 +21,6 @@ static ALLOC: Counting = Counting;
 
 const TWO_MIB: usize = 2 << 20;
 const HALF_MIB: usize = 512 << 10;
-
-/// How long a test waits for another thread's block or acknowledgement.
-const HANDOFF: Duration = Duration::from_secs(10);
 
 fn large() -> Vec<u8> {
     black_box(Vec::with_capacity(TWO_MIB))
@@ -138,7 +134,7 @@ fn a_block_made_before_the_scope_and_grown_inside_is_not_counted() {
 fn a_block_made_on_another_thread_and_freed_here_changes_nothing() {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || send.send(large()).unwrap_or(()));
-    let theirs = Deadline::after(HANDOFF)
+    let theirs = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&receive)
         .expect("waited for the other thread's block");
     let ((), peak) = large_blocks_during(|| {
@@ -159,7 +155,7 @@ fn a_block_freed_on_another_thread_stays_counted() {
             drop(mine);
             send.send(()).unwrap_or(());
         });
-        Deadline::after(HANDOFF)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&receive)
             .expect("waited for the other thread to free the block");
         drop(large());

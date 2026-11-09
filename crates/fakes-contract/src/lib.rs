@@ -5,8 +5,8 @@
 //! binary contains it (`docs/architecture.md`, "The call rules").
 
 mod blocking;
+mod compaction;
 pub mod emit;
-mod handoff;
 pub mod jobs;
 mod locks;
 mod rules;
@@ -15,9 +15,9 @@ mod skills;
 mod tool_io;
 
 pub use blocking::BlockingProvider;
+pub use compaction::no_note;
 pub use emit::{EventLog, Recorder};
 pub use fakes::*;
-pub use handoff::no_note;
 pub use jobs::StubJobs;
 pub use locks::{FakeLock, NoLock};
 pub use rules::{NoRules, RecordingRules};

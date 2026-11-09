@@ -1685,10 +1685,10 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
 }
 
 #[test]
-fn a_rewind_inherits_a_handoff_by_position() {
-    // A handoff completed in the old session applies to a rewind at or
+fn a_rewind_inherits_a_compaction_by_position() {
+    // A compaction completed in the old session applies to a rewind at or
     // past it, and not to one before it (`docs/events.md`, "Rewind"). The
-    // handoff is the person's: turn 2 runs, the `handoff` command carries
+    // compaction is the person's: turn 2 runs, the `compact` command carries
     // on, and turn 3 answers from the new context.
     let setup = Setup::new();
     let server = ProviderServer::start([
@@ -1706,14 +1706,14 @@ fn a_rewind_inherits_a_handoff_by_position() {
     let client = hubbed.client();
     hubbed.prompt("h1_p2", &old, "two");
 
-    client.send(&command("h1_hand", Some(&old), "handoff", json!({})));
-    until_ack(client, "the handoff acknowledgement", "h1_hand");
-    until(client, "the handoff turn_completed", |line| {
+    client.send(&command("h1_hand", Some(&old), "compact", json!({})));
+    until_ack(client, "the compaction acknowledgement", "h1_hand");
+    until(client, "the compaction turn_completed", |line| {
         line["kind"] == "turn_completed" && line["session_id"] == old
     });
     hubbed.prompt("h1_p3", &old, "three");
 
-    // The old log holds the completed handoff in turn 2, and turn 3 runs
+    // The old log holds the completed compaction in turn 2, and turn 3 runs
     // from its context.
     let old_log = session_log(&setup, &old);
     let kinds: Vec<&str> = old_log
@@ -1722,7 +1722,7 @@ fn a_rewind_inherits_a_handoff_by_position() {
         .collect();
     let completed = kinds
         .iter()
-        .position(|kind| *kind == "handoff_completed")
+        .position(|kind| *kind == "compaction_completed")
         .unwrap();
     assert_eq!(old_log[completed]["payload"]["outcome"], "completed");
     assert_eq!(kinds[completed + 1], "opening_message");
@@ -1732,20 +1732,20 @@ fn a_rewind_inherits_a_handoff_by_position() {
     assert_eq!(requests.len(), 4, "two turns, the note, the third turn");
     let third: Value = serde_json::from_slice(&requests[3].body).unwrap();
     let input = third["input"].as_array().unwrap();
-    // The handoff turn began as the command and held no message from the
+    // The compaction turn began as the command and held no message from the
     // person, so the new context is the opening message and the note.
     assert_eq!(input.len(), 3, "{input:?}");
     assert!(
         input[1].to_string().contains("The note."),
-        "the handoff note: {input:?}"
+        "the compaction note: {input:?}"
     );
     assert!(
         input[2].to_string().contains("three"),
         "the new prompt: {input:?}"
     );
 
-    // Past the handoff, at the default point: the new session's next
-    // request carries the handoff's context, then the note, then the
+    // Past the compaction, at the default point: the new session's next
+    // request carries the compaction's context, then the note, then the
     // prompt, with the old request's other keys.
     client.send(&rewind("h1_rw_after", &old, json!({})));
     let ack = until_ack(client, "the after rewind acknowledgement", "h1_rw_after");
@@ -1773,7 +1773,7 @@ fn a_rewind_inherits_a_handoff_by_position() {
         );
     }
     let past_input = past["input"].as_array().unwrap();
-    // Turn 3's prompt is past the point: the shared prefix is the handoff's
+    // Turn 3's prompt is past the point: the shared prefix is the compaction's
     // context, then the rewind note, then the new prompt.
     let k = input.len() - 1;
     assert_eq!(past_input.len(), k + 2, "{past_input:?}");
@@ -1795,7 +1795,7 @@ fn a_rewind_inherits_a_handoff_by_position() {
         past_input[k + 1]
     );
 
-    // Before the handoff, at turn 2's start minus one: no handoff note
+    // Before the compaction, at turn 2's start minus one: no compaction note
     // reaches the new session.
     client.send(&rewind(
         "h1_rw_before",
@@ -1832,7 +1832,7 @@ fn a_rewind_inherits_a_handoff_by_position() {
         earlier_input
             .iter()
             .all(|item| !item.to_string().contains("The note.")),
-        "no handoff note reaches the rewound session: {earlier_input:?}"
+        "no compaction note reaches the rewound session: {earlier_input:?}"
     );
     assert!(
         earlier_input[k]

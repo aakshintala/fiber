@@ -57,6 +57,7 @@ impl Doctor {
     pub(crate) fn frame(&self) -> Frame {
         Frame {
             joins: Vec::new(),
+            chrome: None,
             title: "Doctor".to_owned(),
             command: "/doctor".to_owned(),
             rows: self

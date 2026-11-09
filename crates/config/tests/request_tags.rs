@@ -213,9 +213,9 @@ fn request_tags_bad_file_json_remains_fatal() {
     // an error, while an unrelated wrong type in the same file stays fatal.
     setup.write(
         &setup.global(),
-        r#"{"providers":{"databricks":{"request_tags":5}},"handoff":{"tokens":"many"}}"#,
+        r#"{"providers":{"databricks":{"request_tags":5}},"compaction":{"tokens":"many"}}"#,
     );
     let error = setup.load(&[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
-    assert!(error.to_string().contains("handoff.tokens"), "{error}");
+    assert!(error.to_string().contains("compaction.tokens"), "{error}");
 }

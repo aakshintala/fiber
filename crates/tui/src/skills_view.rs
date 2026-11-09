@@ -442,6 +442,7 @@ impl Skills {
         if let Some(text) = &self.text {
             return Frame {
                 joins: Vec::new(),
+                chrome: None,
                 title: format!("Skill {}", text.name),
                 command: "/skills".to_owned(),
                 rows: wrap(&text.raw, width)
@@ -470,6 +471,7 @@ impl Skills {
         }
         Frame {
             joins: Vec::new(),
+            chrome: None,
             title: "Skills".to_owned(),
             command: "/skills".to_owned(),
             rows,

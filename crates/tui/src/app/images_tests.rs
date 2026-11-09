@@ -1196,7 +1196,7 @@ fn forgetting_purges_queued_payloads_and_takes_no_new_ones() {
     let out = app.take_image_out();
     assert!(out.purge);
     assert!(out.items.is_empty());
-    // The purge is one handoff: the next drain carries nothing.
+    // The purge is one compaction: the next drain carries nothing.
     let out = app.take_image_out();
     assert!(!out.purge);
     assert!(out.items.is_empty());

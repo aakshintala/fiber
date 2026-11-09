@@ -191,11 +191,11 @@ fn prune_skips_shared_worktrees_even_when_forced_and_leaves_locks() {
 #[test]
 fn prune_cannot_enter_the_add_to_child_share_gap_or_a_new_share_after_listing() {
     fakes::within(
-        "prune handoff interleavings",
+        "prune transfer interleavings",
         Deadline::after(Duration::from_secs(30)),
         || {
             for force in [false, true] {
-                let setup = Setup::new("prune-handoff");
+                let setup = Setup::new("prune-transfer");
                 fs::create_dir_all(setup.worktrees()).unwrap();
                 let path = setup.worktrees().join("s_0123456789abcdef");
                 let parent = doors::share(&path).unwrap();

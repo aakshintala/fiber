@@ -30,7 +30,7 @@ use support::{
 fn naming(name: &'static str, text: &'static str) -> TestTool {
     let mut tool = TestTool::reads(name, text);
     tool.output.control = Some(Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("Fix the parser".into()),
@@ -171,7 +171,7 @@ fn two_naming_calls_write_in_request_order() {
     let trace = Arc::default();
     let mut first = naming("first", "First.");
     first.output.control = Some(Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("A".into()),
@@ -180,7 +180,7 @@ fn two_naming_calls_write_in_request_order() {
     first.trace = Arc::clone(&trace);
     let mut second = naming("second", "Second.");
     second.output.control = Some(Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("B".into()),
@@ -270,7 +270,7 @@ fn two_steps_name_twice_in_order() {
 fn a_failed_call_names_nothing() {
     let mut tool = TestTool::failing("name", ErrorCode::ToolError);
     tool.output.control = Some(Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("Fix the parser".into()),
@@ -301,7 +301,7 @@ fn a_failed_call_names_nothing() {
 fn a_cancelled_call_names_nothing() {
     let mut tool = naming("slow", "Slow done.");
     tool.output.control = Some(Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("Fix the parser".into()),
@@ -344,10 +344,10 @@ fn a_cancelled_call_names_nothing() {
 }
 
 #[test]
-fn a_handoff_call_names_nothing() {
-    let mut tool = TestTool::reads("hand", "Handed off.");
+fn a_compaction_call_names_nothing() {
+    let mut tool = TestTool::reads("hand", "Compacted.");
     tool.output.control = Some(Control {
-        handoff: Some("the note".into()),
+        compact: Some("the note".into()),
         questions: None,
         skill: None,
         name: None,
@@ -358,7 +358,7 @@ fn a_handoff_call_names_nothing() {
     let mut expected = head();
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "tool_call_completed"]);
-    expected.extend(["handoff_completed", "opening_message"]);
+    expected.extend(["compaction_completed", "opening_message"]);
     expected.extend(tail());
     assert_eq!(
         kinds(&lines),
@@ -373,7 +373,7 @@ fn a_handoff_call_names_nothing() {
             .find(|l| l.kind() == EventKind::ToolCallCompleted)
             .unwrap()
             .payload["control"],
-        json!({"handoff": "the note"})
+        json!({"compact": "the note"})
     );
 }
 

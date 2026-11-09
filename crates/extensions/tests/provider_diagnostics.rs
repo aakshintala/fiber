@@ -28,9 +28,9 @@ use contract::clock::Clock;
 use contract::clock::Wake;
 use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing};
 use contract::events::CallStatus;
-use contract::events::HandoffTrigger;
+use contract::events::CompactionTrigger;
 use contract::hook::{
-    AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeMessage, BeforeMessageOutcome,
+    AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeMessage, BeforeMessageOutcome,
     BeforeModelCall, BeforeToolCall, CheckOutcome, ContextOutcome, Hooks, SessionStart,
     StartReason, TurnEnd, TurnStart,
 };
@@ -182,7 +182,7 @@ fn all_chains() -> String {
         hook("turn_end", "transform", "{ context = \"e\" }"),
         hook("before_message", "sanitize", "{}"),
         hook("before_model_call", "transform", "{}"),
-        hook("before_handoff", "transform", "{ note = \"h\" }"),
+        hook("before_compaction", "transform", "{ note = \"h\" }"),
     ]
     .join("\n")
 }
@@ -260,13 +260,13 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
         },
     );
     fakes::within(
-        "session.before_handoff",
+        "session.before_compaction",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(session);
             move || {
-                session.before_handoff(&BeforeHandoff {
-                    trigger: HandoffTrigger::Auto,
+                session.before_compaction(&BeforeCompaction {
+                    trigger: CompactionTrigger::Auto,
                     instructions: None,
                     conversation: &[],
                     cancel: &Never,
@@ -312,7 +312,7 @@ fn each_chain_emits_one_scope_per_dispatch() {
             (Op::Hook(HookChain::TurnEnd), None),
             (Op::Hook(HookChain::BeforeMessage), None),
             (Op::Hook(HookChain::BeforeModelCall), None),
-            (Op::Hook(HookChain::BeforeHandoff), None),
+            (Op::Hook(HookChain::BeforeCompaction), None),
         ]
     );
     // Two successive dispatches emit twice.
@@ -353,7 +353,7 @@ fn empty_chains_emit_one_scope_each() {
             (Op::Hook(HookChain::TurnEnd), None),
             (Op::Hook(HookChain::BeforeMessage), None),
             (Op::Hook(HookChain::BeforeModelCall), None),
-            (Op::Hook(HookChain::BeforeHandoff), None),
+            (Op::Hook(HookChain::BeforeCompaction), None),
         ]
     );
 }

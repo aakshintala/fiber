@@ -731,7 +731,7 @@ pub(super) fn remeasured_row(id: &str) -> Option<&'static str> {
 
 /// The ten-turn pass's Budget cell, here and in `docs/performance.md`.
 pub(super) const TEN_TURNS_BUDGET: &str =
-    "Session, memory kept after 10 busy turns, each followed by its handoff";
+    "Session, memory kept after 10 busy turns, each followed by its compaction";
 /// What the summary says when the selection left the ten-turn pass out:
 /// the run is judged on the other rows (`docs/ci.md`, "Selection").
 pub(super) const TEN_TURNS_SKIP_NOTE: &str =

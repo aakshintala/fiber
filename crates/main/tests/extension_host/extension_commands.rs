@@ -353,6 +353,54 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
     assert!(status.success(), "stderr: {stderr}");
 }
 
+/// The retired name of `/compact` is no built-in command, so an extension
+/// may claim it without `replaces`: it loads and the `commands` answer
+/// lists it.
+#[test]
+fn an_extension_may_claim_the_retired_command_name() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    setup.lua(
+        "claimer",
+        "fiber.command(\"handoff\", { timeout = 8000, run = function() end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    assert!(
+        result["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "handoff" && c["extension"] == true),
+        "{result}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
 #[test]
 fn command_runs_idle_reports_status_and_duplicates_reject() {
     let setup = Setup::new_with_fm_root();
@@ -641,7 +689,7 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     // One extension per alias, so every alias gets its own collision
     // notice naming it.
     for (extension, alias) in [
-        ("w-compact", "compact"),
+        ("w-cost", "cost"),
         ("w-keymap", "keymap"),
         ("w-permissions", "permissions"),
         ("w-stop", "stop"),
@@ -659,7 +707,7 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     // read stdout until `extensions_loaded` and every alias is named by
     // an `extension_failed` notice. The load notices are written after
     // `extensions_loaded`; wait for both.
-    let aliases = ["compact", "keymap", "permissions", "stop"];
+    let aliases = ["cost", "keymap", "permissions", "stop"];
     let mut loaded = false;
     let mut noticed = BTreeSet::new();
     loop {
@@ -703,7 +751,7 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     let result = lines.last().unwrap()["payload"]["result"].clone();
     // None of the aliases loads: no command by that name arrives from
     // any of the four extensions.
-    for alias in ["compact", "keymap", "permissions", "stop"] {
+    for alias in ["cost", "keymap", "permissions", "stop"] {
         assert!(
             !result["commands"]
                 .as_array()

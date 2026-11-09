@@ -99,8 +99,8 @@ impl Loop {
         );
         let person = input
             .iter()
-            .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
-        self.handoff.new_turn(person);
+            .any(|item| matches!(item, contract::events::InputItem::Compaction { .. }));
+        self.compaction.new_turn(person);
         // Armed with `turn_started` and its contexts: a shutdown lands
         // before all of them or after (`docs/extensions.md`, "Hooks").
         let cancel = Arc::clone(&self.cancel);
@@ -234,7 +234,7 @@ impl Loop {
             self.provider.as_ref(),
             self.preamble_reason,
             self.replaced.clone(),
-            self.handoff.trigger_at,
+            self.compaction.trigger_at,
             self.tool_search.as_ref(),
         );
         // The loop owns the effective budget; the builder leaves it
@@ -374,7 +374,7 @@ impl Loop {
 
 impl Loop {
     /// Every tool a `ToolSearchResult` in the conversation holds loaded.
-    /// The conversation keeps every search result since the last handoff,
+    /// The conversation keeps every search result since the last compaction,
     /// so this is the loaded set (`docs/tools.md`, "Tool search").
     pub(crate) fn loaded_names(&self) -> BTreeSet<String> {
         self.conversation
@@ -461,10 +461,10 @@ impl Loop {
         }
     }
 
-    /// Moves the loaded names a completed handoff dropped back to
+    /// Moves the loaded names a completed compaction dropped back to
     /// `Deferred`: only names the loaded set lost publish (`docs/tools.md`,
     /// "Tool search"). With no deferral or no setter nothing publishes.
-    pub(crate) fn publish_handoff_rows(&self, before: &BTreeSet<String>) {
+    pub(crate) fn publish_compaction_rows(&self, before: &BTreeSet<String>) {
         let Some(rows) = self.tool_rows.as_ref() else {
             return;
         };

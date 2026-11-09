@@ -1611,7 +1611,7 @@ fn a_switch_before_the_first_prompt_loads_nothing() {
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: r#loop::HandoffSettings::default(),
+            compaction: r#loop::CompactionSettings::default(),
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
                 message: "no reviewer".into(),

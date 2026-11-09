@@ -1,22 +1,23 @@
-# Handoff
+# Compaction
 
 What Fiber does when a session outgrows the model's context. This is what is
 true now, not a plan. It is settled by
-[Handoff: when a session outgrows its context](https://github.com/aakshintala/fiber/issues/24);
+[Compaction: when a session outgrows its context](https://github.com/aakshintala/fiber/issues/24);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `GLOSSARY.md`. Handoff, handoff note, session log, step, step
+Vocabulary is `GLOSSARY.md`. Compaction, compaction note, session log, step, step
 boundary and artifact mean what it says there and nothing else. The events are
 `docs/events.md`; the tool result contract is `docs/tools.md`.
+Fiber called this a handoff until 2026-11-05; that name is kept for a future skill that hands the work to a new session.
 
-## What a handoff is
+## What a compaction is
 
-A handoff restarts the model's context from a handoff note, written by the
-session's own model or by a `before_handoff` hook. It is one mechanism with three triggers: Fiber, a person
-or a tool. Nothing is deleted: the handoff is appended to the session log, and
+A compaction restarts the model's context from a compaction note, written by the
+session's own model or by a `before_compaction` hook. It is one mechanism with three triggers: Fiber, a person
+or a tool. Nothing is deleted: the compaction is appended to the session log, and
 a person can still scroll back through everything before it.
 
-Every handoff makes the next request miss the prompt cache for everything after
+Every compaction makes the next request miss the prompt cache for everything after
 the system prompt and tools, because the conversation that request starts from
 is new.
 
@@ -24,7 +25,7 @@ is new.
 
 ### Automatic
 
-Before each request, Fiber checks how full the model's context is. A handoff
+Before each request, Fiber checks how full the model's context is. A compaction
 runs when the context reaches whichever comes first:
 
 - T tokens, 400,000 by default
@@ -36,14 +37,14 @@ Fiber asks the model for its note in the same session: it appends an
 instruction to the context, and the model's reply is the note. That request
 goes to the session's own model with the same system prompt and tools, so it
 reads the cached prefix. It is never a separate request to another model. The
-request after the handoff misses the prompt cache.
+request after the compaction misses the prompt cache.
 
-At most one handoff runs per step. If the context is still over the trigger
-after a handoff, Fiber does not hand off again in that step.
+At most one compaction runs per step. If the context is still over the trigger
+after a compaction, Fiber does not compact again in that step.
 
-Automatic handoff can be turned off in configuration. With it off, a turn that
+Automatic compaction can be turned off in configuration. With it off, a turn that
 reaches the model's limit fails with `context_overflow`, and the overflow rule
-below does not apply. A person and a tool can still start a handoff.
+below does not apply. A person and a tool can still start a compaction.
 
 ### The nudge
 
@@ -52,19 +53,19 @@ Once per context, when the context reaches two thirds of the automatic trigger
 context. It says:
 
 - how full the context is
-- that a handoff keeps the work going
+- that a compaction keeps the work going
 - the path of the session log
 
 A bare fullness warning makes a model wrap up early and take shortcuts, the
 behaviour Anthropic and Cognition call context anxiety. Their documented fix is
 telling the model the work will continue, which is why the nudge says so
 ([research/compaction/thresholds.md](../research/compaction/thresholds.md),
-section 4). Each handoff starts a new context, so the nudge can be given again.
+section 4). Each compaction starts a new context, so the nudge can be given again.
 
 ### A person
 
-In the terminal, a person types `/handoff`, optionally followed by
-instructions. A driver sends the `handoff` driver command, with optional
+In the terminal, a person types `/compact`, optionally followed by
+instructions. A driver sends the `compact` driver command, with optional
 instructions (`docs/invocation.md`). Instructions say what the next stretch of
 work focuses on.
 
@@ -72,42 +73,42 @@ Sent while a turn is running, it applies at the next step boundary, as a
 steering message does. Sent between turns, it is a turn of its own whose input
 is the command.
 
-Several `/handoff` or `handoff` commands that arrive before one step boundary
-make one handoff. Their instructions are joined in the order they arrived.
+Several `/compact` or `compact` commands that arrive before one step boundary
+make one compaction. Their instructions are joined in the order they arrived.
 
-Fiber asks for the note exactly as for an automatic handoff, with the
-instructions added. The request after the handoff misses the prompt cache.
+Fiber asks for the note exactly as for an automatic compaction, with the
+instructions added. The request after the compaction misses the prompt cache.
 
 ### A tool
 
-The model starts a handoff with the built-in `handoff` tool:
+The model starts a compaction with the built-in `compact` tool:
 
 ```
-handoff { note }
+compact { note }
 ```
 
-The tool returns a tool result carrying `control.handoff`, the note
+The tool returns a tool result carrying `control.compact`, the note
 (`docs/tools.md`, "What a result carries"). The loop acts on that field, never
 on the tool's name, because tool identity is an opaque name. Any tool, built in
-or from an extension, may set `control.handoff`.
+or from an extension, may set `control.compact`.
 
-The `handoff` tool is always declared, because tool definitions never change
+The `compact` tool is always declared, because tool definitions never change
 during a session. It declares no effects, so it is never reviewed. Its
 description tells the model that the next request misses the prompt cache.
 
-A tool-started handoff makes no request for a note: the tool's argument is the
-note. The `handoff` tool's result has empty `content` and carries only
-`control.handoff`. The model never reads that result, because its context
+A tool-started compaction makes no request for a note: the tool's argument is the
+note. The `compact` tool's result has empty `content` and carries only
+`control.compact`. The model never reads that result, because its context
 restarts from the note.
 
-## What the model sees after a handoff
+## What the model sees after a compaction
 
 In order:
 
 1. The system prompt and tools.
 2. A new opening message, written from the current instruction files and date
-   (`docs/system-prompt.md`, "After a handoff").
-3. The context `session_start` hooks add, run with reason `handoff`, each
+   (`docs/system-prompt.md`, "After a compaction").
+3. The context `session_start` hooks add, run with reason `compaction`, each
    logged as `context_added` (`docs/extensions.md`, "The hook points").
 4. The person's earlier messages that still bind, oldest first, each in its
    own labelled block. Each block names the message as the person's earlier
@@ -115,43 +116,43 @@ In order:
    sees it with the same truncation rules. They are the `reviewer_kept`
    selection unchanged, and a context they leave over the trigger is handled
    by "Triggers" and "Overflow", as this turn's input is
-   (`docs/permissions.md`, "At a handoff"). A kept message from this turn
+   (`docs/permissions.md`, "At a compaction"). A kept message from this turn
    appears once, as part of this turn's input. With no reviewer in the session
    there is no selection, and nothing is carried here.
 5. This turn's input from the person and any steering messages applied in this
-   turn, verbatim, in a block labelled as the person's new message. A handoff
+   turn, verbatim, in a block labelled as the person's new message. A compaction
    between turns has none.
-6. The handoff note.
+6. The compaction note.
 7. A line Fiber writes listing the jobs still running, with each job's id and
    description, as the rewind note does (`docs/events.md`, "Rewind").
 8. A line saying the skills were reloaded from the previous context, then
    each skill in its own labelled block with its name, path and current text,
    in the order they were first loaded, once each (`docs/tools.md`, "Skills").
    A skill sent again counts as loaded in the
-   new context, so a later handoff sends it again too. An agent working under
-   a skill keeps it across a handoff without having to notice it was lost. A
-   loaded skill whose file is gone at the handoff is not sent again, and the
+   new context, so a later compaction sends it again too. An agent working under
+   a skill keeps it across a compaction without having to notice it was lost. A
+   loaded skill whose file is gone at the compaction is not sent again, and the
    new opening message's listing leaves it out. A loaded skill that cannot be
-   read at the handoff, for any other reason the `skill` tool would refuse it,
+   read at the compaction, for any other reason the `skill` tool would refuse it,
    is left out the same way, with a `notice` naming it and the reason. The
    standing deny keyed on the tool name is the exception: a resend is not a
    call of any tool, so that rule cannot match at a resend; the credential
    deny and the fail-closed answer for unreadable standing rules still apply.
 
-When a tool set `control.handoff`, the other calls in that step and their
+When a tool set `control.compact`, the other calls in that step and their
 results follow the note verbatim, because the model had not seen them. They go
 as one message holding those calls in call order, then one message holding
-their results in the same order. The call that set `control.handoff`, and its
+their results in the same order. The call that set `control.compact`, and its
 result, are not sent. When two tools in one step set it, their notes are joined
 in call order.
 
-The cut is the step boundary at which the handoff ran. Everything after that
+The cut is the step boundary at which the compaction ran. Everything after that
 boundary in the log follows as usual. This is the rule `docs/prompt-cache.md`
 builds on.
 
-The reviewer hands off at the same boundary. It keeps the person's messages
+The reviewer compacts at the same boundary. It keeps the person's messages
 that still bind, word for word, each with the reply it answered, and starts again from them
-(`docs/permissions.md`, "At a handoff").
+(`docs/permissions.md`, "At a compaction").
 
 ## Looking back
 
@@ -178,11 +179,11 @@ A single step's results can be large
 ([research/compaction/usage.md](../research/compaction/usage.md), section 6).
 That is why the last step's results are what gets moved out.
 
-## The handoff note
+## The compaction note
 
-An extension can write the note instead, through a `before_handoff` hook
+An extension can write the note instead, through a `before_compaction` hook
 (`docs/extensions.md`, "Hooks"). When one does, no note request is made, and
-`handoff_completed` carries the note's text and the extension's name.
+`compaction_completed` carries the note's text and the extension's name.
 
 The note is written so a fresh agent can continue the work. It:
 
@@ -193,31 +194,31 @@ The note is written so a fresh agent can continue the work. It:
   which of the person's messages each came from
 - leaves out secrets
 
-Instructions given to `/handoff` or the `handoff` driver command say what the
+Instructions given to `/compact` or the `compact` driver command say what the
 next stretch of work focuses on. The note has no fixed headings. The request
-for the note is the `handoff-note` section of `crates/loop/prompt/messages.md`,
-followed by `handoff-focus` when there are instructions
+for the note is the `compaction-note` section of `crates/loop/prompt/messages.md`,
+followed by `compaction-focus` when there are instructions
 (`docs/system-prompt.md`, "The texts").
 
 ## Recording
 
-A handoff happens inside a turn, as actions. The log is append-only
-(`docs/adr/0001-session-log-is-the-only-state-of-record.md`), so a handoff adds
+A compaction happens inside a turn, as actions. The log is append-only
+(`docs/adr/0001-session-log-is-the-only-state-of-record.md`), so a compaction adds
 lines and never rewrites earlier ones. The kinds are `docs/events.md`
-("Handoff").
+("Compaction").
 
-- `handoff_started { trigger }`, where `trigger` is `auto`, `person` or
+- `compaction_started { trigger }`, where `trigger` is `auto`, `person` or
   `overflow`. It is durable and written before the note request, so a
-  crash during a handoff can be read from the log. A tool-started handoff makes
-  no note request and writes no `handoff_started`.
+  crash during a compaction can be read from the log. A tool-started compaction makes
+  no note request and writes no `compaction_started`.
 - The note request is an ordinary assistant message action with its own
   `usage_recorded`.
-- `handoff_completed`, with the keys `docs/events.md` lists. `note`
+- `compaction_completed`, with the keys `docs/events.md` lists. `note`
   lists the `action_id`s of the actions that carry the note: the model's reply,
-  or the tool call or calls whose result set `control.handoff`, in call order.
+  or the tool call or calls whose result set `control.compact`, in call order.
   The model's note text is never copied into this line, because no line
   restates the content of an earlier line in the same turn. A
-  `before_handoff` hook's note is the exception: no earlier line holds it, so
+  `before_compaction` hook's note is the exception: no earlier line holds it, so
   `note_text` carries it.
 - `context_nudged { tokens, trigger_at }`. It is durable because the model saw
   it. The nudge's text is generated from this payload.
@@ -226,46 +227,46 @@ lines and never rewrites earlier ones. The kinds are `docs/events.md`
 a breaking change.
 
 - `failed` carries `error { code, message }`. A note request that fails follows
-  the normal retry rules. If it still fails, `handoff_completed` records the
+  the normal retry rules. If it still fails, `compaction_completed` records the
   failure, the context stays as it was, and the turn continues. An overflow
-  handoff is the exception: whatever failed, its turn fails with
+  compaction is the exception: whatever failed, its turn fails with
   `context_overflow`. A `blocking`
-  `session_start` hook that fails at the handoff ends it the same way, with
+  `session_start` hook that fails at the compaction ends it the same way, with
   code `hook_failed`. A `non-blocking` one only loses its context, with a
   `notice` (`docs/extensions.md`, "When a hook fails"). The automatic
   trigger does not fire again in that turn, so the turn goes on until it ends
   or the overflow rule applies.
 - `cancelled` means a person cancelled the turn while the note was being
-  written, by the note request or a `before_handoff` hook. The
+  written, by the note request or a `before_compaction` hook. The
   turn completes `interrupted` and the context stays as it was.
 
 ### Resume
 
-The handoff in force is the latest `handoff_completed` with outcome
+The compaction in force is the latest `compaction_completed` with outcome
 `completed` in the session's own log. For a session that began as a rewind or
-a fork, it can be one inherited by position through `forked_from`: a handoff at
+a fork, it can be one inherited by position through `forked_from`: a compaction at
 or before the point applies, and one after it does not (`docs/events.md`,
 "Rewind").
 
-A `handoff_started` with no `handoff_completed` means the process died during
-the handoff. The handoff did not take effect, and the context is what it was
+A `compaction_started` with no `compaction_completed` means the process died during
+the compaction. The compaction did not take effect, and the context is what it was
 before.
 
 ## What a person and a driver see
 
-Scrollback keeps everything. A handoff shortens what the model sees, never
+Scrollback keeps everything. A compaction shortens what the model sees, never
 what a person can scroll back to.
 
-The terminal draws a divider at each handoff, showing the trigger and the
+The terminal draws a divider at each compaction, showing the trigger and the
 context size before and after. The note can be expanded under the divider.
 
-A driver sees the same thing as events: `handoff_started`, the note request's
-actions, and `handoff_completed`.
+A driver sees the same thing as events: `compaction_started`, the note request's
+actions, and `compaction_completed`.
 
 ## Cost
 
-Every handoff makes the next request miss the prompt cache after the system
-prompt and tools. On token cost alone, handing off earlier is still cheaper,
+Every compaction makes the next request miss the prompt cache after the system
+prompt and tools. On token cost alone, compacting earlier is still cheaper,
 down to a floor where a fresh context is already near the trigger
 ([research/compaction/cost.md](../research/compaction/cost.md)).
 
@@ -273,7 +274,7 @@ Cost therefore cannot choose T; quality does. The owner's experience is that
 current models with 1 million token windows decay around 400,000 tokens, and
 the owner ruled that point the default. The default f of 0.7 keeps the trigger
 clear of a smaller window's limit, with room for a large final step, and the
-cost model supports handing off at that point too.
+cost model supports compacting at that point too.
 
 ## Evidence
 
@@ -284,7 +285,7 @@ cost model supports handing off at that point too.
 - [research/compaction/thresholds.md](../research/compaction/thresholds.md):
   price cliffs, context anxiety, and the reference agents' triggers.
 - [research/compaction/cost.md](../research/compaction/cost.md): how often each
-  threshold hands off, and what it costs.
+  threshold compacts, and what it costs.
 
 ## Related
 

@@ -645,7 +645,7 @@ For each model:
   missing or outside the package fails the load, under the same check
   `prompt` gets
 - context window, which every model declares: one without it is left out of
-  the model list with the notice `model_invalid`, because handoff and the
+  the model list with the notice `model_invalid`, because compaction and the
   size notices are measured against it
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")

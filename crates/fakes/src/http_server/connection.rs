@@ -329,7 +329,7 @@ impl Connection {
     }
 
     /// The stream, its bytes read past the head, and the shared state:
-    /// the CONNECT handoff's parts. The accept window's budget does not
+    /// the CONNECT transfer's parts. The accept window's budget does not
     /// follow it: the tunnel bounds each of its own operations.
     pub(crate) fn into_tunnel_parts(self) -> (TcpStream, Vec<u8>, Arc<Shared>) {
         let Self {
@@ -658,7 +658,7 @@ impl Connection {
     /// Hands the connection to a tunnel: the stream, blocking again,
     /// with the bytes read past the head.
     #[cfg(test)]
-    pub(crate) fn into_handoff(self) -> io::Result<(TcpStream, Vec<u8>)> {
+    pub(crate) fn into_transfer(self) -> io::Result<(TcpStream, Vec<u8>)> {
         self.stream.set_nonblocking(false)?;
         let Self { stream, ahead, .. } = self;
         Ok((stream, ahead.into()))

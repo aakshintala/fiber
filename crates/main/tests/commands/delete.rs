@@ -590,7 +590,7 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
         assert_eq!(
             kinds.iter().filter(|kind| **kind == prologue).count(),
             1,
-            "one {prologue} with no reload or handoff: {kinds:?}"
+            "one {prologue} with no reload or compaction: {kinds:?}"
         );
         let at = kinds
             .iter()

@@ -18,6 +18,7 @@ pub(crate) fn frame(rows: &[HookInfo], list: List, width: u16) -> Frame {
     };
     Frame {
         joins: Vec::new(),
+        chrome: None,
         title: "Hooks".to_owned(),
         command: "/hooks".to_owned(),
         rows: body,

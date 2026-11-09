@@ -110,12 +110,12 @@ pub struct Answers<'a> {
     pub flat: bool,
 }
 
-/// A handoff's band without its note: what the band row reads. The
+/// A compaction's band without its note: what the band row reads. The
 /// context sizes ride [`TurnBandState::Done`], so only a done band
 /// carries them.
 #[derive(Debug, Clone)]
-pub struct HandoffBand<'a> {
-    /// What the handoff runs at.
+pub struct CompactionBand<'a> {
+    /// What the compaction runs at.
     pub trigger: &'a str,
     /// The band's timestamp.
     pub ts: u64,
@@ -328,7 +328,7 @@ impl Answers<'_> {
     }
 }
 
-impl HandoffBand<'_> {
+impl CompactionBand<'_> {
     /// The cache key over the slot and every field.
     pub(crate) fn key(&self, slot: &str) -> u64 {
         let mut key = DefaultHasher::new();

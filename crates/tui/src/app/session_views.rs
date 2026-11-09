@@ -540,7 +540,7 @@ impl App {
                     Some(Sized {
                         total: context.tokens,
                         window: self.panel_state.window_for(session)?,
-                        trigger: self.panel_state.handoff(),
+                        trigger: self.panel_state.compaction(),
                     })
                 });
                 Some(context_view::frame(

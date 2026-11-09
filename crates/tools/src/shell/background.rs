@@ -465,7 +465,7 @@ fn hand_off(
     // plus what is left of the drive's deadline, saturated when the
     // deadline already passed. A keeper-hosted move keeps no drive
     // deadline (`docs/tools.md`, "The keeper"), so the receipt reads the
-    // wall the host handoff stored instead. Without a limit, or without a
+    // wall the host transfer stored instead. Without a limit, or without a
     // deadline in hand, there is nothing to name. Captured before the job's
     // thread takes the move, beside the saved members above.
     let stop = match (limit, moved.progress.timeout_at) {

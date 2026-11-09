@@ -79,10 +79,10 @@ const T=[
  ["Rules","rules",G,"/rules",0,"What you have allowed or refused, and where.",NOW],
  ["Tools","tools.*",G,"/tools",0,"Turn tools on or off.",NOW]]],
 ["Sessions",[
- ["Handoff","handoff.enabled",B,true,0,"Offer a fresh session when the context fills.",REL],
- ["Handoff at","handoff.window_fraction",N,"0.8",0,"Share of the context window that triggers the offer.",REL],
- ["Handoff size","handoff.tokens",N,"8000",0,"Tokens the handoff note may use.",REL],
- ["Handoff nudge","handoff.nudge",B,true,"project","Remind the agent before the handoff.",REL],
+ ["Compaction","compaction.enabled",B,true,0,"Offer a fresh session when the context fills.",REL],
+ ["Compaction at","compaction.window_fraction",N,"0.8",0,"Share of the context window that triggers the offer.",REL],
+ ["Compaction size","compaction.tokens",N,"8000",0,"Tokens the compaction note may use.",REL],
+ ["Compaction nudge","compaction.nudge",B,true,"project","Remind the agent before the compaction.",REL],
  ["Budget","budget.usd",N,"unset",0,"Stop a session that spends past this.",REL],
  ["Skills","skills.disabled",G,"/skills",0,"Turn skills on or off.",NEXT],
  ["Repository extensions","repository_extensions",E,"ask",["ask","allow","refuse"],"What to do when a repository ships extensions.",REL],
@@ -101,7 +101,7 @@ const T=[
  ["First retry delay","retry.initial_delay_ms",N,"500",0,"Milliseconds.",REL],
  ["Longest retry delay","retry.max_delay_ms",N,"30000",0,"Milliseconds.",REL],
  ["Diagnostics level","diagnostics.level",E,"info",["error","warn","info","debug"],"How much Fiber logs.","Applies when each process starts again."]]]];
-const LAYERS={"sandbox.enabled":["global","project","repository"],"handoff.nudge":["global","project","repository"]};
+const LAYERS={"sandbox.enabled":["global","project","repository"],"compaction.nudge":["global","project","repository"]};
 let tab=0,sel=0,q=null,msg='',edit=null;
 const $=id=>document.getElementById(id);
 function rows(){ if(q===null) return T[tab][1].map(r=>[tab,r]);
