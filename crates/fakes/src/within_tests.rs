@@ -89,3 +89,12 @@ fn a_non_string_panic_reports_a_fixed_line() {
     assert!(text.contains("the wait for a turn line panicked"), "{text}");
     assert!(text.contains("a non-string panic"), "{text}");
 }
+
+#[test]
+fn the_outer_bound_is_twice_the_floor() {
+    assert_eq!(
+        WHOLE_SUBSYSTEM_WITHIN,
+        Duration::from_secs(2 * MUST_SUCCEED_WITHIN.as_secs())
+    );
+    assert!(WHOLE_SUBSYSTEM_WITHIN > MUST_SUCCEED_WITHIN);
+}
