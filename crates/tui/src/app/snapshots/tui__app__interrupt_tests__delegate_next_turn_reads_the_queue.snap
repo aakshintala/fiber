@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/app/interrupt_tests.rs
-assertion_line: 836
 expression: next
 ---
   Delegate  ◆ task j_1                                                                   Esc returns
