@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use contract::feedback::{FrameShape, RING_DEPTH, ShapeColor, ShapeKind};
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId, clock};
 use doors::failure;
@@ -31,6 +32,9 @@ pub struct ReportContext<'a> {
     pub doctor: &'a dyn Fn() -> Result<String, FeedbackError>,
     /// The diagnostics section for the selected session, or none.
     pub diagnostics: &'a dyn Fn(Option<&SessionId>) -> String,
+    /// The screen's captured frame shapes, oldest first: the ring's
+    /// snapshot the TUI hands over, empty on the headless door.
+    pub frames: &'a [FrameShape],
 }
 
 /// Why a feedback write failed: one sentence the door prints.
@@ -414,6 +418,130 @@ pub fn diagnostics(home: &Path, clock: &dyn clock::Clock, session: Option<&Sessi
     out
 }
 
+/// One shape colour's wire name: the lowercase ANSI name, an 8-bit
+/// index, or a truecolour triple. Two distinct colours never share a
+/// name, so Red and Blue can never encode identically.
+fn shape_color_name(color: ShapeColor) -> String {
+    match color {
+        ShapeColor::Reset => "reset".to_owned(),
+        ShapeColor::Black => "black".to_owned(),
+        ShapeColor::Red => "red".to_owned(),
+        ShapeColor::Green => "green".to_owned(),
+        ShapeColor::Yellow => "yellow".to_owned(),
+        ShapeColor::Blue => "blue".to_owned(),
+        ShapeColor::Magenta => "magenta".to_owned(),
+        ShapeColor::Cyan => "cyan".to_owned(),
+        ShapeColor::Gray => "gray".to_owned(),
+        ShapeColor::DarkGray => "darkgray".to_owned(),
+        ShapeColor::LightRed => "lightred".to_owned(),
+        ShapeColor::LightGreen => "lightgreen".to_owned(),
+        ShapeColor::LightYellow => "lightyellow".to_owned(),
+        ShapeColor::LightBlue => "lightblue".to_owned(),
+        ShapeColor::LightMagenta => "lightmagenta".to_owned(),
+        ShapeColor::LightCyan => "lightcyan".to_owned(),
+        ShapeColor::White => "white".to_owned(),
+        ShapeColor::Indexed(index) => format!("indexed({index})"),
+        ShapeColor::Rgb(red, green, blue) => format!("rgb({red},{green},{blue})"),
+    }
+}
+
+/// One encoded cell's wire character: one glyph-free character per
+/// cell over the six-character alphabet.
+fn shape_char(kind: ShapeKind, wide: bool) -> char {
+    match (kind, wide) {
+        (ShapeKind::Blank, false) => '.',
+        (ShapeKind::Blank, true) => ':',
+        (ShapeKind::Content, false) => '#',
+        (ShapeKind::Content, true) => 'W',
+        (ShapeKind::Continuation, false) => '>',
+        (ShapeKind::Continuation, true) => '>',
+        (ShapeKind::Exempt, false) => '~',
+        (ShapeKind::Exempt, true) => '~',
+    }
+}
+
+/// One frame's palette line: each entry's id with its foreground,
+/// background, underline colour and modifier bits.
+fn palette_line(frame: &FrameShape) -> String {
+    let mut line = String::from("palette");
+    for (id, style) in frame.palette.iter().enumerate() {
+        line.push_str(&format!(
+            " {id}:fg={},bg={},ul={},mods={}",
+            shape_color_name(style.fg),
+            shape_color_name(style.bg),
+            shape_color_name(style.ul),
+            style.mods,
+        ));
+    }
+    line.push('\n');
+    line
+}
+
+/// One frame's shape and style lines: one quoted line per row, one
+/// glyph-free character and one decimal palette id per cell. An id
+/// outside the frame's own palette falls back to the base slot: every
+/// id the ring assigns is valid by construction, so the fallback only
+/// guards a hand-built snapshot.
+fn frame_lines(frame: &FrameShape) -> String {
+    let mut out = String::new();
+    for row in &frame.rows {
+        let mut shape = String::from("shape \"");
+        for cell in row.cells() {
+            shape.push(shape_char(cell.kind(), cell.wide()));
+        }
+        shape.push_str("\"\n");
+        out.push_str(&shape);
+        let ids: Vec<String> = row
+            .cells()
+            .iter()
+            .map(|cell| {
+                if frame.palette.get(cell.style()).is_some() {
+                    cell.style().to_string()
+                } else {
+                    0.to_string()
+                }
+            })
+            .collect();
+        out.push_str(&format!("style \"{}\"\n", ids.join(",")));
+    }
+    out
+}
+
+/// The report's frame-shapes section, inside Diagnostics after the hub
+/// lines: the whole ring oldest first, each frame with its own palette,
+/// or the empty-ring notice. Saved file only, never the issue link.
+fn shapes_section(frames: &[FrameShape]) -> String {
+    let mut out = String::from("### Frame shapes\n\n");
+    if frames.is_empty() {
+        out.push_str("No frames captured on this machine.\n\n");
+        return out;
+    }
+    let skip = frames.len().saturating_sub(RING_DEPTH);
+    let kept: Vec<&FrameShape> = frames.iter().skip(skip).collect();
+    let count = kept.len();
+    out.push_str(&format!(
+        "{} {}, oldest first. One line per row: shape, then style ids. The section is ASCII and carries no glyphs.\n\n",
+        count,
+        if count == 1 { "frame" } else { "frames" },
+    ));
+    for (at, frame) in kept.iter().enumerate() {
+        out.push_str(&palette_line(frame));
+        let top = match frame.top {
+            Some(top) => format!("Some({top})"),
+            None => "none".to_owned(),
+        };
+        out.push_str(&format!(
+            "frame {}/{count}, {}x{}, top={top}, has_new={}\n",
+            at.saturating_add(1),
+            frame.width,
+            frame.height,
+            frame.has_new,
+        ));
+        out.push_str(&frame_lines(frame));
+    }
+    out
+}
+
 /// Builds the report in memory, writes it once, and returns its path
 /// with the issue link. The link carries the report without its
 /// Diagnostics, which only the file holds. The file is
@@ -439,7 +567,11 @@ pub fn write(
         &doctor,
     );
     let link = issue_link(&title(description), &report, description);
-    let report = format!("{report}\n{}", (ctx.diagnostics)(session));
+    let report = format!(
+        "{report}\n{}{}",
+        (ctx.diagnostics)(session),
+        shapes_section(ctx.frames)
+    );
     let stamp = clock::wall_ms(ctx.clock.wall());
     let mut path = ctx.cwd.join(format!("fiber-feedback-{stamp}.md"));
     for bump in 2.. {

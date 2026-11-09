@@ -112,6 +112,8 @@
 //!   base with REV raises `WAITS`, `BUDGET` or `CLEANUP`, or adds a
 //!   `Deadline::after` of 60 s or more in a test — except the known-short
 //!   bounds (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals below 60 s — without `// ruling: #N`
+//! - `narrating-comments --base REV`: reports ruled history phrases on added
+//!   source comment lines (`docs/code-quality.md`, "Comments")
 //! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
 //!   `<path> <maximum>` per line, and fails when a file under
 //!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
@@ -152,6 +154,7 @@ mod logo;
 mod models_dev;
 mod models_dev_table;
 mod must_succeed;
+mod narrating_comments;
 mod nightly_fixture;
 mod nightly_pair;
 mod rules;
@@ -501,6 +504,14 @@ fn run(args: &[String]) -> Result<bool, String> {
         "budget-bounds" => {
             let base = flag(rest, "--base")?;
             report("budget-bounds", &budget_bounds::budget_bounds(&base)?, "ok")
+        }
+        "narrating-comments" => {
+            let base = flag(rest, "--base")?;
+            report(
+                "narrating-comments",
+                &narrating_comments::narrating_comments(&base)?,
+                "ok",
+            )
         }
         "screen-ratchet" => {
             let mut input = String::new();

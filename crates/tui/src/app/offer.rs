@@ -18,6 +18,10 @@ impl App {
             return None;
         }
         if *key == Key::Esc {
+            // Closing the source view retires its ask.
+            if let Some(asked) = self.offer.source_asked() {
+                self.outbox.settled(&asked);
+            }
             if !self.offer.close_source() {
                 self.offer.put_aside();
             }
@@ -72,10 +76,20 @@ impl App {
 
     /// A click on one of the offer's targets.
     pub(super) fn offer_click(&mut self, spot: Spot) -> Effect {
-        match self.offer.click(spot) {
+        // Clicking the source view shut retires its ask.
+        let asked = if matches!(spot, Spot::Close) {
+            self.offer.source_asked()
+        } else {
+            None
+        };
+        let effect = match self.offer.click(spot) {
             OfferKey::Handled | OfferKey::Source => Effect::None,
             OfferKey::Send => self.send_offer(),
+        };
+        if let Some(asked) = asked {
+            self.outbox.settled(&asked);
         }
+        effect
     }
 
     fn ask_offered_file(&mut self, action: FileAction) -> Effect {
@@ -86,8 +100,15 @@ impl App {
             return Effect::None;
         };
         let id = mint();
+        let retired = self.offer.source_asked();
         let line = self.offer.step_file(action, &id, &session);
         if let Some(line) = line {
+            // Stepping retires the old ask: its wait settles before the
+            // new one registers.
+            if let Some(retired) = retired {
+                self.outbox.settled(&retired);
+            }
+            self.outbox.wait(&id, super::Waiting::OfferFile);
             return Effect::Send(vec![line]);
         }
         if action == FileAction::Open {
@@ -109,9 +130,16 @@ impl App {
             return Effect::None;
         };
         let id = mint();
+        let asked = self.offer.source_asked();
         let Some(line) = self.offer.answer(&id, &session) else {
             return Effect::None;
         };
+        // Answering drops the source view: its retired ask settles
+        // before the reply registers.
+        if let Some(asked) = asked {
+            self.outbox.settled(&asked);
+        }
+        self.outbox.wait(&id, super::Waiting::Reply);
         self.outbox
             .pending
             .insert(id, (Kind::Reply, Draft::default()));
