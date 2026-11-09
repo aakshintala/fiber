@@ -903,6 +903,9 @@ pub(crate) struct SampleOpts {
     pub import_pi: Vec<String>,
     /// `--synthetic DIR`, repeatable: committed synthetic fixture dirs.
     pub synthetic: Vec<String>,
+    /// `--reviewer-denies DIR`, repeatable: session dirs whose reviewer
+    /// denies emit unlabelled lines.
+    pub reviewer_denies: Vec<String>,
     /// `--scan FILE`: the final-set scan over the committed file.
     pub scan: Option<String>,
 }
@@ -971,6 +974,9 @@ pub(crate) fn parse_sample_flags(args: &[String]) -> Result<(SampleOpts, Vec<Str
         } else if arg == "--synthetic" {
             opts.synthetic
                 .push(flag_value(args, &mut at, "--synthetic")?);
+        } else if arg == "--reviewer-denies" {
+            opts.reviewer_denies
+                .push(flag_value(args, &mut at, "--reviewer-denies")?);
         } else if arg == "--scan" {
             opts.scan = Some(flag_value(args, &mut at, "--scan")?);
         } else {

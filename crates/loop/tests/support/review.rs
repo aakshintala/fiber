@@ -25,13 +25,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use super::reviewer_eval::{
-    Allowlist, FoldedFile, ForeignInput, MAX_SAMPLED, SampleOpts, ScrubCtx, Source, SourceKind,
-    drop_kind, emit_line, foreign_to_label_input, parse_claude_file, parse_line, parse_pi_file,
-    reviewed_items, sample, scan_line,
+    Allowlist, FoldedFile, ForeignInput, MAX_SAMPLED, RecordedVerdict, SampleOpts, ScrubCtx,
+    Source, SourceKind, drop_kind, emit_line, foreign_to_label_input, parse_claude_file,
+    parse_line, parse_pi_file, reviewed_items, sample, scan_line,
 };
 use contract::events::{
-    AskStep, CompactionCompleted, DecidedBy, Event, EventKind, Outcome, ReviewedCall, ReviewerUse,
-    ToolCallRequested, ToolCallStarted,
+    AskStep, CompactionCompleted, DecidedBy, Decision, Event, EventKind, Outcome,
+    PermissionResolved, ReviewedCall, ReviewerUse, ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -1744,4 +1744,175 @@ fn push_foreign(
         entries.push(emit_line(entry)?);
     }
     Ok(())
+}
+
+/// Emits one reviewer deny's line: the denied call's action id, the
+/// sampled source at the deny's seq, the reviewed prefix as of the deny,
+/// null labels and the recorded verdict. A deny for an action with no
+/// indexed request, or with neither a start nor denial-carried effects,
+/// is unreplayable and excluded; a raw entry the closed classes match is
+/// dropped loudly.
+fn emit_deny(
+    emit: &EmitCtx<'_>,
+    envelope: &contract::Envelope,
+    id: &ActionId,
+    resolved: &PermissionResolved,
+    lines: &mut Vec<String>,
+    dropped: &mut Vec<String>,
+) -> Result<(), String> {
+    let Some(indexed) = emit.index.calls.get(&id.0) else {
+        return Ok(());
+    };
+    let Some(started) = indexed.started.clone() else {
+        return Ok(());
+    };
+    let arguments = match started.arguments.clone() {
+        Some(rewritten) => Value::Object(rewritten),
+        None => match indexed.call.arguments.clone() {
+            Value::Object(arguments) => Value::Object(arguments),
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Array(_) => Value::Object(Map::new()),
+        },
+    };
+    let paths = started.declared.paths.clone().unwrap_or_default();
+    if let Some(kind) = drop_kind(&arguments, &paths) {
+        dropped.push(format!("DROP {} id={}", kind.name(), id.0));
+        return Ok(());
+    }
+    let snapshot = reviewed_items(emit.reviewed);
+    let mut entry = foreign_to_label_input(ForeignInput {
+        id: &id.0,
+        tool: &indexed.call.name,
+        arguments: &arguments,
+        declared: &started.declared,
+        hosts: None,
+        reviewed: snapshot,
+        workspace: emit.workspace,
+        added_folders: emit.added_folders,
+        source: Source {
+            kind: SourceKind::Sampled,
+            session: emit.session.to_owned(),
+            seq: envelope.seq.map(|seq| seq.0),
+        },
+        ctx: emit.ctx,
+    });
+    entry.recorded = Some(RecordedVerdict {
+        decision: Decision::Deny,
+        reason: resolved.reason.clone(),
+        reviewer: resolved.reviewer.clone(),
+    });
+    let line = emit_line(&entry).map_err(|error| {
+        format!(
+            "review: {}: cannot print call {}: {error}",
+            emit.dir.display(),
+            id.0,
+        )
+    })?;
+    lines.push(line);
+    Ok(())
+}
+
+/// Folds one session directory's chain through the reviewer's renderer
+/// and emits one unlabelled line per reviewer deny at the deny's
+/// position: allows, person and other native decisions emit nothing, and
+/// the first deny per action id wins. The fold shares the sampler's
+/// renderer, index and drop path; unlike the sampler it applies no cap.
+fn fold_denies_and_emit(
+    dir: &Path,
+    ctx: &ScrubCtx,
+    lines: &mut Vec<String>,
+    dropped: &mut Vec<String>,
+) -> Result<(), String> {
+    let (workspace, chain) = load_chain(dir)?;
+    let index = Driver::index_chain(&chain)?;
+    let session = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut reviewed: Vec<Reviewed> = Vec::new();
+    let mut asks = PendingAsks::default();
+    let mut added_folders: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut summary = false;
+    for (position, item) in chain.iter().enumerate() {
+        let envelope = &item.envelope;
+        let event = Event::from_envelope(envelope).map_err(|error| {
+            format!(
+                "review: {} {}: a {} payload that does not parse: {error}",
+                item.dir.display(),
+                describe(envelope, position),
+                envelope.kind().name(),
+            )
+        })?;
+        let Some(event) = event else {
+            continue;
+        };
+        if r#loop::summary_skips(&mut summary, &event) {
+            continue;
+        }
+        if let Event::DirectoryAdded(added) = &event {
+            added_folders.push(added.path.clone());
+        }
+        render_reviewed(
+            &mut reviewed,
+            &event,
+            envelope.action_id.as_ref(),
+            envelope.seq,
+            &mut asks,
+        );
+        if let Event::PermissionResolved(resolved) = event
+            && resolved.decision == Decision::Deny
+            && resolved.decided_by == DecidedBy::Reviewer
+            && let Some(action) = envelope.action_id.clone()
+            && seen.insert(action.0.clone())
+        {
+            let emit = EmitCtx {
+                dir,
+                session: &session,
+                workspace: &workspace,
+                ctx,
+                index: &index,
+                reviewed: &reviewed,
+                added_folders: &added_folders,
+            };
+            emit_deny(&emit, envelope, &action, &resolved, lines, dropped)?;
+        }
+    }
+    Ok(())
+}
+
+/// Runs the reviewer-deny emission: one unlabelled sampled-kind line per
+/// reviewer deny in the session directories, unsampled and uncapped, with
+/// the recorded verdict beside the null labels. Every history segment's
+/// workspace passes the closed allowlist before anything is emitted.
+pub(crate) fn run_reviewer_denies(
+    dirs: &[String],
+    opts: &SampleOpts,
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = scrub_ctx(opts);
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    for dir in dirs {
+        let dir = Path::new(dir);
+        for workspace in segment_workspaces(dir)? {
+            Allowlist::check_chain(std::slice::from_ref(&workspace))?;
+        }
+        fold_denies_and_emit(dir, &ctx, &mut entries, &mut dropped)?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
+    })
 }
