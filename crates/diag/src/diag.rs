@@ -129,18 +129,23 @@ struct AllocMetrics {
     live_delta_bytes: i64,
 }
 
+/// The one subject key of an `op_timing` line, serialized without a tag.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum TimingFields<'a> {
+    Tool { tool: &'a str },
+    Job { job: &'a str },
+}
+
 /// The `data` of an `op_timing` line: the operation, whole milliseconds,
-/// the tool's name on a tool's timers, and the job id on a job's timers.
-/// One subject only: a line carries a tool or a job, never both. No other
+/// and one subject key, either the tool's name or the job id. No other
 /// field is recorded, and never an argument, a path or any content.
 #[derive(serde::Serialize)]
 struct TimingData<'a> {
     op: Op,
     ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    job: Option<&'a str>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    subject: Option<TimingFields<'a>>,
     /// The operation's allocation metrics, present as one unit: an
     /// `alloc-stats` build only, and only when the timer ends on the
     /// thread that started it. Otherwise absent, never a partial set.
@@ -660,14 +665,14 @@ impl Drop for Timer {
             data: Some(TimingData {
                 op: self.op,
                 ms,
-                tool: match &self.subject {
-                    Some(TimingSubject::Tool(tool)) => Some(tool.as_str()),
-                    _ => None,
-                },
-                job: match &self.subject {
-                    Some(TimingSubject::Job(job)) => Some(job.0.as_str()),
-                    _ => None,
-                },
+                subject: self.subject.as_ref().map(|subject| match subject {
+                    TimingSubject::Tool(tool) => TimingFields::Tool {
+                        tool: tool.as_str(),
+                    },
+                    TimingSubject::Job(job) => TimingFields::Job {
+                        job: job.0.as_str(),
+                    },
+                }),
                 #[cfg(feature = "alloc-stats")]
                 alloc,
             }),
