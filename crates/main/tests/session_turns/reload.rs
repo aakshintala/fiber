@@ -70,7 +70,8 @@ impl Session {
             let text = drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
             tx.send(text).unwrap();
         });
-        first_line(setup.deadline, &lines);
+        let diag = Diag::new(Arc::clone(&stderr_snapshot), session_dir(&setup, &id));
+        first_line(setup.deadline, &lines, Some(&diag));
         let mut client = Socket::connect(setup.deadline, &setup.session_socket(&id));
         client.set_diag(Diag::new(stderr_snapshot, session_dir(&setup, &id)));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
@@ -247,6 +248,71 @@ fn extension(setup: &Setup, init: &str) {
     .unwrap()
     .commit()
     .unwrap();
+}
+
+/// `first_line` expiry carries the #3325 dump when it holds a [`Diag`]:
+/// no live child, an empty channel on a zero deadline, a pre-filled
+/// stderr snapshot and a fixture session dir.
+#[test]
+fn first_line_expiry_dumps_stderr_and_log_tail() {
+    // The sender stays alive so the zero-deadline wait expires instead
+    // of reading a hang-up.
+    let (_held, lines) = mpsc::channel::<String>();
+    let marker = "stderr-marker-fiber-started-expiry";
+    let stderr = Arc::new(Mutex::new(marker.to_owned()));
+    let dir = fakes::TempDir::new("fiber-started-expiry");
+    fs::write(
+        dir.path().join("events.jsonl"),
+        "{\"kind\":\"session_started\",\"seq\":1}\n",
+    )
+    .unwrap();
+    let diag = Diag::new(Arc::clone(&stderr), dir.path().to_path_buf());
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        first_line(Deadline::after(Duration::ZERO), &lines, Some(&diag));
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains("waited until the deadline for fiber_started"),
+        "{message}"
+    );
+    assert!(message.contains("fiber stderr:"), "{message}");
+    assert!(message.contains(marker), "{message}");
+    assert!(
+        message.contains("session log tail (events.jsonl, last 20 lines):"),
+        "{message}"
+    );
+    assert!(
+        message.contains("\"kind\":\"session_started\""),
+        "{message}"
+    );
+    // Without a `Diag` the expiry keeps today's bare text, with no dump.
+    let bare = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        first_line(Deadline::after(Duration::ZERO), &lines, None);
+    }))
+    .unwrap_err();
+    let bare = bare.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        bare.contains("waited until the deadline for fiber_started"),
+        "{bare}"
+    );
+    assert!(!bare.contains("fiber stderr:"), "{bare}");
+    // A hung-up sender keeps today's rendering too, dump or none.
+    let (tx, hung) = mpsc::channel::<String>();
+    drop(tx);
+    let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        first_line(Deadline::after(Duration::from_secs(10)), &hung, Some(&diag));
+    }))
+    .unwrap_err();
+    let closed = closed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        closed.contains("waited until the deadline for fiber_started"),
+        "{closed}"
+    );
+    assert!(!closed.contains("fiber stderr:"), "{closed}");
 }
 
 #[test]

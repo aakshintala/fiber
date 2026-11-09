@@ -1452,7 +1452,7 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     setup.provider(&server);
     server.hold();
     let running = start(&setup, &["ask", "hi"]);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     assert_eq!(started["kind"], "session_started");
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
@@ -2212,7 +2212,7 @@ fn a_live_resume_with_a_new_label_switches_before_the_prompt() {
     );
     // The socket is bound before the session's first stdout line, so the
     // line is the signal the socket accepts.
-    first_line(setup.deadline, &running.stdout);
+    first_line(setup.deadline, &running.stdout, None);
     let socket = support::Socket::connect(setup.deadline, &setup.home().join("run").join(&id));
 
     let run =
@@ -2283,7 +2283,7 @@ fn a_live_resume_with_an_absent_label_is_rejected() {
     );
     // The socket is bound before the session's first stdout line, so the
     // line is the signal the socket accepts.
-    first_line(setup.deadline, &running.stdout);
+    first_line(setup.deadline, &running.stdout, None);
     let socket = support::Socket::connect(setup.deadline, &setup.home().join("run").join(&id));
 
     let run =

@@ -231,7 +231,7 @@ impl Interactive {
                 }
             }
         });
-        support::first_line(setup.deadline, &lines);
+        support::first_line(setup.deadline, &lines, None);
         let client = support::Socket::connect(setup.deadline, &setup.home().join("run").join(id));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
         // `clients` is written when the `full` connection attaches, with no

@@ -62,7 +62,7 @@ fn a_command_read_before_the_session_ends_is_answered_before_end_of_file() {
             drop(line);
         }
     });
-    let started = first_line(setup.deadline, &stdout_lines);
+    let started = first_line(setup.deadline, &stdout_lines, None);
     assert_eq!(started["kind"], "session_started");
 
     fakes::fifo(receipt(&setup.home()));

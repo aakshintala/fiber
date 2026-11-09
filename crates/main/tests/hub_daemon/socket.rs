@@ -276,7 +276,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     assert_eq!(started["kind"], "session_started");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
@@ -419,7 +419,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline),
@@ -516,7 +516,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline),
@@ -677,7 +677,7 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline),
@@ -731,7 +731,7 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline),
@@ -826,7 +826,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     .unwrap();
     let id = "s_0123456789abcdef";
     let running = start_session(&setup, id);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     assert_eq!(started["kind"], "session_started");
     assert_eq!(started["session_id"], id);
 
@@ -1128,7 +1128,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     .unwrap();
     let id = "s_0123456789abcdef";
     let running = start_session(&setup, id);
-    let started = first_line(setup.deadline, &running.stdout);
+    let started = first_line(setup.deadline, &running.stdout, None);
     assert_eq!(started["kind"], "session_started");
 
     let socket = setup.home().join("run").join(id);
