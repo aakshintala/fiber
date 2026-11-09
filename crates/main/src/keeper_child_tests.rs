@@ -301,7 +301,7 @@ fn await_crashed_socket(path: &std::path::Path) -> UnixStream {
 
 #[test]
 fn keeper_crashed_socket_stop_ends_the_job_and_exits() {
-    // docs/invocation.md, "Commands and flags": the frozen stop line on a
+    // `docs/invocation.md`, "Commands and flags": the frozen stop line on a
     // crashed session's socket ends every job as a shutdown does, then the
     // keeper exits, unlinking the socket and releasing the lock.
     let id = SessionId("s_4123456789abcdef".into());
@@ -312,7 +312,7 @@ fn keeper_crashed_socket_stop_ends_the_job_and_exits() {
     crash(&mut keeper);
     let socket = crashed_socket(&keeper);
     let mut stop = await_crashed_socket(&socket);
-    // The exact frozen bytes (docs/invocation.md, "Commands and flags").
+    // The exact frozen bytes (`docs/invocation.md`, "Commands and flags").
     stop.write_all(b"{\"shutdown\":true}\n")
         .expect("frozen stop");
     // The job's reap is the end signal: the stop landed shutdown-style.

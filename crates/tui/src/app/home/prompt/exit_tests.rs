@@ -1529,7 +1529,7 @@ fn close_all_with_no_live_session_but_a_keeper_opens_the_question() {
     let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": no live session, one keeper of a gone
+    // `docs/tui.md`, "Quit": no live session, one keeper of a gone
     // session; no notice, the question opens instead.
     assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
     assert_eq!(app.notice(), None);
@@ -1547,7 +1547,7 @@ fn close_all_counts_keepers_beside_sessions() {
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": one live session working, two keepers.
+    // `docs/tui.md`, "Quit": one live session working, two keepers.
     assert_eq!(app.close_all_question(), Some((1, 1, 0, 2)));
     deadline.recv_or_fail(&first_probed, "first keeper read the probe");
     deadline.recv_or_fail(&second_probed, "second keeper read the probe");

@@ -522,7 +522,7 @@ fn the_bar_stays_on_enter_in_close_all() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     draw(&app, area, &mut buf, &mut Vec::new());
-    // Exactly one barred row: Enter's (docs/tui.md, "Quit": "with
+    // Exactly one barred row: Enter's (`docs/tui.md`, "Quit": "with
     // Enter's focused").
     let barred = (0..24)
         .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::theme::Role::Accent.color()))

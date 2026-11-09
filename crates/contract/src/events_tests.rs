@@ -2427,7 +2427,7 @@ fn a_credential_switch_result_writes_and_reads_only_its_provider() {
 
 #[test]
 fn a_stop_result_with_keepers_writes_both_counts_and_reads_an_old_shape_as_zero() {
-    // docs/invocation.md, "Commands and flags": `stop` answers both counts.
+    // `docs/invocation.md`, "Commands and flags": `stop` answers both counts.
     // Old hubs omit `keepers_stopped`, which reads as zero.
     let result = CommandResult::Stop {
         sessions_stopped: 3,
