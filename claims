@@ -351,3 +351,4 @@ crates/tui/src/offer/source.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBo
 crates/tui/src/steering.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/items.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/offer.rs	fiber-3696	plan	2026-11-09T03:25:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/open_at.rs	fiber-1732	grant	2026-11-09T03:33:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/wire/1732-parts-4-5	
