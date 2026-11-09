@@ -15,12 +15,13 @@
 
 use crate::support;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::provider::Input;
 use contract::shapes::{Effect, Failure, Tokens};
-use fakes::{Scripted, ScriptedProvider};
+use contract::{ErrorCode, ThinkingLevel};
+use fakes::{Scripted, ScriptedProvider, call_usage};
 use support::review_sweep::*;
 
 fn entry_json(id: &str, label: &str) -> String {
@@ -99,13 +100,23 @@ fn clock() -> Arc<dyn contract::clock::Clock> {
     fakes::clock::FakeClock::new()
 }
 
+fn empty_model() -> SweepModel {
+    SweepModel {
+        reference: "sweep/reviewer".to_owned(),
+        cost: None,
+        subscription: false,
+        thinking_levels: Vec::new(),
+    }
+}
+
 fn drive_on(
     script: Vec<Scripted>,
     entry: &Entry,
+    model: &SweepModel,
 ) -> (Outcome, Vec<contract::provider::ModelRequest>) {
     let scripted = Arc::new(ScriptedProvider::new(script));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
-    let outcome = drive(entry, &provider, &clock());
+    let outcome = drive(entry, &provider, &clock(), model);
     (outcome, scripted.requests())
 }
 
@@ -138,12 +149,67 @@ fn parses_sweep_with_repeated_models_and_a_set() {
     ])
     .unwrap();
     match mode {
-        Mode::Sweep { models, set } => {
+        Mode::Sweep { models, set, runs } => {
             assert_eq!(models, vec!["alpha-1".to_owned(), "beta-2".to_owned()]);
             assert_eq!(set, std::path::PathBuf::from("calls.jsonl"));
+            assert_eq!(runs, 3);
         }
         Mode::Check { .. } => panic!("a sweep parses as a sweep"),
     }
+}
+
+#[test]
+fn parses_an_explicit_runs_count() {
+    let mode = parse_args(&[
+        "review_sweep".to_owned(),
+        "--models".to_owned(),
+        "alpha-1".to_owned(),
+        "--set".to_owned(),
+        "calls.jsonl".to_owned(),
+        "--runs".to_owned(),
+        "5".to_owned(),
+    ])
+    .unwrap();
+    match mode {
+        Mode::Sweep { runs, .. } => assert_eq!(runs, 5),
+        Mode::Check { .. } => panic!("a sweep parses as a sweep"),
+    }
+}
+
+#[test]
+fn rejects_a_bad_runs_count_naming_the_flag() {
+    for argv in [
+        vec!["review_sweep", "--models", "m", "--set", "s", "--runs"],
+        vec![
+            "review_sweep",
+            "--models",
+            "m",
+            "--set",
+            "s",
+            "--runs",
+            "many",
+        ],
+        vec!["review_sweep", "--models", "m", "--set", "s", "--runs", "0"],
+    ] {
+        let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
+        let error = parse_args(&argv).unwrap_err();
+        assert!(error.contains("--runs"), "{error}");
+    }
+}
+
+#[test]
+fn the_call_cap_holds_the_planned_sweep() {
+    check_call_cap(2, 24, 3).unwrap();
+    check_call_cap(1, 17, 10).unwrap();
+}
+
+#[test]
+fn the_call_cap_rejects_a_sweep_above_170_naming_runs() {
+    let error = check_call_cap(2, 24, 4).unwrap_err();
+    assert!(error.contains("--runs"), "{error}");
+    assert!(error.contains("--models"), "{error}");
+    assert!(error.contains("192"), "{error}");
+    assert!(error.contains("170"), "{error}");
 }
 
 #[test]
@@ -372,7 +438,7 @@ fn a_reply_keeps_its_words_and_strips_the_prefix_for_shown() {
 #[test]
 fn an_allow_at_stage_one_sends_the_stored_prefix() {
     let entry = synthetic_entry("a_01", Some(Label::Pass));
-    let (outcome, requests) = drive_on(vec![Scripted::text("allow")], &entry);
+    let (outcome, requests) = drive_on(vec![Scripted::text("allow")], &entry, &empty_model());
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
         Outcome::Errored(errored) => panic!("an allow is not an error: {}", errored.reason),
@@ -401,6 +467,7 @@ fn check_then_allow_runs_stage_two_and_folds_both_purposes() {
     let (outcome, requests) = drive_on(
         vec![Scripted::text("check"), Scripted::text("allow")],
         &entry,
+        &empty_model(),
     );
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
@@ -422,6 +489,7 @@ fn check_then_block_denies_at_stage_two() {
             Scripted::text("block: it writes outside the workspace"),
         ],
         &entry,
+        &empty_model(),
     );
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
@@ -440,7 +508,7 @@ fn a_provider_failure_is_an_error_outcome() {
         provider: None,
     });
     let entry = synthetic_entry("a_01", Some(Label::Block));
-    let (outcome, _) = drive_on(vec![failure], &entry);
+    let (outcome, _) = drive_on(vec![failure], &entry, &empty_model());
     match outcome {
         Outcome::Errored(errored) => assert!(
             errored.reason.contains("the provider failed"),
@@ -454,8 +522,11 @@ fn a_provider_failure_is_an_error_outcome() {
 #[test]
 fn two_unreadable_verdicts_are_an_error_outcome() {
     let entry = synthetic_entry("a_01", Some(Label::Block));
-    let (outcome, requests) =
-        drive_on(vec![Scripted::text("huh?"), Scripted::text("huh?")], &entry);
+    let (outcome, requests) = drive_on(
+        vec![Scripted::text("huh?"), Scripted::text("huh?")],
+        &entry,
+        &empty_model(),
+    );
     assert_eq!(requests.len(), 2);
     match outcome {
         Outcome::Errored(errored) => assert!(
@@ -582,4 +653,264 @@ fn the_table_names_rates_with_denominators() {
     assert!(table.contains("miss_rate"), "{table}");
     assert!(table.contains("provider/model"), "{table}");
     assert!(table.contains("1 1 1.000"), "{table}");
+}
+
+#[test]
+fn carried_levels_ask_the_lowest_declared_level() {
+    let entry = synthetic_entry("a_01", Some(Label::Block));
+    let model = SweepModel {
+        reference: "sweep/reviewer".to_owned(),
+        cost: None,
+        subscription: false,
+        thinking_levels: vec![ThinkingLevel::High, ThinkingLevel::Low],
+    };
+    let (outcome, requests) = drive_on(
+        vec![Scripted::text("check"), Scripted::text("allow")],
+        &entry,
+        &model,
+    );
+    let ran_at = match outcome {
+        Outcome::Ran(ran_at) => ran_at,
+        Outcome::Errored(errored) => panic!("an allow is not an error: {}", errored.reason),
+    };
+    assert_eq!(ran_at.verdict, Verdict::Allow);
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(
+            request.thinking,
+            Some(ThinkingLevel::Low),
+            "every stage asks the lowest declared level"
+        );
+    }
+    let (_, requests) = drive_on(vec![Scripted::text("allow")], &entry, &empty_model());
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].thinking, None,
+        "no declared level asks for none"
+    );
+}
+
+#[test]
+fn a_reasked_stage_counts_its_generation_once() {
+    let entry = synthetic_entry("a_01", Some(Label::Pass));
+    let (outcome, requests) = drive_on(
+        vec![Scripted::text("huh?"), Scripted::text("allow")],
+        &entry,
+        &empty_model(),
+    );
+    assert_eq!(requests.len(), 2);
+    let ran_at = match outcome {
+        Outcome::Ran(ran_at) => ran_at,
+        Outcome::Errored(errored) => {
+            panic!("a re-asked allow is not an error: {}", errored.reason)
+        }
+    };
+    assert_eq!(ran_at.verdict, Verdict::Allow);
+    assert_eq!(ran_at.stage, 1);
+    assert_eq!(
+        ran_at.s1.input, 10,
+        "the re-ask supersedes the first generation report"
+    );
+    assert_eq!(ran_at.s2.input, 0);
+}
+
+/// Drives `entries` `runs` times each through one stub reviewer serving
+/// `script` in call order, returning the tallies, the pooled outcomes and
+/// every recorded request.
+fn sweep_on(
+    script: Vec<Scripted>,
+    entries: &[Entry],
+    runs: u32,
+) -> (
+    Vec<EntryTally>,
+    Vec<Outcome>,
+    Vec<contract::provider::ModelRequest>,
+) {
+    let scripted = Arc::new(ScriptedProvider::new(script));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let clock = clock();
+    let model = empty_model();
+    let (tallies, outcomes) = sweep(entries, runs, |entry| {
+        drive(entry, &provider, &clock, &model)
+    });
+    (tallies, outcomes, scripted.requests())
+}
+
+/// RULING-477-1 on #477 requires the per-entry `allow 2/3` line beside the
+/// pooled model row: one entry's repetitions aggregate while every run
+/// still counts in the denominators and rates.
+#[test]
+fn a_three_run_sweep_aggregates_per_entry_and_pools_runs() {
+    let entry = synthetic_entry("a_01", Some(Label::Pass));
+    let (tallies, outcomes, _) = sweep_on(
+        vec![
+            Scripted::text("allow"),
+            Scripted::text("allow"),
+            Scripted::text("check"),
+            Scripted::text("block: no"),
+        ],
+        &[entry],
+        3,
+    );
+    assert_eq!(render_entry_table(&tallies, 3), "a_01 pass allow 2/3\n");
+    let report = score("m", &outcomes);
+    assert_eq!(report.runs, 3);
+    assert_eq!(
+        (
+            report.pass_total,
+            report.false_blocks,
+            report.false_block_rate
+        ),
+        (3, 1, Some(1.0 / 3.0))
+    );
+    assert_eq!((report.cached_input, report.uncached_input), (0, 40));
+}
+
+/// R7 on #477 sends each entry's repetitions back to back so later runs
+/// reuse the prompt cache. No doc promises the row order, so the test
+/// asserts the verdicts and the entry rows as sets
+/// (`docs/testing.md`, "Event streams").
+#[test]
+fn sweep_tallies_each_entry_across_its_runs() {
+    let first = synthetic_entry("e_1", Some(Label::Pass));
+    let second = synthetic_entry("e_2", Some(Label::Block));
+    let (tallies, outcomes, _) = sweep_on(
+        vec![
+            Scripted::text("allow"),
+            Scripted::text("allow"),
+            Scripted::text("allow"),
+            Scripted::text("check"),
+            Scripted::text("block: no"),
+            Scripted::text("check"),
+            Scripted::text("block: no"),
+            Scripted::text("check"),
+            Scripted::text("block: no"),
+        ],
+        &[first, second],
+        3,
+    );
+    let mut verdicts: Vec<Verdict> = outcomes
+        .iter()
+        .map(|outcome| match outcome {
+            Outcome::Ran(ran_at) => ran_at.verdict,
+            Outcome::Errored(errored) => {
+                panic!("a verdict is not an error: {}", errored.reason)
+            }
+        })
+        .collect();
+    verdicts.sort_by_key(|verdict| matches!(verdict, Verdict::Block));
+    assert_eq!(
+        verdicts,
+        vec![
+            Verdict::Allow,
+            Verdict::Allow,
+            Verdict::Allow,
+            Verdict::Block,
+            Verdict::Block,
+            Verdict::Block,
+        ],
+        "every run still reports, whatever order the sweep drives them"
+    );
+    let table = render_entry_table(&tallies, 3);
+    let rows: BTreeSet<&str> = table.lines().collect();
+    assert_eq!(
+        rows,
+        BTreeSet::from(["e_1 pass allow 3/3", "e_2 block block 3/3"]),
+        "every entry still tallies its runs"
+    );
+}
+
+/// Both denied-failure shapes come out `Errored`, not a verdict. This
+/// pins the pre-existing generic arm, not new mapping: the dropped inbox
+/// leaves each escalation unanswered, so the denial resolves by cancel
+/// and the untouched `(Decision::Deny, _)` arm reports it. The `drive_with`
+/// seam stays so the second leg can install the failing reviewer.
+#[test]
+fn denied_reviewer_failures_are_error_outcomes() {
+    let entry = synthetic_entry("a_01", Some(Label::Block));
+    let failure = Scripted::failed_after(
+        Failure {
+            code: ErrorCode::Other("boom".to_owned()),
+            message: "the reviewer failed".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        },
+        call_usage("gen_9"),
+    );
+    let (outcome, _) = drive_on(vec![failure], &entry, &empty_model());
+    match outcome {
+        Outcome::Errored(errored) => assert!(
+            errored.reason.contains("never judged"),
+            "a denied reviewer failure never judges: {}",
+            errored.reason
+        ),
+        Outcome::Ran(_) => panic!("a denied reviewer failure is not a verdict"),
+    }
+    let scripted = Arc::new(ScriptedProvider::new(vec![]));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let outcome = drive_with(
+        &entry,
+        &provider,
+        &clock(),
+        Err(Failure {
+            code: ErrorCode::NoModel,
+            message: "No reviewer model is set.".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+    );
+    match outcome {
+        Outcome::Errored(errored) => assert!(
+            errored.reason.contains("never judged"),
+            "a denied missing reviewer never judges: {}",
+            errored.reason
+        ),
+        Outcome::Ran(_) => panic!("a denied missing reviewer is not a verdict"),
+    }
+}
+
+#[test]
+fn entry_lines_name_the_majority_and_ties_read_allow() {
+    let tallies = vec![
+        EntryTally {
+            id: "a".to_owned(),
+            label: Some(Label::Pass),
+            allows: 2,
+            blocks: 1,
+        },
+        EntryTally {
+            id: "b".to_owned(),
+            label: Some(Label::Block),
+            allows: 1,
+            blocks: 2,
+        },
+        EntryTally {
+            id: "c".to_owned(),
+            label: None,
+            allows: 1,
+            blocks: 1,
+        },
+        EntryTally {
+            id: "d".to_owned(),
+            label: Some(Label::Pass),
+            allows: 0,
+            blocks: 0,
+        },
+    ];
+    assert_eq!(
+        render_entry_table(&tallies, 3),
+        "a pass allow 2/3\nb block block 2/3\nc unlabelled allow 1/3\nd pass allow 0/3\n"
+    );
+}
+
+#[test]
+fn cached_and_uncached_inputs_sum_both_stages() {
+    let mut outcome = ran(Some(Label::Pass), Verdict::Allow, 2, 5);
+    if let Outcome::Ran(ran_at) = &mut outcome {
+        ran_at.s1 = tokens(10, 2, &[], 3);
+        ran_at.s2 = tokens(20, 4, &[], 6);
+    }
+    let report = score("m", &[outcome]);
+    assert_eq!(report.cached_input, 6);
+    assert_eq!(report.uncached_input, 30);
 }

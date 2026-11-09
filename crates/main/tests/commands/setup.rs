@@ -211,8 +211,42 @@ fn one_flag_per_step_applies_every_answer() {
 }
 
 #[test]
-fn without_flags_nothing_is_asked_and_each_skip_names_its_command() {
+fn default_setup_has_test_provider_and_model() {
     let setup = Setup::new();
+    let (providers, notices) = extensions::Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let model = providers.resolve("fake/m").unwrap();
+    assert!(matches!(
+        model.provider.credential_from.credential(),
+        Some(config::CredentialSource::Env(name)) if name == "FIBER_TEST_FAKE_KEY"
+    ));
+    assert_eq!(
+        read_json(&setup.home().join("config.json"))["model"],
+        "fake/m"
+    );
+
+    let first_run = Setup::without_provider();
+    let (providers, notices) = extensions::Providers::load(&first_run.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(!providers.has_installed_providers());
+    assert!(!first_run.home().join("config.json").exists());
+
+    let explicit = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    explicit.provider(&server);
+    let (providers, notices) = extensions::Providers::load(&explicit.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let model = providers.resolve("fake/m").unwrap();
+    assert_eq!(model.model.base_url, format!("{}/v1", server.url()));
+    assert_eq!(
+        read_json(&explicit.home().join("config.json"))["model"],
+        "fake/m"
+    );
+}
+
+#[test]
+fn without_flags_nothing_is_asked_and_each_skip_names_its_command() {
+    let setup = Setup::without_provider();
     let run = setup.run_setup(&["setup"], None, &[]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stdout, "", "stdout: {}", run.stdout);
@@ -237,7 +271,7 @@ fn without_flags_nothing_is_asked_and_each_skip_names_its_command() {
 
 #[test]
 fn no_flags_leave_their_steps_out_without_asking() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let run = setup.run_setup(&["setup", "--no-completions", "--no-hub"], None, &[]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stderr.lines().collect();
@@ -258,7 +292,7 @@ fn no_flags_leave_their_steps_out_without_asking() {
 
 #[test]
 fn a_model_flag_with_nobody_signed_in_still_writes_the_model() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let run = setup.run_setup(&["setup", "--model", "fake/m"], None, &[]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let config = read_json(&setup.home().join("config.json"));
@@ -321,7 +355,7 @@ fn completions_for_bash_and_fish_land_in_their_startup_files() {
 
 #[test]
 fn an_unknown_provider_fails_naming_the_step_and_runs_nothing_later() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let run = setup.run_setup(
         &["setup", "--provider", "nope", "--model", "fake/m"],
         None,
@@ -339,7 +373,7 @@ fn an_unknown_provider_fails_naming_the_step_and_runs_nothing_later() {
 
 #[test]
 fn thinking_without_a_model_fails_naming_the_step() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let run = setup.run_setup(&["setup", "--thinking", "high"], None, &[]);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert!(run.stderr.contains("setup model failed"), "{}", run.stderr);
@@ -629,7 +663,7 @@ fn a_rerun_shows_done_steps_and_leaves_startup_files_alone() {
 
 #[test]
 fn without_providers_the_first_and_third_steps_skip_and_nothing_is_asked() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let run = setup.run_on_terminal(&["setup", "--no-hub"], "", &[]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(

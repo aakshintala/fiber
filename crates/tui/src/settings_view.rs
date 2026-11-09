@@ -362,12 +362,24 @@ enum Focus {
     Screen(Screen),
 }
 
+/// The cross-tab search: its query and the tab and row focused when it
+/// opened, so clearing it can stay on a match or go back. Independent of
+/// `Mode`: an inline field or a list page can cover a search without
+/// losing it. `None` is no search; `Some` with an empty query shows
+/// every eligible row.
+#[derive(Debug)]
+struct Search {
+    query: Draft,
+    origin_tab: SettingsTab,
+    origin: Option<Focus>,
+}
+
 /// One display line of the body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Line {
     Item(Item),
     Blank,
-    Note(&'static str),
+    Note(String),
 }
 
 /// The edit field of a number or free text.
@@ -486,6 +498,8 @@ pub(crate) struct Settings {
     request: Option<Request>,
     /// The model picker is open above the view for this key and layer.
     awaiting: Option<(String, Layer)>,
+    /// The cross-tab search, when one is open.
+    search: Option<Search>,
 }
 
 impl Settings {
@@ -504,6 +518,7 @@ impl Settings {
             said: Vec::new(),
             request: None,
             awaiting: None,
+            search: None,
         };
         settings.reread(ctx);
         settings.entry_theme = settings.entry_setting(ctx);
@@ -608,8 +623,35 @@ impl Settings {
     // The tab's rows.
 
     /// The rows the open tab holds: its keys in the order read, then its
-    /// screen rows.
+    /// screen rows. With a search open, the matching rows of every tab
+    /// instead, in tab order and then the same row order.
     fn items(&self) -> Vec<Item> {
+        if let Some(search) = &self.search {
+            let needle = search.query.expand().to_lowercase();
+            let mut items = Vec::new();
+            for tab in SettingsTab::ALL {
+                items.extend(
+                    self.rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| {
+                            row.presentation.tab == Some(tab) && key_matches(row, &needle)
+                        })
+                        .map(|(at, _)| Item::Key(at)),
+                );
+                items.extend(
+                    Screen::ALL
+                        .into_iter()
+                        .filter(|screen| {
+                            screen.row().is_some_and(|row| {
+                                row.metadata.tab == Some(tab) && screen_matches(row, &needle)
+                            })
+                        })
+                        .map(Item::Screen),
+                );
+            }
+            return items;
+        }
         let mut items: Vec<Item> = self
             .rows
             .iter()
@@ -686,12 +728,15 @@ impl Settings {
         self.list = self.list_over(&layout);
     }
 
-    /// The layout of the open tab at `width` by `height`.
+    /// The layout of the open tab at `width` by `height`. With a search
+    /// open the query takes the tab bar's fixed rows, and the rows are
+    /// the matches across every tab.
     fn layout(&self, width: usize, height: usize, usage: Option<u64>) -> Layout {
         let items = self.items();
         let focused = self.focused(&items);
         let compact = height < TALL;
-        // The fixed rows: what saving does, then the tab bar.
+        // The fixed rows: what saving does, then the query or the tab
+        // bar. The query keeps the same rows, so the body never moves.
         let mut top = vec![vec![(
             "Changes save automatically".to_owned(),
             Ink::Muted.style(),
@@ -699,7 +744,11 @@ impl Settings {
         if !compact {
             top.push(Vec::new());
         }
-        top.push(self.tab_bar(width));
+        if self.search.is_some() {
+            top.push(self.query_row());
+        } else {
+            top.push(self.tab_bar(width));
+        }
         if !compact {
             top.push(Vec::new());
         }
@@ -725,7 +774,14 @@ impl Settings {
             lines.push(Line::Item(*item));
         }
         if lines.is_empty() {
-            lines.push(Line::Note("Nothing is set on this tab."));
+            lines.push(Line::Note(if let Some(search) = &self.search {
+                format!(
+                    "No settings match \u{201c}{}\u{201d}.",
+                    search.query.expand()
+                )
+            } else {
+                "Nothing is set on this tab.".to_owned()
+            }));
         }
         let focus = focused.and_then(|item| items.iter().position(|it| *it == item));
         let label_col = items
@@ -743,6 +799,18 @@ impl Settings {
             body,
             label_col,
         }
+    }
+
+    /// The search line in the tab bar's fixed rows: the query after its
+    /// slash, the slash dim. It shows nowhere else, so drawing below it
+    /// never moves.
+    fn query_row(&self) -> Vec<Span> {
+        let query = self
+            .search
+            .as_ref()
+            .map(|search| search.query.expand())
+            .unwrap_or_default();
+        vec![("/ ".to_owned(), Ink::Muted.style()), (query, Style::new())]
     }
 
     /// The tab bar: the open tab bold on the `surface` tint, the rest
@@ -840,6 +908,19 @@ fn tab_name(tab: SettingsTab) -> &'static str {
     }
 }
 
+/// Whether a key matches the lowercased query: its label or its key
+/// path, either as a substring.
+fn key_matches(row: &SettingRow, needle: &str) -> bool {
+    row.presentation.label.to_lowercase().contains(needle) || row.key.contains(needle)
+}
+
+/// Whether a screen row matches the lowercased query: its label or one
+/// of the key paths it covers, either as a substring.
+fn screen_matches(row: &ScreenRow, needle: &str) -> bool {
+    row.metadata.label.to_lowercase().contains(needle)
+        || row.covers.iter().any(|covered| covered.contains(needle))
+}
+
 /// Where a row's value comes from, as the line under the list says it.
 fn origin(row: &SettingRow) -> String {
     if is_run(row) {
@@ -898,9 +979,14 @@ impl Settings {
     }
 
     /// A key over the rows: move, change the focused value, move it to
-    /// another layer, open the file, or close.
+    /// another layer, open the file, search, or close.
     fn rows_key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
         if *key == Key::Esc {
+            // Clearing a search stays open; only the next Esc closes.
+            if self.search.is_some() {
+                self.clear_search(ctx);
+                return Act::Stay;
+            }
             return Act::Close;
         }
         if *key == Key::CtrlG {
@@ -917,6 +1003,30 @@ impl Settings {
         if *key == Key::Tab {
             return self.move_layer(ctx);
         }
+        // A search takes every other printable character but Space, which
+        // keeps the control action above. Without one, `/` opens an empty
+        // search and a typed letter opens one holding it.
+        if let Key::Char(ch) = key {
+            if self.search.is_some() {
+                if text::printable(*ch) {
+                    self.mutate_query(ctx, |query| query.insert(*ch));
+                }
+                return Act::Stay;
+            }
+            if *ch == '/' {
+                self.open_search(ctx, None);
+                return Act::Stay;
+            }
+            if ch.is_alphabetic() {
+                self.open_search(ctx, Some(*ch));
+                return Act::Stay;
+            }
+        }
+        // Backspace edits the query, never the rows.
+        if *key == Key::Backspace && self.search.is_some() {
+            self.mutate_query(ctx, |query| query.backspace());
+            return Act::Stay;
+        }
         let layout = self.layout(ctx.width, ctx.height, ctx.usage);
         let mut list = self.list_over(&layout);
         let before = list.selected();
@@ -927,6 +1037,79 @@ impl Settings {
         self.list = list;
         self.focus_line(list.selected(), ctx);
         Act::Stay
+    }
+
+    // The cross-tab search.
+
+    /// Opens a search over every tab, saving the tab and row focused now
+    /// so clearing it can go back. `seed` starts the query with one
+    /// typed letter; `None` starts it empty. The first result takes the
+    /// focus, as a new query always does.
+    fn open_search(&mut self, ctx: &Ctx<'_>, seed: Option<char>) {
+        let mut query = Draft::default();
+        if let Some(ch) = seed {
+            query.insert(ch);
+        }
+        self.search = Some(Search {
+            query,
+            origin_tab: self.tab,
+            origin: self.focus.clone(),
+        });
+        self.said.clear();
+        self.focus = None;
+        self.place(ctx);
+    }
+
+    /// Runs `edit` on the query; when its text changed, the first result
+    /// takes the focus.
+    fn mutate_query(&mut self, ctx: &Ctx<'_>, edit: impl FnOnce(&mut Draft)) {
+        let changed = match &mut self.search {
+            Some(search) => {
+                let before = search.query.expand();
+                edit(&mut search.query);
+                search.query.expand() != before
+            }
+            None => false,
+        };
+        if changed {
+            self.said.clear();
+            self.focus = None;
+            self.place(ctx);
+        }
+    }
+
+    /// Clears the search: with a match, the focus stays on that match
+    /// in its own tab; with no match, the focus goes back to the row
+    /// focused when the search opened. The next Esc closes, through the
+    /// ordinary path.
+    fn clear_search(&mut self, ctx: &Ctx<'_>) {
+        let Some(search) = self.search.take() else {
+            return;
+        };
+        if self.focus.is_some() {
+            if let Some(tab) = self.tab_of_focus() {
+                self.tab = tab;
+            }
+        } else {
+            self.tab = search.origin_tab;
+            self.focus = search.origin;
+        }
+        self.said.clear();
+        self.place(ctx);
+    }
+
+    /// The tab the focused row sits on: a key's own tab, a screen row's
+    /// metadata tab.
+    fn tab_of_focus(&self) -> Option<SettingsTab> {
+        match &self.focus {
+            Some(Focus::Key(key)) => self
+                .rows
+                .iter()
+                .find(|row| &row.key == key)
+                .and_then(|row| row.presentation.tab),
+            Some(Focus::Screen(screen)) => screen.row().and_then(|row| row.metadata.tab),
+            None => None,
+        }
     }
 
     /// Shifts the window one wheel step. The rows move three, then the
@@ -990,7 +1173,13 @@ impl Settings {
                 Act::Stay
             }
             Mode::Choices { .. } => Act::Stay,
-            Mode::Rows => match edit {
+            Mode::Rows => match &edit {
+                // Left and Right never switch tabs with a search open:
+                // they edit the query instead.
+                Edit::Left | Edit::Right if self.search.is_some() => {
+                    self.mutate_query(ctx, |query| edit_draft(query, edit.clone()));
+                    Act::Stay
+                }
                 Edit::Left => {
                     self.step_tab(false, ctx);
                     Act::Stay
@@ -1008,7 +1197,12 @@ impl Settings {
                 | Edit::DeleteToLineStart
                 | Edit::LineStart
                 | Edit::LineEnd
-                | Edit::Paste(_) => Act::Stay,
+                | Edit::Paste(_) => {
+                    if self.search.is_some() {
+                        self.mutate_query(ctx, |query| edit_draft(query, edit.clone()));
+                    }
+                    Act::Stay
+                }
             },
         }
     }
@@ -1685,7 +1879,7 @@ impl Settings {
             .enumerate()
             .map(|(at, line)| match line {
                 Line::Blank => Vec::new(),
-                Line::Note(note) => vec![((*note).to_owned(), None, Ink::Muted)],
+                Line::Note(note) => vec![((note).clone(), None, Ink::Muted)],
                 Line::Item(item) => self.cells(
                     *item,
                     &layout,
@@ -1758,13 +1952,33 @@ impl Settings {
                 .row(at)
                 .map_or_else(|| (String::new(), None), shown_value),
         };
+        // A search annotates each result with its own tab, dim at the
+        // right: the value is cut short of the annotation, keeping the
+        // layer tag whole.
+        let annotation: Option<String> = self.search.as_ref().map(|_| {
+            let tab = match item {
+                Item::Key(at) => self.row(at).and_then(|row| row.presentation.tab),
+                Item::Screen(screen) => screen.row().and_then(|row| row.metadata.tab),
+            };
+            tab.map(tab_name).unwrap_or_default().to_owned()
+        });
+        let annotation_room = annotation
+            .as_ref()
+            .map_or(0, |name| text::width(name) + GAP);
         let tag_room = tag.as_ref().map_or(0, |tag| text::width(tag) + GAP);
         let room = width
-            .saturating_sub(GUTTER + layout.label_col + GAP + tag_room)
+            .saturating_sub(GUTTER + layout.label_col + GAP + tag_room + annotation_room)
             .max(1);
-        cells.push((text::cut(&value, room, "…"), None, Ink::Plain));
+        let shown = text::cut(&value, room, "…");
+        let mut used = GUTTER + layout.label_col + GAP + text::width(&shown);
+        cells.push((shown, None, Ink::Plain));
         if let Some(tag) = tag {
+            used = used.saturating_add(GAP + text::width(&tag));
             cells.push((format!("{}{tag}", " ".repeat(GAP)), None, Ink::Muted));
+        }
+        if let Some(name) = annotation {
+            let gap = width.saturating_sub(used + text::width(&name));
+            cells.push((format!("{}{name}", " ".repeat(gap)), None, Ink::Muted));
         }
         cells
     }

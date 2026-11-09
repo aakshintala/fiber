@@ -3478,6 +3478,146 @@ fn a_session_only_rejection_drops_the_wait() {
 }
 
 #[test]
+fn model_answer_reaches_its_handler() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Model));
+    app.on_line(accepted(SESSION, &id));
+    // The accept marks the row for this session only and clears the
+    // wait the choice registered.
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn model_tag_is_gone_after_answer() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn model_after_refusal() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(refused(SESSION, &id, "invalid_arguments", "gone."));
+    // One notice names the refusal, and the wait goes with the entry.
+    assert_eq!(app.notice(), Some("gone."));
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_model_refusal_routes_once_by_tag() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(refused(SESSION, &id, "stale_request", "replaced."));
+    // The refusal routes once: a single notice, cleared maps, and a
+    // settled wait. A duplicate refusal for the same id reports
+    // nothing new and keeps no new wait.
+    assert_eq!(app.notice(), Some("replaced."));
+    assert!(app.model_picker.sent.is_empty());
+    assert!(app.model_picker.awaiting.is_empty());
+    assert!(app.model_picker.only_pending.is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+    app.on_line(refused(SESSION, &id, "stale_request", "replaced."));
+    assert_eq!(app.notice(), Some("replaced."));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn a_model_accept_from_another_session_attaches_nothing() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    // Another session's accept for the wait attaches nothing: the row
+    // stays unmarked while the wait settles generically. The own
+    // session's accept marks the row instead (see
+    // `a_session_only_accept_sets_the_row`): the two sides of the
+    // session check.
+    app.on_line(accepted(OTHER, &id));
+    assert_eq!(app.model_picker.session_only, None);
+    assert!(app.model_picker.only_pending.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Model));
+    // The own session's accept still marks the row and settles the
+    // wait the other session's answer left standing.
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn a_lost_model_steer_shell_line_settles_its_tag() {
+    use crate::app::commands::commands_testkit::attached;
+    use crate::keys::Key;
+    let mut app = attached();
+    // One send of each kind with a pending entry: a session-only
+    // model choice, a steering amend, and a `!` shell run.
+    let choice = crate::model_picker::Choice {
+        reference: "acme/m1".to_owned(),
+        level: None,
+        level_chosen: false,
+        save_model: false,
+        session_only: true,
+    };
+    let Effect::Send(model) = app.choose(choice) else {
+        panic!("choosing sends");
+    };
+    let queue = crate::link::Line::Session(contract::Envelope {
+        kind: EventKind::from_name("steering_queue"),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "one"}],
+                "source": "driver", "command_id": "c_1"}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    assert!(app.on_line(queue).is_empty());
+    app.select_steering(0);
+    let Effect::Send(mut steer) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter amends");
+    };
+    assert_eq!(steer.len(), 2);
+    app.draft.set("!ls");
+    let Effect::Send(shell) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the shell run");
+    };
+    assert_eq!(shell.len(), 1);
+    // Losing every line settles each wait with its entry.
+    let mut unsent = model;
+    unsent.append(&mut steer);
+    unsent.extend(shell);
+    app.write_failed_inner(&unsent);
+    for line in &unsent {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap();
+        let id = line["id"].as_str().unwrap_or_default();
+        assert_eq!(app.outbox.waiting(id), None, "{id}");
+        assert!(!app.outbox.pending.contains_key(id), "{id}");
+    }
+}
+
+#[test]
 fn a_saved_choice_accepted_clears_the_session_only_mark() {
     let (mut app, _) = choosing_app();
     let first = session_only_id(&mut app);

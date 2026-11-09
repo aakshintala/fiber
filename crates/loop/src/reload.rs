@@ -370,11 +370,13 @@ impl Loop {
         if let Some(hooks) = self.hooks.clone() {
             self.drain_state(&hooks, None)?;
         }
-        self.preamble = None;
-        self.preamble_reason = PreambleReason::Reload;
-        self.warming.stop(self.log.clock().now());
+        // The same seam the toggle takes, with the reload reason: the
+        // registered shell entry, warming, cached build and rows refresh
+        // identically to a toggle. The publish reads the live definition,
+        // so with no flip the refresh is a no-op that still rebuilds with
+        // the reload reason.
         self.load_after_reload = true;
-        self.build_preamble()?;
+        self.invalidate_sandbox(PreambleReason::Reload)?;
         if self.opened {
             let skills = self.skills.reload_check();
             for notice in group_notices(skills.notices, grouped_lead) {

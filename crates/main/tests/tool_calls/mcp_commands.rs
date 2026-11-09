@@ -252,7 +252,7 @@ fn declares(run: &StdoutRun, name: &str) -> bool {
 
 #[test]
 fn a_url_with_userinfo_fails_naming_the_server_and_no_code() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     let run = setup.mcp_commands_run(&["mcp", "add", "db", "https://user@example.test/mcp"], None);
     assert_eq!(run.code, Some(1), "{run:?}");
     assert!(run.stderr.contains("db"), "{run:?}");
@@ -281,7 +281,7 @@ fn remove_of_an_absent_name_names_the_layers_holding_it() {
 
 #[test]
 fn a_shape_the_parser_cannot_say_is_a_usage_error() {
-    let setup = Setup::new();
+    let setup = Setup::without_provider();
     for args in [
         // Both a url and a command.
         vec!["mcp", "add", "x", "https://example.test/mcp", "--", "npx"],

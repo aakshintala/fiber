@@ -88,7 +88,7 @@ pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<ReviewArg
             notes,
             keep_all,
         }),
-        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --scan FILE] [<session directory>]".to_owned()),
+        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR | --scan FILE] [<session directory>]".to_owned()),
     }
 }
 
@@ -1329,18 +1329,22 @@ struct EmitCtx<'a> {
     added_folders: &'a [String],
 }
 
-/// Emits one session directory's label-input lines: one line per replayable
-/// call carrying the full `reviewed[]` snapshot plus tool, arguments,
-/// declared effects, workspace, added folders and source. A reviewed call
-/// without its start or its denial carrying its declared effects is
-/// unreplayable and excluded, while the denial-carries-effects case stays
-/// replayable through `started_from` and is kept. Drop checks run on the
-/// raw entry before placeholder substitution.
-fn emit_sampled(
+/// Folds one session directory's chain through the reviewer's renderer and
+/// emits one label-input line per replayable call: the emission both the
+/// sampler and the synthetic converter share. A reviewed call without its
+/// start or its denial carrying its declared effects is unreplayable and
+/// excluded, while the denial-carries-effects case stays replayable through
+/// `started_from` and is kept. With a synthetic `counter` the line takes
+/// the synthetic identity (`{session}-{n}` with a synthetic source triple)
+/// and skips the drop classes, for the committed fixtures that carry no
+/// owner data; without one it takes the sampled identity and drops raw
+/// entries the closed classes match before placeholder substitution.
+fn fold_and_emit(
     dir: &Path,
     ctx: &ScrubCtx,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
+    mut synthetic: Option<&mut u64>,
 ) -> Result<(), String> {
     let (workspace, chain) = load_chain(dir)?;
     let index = Driver::index_chain(&chain)?;
@@ -1394,14 +1398,26 @@ fn emit_sampled(
                 reviewed: &reviewed,
                 added_folders: &added_folders,
             };
-            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped)?;
+            emit_sampled_call(
+                &emit,
+                envelope,
+                &action,
+                &call,
+                lines,
+                dropped,
+                synthetic.as_deref_mut(),
+            )?;
         }
     }
     Ok(())
 }
 
 /// Emits one requested call's label-input line, or nothing when the call
-/// is not a review request or is unreplayable.
+/// is not a review request or is unreplayable. With a `synthetic` emission
+/// counter the line instead takes the synthetic identity (`{session}-{n}`
+/// with a synthetic source triple): the committed fixtures carry no owner
+/// data, so no entry meets a drop class and their controls stay the block
+/// side.
 fn emit_sampled_call(
     emit: &EmitCtx<'_>,
     envelope: &contract::Envelope,
@@ -1409,6 +1425,7 @@ fn emit_sampled_call(
     call: &ToolCallRequested,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
+    synthetic: Option<&mut u64>,
 ) -> Result<(), String> {
     let judged = emit.index.review.contains(&id.0);
     if emit.index.nonreview.contains(&id.0) && !judged {
@@ -1432,13 +1449,35 @@ fn emit_sampled_call(
         },
     };
     let paths = started.declared.paths.clone().unwrap_or_default();
-    if let Some(kind) = drop_kind(&arguments, &paths) {
-        dropped.push(format!("DROP {} id={}", kind.name(), id.0));
+    let is_synthetic = synthetic.is_some();
+    let (id, source) = match synthetic {
+        Some(counter) => {
+            *counter += 1;
+            (
+                format!("{}-{counter}", emit.session),
+                Source {
+                    kind: SourceKind::Synthetic,
+                    session: emit.session.to_owned(),
+                    seq: Some(*counter),
+                },
+            )
+        }
+        None => (
+            id.0.clone(),
+            Source {
+                kind: SourceKind::Sampled,
+                session: emit.session.to_owned(),
+                seq: envelope.seq.map(|seq| seq.0),
+            },
+        ),
+    };
+    if !is_synthetic && let Some(kind) = drop_kind(&arguments, &paths) {
+        dropped.push(format!("DROP {} id={}", kind.name(), id));
         return Ok(());
     }
     let snapshot = reviewed_items(emit.reviewed);
     let entry = foreign_to_label_input(ForeignInput {
-        id: &id.0,
+        id: &id,
         tool: &call.name,
         arguments: &arguments,
         declared: &started.declared,
@@ -1446,18 +1485,13 @@ fn emit_sampled_call(
         reviewed: snapshot,
         workspace: emit.workspace,
         added_folders: emit.added_folders,
-        source: Source {
-            kind: SourceKind::Sampled,
-            session: emit.session.to_owned(),
-            seq: envelope.seq.map(|seq| seq.0),
-        },
+        source,
         ctx: emit.ctx,
     });
     let line = emit_line(&entry).map_err(|error| {
         format!(
-            "review: {}: cannot print call {}: {error}",
+            "review: {}: cannot print call {id}: {error}",
             emit.dir.display(),
-            id.0
         )
     })?;
     lines.push(line);
@@ -1482,7 +1516,7 @@ pub(crate) fn run_sampled(
         for workspace in segment_workspaces(dir)? {
             Allowlist::check_chain(std::slice::from_ref(&workspace))?;
         }
-        emit_sampled(dir, &ctx, &mut entries, &mut dropped)?;
+        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None)?;
     }
     for path in &opts.import_claude {
         let path = Path::new(path);
@@ -1517,6 +1551,176 @@ pub(crate) fn run_sampled(
         lines: entries,
         dropped,
         unsupported,
+    })
+}
+
+/// The committed synthetic fixture roots `run_synthetic` converts: one
+/// session per `reviewer_consent/` directory plus the single
+/// `review_person_input/` session.
+fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    (
+        fixtures.join("reviewer_consent"),
+        fixtures.join("review_person_input"),
+    )
+}
+
+/// The committed `reviewer_consent/` sessions `run_synthetic` converts, in
+/// recipe order: only a directory carrying one of these names converts, so
+/// an untracked directory placed beside them is rejected instead of
+/// emitting its calls raw — the converter scrubs with an empty (identity)
+/// context and skips every drop class, which is safe only for these
+/// fixtures.
+pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 15] = [
+    "control-1-credentialed-probe",
+    "control-2-key-material-copy",
+    "control-3-delete-outside-workspace",
+    "control-4-swapped-push-target",
+    "field-1-typed-restart-and-run",
+    "field-2-picked-run-label",
+    "field-3-named-branch-push",
+    "field-4-loopback-server-port",
+    "field-6-restart-it-kill-and-start",
+    "shape-1-verbatim-retype",
+    "shape-2-effect-named-by-reply",
+    "shape-3-prerequisite",
+    "shape-4-conceded-then-new-demand",
+    "shape-5-task-names-action",
+    "shape-6-reason-names-different-call",
+];
+
+/// Whether `name` is one of the committed synthetic consent sessions.
+pub(crate) fn is_committed_synthetic_session(name: &str) -> bool {
+    COMMITTED_SYNTHETIC_SESSIONS.contains(&name)
+}
+
+/// Resolves a `--synthetic` dir to its committed fixture directory,
+/// rejecting anything else with an error naming the dir: only the named
+/// committed `reviewer_consent/` sessions and the `review_person_input/`
+/// session convert, so no owner directory or environment value reaches the
+/// converter through a flag.
+fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
+    let reject = || {
+        format!(
+            "review: --synthetic takes only the committed fixture dirs, not {}",
+            dir.display()
+        )
+    };
+    let candidate = dir.canonicalize().map_err(|_| reject())?;
+    let (consent, person_input) = synthetic_fixture_roots();
+    let consent = consent.canonicalize().map_err(|_| reject())?;
+    let person_input = person_input.canonicalize().map_err(|_| reject())?;
+    if candidate == person_input {
+        return Ok(candidate);
+    }
+    let named = candidate
+        .file_name()
+        .is_some_and(|name| is_committed_synthetic_session(&name.to_string_lossy()));
+    if candidate.is_dir() && named && candidate.parent().is_some_and(|parent| parent == consent) {
+        return Ok(candidate);
+    }
+    Err(reject())
+}
+
+/// Converts the committed synthetic fixture dirs to unlabelled
+/// synthetic-kind lines: the shared `fold_and_emit` fold with a synthetic
+/// counter, except nothing passes the project allowlist and no entry meets
+/// a drop class — the fixtures carry no owner data, so their controls stay
+/// the block side. The scrub context is empty (the converter reads no
+/// flag): fixture workspaces are already `/synthetic/...` paths and
+/// `$HOME` placeholders, so the workspace lands verbatim. Each dir's lines
+/// take the synthetic identity (`{session}-{n}` with a 1-based emission
+/// index in file order, which is turn order); labels stay null for the
+/// recipe to fill. No cap, no truncation; a reviewed call without its start
+/// stays unreplayable and is excluded.
+pub(crate) fn run_synthetic(
+    dirs: &[String],
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = ScrubCtx {
+        home: String::new(),
+        owner_name: String::new(),
+        owner_email: String::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    for dir in dirs {
+        let dir = check_synthetic_dir(Path::new(dir))?;
+        let mut seq = 0u64;
+        fold_and_emit(&dir, &ctx, &mut entries, &mut dropped, Some(&mut seq))?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
+    })
+}
+
+/// One embedded synthetic fixture session for the converter's test seam:
+/// the committed session name plus its `events.jsonl` bytes, compiled in
+/// with `include_str!`.
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddedSession {
+    /// The committed session name, stored as the entry source.
+    pub(crate) name: &'static str,
+    /// The session's `events.jsonl` bytes.
+    pub(crate) events: &'static str,
+}
+
+/// The committed `review_person_input/` session name the converter's test
+/// seam accepts beside the consent sessions.
+pub(crate) const PERSON_INPUT_SESSION: &str = "review_person_input";
+
+/// Converts embedded synthetic fixture sessions to unlabelled
+/// synthetic-kind lines: the converter's test seam. Each session stages
+/// under its committed name in a temporary directory and folds through the
+/// shared emission with a synthetic counter, so tests compile the fixture
+/// inputs in (`docs/testing.md`, "What a test asserts") instead of reading
+/// the fixture directories at run time. The name allowlist accepts only
+/// the committed sessions — an untracked name is rejected with an error
+/// naming it, so only the committed sessions convert.
+pub(crate) fn run_synthetic_embedded(
+    sessions: &[EmbeddedSession],
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = ScrubCtx {
+        home: String::new(),
+        owner_name: String::new(),
+        owner_email: String::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    let home = fakes::TempDir::new("fiber-eval-synthetic");
+    for session in sessions {
+        if !is_committed_synthetic_session(session.name) && session.name != PERSON_INPUT_SESSION {
+            return Err(format!(
+                "review: --synthetic takes only the committed fixture sessions, not {}",
+                session.name
+            ));
+        }
+        home.write(&format!("{}/events.jsonl", session.name), session.events);
+        let dir = home.path().join(session.name);
+        let mut seq = 0u64;
+        fold_and_emit(&dir, &ctx, &mut entries, &mut dropped, Some(&mut seq))?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
     })
 }
 

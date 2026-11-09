@@ -4770,7 +4770,7 @@ fn a_delegate_fails_on_a_required_server_nobody_approved() {
 
 #[test]
 fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::without_provider();
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
         support::stream(&[spawn_call("fiber:fake/none")]),
@@ -5094,7 +5094,7 @@ fn delegate_models_omits_logged_out_provider_references() {
 
 #[test]
 fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_neither() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::without_provider();
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
         support::stream(&[function_call("call_models", "delegate_models", &json!({}))]),
@@ -8290,17 +8290,6 @@ const FINISHED_ROW: &str = "✓ scan";
 /// The delegate child's final message: what the replayed transcript shows.
 const CHILD_TEXT: &str = "the scan is done";
 
-/// The first row containing `needle`, or a panic naming it.
-fn row_with(grid: &Grid, needle: &str) -> u16 {
-    u16::try_from(
-        grid.rows
-            .iter()
-            .position(|row| row.contains(needle))
-            .unwrap_or_else(|| panic!("{needle:?} in\n{}", grid.contents)),
-    )
-    .unwrap_or(u16::MAX)
-}
-
 /// The column where `needle` starts on `y`, matching the cells one by
 /// one, so a wide cell before it changes nothing.
 fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
@@ -8323,11 +8312,6 @@ fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
         }
     }
     panic!("{needle:?} on row {y}")
-}
-
-/// Clicks the cell at `(x, y)`: a press then its release on the same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
 }
 
 /// The rows holding a reversed cell: navigate mode's focus signature.
@@ -8415,17 +8399,41 @@ fn a_finished_delegate_opens_its_replayed_view_from_a_click_and_from_enter() {
         .into_iter()
         .chain(support::TRUECOLOUR)
         .collect();
+    let hub = Arc::new(Mutex::new(None));
+    let (feed, _) = support::connect_hub(&setup, &hub);
+    feed.send(r#"{"id":"c_feed","command":"feed"}"#);
+    support::recv_answer(&feed, "c_feed", "the registered status feed");
     let mut run = Run::spawn(&setup, 160, 48, &[], &env);
     run.ready();
     run.write(b"scan the tree\r");
-    // The delegate runs to completion: the card keeps its finished row.
-    let grid = run.wait_screen("the finished delegate row", |grid| {
+    // The final parent summary carries the last usage that can move the panel.
+    support::until(&feed, "the final idle parent summary", |line| {
+        line["kind"] == "session_status"
+            && line["payload"]["parent"].is_null()
+            && line["payload"]["state"] == "idle"
+            && line["payload"]["turns"] == 2
+            && line["payload"]["delegates"] == 0
+    });
+    // The delegate runs to completion; finished rows start folded.
+    run.wait_screen("the final summary and folded row rendered", |grid| {
+        grid.contents.contains("1 finished ▸")
+            && grid.contents.contains("Hello.")
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("tokens in / out") && row.trim_end().ends_with("10 / 3"))
+    });
+    run.click_where("the finished delegates fold", |grid| {
+        grid.text_at("1 finished ▸")
+    });
+    run.wait_screen("the finished delegate row", |grid| {
         grid.contents.contains(FINISHED_ROW)
     });
-    let card = row_with(&grid, FINISHED_ROW);
     // The click path: the finished Delegates-card row opens the replayed
     // transcript, not the parent's conversation.
-    click(&mut run, col_at(&grid, card, FINISHED_ROW) + 2, card);
+    run.click_where("the finished delegate row", |grid| {
+        grid.text_at(FINISHED_ROW)
+    });
     run.wait_screen("the breadcrumb", |grid| grid.contents.contains("› ◆ scan"));
     run.wait_screen("the replayed transcript", |grid| {
         grid.contents.contains(CHILD_TEXT)
@@ -8450,7 +8458,10 @@ fn a_finished_delegate_opens_its_replayed_view_from_a_click_and_from_enter() {
     run.wait_screen("the conversation back again", |grid| {
         grid.contents.contains(FINISHED_ROW) && !grid.contents.contains(CHILD_TEXT)
     });
+    drop(feed);
     quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
 }
 /// A `delegate_spawn` call starting scan `name` on `model`: one per
 /// delegate, each with its own call id and description.
@@ -8583,7 +8594,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // child, so each row still spins.
     run.write(b"/delegates\r");
     let grid = run.wait_screen("the running delegates", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("◆ scan one")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan one")
+            && !grid.contents.contains("✓ scan one")
     });
     // The shorter viewport hides the third delegate below the fold: walk
     // focus down until the viewport follows it into view to prove it
@@ -8591,7 +8604,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // navigation start for the six Downs below.
     let mut prev = grid.contents;
     let mut downs = 0;
-    while downs < 6 && !prev.contains("◆ scan three") {
+    while downs < 6 && !prev.contains("scan three") {
         run.write(b"\x1b[B");
         downs += 1;
         prev = run
@@ -8601,7 +8614,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             .contents;
     }
     let grid = run.wait_screen("the third running delegate", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("◆ scan three")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan three")
+            && !grid.contents.contains("✓ scan three")
     });
     let mut prev = grid.contents;
     for _ in 0..downs {
@@ -8613,7 +8628,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             .contents;
     }
     let grid = run.wait_screen("the first delegate back on top", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("◆ scan one")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan one")
+            && !grid.contents.contains("✓ scan one")
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -8635,7 +8652,11 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             && grid.contents.contains("scan four")
             && !grid.contents.contains("scan one")
     });
-    assert!(grid.contents.contains("◆ scan four"), "{}", grid.contents);
+    assert!(
+        grid.contents.contains("scan four") && !grid.contents.contains("✓ scan four"),
+        "{}",
+        grid.contents
+    );
     // Enter opens the fourth delegate's live view.
     run.write(b"\r");
     run.wait_screen("the fourth delegate's view", |grid| {
@@ -8680,9 +8701,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     });
     let grid = run.wait_screen("the partial delegates list", |grid| {
         delegates_list_header(grid)
-            && (grid.contents.contains("◆ scan three") || grid.contents.contains("◆ scan four"))
-            && !grid.contents.contains("◆ scan one")
-            && !grid.contents.contains("◆ scan two")
+            && ((grid.contents.contains("scan three") && !grid.contents.contains("✓ scan three"))
+                || (grid.contents.contains("scan four") && !grid.contents.contains("✓ scan four")))
+            && !(grid.contents.contains("scan one") && !grid.contents.contains("✓ scan one"))
+            && !(grid.contents.contains("scan two") && !grid.contents.contains("✓ scan two"))
             && grid.contents.contains("✓ scan")
     });
     // An unfinished late scan stays first while the finished rows sit
@@ -8690,7 +8712,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // replay. Rows match by containment: a clipped viewport marks its
     // first column with an overflow glyph, so the marker is not always
     // first.
-    let running = grid.rows.iter().position(|row| row.contains("◆ scan"));
+    let running = grid
+        .rows
+        .iter()
+        .position(|row| row.contains("scan") && !row.contains("✓"));
     let finished = grid.rows.iter().position(|row| row.contains("✓ scan"));
     let (Some(running), Some(finished)) = (running, finished) else {
         panic!("a running scan above finished ones in\n{}", grid.contents);
@@ -8728,7 +8753,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             && grid.contents.contains("✓ scan two")
             && grid.contents.contains("✓ scan three")
             && grid.contents.contains("✓ scan four")
-            && !grid.contents.contains("◆ scan")
+            && !grid
+                .rows
+                .iter()
+                .any(|row| row.contains("scan") && !row.contains("✓"))
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -11049,7 +11077,7 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
     fakes::wait_until("the steering_applied line", setup.deadline, move || {
         log_has(&log, "steering_applied", MARK)
     });
-    open_delegate_view(&mut run, "◆ scan", "› ◆ scan");
+    open_delegate_view(&mut run, "scan", "› ◆ scan");
     run.wait_screen(
         "the steer rule over its text, no Fiber rule beside it",
         |grid| rule_over_text(grid, "steer", MARK).is_some() && !grid.contents.contains("Fiber ·"),

@@ -1011,6 +1011,7 @@ fn delegate(
         started: Some(1720000000000),
         outcome,
         ended,
+        cost: None,
     }
 }
 
@@ -1462,6 +1463,32 @@ fn chrome_delegate_outcomes_key_apart() {
     // so three misses prove the key reaches the variant
     // (`docs/tui.md`, "How a TUI extension runs").
     assert_eq!(calls.get(), 3, "each outcome misses");
+}
+
+#[test]
+fn chrome_delegate_cost_presence_and_totals_are_in_the_cache_key() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    for cost in [
+        None,
+        Some((None, 0.0)),
+        Some((Some(0.42), 0.0)),
+        Some((Some(0.42), 1.10)),
+    ] {
+        let mut delegate = delegate("3", None, None);
+        delegate.cost = cost;
+        let input = Input::Card(Card::Delegates(DelegatesCard {
+            delegates: vec![delegate],
+            flat: false,
+        }));
+        assert!(draw_counted(&cache, "card:delegates", &input, 20, &calls, drawn("hi")).is_some());
+    }
+    assert_eq!(
+        calls.get(),
+        4,
+        "absence, reported null, billed and subscription each miss"
+    );
 }
 
 #[test]

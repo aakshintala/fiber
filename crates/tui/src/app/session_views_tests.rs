@@ -1556,14 +1556,42 @@ fn jobs_list_draws_one_row_per_job_and_opens_on_click() {
 
 #[test]
 fn all_delegates_list_draws_every_delegate_with_no_heading() {
+    let clock = fakes::clock::FakeClock::new();
     let mut app = attached(80, 24);
+    app.set_now(clock.origin(), 8_000);
     start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
     start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    for session in ["s_dddddddddddddddd", "s_eeeeeeeeeeeeeeee"] {
+        app.on_line(session_line(
+            session,
+            "session_status",
+            json!({
+                "name": "delegate", "workspace": "/w", "project": "-w", "state": "idle",
+                "parent": SESSION, "started": 2_000, "since": 0, "calls": 3,
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+                "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                    "cost": 0.42, "subscription_cost": 0.75}
+            }),
+            None,
+        ));
+    }
+    let mut completed = session_line(
+        SESSION,
+        "job_completed",
+        json!({"job_id": "j_2", "status": "completed"}),
+        Some("a_1"),
+    );
+    if let Line::Session(line) = &mut completed {
+        line.ts = 8_000;
+    }
+    app.on_line(completed);
     open_all_delegates(&mut app);
     let (shown, _) = screen(&app, 80, 24);
     assert!(shown.contains("Delegates"));
     assert!(shown.contains("task j_1"));
-    assert!(shown.contains("task j_2"));
+    assert!(shown.contains("✓ task j_2"));
+    assert!(shown.contains("3 calls · 6s · $0.42 · $0.75 sub"));
+    assert!(shown.contains("3 calls · 6s · $0.42 · $0.75 sub · done"));
     assert!(!shown.contains("Running delegates"));
     assert!(!shown.contains("Nothing running."));
     // Row data starts at once: the first frame row holds the first

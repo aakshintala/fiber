@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/working_line_tests.rs
+assertion_line: 447
 expression: shown
 ---
 
@@ -18,9 +19,9 @@ expression: shown
 ⋮
    ⠋ Working 11m 14s · Esc to interrupt
  ⠋ build
-   0 calls · 0s
+   0 calls · 0s · $0.00
  ⠋ build
-   0 calls · 0s
+   0 calls · 0s · $0.00
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
  ▌─────────────────────────────────────────────────────────────────────────────

@@ -978,15 +978,37 @@ impl State {
         };
         let (reviewer, reviewer_observe, credential_files, publish) =
             self.switching.reviewer_for(route, &config, &here);
+        // A reload that changes the effective sandbox setting stages one
+        // flip notice saying which way it went, exactly when the candidate
+        // differs from the current value read under the shared-handle lock.
         // A reload that newly makes the sandbox unavailable stages the
-        // startup-shaped notice, but only on the first transition for the
-        // session: prepare computes the candidate settings with the reloaded
-        // credential files, and the install below applies them and sets the
-        // latch, so later toggles emit nothing.
+        // startup-shaped notice too, but only on the first transition for
+        // the session: prepare computes the candidate settings with the
+        // reloaded credential files, and the install below applies them and
+        // sets the latch, so later toggles emit nothing. When both apply
+        // the flip comes first.
+        let (current_enabled, fiber_home) = {
+            let guard = support::lock(&self.sandbox);
+            (guard.enabled, guard.fiber_home.clone())
+        };
+        let candidate = crate::settings::sandbox_settings(&config, &fiber_home, &credential_files);
+        let staged_flip_notice: Option<contract::events::Notice> =
+            (candidate.enabled != current_enabled).then(|| {
+                let message = if candidate.enabled {
+                    "Sandbox on after /reload."
+                } else {
+                    "Sandbox off after /reload."
+                };
+                contract::events::Notice {
+                    code: contract::ErrorCode::Sandbox,
+                    message: message.to_owned(),
+                    extension: None,
+                }
+            });
+        if let Some(notice) = &staged_flip_notice {
+            notices.push(notice.clone());
+        }
         let staged_sandbox_notice: Option<contract::events::Notice> = (|| {
-            let fiber_home = support::lock(&self.sandbox).fiber_home.clone();
-            let candidate =
-                crate::settings::sandbox_settings(&config, &fiber_home, &credential_files);
             if !candidate.enabled {
                 return None;
             }

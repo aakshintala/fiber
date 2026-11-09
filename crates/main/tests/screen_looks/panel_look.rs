@@ -320,19 +320,29 @@ fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
         };
         let text = next[start..].trim_end();
         let parts: Vec<_> = text.split(" · ").collect();
-        if parts.len() != 3 || parts[0] != "2 calls" || !delegate_duration(parts[1]) {
+        if !matches!(parts.len(), 3 | 4)
+            || parts[0] != "2 calls"
+            || !delegate_duration(parts[1])
+            || (parts.len() == 4 && parts[2] != "$0.00")
+        {
             return false;
         }
+        let subject = parts[parts.len() - 1];
         let Some((x, progress_y)) = grid.text_at(text) else {
             return false;
         };
         if usize::from(progress_y) != y + 1 {
             return false;
         }
-        let prefix_width = Span::raw(format!("2 calls · {} · ", parts[1])).width();
+        let prefix = if parts.len() == 4 {
+            format!("2 calls · {} · $0.00 · ", parts[1])
+        } else {
+            format!("2 calls · {} · ", parts[1])
+        };
+        let prefix_width = Span::raw(prefix).width();
         let subject_x = usize::from(x) + prefix_width;
         let content_end = usize::from(grid.size().0.saturating_sub(1));
-        if !delegate_subject_matches(parts[2], tail, content_end.saturating_sub(subject_x)) {
+        if !delegate_subject_matches(subject, tail, content_end.saturating_sub(subject_x)) {
             return false;
         }
         let y = progress_y;
@@ -409,6 +419,10 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
     )
     .unwrap();
     let subject = format!("shell {command}");
+    let hub = Arc::new(Mutex::new(None));
+    let (feed, _) = connect_hub(&setup, &hub);
+    feed.send(r#"{"id":"c_feed","command":"feed"}"#);
+    support::recv_answer(&feed, "c_feed", "the registered status feed");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
@@ -416,12 +430,34 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         delegate_progress(grid, &subject, false)
     });
     std::io::Write::write_all(hold.release(), b"done\n").unwrap();
+    // The final parent summary carries the last usage that can move the panel.
+    until(&feed, "the final idle parent summary", |line| {
+        line["kind"] == "session_status"
+            && line["payload"]["parent"].is_null()
+            && line["payload"]["state"] == "idle"
+            && line["payload"]["turns"] == 2
+            && line["payload"]["delegates"] == 0
+    });
+    run.wait_screen("the final summary and folded row rendered", |grid| {
+        grid.contents.contains("1 finished ▸")
+            && grid.contents.contains("Waiting.")
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("tokens in / out") && row.trim_end().ends_with("0 / 0"))
+    });
+    run.click_where("the finished delegates fold", |grid| {
+        grid.text_at("1 finished ▸").filter(|&(x, _)| x >= 100)
+    });
     run.wait_screen(
-        "the finished delegate's calls, elapsed and done, dim",
+        "the finished delegate's calls, elapsed, known-zero cost and done, dim",
         |grid| delegate_progress(grid, "done", true),
     );
     hold.stand_down(setup.deadline.cleanup_phase());
+    drop(feed);
     quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
 }
 
 #[test]
