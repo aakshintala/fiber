@@ -607,6 +607,70 @@ fn execute_noting(answer: bool, paced: bool, refusal: Option<&str>) -> Noted {
     }
 }
 
+/// A hosted run as `execute_noting` does, on the test-controlled `clock`:
+/// time moves only when the test advances it (`docs/testing.md`, "Values
+/// that change every run", "Waits and timeouts").
+fn execute_noting_on(
+    answer: bool,
+    paced: bool,
+    clock: Arc<fakes::clock::FakeClock>,
+) -> (Noted, Arc<fakes::clock::FakeClock>) {
+    let dir = fakes::TempDir::new("fiber-hosted-noting");
+    let order: Order = Arc::new(Mutex::new(Vec::new()));
+    let (calls, started) = mpsc::channel();
+    let host = Arc::new(Noting {
+        order: Arc::clone(&order),
+        refusal: None,
+        calls,
+    });
+    let probe = Arc::new(Probe {
+        order: Arc::clone(&order),
+        answer,
+        paced,
+        recorder: Recorder::default(),
+    });
+    let workdir = dir.path().to_path_buf();
+    let emit = Arc::clone(&probe);
+    let moved = Arc::clone(&clock);
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let settings = super::super::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: workdir.clone(),
+        };
+        let ran = super::execute(
+            host,
+            Path::new("/bin/sh"),
+            "held",
+            &workdir,
+            None,
+            moved.as_ref(),
+            &CancelToken::default(),
+            &*emit,
+            super::command::MovePolicy::Stay,
+            None,
+            None,
+            None,
+            &settings,
+            &workdir,
+            None,
+        );
+        let _sent = done.send(ran);
+    });
+    (
+        Noted {
+            order,
+            probe,
+            started,
+            result,
+            _dir: dir,
+        },
+        clock,
+    )
+}
+
 #[test]
 fn a_hosted_call_asks_to_start_once_before_the_host_starts_it() {
     let Noted {
@@ -676,12 +740,20 @@ fn a_refused_host_start_after_starting_reports_the_error() {
 /// the park deadline, with the host quiet.
 #[test]
 fn a_paced_hosted_call_flushes_a_held_change_on_the_park_deadline() {
-    let Noted {
-        probe,
-        started,
-        result,
-        ..
-    } = execute_noting(true, true, None);
+    // Time moves only when the test advances it (`docs/testing.md`, "Values
+    // that change every run"): the held change goes out on the park the test
+    // drives, not on the process clock.
+    let clock = fakes::clock::FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(100);
+    let (
+        Noted {
+            probe,
+            started,
+            result,
+            ..
+        },
+        clock,
+    ) = execute_noting_on(true, true, Arc::clone(&clock));
     let wait = Deadline::after(Duration::from_secs(40));
     let events = wait.recv_or_fail(&started, "host start");
     events
@@ -700,6 +772,17 @@ fn a_paced_hosted_call_flushes_a_held_change_on_the_park_deadline() {
             bytes: b"b".to_vec(),
         })
         .expect("second output");
+    assert!(
+        clock.await_parked(due, Deadline::after(Duration::from_secs(40))),
+        "the drive parks for the held delta"
+    );
+    assert_eq!(probe.recorder.text(), "a", "held inside the interval");
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(Duration::from_secs(40)),
+    );
     assert!(
         probe.recorder.wait_for_text("ab", wait),
         "the held b goes out on the park deadline: {:?}",

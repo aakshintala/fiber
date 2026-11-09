@@ -2928,6 +2928,49 @@ fn execute_hooked(
     rx
 }
 
+/// Runs `command` as `execute_hooked` does, on the test-controlled `clock`:
+/// time moves only when the test advances it (`docs/testing.md`, "Values
+/// that change every run", "Waits and timeouts").
+fn execute_hooked_on(
+    program: std::path::PathBuf,
+    command: &str,
+    work: &std::path::Path,
+    hook: &Arc<Hook>,
+    clock: Arc<FakeClock>,
+) -> mpsc::Receiver<io::Result<super::Ran>> {
+    let command = command.to_owned();
+    let work = work.to_path_buf();
+    let hook = Arc::clone(hook);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let cancel = CancelToken::new();
+        let sandbox = crate::shell::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        };
+        let ran = super::execute(
+            &program,
+            &command,
+            &work,
+            Some(Duration::from_secs(3600)),
+            clock.as_ref(),
+            &cancel,
+            &*hook,
+            MovePolicy::Stay,
+            None,
+            None,
+            None,
+            &sandbox,
+            &work,
+            None,
+        );
+        let _sent = tx.send(ran);
+    });
+    rx
+}
+
 fn finished_of(ran: io::Result<super::Ran>) -> super::Finished {
     match ran {
         Ok(super::Ran::Finished(finished, _)) => finished,
@@ -3042,11 +3085,17 @@ fn a_paced_call_flushes_a_held_change_on_the_park_deadline() {
         .open(&second)
         .unwrap();
     let hook = Arc::new(Hook::new(true, true, || false));
-    let rx = execute_hooked(
+    // Time moves only when the test advances it (`docs/testing.md`, "Values
+    // that change every run"): the held change goes out on the park the test
+    // drives, not on the process clock.
+    let clock = FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(100);
+    let rx = execute_hooked_on(
         "/bin/sh".into(),
         "printf a; read -r _ < first; printf b; read -r _ < second",
         &work,
         &hook,
+        Arc::clone(&clock),
     );
     let wait = Deadline::after(WAIT);
     // The first change after idle goes out at once.
@@ -3057,6 +3106,17 @@ fn a_paced_call_flushes_a_held_change_on_the_park_deadline() {
     }
     // `b` arrives within the 100 ms the first delta holds back, so it is
     // held; with the command quiet, only the park deadline can send it.
+    assert!(
+        clock.await_parked(due, Deadline::after(WAIT)),
+        "the drive parks for the held delta"
+    );
+    assert_eq!(hook.recorder.text(), "a", "held inside the interval");
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert!(
         hook.recorder.wait_for_text("ab", wait),
         "the held b goes out on the park deadline: {:?}",

@@ -652,6 +652,9 @@ fn driver_shell_sent_logs_its_start_then_streams_its_output_then_its_end() {
     let early = until_after(&direct, &sub, "the early output", |line| {
         delta_with(line, "c_stream", "early-4177")
     });
+    // Order: the start comes before any delta and before its end
+    // (`docs/events.md`, "`shell_command_started`": before any of its
+    // `shell_command_delta` lines and before its `shell_command`).
     let started = early
         .iter()
         .position(|line| line["kind"] == "shell_command_started")
@@ -673,6 +676,9 @@ fn driver_shell_sent_logs_its_start_then_streams_its_output_then_its_end() {
     let ended = until_after(&direct, &sub, "the end of the command", |line| {
         end_of(line, "c_stream")
     });
+    // Order: the rest of the output streams before the end (`docs/events.md`,
+    // "`shell_command_started`": the start is before its `shell_command`; the
+    // deltas stream while it runs).
     assert!(
         ended
             .iter()

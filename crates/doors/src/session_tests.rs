@@ -7910,6 +7910,8 @@ fn a_sent_driver_shell_waits_for_its_start_line_then_streams_to_every_client() {
         .iter()
         .map(|line| line["kind"].as_str().unwrap())
         .collect();
+    // Order: the start comes before any delta (`docs/events.md`,
+    // "`shell_command_started`": before any of its `shell_command_delta` lines).
     let started = kinds
         .iter()
         .position(|kind| *kind == "shell_command_started")
@@ -7920,6 +7922,8 @@ fn a_sent_driver_shell_waits_for_its_start_line_then_streams_to_every_client() {
         .iter()
         .filter(|line| line["kind"] == "shell_command_delta")
         .collect();
+    // Count: the stub exits with two outputs, so two deltas; the order of
+    // the two texts follows the stub's write order, not a doc promise.
     assert_eq!(deltas.len(), 2);
     for delta in &deltas {
         assert_eq!(delta["payload"]["command_id"], "c_bang");
@@ -7927,6 +7931,8 @@ fn a_sent_driver_shell_waits_for_its_start_line_then_streams_to_every_client() {
     }
     assert_eq!(deltas[0]["payload"]["text"], "one\n");
     assert_eq!(deltas[1]["payload"]["text"], "two\n");
+    // Order: the start line comes before any delta (`docs/events.md`,
+    // "`shell_command_started`").
     assert!(
         kinds
             .iter()

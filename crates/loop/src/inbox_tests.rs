@@ -1343,6 +1343,9 @@ fn a_sent_shell_start_before_its_end_is_written_before_it_mid_turn() {
     looped.admit_running(ended_at, &turn).unwrap();
     assert!(matches!(answered(&started_rx), Ok(None)));
     assert!(matches!(answered(&ended_rx), Ok(None)));
+    // Order: the start comes before its end (`docs/events.md`,
+    // "`shell_command_started`": before its `shell_command`; `docs/events.md`,
+    // "`shell_command`": its `shell_command_started` comes before it).
     assert_eq!(
         saved_kinds(&home),
         [

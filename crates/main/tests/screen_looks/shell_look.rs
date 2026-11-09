@@ -313,6 +313,8 @@ fn session_id(home: &Path) -> String {
 /// A `!` or `!!` run that keeps running and writes output draws its
 /// row with the output so far and `running`, before it exits; the
 /// ending then replaces `running`.
+/// Order: the row shows the head, the note, the output so far, then
+/// `running`, and the ending replaces it (`docs/tui.md`, "`!cmd`").
 fn streams_before_it_exits(prefix: &str, note: &str) {
     let setup = Setup::new();
     script(&setup);

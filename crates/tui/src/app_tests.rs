@@ -2816,6 +2816,9 @@ const SENT_NOTE: &str = "sent with your next prompt";
 /// ends as one row when its `shell_command` lands.
 #[test]
 fn a_started_run_is_a_live_row_that_its_end_replaces() {
+    // Order: the row shows the head, then the output so far, then `running`,
+    // and the ending replaces it (`docs/tui.md`, "`!cmd`"; `docs/events.md`,
+    // "`shell_command_started`": a client folds it as a live row).
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
