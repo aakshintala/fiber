@@ -1539,3 +1539,275 @@ fn b2_old_keeper_wins_lock() {
 fn b2_fresh_keeper_wins_lock() {
     lock_race(false);
 }
+
+/// One numbered producer block.
+fn block(n: u64) -> Vec<u8> {
+    format!("block {n:08}\n").into_bytes()
+}
+
+#[test]
+fn the_switch_moves_every_byte_from_the_file_to_frames() {
+    use base64::Engine as _;
+    let clock = fakes::clock::FakeClock::new();
+    // Pause and release registered before any worker starts. The test owns
+    // the release sender, and the test ending drops it, which releases the
+    // pause too. The injected clock stays frozen throughout.
+    let (arrived_send, arrived) = mpsc::channel();
+    let (release_send, release) = mpsc::channel();
+    let release = Arc::new(std::sync::Mutex::new(release));
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        before_switch: Some(Box::new(move || {
+            match arrived_send.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match release
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .recv()
+            {
+                Ok(()) | Err(_) => {}
+            }
+        })),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-switch-hook",
+        SessionId("s_0123456789abcdef".into()),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    let out_fifo = keeper.home.path().join("out.fifo");
+    fakes::fifo(&out_fifo);
+    let mut producer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&out_fifo)
+        .expect("fifo");
+    let pgid = start_shell(&keeper, "job", &format!("cat '{}'", out_fifo.display()));
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "the keeper to hold the log");
+    let id = keeper.id.clone();
+    let mut peer = connect(&keeper);
+    identify(&mut peer, &id);
+    let running = handover(&mut peer);
+    assert_eq!(running.len(), 1);
+    let output = keeper.home.path().join("job.out");
+    assert_eq!(running[0].output_path, output);
+    // Blocks before the acknowledgement land in the keeper's file. The
+    // producer never waits for the handover to complete.
+    let mut expected = Vec::new();
+    for n in 1..=6 {
+        producer.write_all(&block(n)).expect("block");
+        expected.extend(block(n));
+    }
+    let file_is = |wanted: Vec<u8>| {
+        let output = output.clone();
+        move || std::fs::read(&output).is_ok_and(|bytes| bytes == wanted)
+    };
+    fakes::wait_until(
+        "the pre-switch blocks in the file",
+        Deadline::after(Duration::from_secs(10)),
+        file_is(expected.clone()),
+    );
+    // The acknowledgement runs to the switch on a worker, which forwards
+    // every frame to the test; the test collects them with deadlines.
+    let (forwarded_send, forwarded) = mpsc::channel();
+    let (adopted_send, adopted) = mpsc::channel();
+    let (worker_send, worker_done) = mpsc::channel();
+    std::thread::spawn(move || {
+        say(&mut peer, &ToKeeper::Adopted(true));
+        let deadline = Deadline::after(Duration::from_secs(10));
+        let mut acknowledged = false;
+        loop {
+            match deadline.recv(&peer.frames) {
+                Ok(Some(FromKeeper::AdoptDone(true))) => {
+                    acknowledged = true;
+                    match adopted_send.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                Ok(Some(frame)) => {
+                    let ending = matches!(frame, FromKeeper::Exit { .. });
+                    if forwarded_send.send(frame).is_err() {
+                        break;
+                    }
+                    // The job's ending is terminal: nothing after it needs
+                    // forwarding, so the worker ends instead of waiting out
+                    // its deadline.
+                    if ending {
+                        break;
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        match worker_send.send(acknowledged) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    // The switch worker is paused: the held block lands in the
+    // keeper-owned file, with no corresponding output frame.
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&arrived, "the switch to pause");
+    producer.write_all(&block(7)).expect("held block");
+    expected.extend(block(7));
+    fakes::wait_until(
+        "the held block in the keeper-owned file",
+        Deadline::after(Duration::from_secs(10)),
+        file_is(expected.clone()),
+    );
+    let mut pre = Vec::new();
+    while let Ok(frame) = forwarded.try_recv() {
+        pre.push(frame);
+    }
+    assert!(
+        pre.iter()
+            .all(|frame| !matches!(frame, FromKeeper::Output { .. })),
+        "no output frame crosses the handover before the switch"
+    );
+    // Release the switch and require the acknowledgement.
+    match release_send.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopted, "the acknowledgement");
+    // The next numbered block arrives as an output frame.
+    for n in 8..=9 {
+        producer.write_all(&block(n)).expect("block");
+        expected.extend(block(n));
+    }
+    let decode = |frame: &FromKeeper| match frame {
+        FromKeeper::Output { bytes, .. } => base64::engine::general_purpose::STANDARD
+            .decode(bytes)
+            .expect("base64"),
+        FromKeeper::Started { .. }
+        | FromKeeper::Failed { .. }
+        | FromKeeper::Exit { .. }
+        | FromKeeper::Identity { .. }
+        | FromKeeper::Handover { .. }
+        | FromKeeper::AdoptDone(_) => Vec::new(),
+    };
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let mut post = Vec::new();
+    let mut seen: Vec<u8> = Vec::new();
+    while !seen.ends_with(&block(9)) {
+        match deadline.recv_or_fail(&forwarded, "a post-switch frame") {
+            frame @ FromKeeper::Output { .. } => {
+                seen.extend(decode(&frame));
+                post.push(frame);
+            }
+            frame @ FromKeeper::Started { .. }
+            | frame @ FromKeeper::Failed { .. }
+            | frame @ FromKeeper::Exit { .. }
+            | frame @ FromKeeper::Identity { .. }
+            | frame @ FromKeeper::Handover { .. }
+            | frame @ FromKeeper::AdoptDone(_) => {
+                panic!("expected output, heard {}", describe(&Some(frame)))
+            }
+        }
+    }
+    drop(producer);
+    let ending = loop {
+        match deadline.recv_or_fail(&forwarded, "the job ending") {
+            frame @ FromKeeper::Exit { .. } => break frame,
+            frame @ FromKeeper::Output { .. } => post.push(frame),
+            frame @ FromKeeper::Started { .. }
+            | frame @ FromKeeper::Failed { .. }
+            | frame @ FromKeeper::Identity { .. }
+            | frame @ FromKeeper::Handover { .. }
+            | frame @ FromKeeper::AdoptDone(_) => {
+                panic!("expected the ending, heard {}", describe(&Some(frame)))
+            }
+        }
+    };
+    // Every post-switch frame runs through the restored runner, which
+    // appends it after the keeper's bytes; the file holds exactly the
+    // bytes written, in order.
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&output)
+        .expect("output file");
+    let (end_send, completions) = mpsc::channel();
+    let emit = Arc::new(fakes::Recorder::default());
+    let recorder: Arc<dyn contract::emit::Emit> = emit;
+    let opened = contract::jobs::Opened {
+        started: contract::events::JobStarted {
+            job_id: JobId("j_job".into()),
+            tool: Some("shell".into()),
+            extension: None,
+            description: "job j_job".into(),
+            output_path: "artifacts/job.out".into(),
+        },
+        path: output.clone(),
+        file,
+        end: contract::jobs::End(Box::new(move |completed| match end_send.send(completed) {
+            Ok(()) | Err(_) => {}
+        })),
+        emit: recorder,
+        lines: None,
+    };
+    let (events_send, run_events) = mpsc::channel();
+    let runner_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let run = tools::AdoptedRun::new(
+        opened,
+        run_events,
+        None,
+        contract::jobs::Stop(Box::new(|| {})),
+        runner_clock,
+    );
+    let (run_send, run_done) = mpsc::channel();
+    std::thread::spawn(move || match run_send.send(run.run()) {
+        Ok(()) | Err(_) => {}
+    });
+    for frame in &post {
+        match frame {
+            FromKeeper::Output { stream, bytes, .. } => events_send
+                .send(contract::keeper::HostEvent::Output {
+                    stream: *stream,
+                    bytes: base64::engine::general_purpose::STANDARD
+                        .decode(bytes)
+                        .expect("base64"),
+                })
+                .expect("runner event"),
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("post-switch output expected"),
+        }
+    }
+    match ending {
+        FromKeeper::Exit { exit, .. } => events_send
+            .send(contract::keeper::HostEvent::Exit(exit))
+            .expect("runner exit"),
+        frame @ FromKeeper::Started { .. }
+        | frame @ FromKeeper::Failed { .. }
+        | frame @ FromKeeper::Output { .. }
+        | frame @ FromKeeper::Identity { .. }
+        | frame @ FromKeeper::Handover { .. }
+        | frame @ FromKeeper::AdoptDone(_) => {
+            panic!("expected the ending, heard {}", describe(&Some(frame)))
+        }
+    }
+    drop(events_send);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&run_done, "the runner to return")
+            .is_none(),
+        "a reported exit returns no report"
+    );
+    let completed =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&completions, "the ending");
+    assert_eq!(completed.job_id, JobId("j_job".into()));
+    assert_eq!(completed.status, contract::events::Outcome::Completed);
+    assert_eq!(std::fs::read(&output).expect("output file"), expected);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&worker_done, "the forwarding worker to finish"),
+        "the worker saw the acknowledgement"
+    );
+}

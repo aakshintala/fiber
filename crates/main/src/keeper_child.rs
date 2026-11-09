@@ -123,6 +123,9 @@ struct Hooks {
     /// Runs once a candidate holds the log, before it decides, so a test
     /// reads what had happened by then.
     acquired: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs immediately before a handover switches each job's sink from its
+    /// files to the session, so a test lands a write in that window.
+    before_switch: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
 }
@@ -846,6 +849,12 @@ impl Runtime {
             Ok(Some(ToKeeper::Adopted(true)))
         );
         let result = if ready {
+            // No runtime or job lock is held here: the handover's log was
+            // released above, and the switch takes the locks itself.
+            #[cfg(test)]
+            if let Some(pause) = &self.hooks.before_switch {
+                pause();
+            }
             self.switch(&kept);
             self.send(FromKeeper::AdoptDone(true))
                 .and_then(|()| self.control_from(reader))
