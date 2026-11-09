@@ -119,20 +119,17 @@ impl<B: Backend> Screen<B> {
         if self.last.as_ref() == Some(&next) {
             return Ok(());
         }
-        let look = &self.look;
-        self.terminal.draw(|frame| {
-            frame.buffer_mut().clone_from(&next.0);
-            look.paint(frame.buffer_mut());
-            if let Some(cursor) = next.1 {
-                frame.set_cursor_position(cursor);
-            }
-        })?;
-        // Shapes the painted copy, never the kept frame: the paint
-        // changes styles and blanks cells, so a pre-paint capture would
-        // report a frame that never appeared. The clone drops here.
-        let mut painted = next.0.clone();
-        look.paint(&mut painted);
-        let shape = shape_frame(&painted, app.top(), app.has_new());
+        let shape = {
+            let look = &self.look;
+            let completed = self.terminal.draw(|frame| {
+                frame.buffer_mut().clone_from(&next.0);
+                look.paint(frame.buffer_mut());
+                if let Some(cursor) = next.1 {
+                    frame.set_cursor_position(cursor);
+                }
+            })?;
+            shape_frame(completed.buffer, app.top(), app.has_new())
+        };
         self.frames.push(shape);
         self.frames
             .drain(..self.frames.len().saturating_sub(RING_DEPTH));

@@ -1130,7 +1130,7 @@ fn blanks(count: usize) -> Vec<ShapeCell> {
 }
 
 /// A 2-frame snapshot: the first frame's lead cell in red, the second
-/// frame's wide lead in blue. The wide lead stands in for a `🔑`-width
+/// frame's wide lead in blue. The wide lead stands in for a `\u{1f511}`-width
 /// cell: its glyph never reaches the section, only its width class.
 fn two_frames() -> Vec<FrameShape> {
     let red = StyleValue {
@@ -1209,6 +1209,10 @@ fn section(saved: &str) -> String {
 
 #[test]
 fn frame_shapes_round_trip_through_write_byte_for_byte() {
+    // docs/user/reporting.md:17,21 plus docs/invocation.md:211 (shapes of the
+    // last 20 painted frames, per cell width class/style/blank plus geometry,
+    // at most 20): the section renders the ring deterministically, oldest
+    // first, so the byte-for-byte pin proves the renderer, not an event order.
     let root = fakes::TempDir::new("fiber-feedback-shapes");
     let clock = FakeClock::new();
     let doctor = || Ok(DOCTOR.to_owned());
@@ -1230,7 +1234,7 @@ fn frame_shapes_round_trip_through_write_byte_for_byte() {
     assert_eq!(section, TWO_FRAMES);
     assert!(section.is_ascii(), "the section carries no glyphs");
     assert!(
-        !section.contains("🔑"),
+        !section.contains("\u{1f511}"),
         "the emoji-width lead leaves no glyph"
     );
     assert!(
@@ -1278,6 +1282,9 @@ fn tops(count: usize) -> Vec<FrameShape> {
 
 #[test]
 fn frame_cap_keeps_the_newest_twenty() {
+    // docs/user/reporting.md:21 (at most the newest 20 frame shapes) plus
+    // docs/invocation.md:211 and docs/tui.md `/feedback` row (last 20 painted
+    // frames): the writer keeps the newest 20 and drops the oldest first.
     let root = fakes::TempDir::new("fiber-feedback-shapes-cap");
     let clock = FakeClock::new();
     let doctor = || Ok(DOCTOR.to_owned());
@@ -1350,7 +1357,7 @@ fn the_link_never_carries_shapes() {
     )
     .unwrap();
     let (_, body) = linked(&done.link);
-    for marker in ["### Frame shapes", "palette ", "frame 1/", "🔑"] {
+    for marker in ["### Frame shapes", "palette ", "frame 1/", "\u{1f511}"] {
         assert!(!body.contains(marker), "full link carries {marker}: {body}");
     }
     // A report too long for the link falls back to the description, and
@@ -1370,7 +1377,7 @@ fn the_link_never_carries_shapes() {
     .unwrap();
     let (_, body) = linked(&done.link);
     assert!(body.contains("attach the report file"), "{body}");
-    for marker in ["### Frame shapes", "palette ", "frame 1/", "🔑"] {
+    for marker in ["### Frame shapes", "palette ", "frame 1/", "\u{1f511}"] {
         assert!(!body.contains(marker), "fallback link carries {marker}");
     }
     assert!(

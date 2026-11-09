@@ -187,7 +187,6 @@ pub fn encode_cell(width: u16, blank: bool, exempt: bool) -> (ShapeKind, bool, u
     };
     match width {
         0 | 1 => (kind, false, 0),
-        2 => (kind, true, 1),
         _ => (kind, true, width - 1),
     }
 }

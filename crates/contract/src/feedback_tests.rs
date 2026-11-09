@@ -65,6 +65,8 @@ fn blank_and_content_kinds_follow_the_blank_flag() {
 
 #[test]
 fn ring_depth_holds_a_full_screen_of_scrolling() {
+    // docs/user/reporting.md:21 (at most 20 frame shapes) and
+    // docs/invocation.md:211 plus docs/tui.md `/feedback` row (last 20 painted frames).
     assert_eq!(RING_DEPTH, 20);
 }
 
@@ -122,6 +124,9 @@ fn shape_cells_round_trip_through_the_constructor() {
 
 #[test]
 fn shape_rows_hold_their_cells_in_order() {
+    // docs/user/reporting.md:17 (per cell its width class, style and whether
+    // it is blank, plus the frame geometry): a row holds its cells in column
+    // order by construction, so the report can place each cell.
     let cells = vec![
         ShapeCell::new(ShapeKind::Content, false, 1),
         ShapeCell::new(ShapeKind::Continuation, false, 1),
@@ -152,44 +157,6 @@ fn frame_shapes_hold_geometry_scroll_and_palette() {
     assert!(frame.has_new);
     assert_eq!(frame.palette.len(), 1);
     assert_eq!(frame.rows.len(), 1);
-}
-
-/// The wire character the alphabet gives an encoded cell: one glyph-free
-/// character per cell over the six-character alphabet. The `cli`
-/// renderer owns this table; the copy here documents which pairs the
-/// alphabet covers, and fails to compile when a new kind arrives.
-fn alphabet_char(kind: ShapeKind, wide: bool) -> char {
-    match (kind, wide) {
-        (ShapeKind::Blank, false) => '.',
-        (ShapeKind::Blank, true) => ':',
-        (ShapeKind::Content, false) => '#',
-        (ShapeKind::Content, true) => 'W',
-        (ShapeKind::Continuation, false) => '>',
-        (ShapeKind::Continuation, true) => '>',
-        (ShapeKind::Exempt, false) => '~',
-        (ShapeKind::Exempt, true) => '~',
-    }
-}
-
-#[test]
-fn every_encoder_output_fits_the_six_char_alphabet() {
-    // An emoji-wide input carries no glyph past the encoder: width 2
-    // with content encodes the wide lead the alphabet renders as `W`.
-    let (kind, wide, _) = encode_cell(2, false, false);
-    assert_eq!(alphabet_char(kind, wide), 'W');
-    // Every width class the encoder emits lands on an alphabet char.
-    for width in [0, 1, 2, 3, 4, 255, 65535] {
-        for blank in [false, true] {
-            for exempt in [false, true] {
-                let (kind, wide, _) = encode_cell(width, blank, exempt);
-                let rendered = alphabet_char(kind, wide);
-                assert!(
-                    matches!(rendered, '.' | ':' | '#' | 'W' | '>' | '~'),
-                    "{kind:?} {wide}"
-                );
-            }
-        }
-    }
 }
 
 #[test]

@@ -952,11 +952,14 @@ fn the_ring_starts_empty() {
 /// The ring keeps the newest frames up to its depth, then drops the
 /// oldest exactly one per frame: 19 draws keep 19, 20 keep 20, and the
 /// 21st drops the first draw.
+// docs/user/reporting.md:21 (at most the newest 20 frame shapes) plus
+// docs/tui.md `/feedback` row (last 20 painted frames, always on).
 #[test]
 fn the_ring_keeps_the_newest_twenty_frames() {
     let mut screen = ring_screen(8, 1);
     screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
     let mut app = plain_app(8, 1);
+    // docs/user/reporting.md:21 plus docs/tui.md `/feedback` row: the ring depth is 20.
     assert_eq!(RING_DEPTH, 20);
     for draw_at in 0..19 {
         let marker = draw_at;
@@ -1001,6 +1004,25 @@ fn the_ring_keeps_the_newest_twenty_frames() {
     let frame = shapes.last().expect("the ring holds a frame");
     let cell = frame.rows[0].cells()[0];
     assert_eq!(frame.palette[cell.style()].fg, ShapeColor::Rgb(20, 0, 0));
+    assert_round_trips(&screen, &app);
+}
+
+/// Each shaped row covers exactly its width: the walk stops at the row's
+/// end, so `x < width` never reads the next row's first cell. With `<=` the
+/// first of two rows would hold one extra cell.
+// docs/user/reporting.md:17 (per cell plus the frame geometry): rows stay
+// width-wide, so the report can place each cell.
+#[test]
+fn shaped_rows_cover_exactly_their_width() {
+    let mut screen = ring_screen(8, 2);
+    let mut app = plain_app(8, 2);
+    draw(&mut screen, &mut app, |_, _, _, _| Vec::new());
+    let shapes = screen.frame_shapes();
+    let frame = shapes.last().expect("the ring holds a frame");
+    assert_eq!(frame.rows.len(), 2);
+    for row in &frame.rows {
+        assert_eq!(row.cells().len(), 8, "every row covers exactly its width");
+    }
     assert_round_trips(&screen, &app);
 }
 
