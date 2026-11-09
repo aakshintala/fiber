@@ -2803,7 +2803,7 @@ pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
     release();
     // The released wait's report arrives first, under the outer bound, so a
     // stall fails naming the inner step: the inner deadline expires first.
-    match Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN) // ruling: #4075
+    match Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN) // ruling: #4311
         .recv(&done)
     {
         Ok(outcome) => {
