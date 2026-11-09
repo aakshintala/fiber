@@ -126,7 +126,9 @@ pub use configure::{
     ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 pub use configure::{SettingControl, SettingPresentation};
-pub use contract::feedback::{FeedbackDone, WriteFeedback};
+pub use contract::feedback::{
+    FeedbackDone, FrameShape, ShapeCell, ShapeColor, ShapeKind, ShapeRow, StyleValue, WriteFeedback,
+};
 
 pub use home::{Launch, LaunchLocation};
 

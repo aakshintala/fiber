@@ -543,6 +543,8 @@ impl<B: Backend> Loop<B> {
             // changed line, and the batch settles once at its end, when
             // the counts are exact.
             let held = batchable(first.first());
+            #[cfg(test)]
+            pause::page_zero_before(&self.app, first.first());
             // The batch's inputs already folded, in arrival order.
             if held {
                 self.app.begin_batch();
@@ -761,6 +763,7 @@ impl<B: Backend> Loop<B> {
                         Some(&self.files_out),
                         description,
                         self.app.session().cloned(),
+                        self.screen.frame_shapes(),
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.
