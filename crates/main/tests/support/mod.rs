@@ -2065,8 +2065,8 @@ pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
 }
 
 /// The first stdout line, waited for under the test's [`Deadline`]. With a
-/// [`Diag`], expiry panics with the #3325 dump; without one it panics as
-/// [`Deadline::recv`] fails today.
+/// [`Diag`], expiry panics with the #3325 dump; without one it panics with
+/// the receive error rendered into the wait text.
 #[track_caller]
 pub(crate) fn first_line(
     deadline: Deadline,

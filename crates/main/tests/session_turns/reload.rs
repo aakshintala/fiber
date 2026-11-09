@@ -250,6 +250,16 @@ fn extension(setup: &Setup, init: &str) {
     .unwrap();
 }
 
+/// The message of a panic `action` raises, so each expiry path below
+/// captures its rendering the same way.
+fn panic_message(action: impl FnOnce()) -> String {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(action))
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// `first_line` expiry carries the #3325 dump when it holds a [`Diag`]:
 /// no live child, an empty channel on a zero deadline, a pre-filled
 /// stderr snapshot and a fixture session dir.
@@ -267,14 +277,9 @@ fn first_line_expiry_dumps_stderr_and_log_tail() {
     )
     .unwrap();
     let diag = Diag::new(Arc::clone(&stderr), dir.path().to_path_buf());
-    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let message = panic_message(|| {
         first_line(Deadline::after(Duration::ZERO), &lines, Some(&diag));
-    }))
-    .unwrap_err();
-    let message = expired
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
+    });
     assert!(
         message.contains("waited until the deadline for fiber_started"),
         "{message}"
@@ -289,25 +294,21 @@ fn first_line_expiry_dumps_stderr_and_log_tail() {
         message.contains("\"kind\":\"session_started\""),
         "{message}"
     );
-    // Without a `Diag` the expiry keeps today's bare text, with no dump.
-    let bare = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // Without a `Diag` the expiry panics with the bare wait text, with no dump.
+    let bare = panic_message(|| {
         first_line(Deadline::after(Duration::ZERO), &lines, None);
-    }))
-    .unwrap_err();
-    let bare = bare.downcast_ref::<String>().cloned().unwrap_or_default();
+    });
     assert!(
         bare.contains("waited until the deadline for fiber_started"),
         "{bare}"
     );
     assert!(!bare.contains("fiber stderr:"), "{bare}");
-    // A hung-up sender keeps today's rendering too, dump or none.
+    // A hung-up sender panics with the bare wait text, with or without a `Diag`.
     let (tx, hung) = mpsc::channel::<String>();
     drop(tx);
-    let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let closed = panic_message(|| {
         first_line(Deadline::after(Duration::from_secs(10)), &hung, Some(&diag));
-    }))
-    .unwrap_err();
-    let closed = closed.downcast_ref::<String>().cloned().unwrap_or_default();
+    });
     assert!(
         closed.contains("waited until the deadline for fiber_started"),
         "{closed}"
