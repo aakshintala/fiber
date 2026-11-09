@@ -656,3 +656,62 @@ fn set_open_and_toggle_ignore_a_warning() {
     assert!(!warning.set_open(&Target::Orphans(7), true));
     assert_eq!(warning.toggle(Target::Orphans(7)), None);
 }
+
+#[test]
+fn keeper_written_completions_keep_their_rows_and_orphans_name_only_the_rest() {
+    let mut app = app();
+    started_job(&mut app, "j_keep", "kept work", 1_000);
+    started_job(&mut app, "j_slow", "slow work", 2_000);
+    started_job(&mut app, "j_lost", "lost work", 3_000);
+    start(&mut app, 4_000);
+    completed_job(&mut app, "j_keep", "completed", None, 5_000);
+    completed_job(&mut app, "j_slow", "failed", Some("nonzero_exit"), 6_000);
+    resumed(&mut app, true, 9_000);
+    completed_job(&mut app, "j_lost", "failed", Some("orphaned"), 11_000);
+    assert_eq!(
+        texts(&app),
+        [
+            "",
+            "▄▄▄▄▄",
+            " go ▐",
+            "▀▀▀▀▀",
+            "you 00:00 ",
+            "",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            " ▣ cut short: Fiber stopped · 2s",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "↺ resumed",
+            "Orphaned jobs: lost work",
+        ]
+    );
+    open(&mut app, "Orphaned jobs: lost work");
+    assert_eq!(texts(&app)[11..], ["  lost work: j_lost orphaned."]);
+    open(&mut app, "Orphaned jobs: lost work");
+    assert_eq!(texts(&app).len(), 11);
+    // The keeper's finished jobs open as usual completion rows.
+    let _ = app.open_item(&contract::JobId("j_keep".to_owned()));
+    let view = app.item_view().unwrap_or_else(|| panic!("a view"));
+    assert_eq!(view.word, "completed");
+    assert_eq!(view.glyph, "▣");
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let rows: Vec<String> = crate::view::text(&buf).lines().map(str::to_owned).collect();
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("job j_keep · kept work · completed")),
+        "a kept-work completion row on screen"
+    );
+    let _ = app.open_item(&contract::JobId("j_slow".to_owned()));
+    let view = app.item_view().unwrap_or_else(|| panic!("a view"));
+    assert_eq!(view.word, "failed");
+    assert_eq!(view.glyph, "✗");
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let rows: Vec<String> = crate::view::text(&buf).lines().map(str::to_owned).collect();
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("job j_slow · slow work · failed")),
+        "a slow-work completion row on screen"
+    );
+}
