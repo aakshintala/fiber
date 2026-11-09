@@ -190,6 +190,11 @@ impl LaunchLocation {
 /// shared by local and remote terminals.
 #[derive(Default)]
 pub struct Launch {
+    /// Fiber home: its `run/` holds the local session and keeper
+    /// sockets (`docs/state.md`, "What each part holds"). `None`
+    /// without a boot (jigs, tests that need no keepers), where
+    /// `/close all` counts no keepers.
+    pub fiber_home: Option<PathBuf>,
     /// The launch workspace or listed hub.
     pub location: LaunchLocation,
     /// Where the terminal opens (`docs/invocation.md`, "Commands and flags").
@@ -1076,16 +1081,28 @@ pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
 }
 
 /// The close-all question's count line: how many live top-level sessions
-/// it counted, of them how many work, and how many are also open
-/// elsewhere. The overlay draws it under its title (`docs/tui.md`,
-/// "Quit").
-pub(crate) fn close_all_count(sessions: usize, working: usize, elsewhere: usize) -> String {
+/// it counted, of them how many work, how many are also open
+/// elsewhere, and how many keepers of gone sessions it counted. The
+/// overlay draws it under its title (`docs/tui.md`, "Quit"). No
+/// keepers keeps today's string.
+pub(crate) fn close_all_count(
+    sessions: usize,
+    working: usize,
+    elsewhere: usize,
+    keepers: usize,
+) -> String {
     let sessions = if sessions == 1 {
         "1 session".to_owned()
     } else {
         format!("{sessions} sessions")
     };
-    format!("{sessions}, {working} working, {elsewhere} open elsewhere")
+    let mut line = format!("{sessions}, {working} working, {elsewhere} open elsewhere");
+    match keepers {
+        0 => {}
+        1 => line.push_str(", 1 keeper"),
+        _ => line.push_str(&format!(", {keepers} keepers")),
+    }
+    line
 }
 
 /// A resume line on exit: the session's id and the command resuming

@@ -71,9 +71,12 @@ pub(super) enum Prompt {
         /// The live top-level sessions counted when the question opened,
         /// in list order with the attached one last.
         sessions: Vec<SessionId>,
-        /// The counts drawn under the title: working, elsewhere.
-        /// Sessions is `sessions.len()`.
-        counts: (usize, usize),
+        /// The counts drawn under the title: working, elsewhere, keepers.
+        /// Sessions is `sessions.len()`; keepers is `keepers.len()`.
+        counts: (usize, usize, usize),
+        /// The keepers counted when the question opened, in id order:
+        /// Enter stops each still present direct.
+        keepers: Vec<SessionId>,
     },
     /// Asking to stop one live session: Enter sends it `close` with
     /// `now`, Esc cancels. It holds what the question drew when it

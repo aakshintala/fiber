@@ -2,6 +2,10 @@
 //! and the resume lines (`docs/tui.md`, "Quit", "On exit"). This module
 //! is a child of home's question module, whose closes it owns.
 
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+
 use serde_json::{Value, json};
 
 use super::super::super::{App, Effect, Phase, mint, session_command};
@@ -39,25 +43,28 @@ impl App {
         Some((working.len(), self.elsewhere(&working)))
     }
 
-    /// The close-all question, while open: the sessions, working and
-    /// elsewhere counts fixed when it opened. The overlay never
-    /// live-updates; Enter closes the counted sessions still live.
-    pub(crate) fn close_all_question(&self) -> Option<(usize, usize, usize)> {
+    /// The close-all question, while open: the sessions, working,
+    /// elsewhere and keeper counts fixed when it opened. The overlay
+    /// never live-updates; Enter closes the counted sessions still live
+    /// and stops the counted keepers still present.
+    pub(crate) fn close_all_question(&self) -> Option<(usize, usize, usize, usize)> {
         match self.home.questions.prompt() {
-            Some(Prompt::CloseAll { sessions, counts }) => {
-                Some((sessions.len(), counts.0, counts.1))
-            }
+            Some(Prompt::CloseAll {
+                sessions, counts, ..
+            }) => Some((sessions.len(), counts.0, counts.1, counts.2)),
             _ => None,
         }
     }
 
     /// `/close all`, on home or over a session: asks to close every live
-    /// top-level session now, after one question. With no live session it
-    /// says so and opens nothing; with the link down it opens nothing and
-    /// keeps the draft. It never sends a line: Enter does that.
+    /// top-level session and stop every keeper now, after one question.
+    /// With no live session and no keeper it says so and opens nothing;
+    /// with the link down it opens nothing and keeps the draft. It never
+    /// sends a line: Enter does that.
     pub(crate) fn ask_close_all(&mut self) -> Effect {
         let sessions = self.live_sessions();
-        if sessions.is_empty() {
+        let keepers = self.keepers();
+        if sessions.is_empty() && keepers.is_empty() {
             self.notices.push(
                 ErrorCode::SessionNotFound,
                 "No sessions to close.".to_owned(),
@@ -71,9 +78,14 @@ impl App {
         let counts = (
             sessions.iter().filter(|id| working.contains(id)).count(),
             self.elsewhere(&sessions),
+            keepers.len(),
         );
         self.close_delete_prompt();
-        self.home.questions.prompt = Some(Prompt::CloseAll { sessions, counts });
+        self.home.questions.prompt = Some(Prompt::CloseAll {
+            sessions,
+            counts,
+            keepers,
+        });
         Effect::None
     }
 
@@ -176,6 +188,47 @@ impl App {
             self.go_home();
         }
         Effect::Send(lines)
+    }
+
+    /// The frozen keeper-stop line on the wire, newline-terminated
+    /// (`docs/invocation.md`, "Commands and flags"): byte-identical to
+    /// what `fiber stop` writes, so a newer terminal stops any older
+    /// keeper.
+    const KEEPER_STOP: &[u8] = b"{\"shutdown\":true}\n";
+
+    /// The keepers of sessions that are gone: `run/` entries answering
+    /// the probe with EOF, in id order. Without a booted fiber home, or
+    /// when the listing fails, none: `/close all` then counts sessions
+    /// alone, as before.
+    fn keepers(&self) -> Vec<SessionId> {
+        let Some(home) = self.home.launch.fiber_home.as_deref() else {
+            return Vec::new();
+        };
+        doors::classify_sockets(home)
+            .map(|probed| {
+                probed
+                    .into_iter()
+                    .filter_map(|(id, class)| {
+                        matches!(class, doors::SocketClass::KeeperOrGone).then_some(id)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Stops one keeper direct: the frozen stop on its crashed socket,
+    /// fire-and-forget, reporting whether the line went out. A keeper
+    /// that vanished since the question opened refuses the connect and
+    /// is skipped. The write performs no wait: a local socket refuses
+    /// or accepts at once, and the line is small.
+    fn stop_keeper(home: &Path, keeper: &SessionId) -> bool {
+        // `run/` holds the listening sockets (`docs/state.md`, "What
+        // each part holds").
+        let path = home.join("run").join(&keeper.0);
+        let Ok(mut stream) = UnixStream::connect(path) else {
+            return false;
+        };
+        stream.write_all(Self::KEEPER_STOP).is_ok()
     }
 
     /// The live top-level sessions on this hub closing asks about, in
@@ -313,36 +366,59 @@ impl App {
 
     /// Enter in the close-all question: `close` with `now` each counted
     /// session still live, with a `summary` subscribe first where this
-    /// connection holds nothing. The set is the sessions the overlay
-    /// counted: one that left while it showed is skipped, and one that
-    /// went live after it opened keeps running. With the link down, or
-    /// nothing still live, it closes the question and sends nothing: the
+    /// connection holds nothing, and the frozen stop each counted keeper
+    /// still present, written direct to its socket. The set is the
+    /// sessions and keepers the overlay counted: one that left while it
+    /// showed is skipped, and one that went live after it opened keeps
+    /// running. With the link down it closes the question and sends
+    /// nothing; with nothing still live it still stops the keepers: the
     /// terminal stays open on home either way.
     fn confirm_close_all(&mut self) -> Effect {
-        let open: Vec<SessionId> = match self.home.questions.prompt() {
-            Some(Prompt::CloseAll { sessions, .. }) => sessions.clone(),
-            _ => return Effect::None,
-        };
-        let live = self.live_sessions();
-        let close: Vec<SessionId> = open.into_iter().filter(|id| live.contains(id)).collect();
-        if close.is_empty() || !self.outbox.is_up() {
+        let (open, open_keepers): (Vec<SessionId>, Vec<SessionId>) =
+            match self.home.questions.prompt() {
+                Some(Prompt::CloseAll {
+                    sessions, keepers, ..
+                }) => (sessions.clone(), keepers.clone()),
+                _ => return Effect::None,
+            };
+        if !self.outbox.is_up() {
             self.close_prompt();
             return Effect::None;
         }
-        let (lines, pairs) = self.close_lines(&close);
-        for (session, id) in pairs {
-            self.home
-                .questions
-                .asks
-                .insert(id.clone(), Ask::Stop(session));
-            self.outbox.wait(&id, super::super::super::Waiting::Stop);
+        let live = self.live_sessions();
+        let close: Vec<SessionId> = open.into_iter().filter(|id| live.contains(id)).collect();
+        let mut lines = Vec::new();
+        if !close.is_empty() {
+            let (session_lines, pairs) = self.close_lines(&close);
+            for (session, id) in pairs {
+                self.home
+                    .questions
+                    .asks
+                    .insert(id.clone(), Ask::Stop(session));
+                self.outbox.wait(&id, super::super::super::Waiting::Stop);
+            }
+            lines = session_lines;
+        }
+        let mut keepers_stopped = false;
+        if let Some(home) = self.home.launch.fiber_home.clone() {
+            for keeper in &open_keepers {
+                keepers_stopped |= Self::stop_keeper(&home, keeper);
+            }
+        }
+        if lines.is_empty() && !keepers_stopped {
+            self.close_prompt();
+            return Effect::None;
         }
         self.close_prompt();
         self.draft.clear();
         if self.session().is_some() {
             self.go_home();
         }
-        Effect::Send(lines)
+        if lines.is_empty() {
+            Effect::None
+        } else {
+            Effect::Send(lines)
+        }
     }
 
     /// The lines closing `sessions`: a `summary` subscribe first where

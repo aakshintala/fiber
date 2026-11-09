@@ -11,7 +11,12 @@ use contract::clock::Clock;
 use contract::events::ImportedNames;
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixListener;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::Duration;
 
 /// The launch home opens: local /w with no model chip.
 pub(super) fn launch() -> Launch {
@@ -890,7 +895,7 @@ fn slash_close_all_on_home_opens_the_question_and_sends_nothing() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(app.quit_open());
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((2, 1, 0, 0)));
 }
 
 #[test]
@@ -924,7 +929,7 @@ fn quit_question_is_none_while_close_all_is_open() {
     assert!(app.quit_open());
     assert_eq!(app.quit_question(), None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
     // Under the quit prompt the close-all question is none.
     let mut app = home_with(80, 24, launch());
     linked(&mut app);
@@ -970,7 +975,7 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
     assert_eq!(app.ask_close_all(), Effect::None);
     assert!(app.quit_open());
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
     // The hub accepts the delete: the row drops and recent is asked again.
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
@@ -1046,7 +1051,7 @@ fn enter_closes_every_live_session_now_and_stays_home() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "2 sessions, 1 working, 0 open elsewhere"
     // dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((2, 1, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1095,7 +1100,7 @@ fn other_keys_and_ctrl_c_do_nothing_while_close_all_is_open() {
     }
     assert!(app.quit_open());
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
     assert_eq!(app.draft(), "/close all");
 }
 
@@ -1132,7 +1137,7 @@ fn a_session_that_leaves_while_close_all_shows_gets_no_close() {
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
     // The overlay never live-updates: it still names both sessions.
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 2, 0)));
+    assert_eq!(app.close_all_question(), Some((2, 2, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1150,7 +1155,7 @@ fn a_session_that_goes_live_while_close_all_shows_gets_no_close() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     // The overlay never live-updates: the new session is not counted.
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1168,7 +1173,7 @@ fn a_session_attached_then_left_after_attach_gets_no_close() {
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1215,7 +1220,7 @@ fn a_session_that_is_idle_still_gets_a_close() {
     ));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((2, 1, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1237,7 +1242,7 @@ fn an_unreadable_row_is_counted_and_closed() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": the count names live top-level sessions;
     // an unreadable row is still a live session (see #2962).
-    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((2, 1, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1257,7 +1262,7 @@ fn the_attached_session_with_no_row_counts_and_gets_a_close_and_the_terminal_goe
     };
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
@@ -1335,9 +1340,9 @@ fn the_close_all_count_reads_sessions_working_and_elsewhere() {
     app.home.subs.accept(held, crate::home::Level::Full);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((3, 1, 1)));
+    assert_eq!(app.close_all_question(), Some((3, 1, 1, 0)));
     assert_eq!(
-        crate::home::close_all_count(3, 1, 1),
+        crate::home::close_all_count(3, 1, 1, 0),
         "3 sessions, 1 working, 1 open elsewhere"
     );
 }
@@ -1347,15 +1352,15 @@ fn the_close_all_count_holds_singular_below_and_plural_above_one() {
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere);
     // "Stopping every session" pins the same count line on the close-all question.
     assert_eq!(
-        crate::home::close_all_count(0, 0, 0),
+        crate::home::close_all_count(0, 0, 0, 0),
         "0 sessions, 0 working, 0 open elsewhere"
     );
     assert_eq!(
-        crate::home::close_all_count(1, 0, 1),
+        crate::home::close_all_count(1, 0, 1, 0),
         "1 session, 0 working, 1 open elsewhere"
     );
     assert_eq!(
-        crate::home::close_all_count(2, 2, 2),
+        crate::home::close_all_count(2, 2, 2, 0),
         "2 sessions, 2 working, 2 open elsewhere"
     );
 }
@@ -1386,7 +1391,7 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
     app.home.subs.accept(held, crate::home::Level::Full);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 2, 1)));
+    assert_eq!(app.close_all_question(), Some((2, 2, 1, 0)));
 }
 
 #[test]
@@ -1447,4 +1452,171 @@ fn quit_close_session_answer_settles_its_tag() {
     });
     assert!(app.on_line(answer).is_empty());
     assert_eq!(app.outbox.waiting(id), None);
+}
+
+/// A temp fiber home with its `run/` directory: keepers bind under it.
+fn keeper_home() -> (fakes::TempDir, PathBuf) {
+    let home = fakes::TempDir::new("tui-close-all-keepers");
+    let run = home.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    (home, run)
+}
+
+/// The launch probing `home` for keepers.
+fn launch_with(home: &Path) -> Launch {
+    let mut launch = launch();
+    launch.fiber_home = Some(home.to_path_buf());
+    launch
+}
+
+/// Binds `run/<id>` and serves the open probe on a thread: reads the
+/// subscribe line, then shuts down with no answer, like a keeper
+/// dropping a probe line. Returns the listener, which the test keeps:
+/// dropping it before Enter makes the keeper vanish. The channels
+/// fire when the probe landed and the thread ended, both under the
+/// test's deadline.
+fn serve_probe(run: &Path, id: &str) -> (UnixListener, Receiver<()>, Receiver<()>) {
+    let listener = UnixListener::bind(run.join(id)).unwrap();
+    let serving = listener.try_clone().unwrap();
+    let (probed_tx, probed) = mpsc::channel();
+    let (ended_tx, ended) = mpsc::channel();
+    thread::spawn(move || {
+        let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+        let (stream, _) = serving.accept().unwrap();
+        let timeout = deadline.left().max(Duration::from_millis(1));
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        let line: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(line["command"], "subscribe");
+        probed_tx.send(()).unwrap();
+        stream.shutdown(std::net::Shutdown::Both).unwrap();
+        ended_tx.send(()).unwrap();
+    });
+    (listener, probed, ended)
+}
+
+/// Catches the Enter stop on `listener`: accepts one connection, reads
+/// its line and reports the bytes. The stop needs no answer.
+fn catch_stop(listener: &UnixListener) -> Receiver<Vec<u8>> {
+    let serving = listener.try_clone().unwrap();
+    let (stopped_tx, stopped) = mpsc::channel();
+    thread::spawn(move || {
+        let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+        let (stream, _) = serving.accept().unwrap();
+        let timeout = deadline.left().max(Duration::from_millis(1));
+        // macOS rejects setsockopt with EINVAL once the writer closed;
+        // the bytes below already arrived then, so the bound is moot.
+        match stream.set_read_timeout(Some(timeout)) {
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+            other => other.unwrap(),
+        }
+        let mut line = Vec::new();
+        BufReader::new(&stream)
+            .read_until(b'\n', &mut line)
+            .unwrap();
+        stopped_tx.send(line).unwrap();
+    });
+    stopped
+}
+
+#[test]
+fn close_all_with_no_live_session_but_a_keeper_opens_the_question() {
+    let (_home, run) = keeper_home();
+    let (_listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
+    let mut app = home_with(80, 24, launch_with(_home.path()));
+    linked(&mut app);
+    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert!(app.quit_open());
+    // docs/tui.md, "Quit": no live session, one keeper of a gone
+    // session; no notice, the question opens instead.
+    assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
+    assert_eq!(app.notice(), None);
+    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
+    deadline.recv_or_fail(&ended, "keeper saw the probe close");
+}
+
+#[test]
+fn close_all_counts_keepers_beside_sessions() {
+    let (_home, run) = keeper_home();
+    let (_first, first_probed, first_ended) = serve_probe(&run, "s_cccccccccccccccc");
+    let (_second, second_probed, second_ended) = serve_probe(&run, "s_dddddddddddddddd");
+    let mut app = home_with(80, 24, launch_with(_home.path()));
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    // docs/tui.md, "Quit": one live session working, two keepers.
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 2)));
+    deadline.recv_or_fail(&first_probed, "first keeper read the probe");
+    deadline.recv_or_fail(&second_probed, "second keeper read the probe");
+    deadline.recv_or_fail(&first_ended, "first keeper saw the probe close");
+    deadline.recv_or_fail(&second_ended, "second keeper saw the probe close");
+}
+
+#[test]
+fn enter_stops_the_counted_keeper_direct_and_closes_the_session() {
+    let (_home, run) = keeper_home();
+    let (listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
+    let mut app = home_with(80, 24, launch_with(_home.path()));
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0, 1)));
+    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
+    deadline.recv_or_fail(&ended, "keeper saw the probe close");
+    let stopped = catch_stop(&listener);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    // The session closes as today...
+    let lines = commands(lines);
+    assert_closes(&closes(lines), &["s_aaaaaaaaaaaaaaaa"]);
+    // ...and the keeper got the frozen stop, byte-identical to what
+    // `fiber stop` writes (`docs/invocation.md`, "Commands and flags").
+    assert_eq!(
+        deadline.recv_or_fail(&stopped, "keeper got its stop"),
+        b"{\"shutdown\":true}\n"
+    );
+    assert_eq!(app.close_all_question(), None);
+}
+
+#[test]
+fn enter_skips_a_keeper_that_vanished() {
+    let (_home, run) = keeper_home();
+    let (listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
+    let mut app = home_with(80, 24, launch_with(_home.path()));
+    linked(&mut app);
+    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
+    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
+    deadline.recv_or_fail(&ended, "keeper saw the probe close");
+    drop(listener);
+    let clock = fakes::clock::FakeClock::new();
+    // Nothing still live and the keeper gone: nothing goes out, the
+    // question closes, and the draft stays for a retry.
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert_eq!(app.close_all_question(), None);
+    assert_eq!(app.draft(), "/close all");
+}
+
+#[test]
+fn close_all_with_the_link_down_and_a_keeper_opens_nothing() {
+    let (_home, run) = keeper_home();
+    let (_listener, probed, ended) = serve_probe(&run, "s_cccccccccccccccc");
+    let mut app = home_with(80, 24, launch_with(_home.path()));
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.disconnected();
+    let deadline = fakes::Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(app.close_all_question(), None);
+    assert_eq!(app.draft(), "/close all");
+    deadline.recv_or_fail(&probed, "keeper read the probe subscribe");
+    deadline.recv_or_fail(&ended, "keeper saw the probe close");
 }

@@ -385,7 +385,7 @@ fn ask_close_all(app: &mut App) {
     assert!(app.quit_open());
     // docs/tui.md, "Quit": "2 sessions, 2 working, 0 open elsewhere"
     // dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 2, 0)));
+    assert_eq!(app.close_all_question(), Some((2, 2, 0, 0)));
 }
 
 #[test]
@@ -419,7 +419,7 @@ fn close_all_at_width_40() {
 }
 
 #[test]
-fn the_close_all_count_line_names_all_three_numbers() {
+fn the_close_all_count_line_names_all_four_numbers() {
     let mut app = home(80, 24);
     app.on_line(hello());
     app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
@@ -428,7 +428,7 @@ fn the_close_all_count_line_names_all_three_numbers() {
     ask_close_all_three(&mut app);
     // docs/tui.md, "Quit": "3 sessions, 3 working, 0 open elsewhere"
     // dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((3, 3, 0)));
+    assert_eq!(app.close_all_question(), Some((3, 3, 0, 0)));
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     draw(&app, area, &mut buf, &mut Vec::new());
@@ -436,6 +436,20 @@ fn the_close_all_count_line_names_all_three_numbers() {
     assert!(
         shown.contains("3 sessions, 3 working, 0 open elsewhere"),
         "{shown}"
+    );
+    // docs/tui.md, "Quit": the keeper part appends, singular then
+    // plural, and no keepers keeps today's string.
+    assert_eq!(
+        crate::home::close_all_count(2, 1, 0, 0),
+        "2 sessions, 1 working, 0 open elsewhere"
+    );
+    assert_eq!(
+        crate::home::close_all_count(2, 1, 0, 1),
+        "2 sessions, 1 working, 0 open elsewhere, 1 keeper"
+    );
+    assert_eq!(
+        crate::home::close_all_count(0, 0, 0, 2),
+        "0 sessions, 0 working, 0 open elsewhere, 2 keepers"
     );
 }
 
