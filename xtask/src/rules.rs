@@ -698,7 +698,7 @@ pub(crate) fn support_tests(files: &[RustFile]) -> Vec<String> {
         let declarers = support_declarers(&f.path, tests_dir, &by_path);
         if declarers > 1 {
             failures.push(format!(
-                "{} holds {count} #[test] collected by {declarers} binaries; move it to crates/main/tests/support_helpers.rs",
+                "{} holds {count} #[test] collected by {declarers} binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs",
                 f.path
             ));
         }
@@ -719,8 +719,8 @@ fn support_tests_dir(f: &RustFile) -> Option<&str> {
 }
 
 /// Every test binary compiling `support`, as module declarations name
-/// them: each top-level `tests/*.rs` file is one binary, and the lib's own
-/// test harness is one more. `mod support;` compiles the support root with
+/// them: each top-level `tests/*.rs` file and each `tests/<dir>/main.rs`
+/// area root is one binary, and the lib's own test harness is one more. `mod support;` compiles the support root with
 /// its declared children, and each `#[path]` declaration compiles its
 /// target with its children. Counts files, so a binary declaring both
 /// counts once; the harness counts once, however many `#[cfg(test)]`
@@ -731,7 +731,10 @@ fn support_declarers(support: &str, tests_dir: &str, by_path: &BTreeMap<&str, &R
         .values()
         .filter(|t| {
             let rel = t.path.strip_prefix(&prefix).unwrap_or_default();
-            !rel.contains('/') && rel.ends_with(".rs")
+            let area_root = rel
+                .strip_suffix("/main.rs")
+                .is_some_and(|dir| !dir.is_empty() && !dir.contains('/'));
+            area_root || (!rel.contains('/') && rel.ends_with(".rs"))
         })
         .filter(|t| compiled_modules(t, by_path).contains(support))
         .count();
@@ -1300,18 +1303,11 @@ const LABEL_ALLOWANCES: &[LabelAllowance] = &[
         reason: "labels a listed command",
     },
     LabelAllowance {
-        path: "crates/loop/src/handoff/carry.rs",
+        path: "crates/loop/src/compaction/carry.rs",
         function: "restart",
         context: "template-key",
         name: "jobs",
-        reason: "fills the handoff template",
-    },
-    LabelAllowance {
-        path: "crates/loop/src/reviewer.rs",
-        function: "sections",
-        context: "prompt-section",
-        name: "handoff",
-        reason: "selects the handoff section",
+        reason: "fills the compaction template",
     },
 ];
 
@@ -2600,7 +2596,7 @@ fn label_context(
     {
         return Some(("commands", "labels a listed command"));
     }
-    if path == "crates/loop/src/handoff/carry.rs"
+    if path == "crates/loop/src/compaction/carry.rs"
         && context == "fn restart"
         && name == "jobs"
         && previous_punct(tokens, i, 1, '(')
@@ -2609,19 +2605,7 @@ fn label_context(
         && next_punct(tokens, i, 3, '.')
         && next_ident(tokens, i, 4, "join")
     {
-        return Some(("restart", "fills the handoff template"));
-    }
-    if path == "crates/loop/src/reviewer.rs"
-        && context == "fn sections"
-        && name == "handoff"
-        && previous_punct(tokens, i, 1, ',')
-        && previous_ident(tokens, i, 2, "md")
-        && previous_ident(tokens, i, 4, "section")
-        && previous_ident(tokens, i, 7, "prompt")
-        && previous_ident(tokens, i, 10, "crate")
-        && previous_ident(tokens, i, 12, "handoff")
-    {
-        return Some(("sections", "selects the handoff section"));
+        return Some(("restart", "fills the compaction template"));
     }
     None
 }
@@ -2696,8 +2680,7 @@ fn loop_sites_with_tokens(
                 ("crates/loop/src/opening.rs", "shell") => Some("environment-template"),
                 ("crates/loop/src/status.rs", "jobs") => Some("state-key"),
                 ("crates/loop/src/skills.rs", "skill") => Some("command-tag"),
-                ("crates/loop/src/handoff/carry.rs", "jobs") => Some("template-key"),
-                ("crates/loop/src/reviewer.rs", "handoff") => Some("prompt-section"),
+                ("crates/loop/src/compaction/carry.rs", "jobs") => Some("template-key"),
                 _ => None,
             };
             let exception = label.is_some_and(|label| {

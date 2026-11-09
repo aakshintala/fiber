@@ -13,6 +13,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::Secret;
 use contract::clock::Clock;
+pub use contract::settings::{SettingControl, SettingPresentation};
 
 use crate::ThemeSetting;
 
@@ -79,6 +80,10 @@ pub struct SettingRow {
     pub file: Option<PathBuf>,
     /// The files it may be written to.
     pub scope: WriteScope,
+    /// The schema's tab, label and description.
+    pub presentation: SettingPresentation,
+    /// How the view edits it, from the type the schema checks.
+    pub control: SettingControl,
 }
 
 /// What a write did: the file written and the warning lines
@@ -496,8 +501,14 @@ pub trait Configure: Send + Sync {
     // `/settings`.
 
     /// Every configuration key with its effective value and layer, for
-    /// `workspace`'s project and repository.
-    fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError>;
+    /// `workspace`'s project and repository, with the run's `-c`
+    /// `overrides` in the order given: the last for a key wins and reads
+    /// as `-c`.
+    fn settings(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<SettingRow>, ConfigureError>;
 
     /// Writes `key` in `layer`'s file from `text`, through the same path
     /// as `fiber config set`.
@@ -507,6 +518,18 @@ pub trait Configure: Send + Sync {
         layer: Layer,
         key: &str,
         text: &str,
+    ) -> Result<Saved, ConfigureError>;
+
+    /// Removes `key` from `layer`'s file so the value below applies, only
+    /// when the file still holds `expected`, compact JSON. A layer that
+    /// sets nothing is a no-write success; a changed value is refused as
+    /// `stale_request` with nothing written.
+    fn reset(
+        &self,
+        workspace: &Path,
+        layer: Layer,
+        key: &str,
+        expected: &str,
     ) -> Result<Saved, ConfigureError>;
 
     /// Fiber home's `config.json`.

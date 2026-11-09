@@ -248,12 +248,12 @@ crates/loop/src/before_tool_tests.rs	1	docs/errors.md`,\n    // "Notices"
 crates/loop/src/calls.rs	2	docs/extensions.md`, "after_tool"
 crates/loop/src/calls_tests.rs	1	docs/events.md, "tool_call_completed"
 crates/loop/src/calls_tests.rs	1	docs/loop.md, "One step"
-crates/loop/src/conversation_tests.rs	18	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/src/compaction.rs	1	docs/errors.md`, "Notices"
+crates/loop/src/compaction/tests.rs	4	docs/compaction.md, "What the model sees after a compaction"
+crates/loop/src/conversation_tests.rs	18	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
 crates/loop/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/loop/src/handoff.rs	1	docs/errors.md`, "Notices"
-crates/loop/src/handoff/tests.rs	4	docs/handoff.md, "What the model sees after a handoff"
-crates/loop/src/history_tests.rs	5	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/src/history_tests.rs	5	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/history_tests.rs	1	docs/loop.md, "What the model is sent"
 crates/loop/src/hooks.rs	1	docs/events.md`, "Conventions"
 crates/loop/src/hooks_tests.rs	2	docs/errors.md`, "Notices"
@@ -270,8 +270,8 @@ crates/loop/src/offer.rs	2	docs/extensions.md`, "Offering"
 crates/loop/src/reload_tests.rs	1	docs/errors.md`, "Notices"
 crates/loop/src/reload_tests.rs	1	docs/mcp.md, "Servers, their state and the per-server\n                // commands"
 crates/loop/src/resume.rs	1	docs/extensions.md`, "`before_tool`"
-crates/loop/src/reviewer/shown_tests.rs	4	docs/handoff.md, "What the model sees after a handoff"
-crates/loop/src/rewind_tests.rs	6	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/src/reviewer/shown_tests.rs	4	docs/compaction.md, "What the model sees after a compaction"
+crates/loop/src/rewind_tests.rs	6	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/status.rs	1	docs/prompt-cache.md`, "Reload"
 crates/loop/src/status_tests.rs	11	docs/events.md, "session_status"
 crates/loop/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
@@ -280,27 +280,27 @@ crates/loop/src/tool_timing_tests.rs	1	docs/permissions.md`, "What is recorded"
 crates/loop/src/tool_timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
 crates/loop/src/turn.rs	1	docs/errors.md`, "Notices"
 crates/loop/tests/approved_code.rs	1	docs/extensions.md`, "Offering"
-crates/loop/tests/before_handoff.rs	3	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/tests/before_compaction.rs	3	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/change_workspace.rs	1	docs/events.md:1606
 crates/loop/tests/changes.rs	1	docs/errors.md`,\n    // "Notices"
+crates/loop/tests/compaction.rs	14	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/configuration.md:79-81
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	102	docs/invocation.md:1159-1160
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:109-138
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:187-190
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:536-539
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	30	docs/testing.md:46-48
-crates/loop/tests/handoff.rs	14	docs/handoff.md, "What the model sees after a handoff"
 crates/loop/tests/inner_calls.rs	1	docs/extensions.md`, "When an extension calls a tool"
 crates/loop/tests/invariants.rs	1	docs/invocation.md`, "A prompt arriving\n    /// mid-turn is rejected `busy`"
-crates/loop/tests/resume.rs	3	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/tests/resume.rs	3	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/resume.rs	1	docs/tools.md, "The keeper"
-crates/loop/tests/reviewer_handoff.rs	9	docs/handoff.md, "What the model sees after a handoff"
-crates/loop/tests/reviewer_handoff.rs	1	docs/permissions.md, "At a handoff"
-crates/loop/tests/rewind.rs	1	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/tests/reviewer_compaction.rs	9	docs/compaction.md, "What the model sees after a compaction"
+crates/loop/tests/reviewer_compaction.rs	1	docs/permissions.md, "At a compaction"
+crates/loop/tests/rewind.rs	1	docs/compaction.md, "What the model sees after a compaction"
+crates/loop/tests/skills_resent.rs	8	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/skills_resent.rs	1	docs/errors.md`, "Notices"
-crates/loop/tests/skills_resent.rs	8	docs/handoff.md, "What the model sees after a handoff"
 crates/loop/tests/status.rs	4	docs/events.md, "session_status"
-crates/loop/tests/tool_search.rs	1	docs/handoff.md, "What the model sees after a handoff"
+crates/loop/tests/tool_search.rs	1	docs/compaction.md, "What the model sees after a compaction"
 crates/main/src/builtin_tests.rs	1	docs/testing.md, "Waits and timeouts"
 crates/main/src/cli.rs	1	docs/invocation.md`, "Sessions"
 crates/main/src/cli.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
@@ -321,210 +321,210 @@ crates/main/src/startup_log.rs	1	docs/state.md`, "Diagnostic logs"
 crates/main/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
 crates/main/src/tui_extensions_tests.rs	1	docs/extensions.md:1526
 crates/main/src/tui_extensions_tests.rs	1	docs/extensions.md:1529-1530
-crates/main/tests/alloc_stats.rs	2	docs/state.md:306
-crates/main/tests/alloc_stats.rs	1	docs/state.md:345-355
-crates/main/tests/alloc_stats.rs	1	docs/state.md`, "Diagnostic logs"
-crates/main/tests/approve.rs	1	docs/extensions.md`, "Approving\n//! outside a session"
-crates/main/tests/ask.rs	1	docs/errors.md`, "Notices"
-crates/main/tests/change_workspace.rs	1	docs/invocation.md,\n    // "Deleting a session"
-crates/main/tests/change_workspace.rs	1	docs/invocation.md, "Deleting a session"
-crates/main/tests/change_workspace.rs	2	docs/invocation.md`, "Change workspace"
-crates/main/tests/changed_files_editor.rs	1	docs/testing/screens.md`, "A pointer event…"
-crates/main/tests/changed_files_remote.rs	1	docs/testing/screens.md`, "A pointer event…"
-crates/main/tests/continue_session.rs	1	docs/invocation.md`, "`start` `continues`"
-crates/main/tests/delegates.rs	1	docs/code-quality.md, "What a reviewer checks"
-crates/main/tests/delegates.rs	1	docs/delegates.md,\n    // "Streams"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Choosing a model"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Events"
-crates/main/tests/delegates.rs	4	docs/delegates.md, "Identity and resume"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Lifetime"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Results"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Streams"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Talking to a delegate"
-crates/main/tests/delegates.rs	1	docs/delegates.md, "Worktrees"
-crates/main/tests/delegates.rs	1	docs/delegates.md:123
-crates/main/tests/delegates.rs	2	docs/delegates.md:168-171
-crates/main/tests/delegates.rs	1	docs/events.md,\n    // "Jobs"
-crates/main/tests/delegates.rs	11	docs/events.md, "Jobs"
-crates/main/tests/delegates.rs	3	docs/events.md, "Kinds"
-crates/main/tests/delegates.rs	5	docs/events.md, "Process boundary"
-crates/main/tests/delegates.rs	1	docs/events.md, "The envelope"
-crates/main/tests/delegates.rs	1	docs/events.md, "Usage and notices"
-crates/main/tests/delegates.rs	2	docs/events.md, "extension_ui"
-crates/main/tests/delegates.rs	3	docs/events.md, "fiber_started"
-crates/main/tests/delegates.rs	3	docs/events.md, "usage_recorded"
-crates/main/tests/delegates.rs	2	docs/events.md:1319
-crates/main/tests/delegates.rs	2	docs/events.md:1333
-crates/main/tests/delegates.rs	3	docs/events.md:1354
-crates/main/tests/delegates.rs	2	docs/events.md:285-286
-crates/main/tests/delegates.rs	2	docs/events.md:296
-crates/main/tests/delegates.rs	2	docs/events.md:339
-crates/main/tests/delegates.rs	1	docs/invocation.md,\n    // "What the hub speaks"
-crates/main/tests/delegates.rs	2	docs/loop.md, "One step"
-crates/main/tests/delegates.rs	1	docs/loop.md, "Starting a turn"
-crates/main/tests/delegates.rs	1	docs/testing.md, "Waits and timeouts"
-crates/main/tests/delegates.rs	1	docs/testing.md:95
-crates/main/tests/delegates.rs	1	docs/tui.md,\n    // "Swapped views"
-crates/main/tests/delegates.rs	1	docs/tui.md, "Swapped views"
-crates/main/tests/delegates.rs	1	docs/tui.md, "The panel"
-crates/main/tests/delete.rs	1	docs/testing.md:95
-crates/main/tests/diagnostics.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/main/tests/diagnostics.rs	3	docs/state.md`, "Diagnostic logs"
-crates/main/tests/driver_shell_no_timeout.rs	1	docs/testing.md, "Waits and timeouts"
-crates/main/tests/driver_shell_sent.rs	1	docs/testing.md, "Waits and timeouts"
-crates/main/tests/extension_case.rs	1	docs/extensions.md:753-759
-crates/main/tests/extension_case.rs	1	docs/testing.md:110-16
-crates/main/tests/extension_commands.rs	1	docs/events.md:116
-crates/main/tests/extension_commands.rs	1	docs/testing.md, "Event streams"
-crates/main/tests/extension_diagnostics.rs	1	docs/state.md, "Diagnostic logs"
-crates/main/tests/extension_diagnostics.rs	1	docs/state.md`,\n//! "Diagnostic logs"
-crates/main/tests/extension_export.rs	1	docs/events.md:116
-crates/main/tests/extension_export.rs	2	docs/events.md:1367
-crates/main/tests/extension_export.rs	1	docs/events.md:360
-crates/main/tests/extension_export.rs	1	docs/events.md:389
-crates/main/tests/extension_export.rs	1	docs/events.md:629-635
-crates/main/tests/extension_export.rs	1	docs/invocation.md:452
-crates/main/tests/extension_export.rs	3	docs/testing.md:74-75
-crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:1356-57
-crates/main/tests/extension_lazy_commands.rs	2	docs/extensions.md:1375-79
-crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:1377-80
-crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:1379
-crates/main/tests/extension_lazy_commands.rs	2	docs/extensions.md:1381-83
-crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:313-16
-crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:70-71
-crates/main/tests/feed.rs	1	docs/state.md`, "Recently exited\n//! sessions"
+crates/main/tests/commands/change_workspace.rs	1	docs/invocation.md,\n    // "Deleting a session"
+crates/main/tests/commands/change_workspace.rs	1	docs/invocation.md, "Deleting a session"
+crates/main/tests/commands/change_workspace.rs	2	docs/invocation.md`, "Change workspace"
+crates/main/tests/commands/changed_files_editor.rs	1	docs/testing/screens.md`, "A pointer event…"
+crates/main/tests/commands/delete.rs	1	docs/testing.md:95
+crates/main/tests/commands/diagnostics.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/commands/diagnostics.rs	3	docs/state.md`, "Diagnostic logs"
+crates/main/tests/commands/slash_aliases.rs	1	docs/tools.md:562-568,575-577
+crates/main/tests/commands/startup_log.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/commands/update.rs	1	docs/extensions.md:1797, 1805-1807
+crates/main/tests/commands/update.rs	2	docs/extensions.md:1798-1799
+crates/main/tests/commands/update.rs	1	docs/extensions.md:1805-1807
+crates/main/tests/delegation/ask.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/delegation/delegates.rs	1	docs/code-quality.md, "What a reviewer checks"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md,\n    // "Streams"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Choosing a model"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Events"
+crates/main/tests/delegation/delegates.rs	4	docs/delegates.md, "Identity and resume"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Lifetime"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Results"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Streams"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Talking to a delegate"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md, "Worktrees"
+crates/main/tests/delegation/delegates.rs	1	docs/delegates.md:123
+crates/main/tests/delegation/delegates.rs	2	docs/delegates.md:168-171
+crates/main/tests/delegation/delegates.rs	1	docs/events.md,\n    // "Jobs"
+crates/main/tests/delegation/delegates.rs	11	docs/events.md, "Jobs"
+crates/main/tests/delegation/delegates.rs	3	docs/events.md, "Kinds"
+crates/main/tests/delegation/delegates.rs	5	docs/events.md, "Process boundary"
+crates/main/tests/delegation/delegates.rs	1	docs/events.md, "The envelope"
+crates/main/tests/delegation/delegates.rs	1	docs/events.md, "Usage and notices"
+crates/main/tests/delegation/delegates.rs	2	docs/events.md, "extension_ui"
+crates/main/tests/delegation/delegates.rs	3	docs/events.md, "fiber_started"
+crates/main/tests/delegation/delegates.rs	3	docs/events.md, "usage_recorded"
+crates/main/tests/delegation/delegates.rs	2	docs/events.md:1319
+crates/main/tests/delegation/delegates.rs	2	docs/events.md:1333
+crates/main/tests/delegation/delegates.rs	3	docs/events.md:1354
+crates/main/tests/delegation/delegates.rs	2	docs/events.md:285-286
+crates/main/tests/delegation/delegates.rs	2	docs/events.md:296
+crates/main/tests/delegation/delegates.rs	2	docs/events.md:339
+crates/main/tests/delegation/delegates.rs	1	docs/invocation.md,\n    // "What the hub speaks"
+crates/main/tests/delegation/delegates.rs	2	docs/loop.md, "One step"
+crates/main/tests/delegation/delegates.rs	1	docs/loop.md, "Starting a turn"
+crates/main/tests/delegation/delegates.rs	1	docs/testing.md, "Waits and timeouts"
+crates/main/tests/delegation/delegates.rs	1	docs/testing.md:95
+crates/main/tests/delegation/delegates.rs	1	docs/tui.md,\n    // "Swapped views"
+crates/main/tests/delegation/delegates.rs	1	docs/tui.md, "Swapped views"
+crates/main/tests/delegation/delegates.rs	1	docs/tui.md, "The panel"
+crates/main/tests/extension_host/extension_case.rs	1	docs/extensions.md:753-759
+crates/main/tests/extension_host/extension_case.rs	1	docs/testing.md:110-16
+crates/main/tests/extension_host/extension_commands.rs	1	docs/events.md:116
+crates/main/tests/extension_host/extension_commands.rs	1	docs/testing.md, "Event streams"
+crates/main/tests/extension_host/extension_diagnostics.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/extension_host/extension_diagnostics.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/extension_host/extension_export.rs	1	docs/events.md:116
+crates/main/tests/extension_host/extension_export.rs	2	docs/events.md:1367
+crates/main/tests/extension_host/extension_export.rs	1	docs/events.md:360
+crates/main/tests/extension_host/extension_export.rs	1	docs/events.md:389
+crates/main/tests/extension_host/extension_export.rs	1	docs/events.md:629-635
+crates/main/tests/extension_host/extension_export.rs	1	docs/invocation.md:452
+crates/main/tests/extension_host/extension_export.rs	3	docs/testing.md:74-75
+crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:1356-57
+crates/main/tests/extension_host/extension_lazy_commands.rs	2	docs/extensions.md:1375-79
+crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:1377-80
+crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:1379
+crates/main/tests/extension_host/extension_lazy_commands.rs	2	docs/extensions.md:1381-83
+crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:313-16
+crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:70-71
+crates/main/tests/extension_host/hooks.rs	1	docs/compaction.md, "What the model sees after a compaction"
+crates/main/tests/extension_host/hooks.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/extension_host/hooks_entries.rs	2	docs/errors.md:85-91
+crates/main/tests/extension_host/hooks_entries.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/extension_host/hooks_entries.rs	1	docs/events.md:1154-1155
+crates/main/tests/extension_host/hooks_entries.rs	1	docs/events.md:116
+crates/main/tests/extension_host/hooks_entries.rs	1	docs/events.md:1163-1168
+crates/main/tests/extension_host/hooks_entries.rs	1	docs/events.md:582-586
+crates/main/tests/extension_host/hooks_entries.rs	1	docs/testing.md:95
+crates/main/tests/extension_host/process_extensions.rs	2	docs/extensions.md:209
+crates/main/tests/extension_host/process_extensions.rs	2	docs/extensions.md:211
+crates/main/tests/extension_host/process_extensions.rs	2	docs/extensions.md:222
+crates/main/tests/extension_host/process_extensions.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/extension_host/repository_hooks.rs	1	docs/extensions.md`, "Pinning"
+crates/main/tests/extension_host/repository_servers.rs	1	docs/testing.md:95
 crates/main/tests/fixtures/gcloud/gcloud	1	docs/testing.md, "Waits and timeouts"
-crates/main/tests/handoff_kept.rs	4	docs/handoff.md, "What the model sees after a handoff"
-crates/main/tests/handoff_kept.rs	1	docs/permissions.md, "At a handoff"
-crates/main/tests/history_page_failed.rs	1	docs/testing.md, "Waits and\n    // timeouts"
-crates/main/tests/hooks.rs	1	docs/errors.md`, "Notices"
-crates/main/tests/hooks.rs	1	docs/handoff.md, "What the model sees after a handoff"
-crates/main/tests/hooks_entries.rs	2	docs/errors.md:85-91
-crates/main/tests/hooks_entries.rs	1	docs/errors.md`, "Notices"
-crates/main/tests/hooks_entries.rs	1	docs/events.md:1154-1155
-crates/main/tests/hooks_entries.rs	1	docs/events.md:116
-crates/main/tests/hooks_entries.rs	1	docs/events.md:1163-1168
-crates/main/tests/hooks_entries.rs	1	docs/events.md:582-586
-crates/main/tests/hooks_entries.rs	1	docs/testing.md:95
-crates/main/tests/hub_prune.rs	1	docs/errors.md:95
-crates/main/tests/hub_prune.rs	3	docs/invocation.md:1268-1270
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1418-1420
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1421-1426
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1474-1476
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1475-1476
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1479-1483
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1483-1484
-crates/main/tests/hub_prune.rs	1	docs/invocation.md:1484-1485
-crates/main/tests/hub_remote_config.rs	2	docs/invocation.md:1160
-crates/main/tests/hub_start_overrides.rs	1	docs/events.md:285-286
-crates/main/tests/hub_start_overrides.rs	1	docs/events.md:296
-crates/main/tests/hub_start_overrides.rs	1	docs/events.md:339
-crates/main/tests/hub_start_overrides.rs	1	docs/testing.md:109-111
-crates/main/tests/hub_start_overrides.rs	1	docs/testing.md:95
-crates/main/tests/hub_start_worktree.rs	1	docs/events.md:285-286
-crates/main/tests/hub_start_worktree.rs	1	docs/events.md:296
-crates/main/tests/hub_start_worktree.rs	1	docs/events.md:339
-crates/main/tests/hub_start_worktree.rs	1	docs/testing.md:109-111
-crates/main/tests/hub_start_worktree.rs	1	docs/testing.md:95
-crates/main/tests/hub_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
-crates/main/tests/hub_timing.rs	1	docs/testing.md:95
-crates/main/tests/jobs_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/main/tests/link_look.rs	1	docs/tui.md, "Moving\n    // through the conversation"
-crates/main/tests/live_codex.rs	1	docs/testing.md, "Live calls\n    // and evals"
-crates/main/tests/log_search_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/main/tests/loop_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/hub_daemon/changed_files_remote.rs	1	docs/testing/screens.md`, "A pointer event…"
+crates/main/tests/hub_daemon/feed.rs	1	docs/state.md`, "Recently exited\n//! sessions"
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/errors.md:95
+crates/main/tests/hub_daemon/hub_prune.rs	3	docs/invocation.md:1268-1270
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1418-1420
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1421-1426
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1474-1476
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1475-1476
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1479-1483
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1483-1484
+crates/main/tests/hub_daemon/hub_prune.rs	1	docs/invocation.md:1484-1485
+crates/main/tests/hub_daemon/hub_remote_config.rs	2	docs/invocation.md:1160
+crates/main/tests/hub_daemon/hub_start_overrides.rs	1	docs/events.md:285-286
+crates/main/tests/hub_daemon/hub_start_overrides.rs	1	docs/events.md:296
+crates/main/tests/hub_daemon/hub_start_overrides.rs	1	docs/events.md:339
+crates/main/tests/hub_daemon/hub_start_overrides.rs	1	docs/testing.md:109-111
+crates/main/tests/hub_daemon/hub_start_overrides.rs	1	docs/testing.md:95
+crates/main/tests/hub_daemon/hub_start_worktree.rs	1	docs/events.md:285-286
+crates/main/tests/hub_daemon/hub_start_worktree.rs	1	docs/events.md:296
+crates/main/tests/hub_daemon/hub_start_worktree.rs	1	docs/events.md:339
+crates/main/tests/hub_daemon/hub_start_worktree.rs	1	docs/testing.md:109-111
+crates/main/tests/hub_daemon/hub_start_worktree.rs	1	docs/testing.md:95
+crates/main/tests/hub_daemon/shutdown.rs	1	docs/invocation.md`,\n    // "Three signals, one path"
+crates/main/tests/hub_daemon/shutdown.rs	1	docs/invocation.md`, "What\n    // happens, all at once"
+crates/main/tests/hub_daemon/shutdown.rs	1	docs/invocation.md`, "What\n    // is written"
+crates/main/tests/hub_daemon/shutdown.rs	3	docs/invocation.md`, "What is written"
+crates/main/tests/hub_daemon/socket.rs	1	docs/events.md:1174-1175
+crates/main/tests/hub_daemon/socket.rs	1	docs/events.md:285-286
+crates/main/tests/hub_daemon/socket.rs	1	docs/events.md:534-535
+crates/main/tests/hub_daemon/socket.rs	1	docs/events.md:549-551
+crates/main/tests/hub_daemon/socket.rs	2	docs/events.md:583-586
+crates/main/tests/hub_daemon/socket.rs	1	docs/events.md:984-985
+crates/main/tests/hub_daemon/socket.rs	1	docs/events.md`,\n    // "`usage_recorded`): the turn makes two model calls, the held call's\n    // reply and the closing text reply, as the two requests asserted below\n    // against the provider server show.\n    assert_eq!(\n        lines\n            .iter()\n            .filter(|line| line["
+crates/main/tests/hub_daemon/socket.rs	3	docs/events.md`, "`steering_queue"
+crates/main/tests/hub_daemon/socket.rs	1	docs/loop.md:136-137
+crates/main/tests/hub_daemon/socket.rs	1	docs/loop.md:22-23
+crates/main/tests/hub_daemon/socket.rs	1	docs/loop.md:24-26
+crates/main/tests/hub_daemon/socket.rs	1	docs/loop.md:33
+crates/main/tests/hub_daemon/socket.rs	1	docs/loop.md:36-37
+crates/main/tests/hub_daemon/socket.rs	1	docs/loop.md:43-51
+crates/main/tests/hub_daemon/socket.rs	1	docs/permissions.md:638-640
+crates/main/tests/hub_daemon/socket.rs	1	docs/testing.md:109-111
+crates/main/tests/hub_daemon/socket.rs	1	docs/testing.md:95
+crates/main/tests/hub_daemon/stream_closed_notice.rs	1	docs/events.md`, "session_status"
+crates/main/tests/hub_daemon/support_helpers.rs	1	docs/testing.md, "Testing"
+crates/main/tests/hub_daemon/support_helpers.rs	1	docs/testing.md`,\n    // "Races are forced, not waited for"
+crates/main/tests/hub_daemon/support_helpers.rs	10	docs/testing/screens.md, "Screens"
+crates/main/tests/main_journeys.rs	2	docs/compaction.md, "What the model sees after a compaction"
 crates/main/tests/main_journeys.rs	1	docs/errors.md`,\n            // "Notices"
 crates/main/tests/main_journeys.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1797, 1805-1807
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1798-1799
-crates/main/tests/main_journeys.rs	2	docs/handoff.md, "What the model sees after a handoff"
 crates/main/tests/main_journeys.rs	1	docs/releasing.md`, "Install\n/// steps"
-crates/main/tests/mcp_login.rs	1	docs/state.md, "Diagnostic logs"
-crates/main/tests/mcp_remote.rs	1	docs/state.md, "Diagnostic logs"
-crates/main/tests/mcp_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/main/tests/model_picker_keys.rs	2	docs/state.md, "Diagnostic logs"
-crates/main/tests/model_switch.rs	16	docs/events.md, "clients"
-crates/main/tests/process_extensions.rs	2	docs/extensions.md:209
-crates/main/tests/process_extensions.rs	2	docs/extensions.md:211
-crates/main/tests/process_extensions.rs	2	docs/extensions.md:222
-crates/main/tests/process_extensions.rs	1	docs/state.md, "Diagnostic logs"
-crates/main/tests/provider_diagnostics.rs	2	docs/state.md, "Diagnostic logs"
-crates/main/tests/provider_diagnostics.rs	1	docs/state.md`, "Diagnostic logs"
-crates/main/tests/repository_hooks.rs	1	docs/extensions.md`, "Pinning"
-crates/main/tests/repository_servers.rs	1	docs/testing.md:95
-crates/main/tests/resume.rs	1	docs/events.md`,\n    // "Only the window a consumer actually needs is parsed"
-crates/main/tests/resume.rs	1	docs/invocation.md,\n    // "Driver commands"
-crates/main/tests/resume.rs	1	docs/invocation.md, "Lifecycle"
-crates/main/tests/rewind.rs	1	docs/invocation.md`, "`rewind` starts a new session process"
-crates/main/tests/rewind.rs	1	docs/invocation.md`, "`sessions [--all]`"
-crates/main/tests/sandbox.rs	1	docs/delegates.md, "Permissions"
-crates/main/tests/sandbox.rs	1	docs/events.md:683
-crates/main/tests/sandbox.rs	1	docs/events.md:697-701
-crates/main/tests/sandbox.rs	1	docs/events.md`, "Ephemeral"
-crates/main/tests/sandbox.rs	1	docs/permissions.md, "The destructive-command guard"
-crates/main/tests/sandbox.rs	1	docs/sandbox.md, "What it cannot do"
-crates/main/tests/sandbox.rs	2	docs/sandbox.md:102-106
-crates/main/tests/sandbox.rs	2	docs/sandbox.md:64-73
-crates/main/tests/session_command.rs	2	docs/events.md:1333
-crates/main/tests/session_command.rs	1	docs/events.md:285-286
-crates/main/tests/session_command.rs	1	docs/events.md:296
-crates/main/tests/session_command.rs	1	docs/events.md:339
-crates/main/tests/session_command.rs	1	docs/testing.md:95
-crates/main/tests/shutdown.rs	1	docs/invocation.md`,\n    // "Three signals, one path"
-crates/main/tests/shutdown.rs	1	docs/invocation.md`, "What\n    // happens, all at once"
-crates/main/tests/shutdown.rs	1	docs/invocation.md`, "What\n    // is written"
-crates/main/tests/shutdown.rs	3	docs/invocation.md`, "What is written"
-crates/main/tests/slash_aliases.rs	1	docs/tools.md:562-568,575-577
-crates/main/tests/socket.rs	1	docs/events.md:1174-1175
-crates/main/tests/socket.rs	1	docs/events.md:285-286
-crates/main/tests/socket.rs	1	docs/events.md:534-535
-crates/main/tests/socket.rs	1	docs/events.md:549-551
-crates/main/tests/socket.rs	2	docs/events.md:583-586
-crates/main/tests/socket.rs	1	docs/events.md:984-985
-crates/main/tests/socket.rs	1	docs/events.md`,\n    // "`usage_recorded`): the turn makes two model calls, the held call's\n    // reply and the closing text reply, as the two requests asserted below\n    // against the provider server show.\n    assert_eq!(\n        lines\n            .iter()\n            .filter(|line| line["
-crates/main/tests/socket.rs	3	docs/events.md`, "`steering_queue"
-crates/main/tests/socket.rs	1	docs/loop.md:136-137
-crates/main/tests/socket.rs	1	docs/loop.md:22-23
-crates/main/tests/socket.rs	1	docs/loop.md:24-26
-crates/main/tests/socket.rs	1	docs/loop.md:33
-crates/main/tests/socket.rs	1	docs/loop.md:36-37
-crates/main/tests/socket.rs	1	docs/loop.md:43-51
-crates/main/tests/socket.rs	1	docs/permissions.md:638-640
-crates/main/tests/socket.rs	1	docs/testing.md:109-111
-crates/main/tests/socket.rs	1	docs/testing.md:95
-crates/main/tests/startup_log.rs	1	docs/state.md`,\n//! "Diagnostic logs"
-crates/main/tests/startup_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/main/tests/startup_timing.rs	2	docs/testing.md, "Event streams"
-crates/main/tests/stop.rs	2	docs/state.md`, "Sockets"
-crates/main/tests/stream_closed_notice.rs	1	docs/events.md`, "session_status"
+crates/main/tests/providers/live_codex.rs	1	docs/testing.md, "Live calls\n    // and evals"
+crates/main/tests/providers/model_picker_keys.rs	2	docs/state.md, "Diagnostic logs"
+crates/main/tests/providers/model_switch.rs	16	docs/events.md, "clients"
+crates/main/tests/providers/provider_diagnostics.rs	2	docs/state.md, "Diagnostic logs"
+crates/main/tests/providers/provider_diagnostics.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/tests/screen_looks/link_look.rs	1	docs/tui.md, "Moving\n    // through the conversation"
+crates/main/tests/screen_looks/working_line_look.rs	3	docs/tui.md, "Steering"
+crates/main/tests/screen_looks/working_line_look.rs	1	docs/tui.md, "The slots"
+crates/main/tests/screens/terminal.rs	1	docs/configuration.md:119
+crates/main/tests/screens/terminal.rs	3	docs/invocation.md:115
+crates/main/tests/screens/terminal.rs	2	docs/invocation.md:1268-1270
+crates/main/tests/screens/terminal.rs	1	docs/invocation.md:291
+crates/main/tests/screens/terminal.rs	1	docs/invocation.md`, "Three signals, one\n/// path"
+crates/main/tests/screens/terminal_overrides.rs	1	docs/invocation.md`, "Sessions"
+crates/main/tests/screens/wheel_garble.rs	2	docs/tui.md, "Turns"
+crates/main/tests/session_turns/compaction_kept.rs	4	docs/compaction.md, "What the model sees after a compaction"
+crates/main/tests/session_turns/compaction_kept.rs	1	docs/permissions.md, "At a compaction"
+crates/main/tests/session_turns/continue_session.rs	1	docs/invocation.md`, "`start` `continues`"
+crates/main/tests/session_turns/history_page_failed.rs	1	docs/testing.md, "Waits and\n    // timeouts"
+crates/main/tests/session_turns/resume.rs	1	docs/events.md`,\n    // "Only the window a consumer actually needs is parsed"
+crates/main/tests/session_turns/resume.rs	1	docs/invocation.md,\n    // "Driver commands"
+crates/main/tests/session_turns/resume.rs	1	docs/invocation.md, "Lifecycle"
+crates/main/tests/session_turns/rewind.rs	1	docs/invocation.md`, "`rewind` starts a new session process"
+crates/main/tests/session_turns/rewind.rs	1	docs/invocation.md`, "`sessions [--all]`"
+crates/main/tests/session_turns/session_command.rs	2	docs/events.md:1333
+crates/main/tests/session_turns/session_command.rs	1	docs/events.md:285-286
+crates/main/tests/session_turns/session_command.rs	1	docs/events.md:296
+crates/main/tests/session_turns/session_command.rs	1	docs/events.md:339
+crates/main/tests/session_turns/session_command.rs	1	docs/testing.md:95
+crates/main/tests/session_turns/stop.rs	2	docs/state.md`, "Sockets"
 crates/main/tests/support/mod.rs	1	docs/state.md`,\n/// "Sockets"
-crates/main/tests/support_helpers.rs	1	docs/testing.md, "Testing"
-crates/main/tests/support_helpers.rs	1	docs/testing.md`,\n    // "Races are forced, not waited for"
-crates/main/tests/support_helpers.rs	10	docs/testing/screens.md, "Screens"
-crates/main/tests/terminal.rs	1	docs/configuration.md:119
-crates/main/tests/terminal.rs	3	docs/invocation.md:115
-crates/main/tests/terminal.rs	2	docs/invocation.md:1268-1270
-crates/main/tests/terminal.rs	1	docs/invocation.md:291
-crates/main/tests/terminal.rs	1	docs/invocation.md`, "Three signals, one\n/// path"
-crates/main/tests/terminal_overrides.rs	1	docs/invocation.md`, "Sessions"
-crates/main/tests/tool_search.rs	1	docs/testing.md:95
-crates/main/tests/tool_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
-crates/main/tests/tools.rs	1	docs/state.md, "Diagnostic logs"
-crates/main/tests/tui_timing_tests.rs	1	docs/state.md:428-429
-crates/main/tests/tui_timing_tests.rs	1	docs/state.md:430-432
-crates/main/tests/tui_timing_tests.rs	1	docs/state.md:432-435
-crates/main/tests/tui_timing_tests.rs	1	docs/state.md:435-440
-crates/main/tests/tui_timing_tests.rs	1	docs/state.md:438-440
-crates/main/tests/tui_timing_tests.rs	2	docs/state.md`, "Diagnostic\n/// logs"
-crates/main/tests/tui_timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/main/tests/update.rs	1	docs/extensions.md:1797, 1805-1807
-crates/main/tests/update.rs	2	docs/extensions.md:1798-1799
-crates/main/tests/update.rs	1	docs/extensions.md:1805-1807
-crates/main/tests/watchers.rs	3	docs/extensions.md:1651-1657
-crates/main/tests/wheel_garble.rs	2	docs/tui.md, "Turns"
-crates/main/tests/working_line_look.rs	3	docs/tui.md, "Steering"
-crates/main/tests/working_line_look.rs	1	docs/tui.md, "The slots"
-crates/main/tests/worktree_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/timings/alloc_stats.rs	2	docs/state.md:306
+crates/main/tests/timings/alloc_stats.rs	1	docs/state.md:345-355
+crates/main/tests/timings/alloc_stats.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/tests/timings/hub_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/timings/hub_timing.rs	1	docs/testing.md:95
+crates/main/tests/timings/jobs_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/timings/log_search_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/timings/loop_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/timings/mcp_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/timings/startup_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/timings/startup_timing.rs	2	docs/testing.md, "Event streams"
+crates/main/tests/timings/tool_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/timings/tui_timing_tests.rs	1	docs/state.md:428-429
+crates/main/tests/timings/tui_timing_tests.rs	1	docs/state.md:430-432
+crates/main/tests/timings/tui_timing_tests.rs	1	docs/state.md:432-435
+crates/main/tests/timings/tui_timing_tests.rs	1	docs/state.md:435-440
+crates/main/tests/timings/tui_timing_tests.rs	1	docs/state.md:438-440
+crates/main/tests/timings/tui_timing_tests.rs	2	docs/state.md`, "Diagnostic\n/// logs"
+crates/main/tests/timings/tui_timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/tests/timings/worktree_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/tool_calls/approve.rs	1	docs/extensions.md`, "Approving\n//! outside a session"
+crates/main/tests/tool_calls/driver_shell_no_timeout.rs	1	docs/testing.md, "Waits and timeouts"
+crates/main/tests/tool_calls/driver_shell_sent.rs	1	docs/testing.md, "Waits and timeouts"
+crates/main/tests/tool_calls/mcp_login.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/tool_calls/mcp_remote.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/tool_calls/sandbox.rs	1	docs/delegates.md, "Permissions"
+crates/main/tests/tool_calls/sandbox.rs	1	docs/events.md:683
+crates/main/tests/tool_calls/sandbox.rs	1	docs/events.md:697-701
+crates/main/tests/tool_calls/sandbox.rs	1	docs/events.md`, "Ephemeral"
+crates/main/tests/tool_calls/sandbox.rs	1	docs/permissions.md, "The destructive-command guard"
+crates/main/tests/tool_calls/sandbox.rs	1	docs/sandbox.md, "What it cannot do"
+crates/main/tests/tool_calls/sandbox.rs	2	docs/sandbox.md:102-106
+crates/main/tests/tool_calls/sandbox.rs	2	docs/sandbox.md:64-73
+crates/main/tests/tool_calls/tool_search.rs	1	docs/testing.md:95
+crates/main/tests/tool_calls/tools.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/tool_calls/watchers.rs	3	docs/extensions.md:1651-1657
 crates/mcp/Cargo.toml	1	docs/architecture.md, "The call rules"
 crates/mcp/src/cache.rs	1	docs/state.md`, "Cache"
 crates/mcp/src/http_tests.rs	7	docs/state.md, "Diagnostic logs"
@@ -684,6 +684,7 @@ scripts/test-journey-report	10	docs/ci.md:459-461
 scripts/test-journey-report	10	docs/testing.md:114-120
 scripts/test-leak-probe	1	docs/testing.md,\n# "Running tests"
 scripts/test-leak-scan	1	docs/testing.md, "Running tests"
+scripts/test-retry-filter	1	docs/testing/running.md,\n# "Flaky tests"
 scripts/test-stress-plan	1	docs/ci.md, "On every pull request that changes code"
 xtask/src/bench/attach.rs	3	docs/performance.md:184-185
 xtask/src/bench/judge.rs	2	docs/performance.md:184-185
@@ -707,6 +708,7 @@ xtask/src/bench_tests.rs	2	docs/performance.md:73,309-310
 xtask/src/bench_tests.rs	2	docs/performance.md` line 274
 xtask/src/ci_needs.rs	1	docs/ci.md,\n/// "The merge gate"
 xtask/src/flake_report_tests.rs	6	docs/ci.md, "On every pull request that changes code"
+xtask/src/flake_report_tests.rs	1	docs/ci.md, "The one-week trial"
 xtask/src/flake_report_tests.rs	20	docs/testing/running.md, "Flaky tests"
 xtask/src/main.rs	1	docs/ci.md, "The user docs site"
 xtask/src/must_succeed_tests.rs	1	docs/ci.md`, "On Linux x86_64 alone"

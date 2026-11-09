@@ -50,8 +50,8 @@ const OPEN_HEIGHT: u16 = 12;
 /// band. Reply bytes never size a log: the probe's measured bytes do.
 pub(crate) const TURN_REPLY_BYTES: usize = 4_096;
 
-/// A growth turn holds a fraction of the handoff trigger's tokens, so no
-/// automatic handoff runs while the log grows.
+/// A growth turn holds a fraction of the compaction trigger's tokens, so no
+/// automatic compaction runs while the log grows.
 const _: () = {
     assert!(TURN_REPLY_BYTES / BYTES_PER_TOKEN < TRIGGER_TOKENS);
 };
@@ -60,20 +60,20 @@ const _: () = {
 /// ([`size_note`]).
 const PLANS: [(&str, u64); 2] = [("1 MiB", 1_048_576), ("10 MiB", 10_485_760)];
 
-/// The probes: one turn, then two turns with a handoff, each of
+/// The probes: one turn, then two turns with a compaction, each of
 /// [`TURN_REPLY_BYTES`]. Their two log sizes split the fixed cost from the
-/// cost of each further turn with its handoff.
+/// cost of each further turn with its compaction.
 pub(crate) const PROBE_A: Fixture = Fixture {
     metric: "attach_probe",
     turns: 1,
     reply_bytes: TURN_REPLY_BYTES,
-    handoffs: 0,
+    compactions: 0,
 };
 pub(crate) const PROBE_B: Fixture = Fixture {
     metric: "attach_probe",
     turns: 2,
     reply_bytes: TURN_REPLY_BYTES,
-    handoffs: 1,
+    compactions: 1,
 };
 
 /// The turns growing from a `first`-byte start in `extra`-byte steps need
@@ -852,7 +852,7 @@ pub(crate) fn prepare_attach(
             metric: "terminal_attach_ms",
             turns,
             reply_bytes: TURN_REPLY_BYTES,
-            handoffs: turns - 1,
+            compactions: turns - 1,
         };
         let home = ctx.home.child(fixture.script_with_last(ATTACH_TAIL))?;
         match prepare_fixture(ctx, home, label, &fixture, notes) {

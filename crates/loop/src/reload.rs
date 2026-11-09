@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{BlockLimits, Error, HandoffSettings, Loop, Retry, Reviewer};
+use crate::{BlockLimits, CompactionSettings, Error, Loop, Retry, Reviewer};
 use contract::diag::Observe;
 use contract::events::{
     CacheLifetime, CommandInfo, LoadedExtension, Notice, ReloadFailure, ReloadedServers,
@@ -82,8 +82,8 @@ pub struct ReloadSettings {
     pub limits: BlockLimits,
     /// Model call retry settings.
     pub retry: Retry,
-    /// Automatic handoff settings.
-    pub handoff: HandoffSettings,
+    /// Automatic compaction settings.
+    pub compaction: CompactionSettings,
     /// The session's billed-spend limit.
     pub budget: Option<f64>,
     /// The idle exit timeout.
@@ -288,7 +288,7 @@ impl Loop {
         self.reviewer_notes = settings.reviewer_notes;
         self.limits = settings.limits;
         self.retry = settings.retry;
-        self.handoff.settings = settings.handoff;
+        self.compaction.settings = settings.compaction;
         self.budget = settings.budget;
         self.idle_exit = settings.idle_exit;
         self.warming.set_cap(settings.warm_cap);
@@ -370,11 +370,13 @@ impl Loop {
         if let Some(hooks) = self.hooks.clone() {
             self.drain_state(&hooks, None)?;
         }
-        self.preamble = None;
-        self.preamble_reason = PreambleReason::Reload;
-        self.warming.stop(self.log.clock().now());
+        // The same seam the toggle takes, with the reload reason: the
+        // registered shell entry, warming, cached build and rows refresh
+        // identically to a toggle. The publish reads the live definition,
+        // so with no flip the refresh is a no-op that still rebuilds with
+        // the reload reason.
         self.load_after_reload = true;
-        self.build_preamble()?;
+        self.invalidate_sandbox(PreambleReason::Reload)?;
         if self.opened {
             let skills = self.skills.reload_check();
             for notice in group_notices(skills.notices, grouped_lead) {

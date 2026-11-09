@@ -67,11 +67,12 @@ what a panic leaves (`docs/code-quality.md`, "Panics") panics in a child
 process that aborts, such as the `fiber` binary or the test binary re-run with
 the real panic hook, never in the test's own process.
 
-Fiber's own tests are Rust, run by cargo. The one exception is an extension's
-tests, Fiber's first-party extensions included: they are cases run by
-`fiber extension test` ("Testing an extension"). Behaviour a case cannot
-observe, such as a file an extension writes, is tested at binary level in
-`crates/main/tests`.
+Fiber's own tests are Rust, run by cargo. Two exceptions. The first is an
+extension's tests, Fiber's first-party extensions included: they are cases run
+by `fiber extension test` ("Testing an extension"). The second is a shell
+script under `scripts/`: it is tested by its own `scripts/test-<name>`
+self-test, which `scripts/check` runs. Behaviour a case cannot observe, such as
+a file an extension writes, is tested at binary level in `crates/main/tests`.
 
 ## What a test asserts
 
@@ -346,7 +347,7 @@ unless its fix PR names the journey that already covers the path. A provider
 bug a person finds adds its recorded gateway transcript, and its journey
 replays that transcript.
 
-The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
-`crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the
+The gate runs the screen journeys in `crates/main/tests/screens/terminal.rs`,
+`crates/main/tests/screens/journeys.rs` and `crates/main/tests/screens/inline_images.rs`; the
 main journeys in `crates/main/tests/main_journeys.rs` run on `main`. To run
 them on a developer machine, see `docs/testing/running.md`, "Journey suite".

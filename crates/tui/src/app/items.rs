@@ -151,6 +151,9 @@ pub(crate) struct ItemView {
     /// Whether the job runs under a pseudo-terminal: the body's screen
     /// slab, kept after the run ends.
     pub(crate) tty: bool,
+    /// Whether the connected delegate's turn runs, so the card offers to
+    /// interrupt it; apart from `running`, the job's lifetime.
+    pub(crate) interruptible: bool,
 }
 
 /// The attached session's items: the per-job fold, the open item and the
@@ -230,7 +233,7 @@ impl App {
     /// delegate's, swapped onto the screen. A job's view and another
     /// harness's delegate show none, and the screen behind is the
     /// parent's.
-    pub(super) fn item_transcript(&self) -> bool {
+    pub(crate) fn item_transcript(&self) -> bool {
         self.items
             .open
             .as_ref()
@@ -240,6 +243,15 @@ impl App {
     /// The open item's job, if any.
     fn open_job(&self) -> Option<JobId> {
         self.items.open.as_ref().map(|open| open.job_id.clone())
+    }
+
+    /// Whether the open item is a delegate of any harness, not a plain job.
+    fn item_is_delegate(&self) -> bool {
+        self.items
+            .open
+            .as_ref()
+            .and_then(|open| self.items.jobs.get(&open.job_id))
+            .is_some_and(|record| record.delegate.is_some())
     }
 
     /// Whether `session` is the open fiber delegate's session.
@@ -355,7 +367,46 @@ impl App {
             output_path: record.output_path.clone(),
             job_id: open.job_id.clone(),
             tty: record.tty,
+            interruptible: self.item_transcript() && self.interrupt_session().is_some(),
         })
+    }
+
+    /// The delegate whose running turn the swapped transcript shows: the
+    /// open Fiber delegate's session while its job runs and the shown
+    /// pages hold an open turn. A finished delegate, an idle one or a view
+    /// with no transcript has none, and never falls back to the parent.
+    pub(super) fn item_turn_session(&self) -> Option<SessionId> {
+        let open = self.items.open.as_ref()?;
+        open.stashed.as_ref()?;
+        let record = self.items.jobs.get(&open.job_id)?;
+        if record.outcome.is_some() {
+            return None;
+        }
+        let delegate = record.delegate.as_ref()?;
+        self.screen.pages().open_turn()?;
+        Some(delegate.session.clone())
+    }
+
+    /// The session whose turn the on-screen conversation runs, while the
+    /// terminal is connected to interrupt it: a delegate's own in its
+    /// view, else the attached session's when busy, whatever else is open
+    /// over it. A delegate's view of another harness has no turn to
+    /// interrupt and never falls back to its parent; an ordinary job's
+    /// view shows the attached conversation and does.
+    pub(super) fn interrupt_session(&self) -> Option<SessionId> {
+        if !self.connected() {
+            return None;
+        }
+        if self.item_transcript() || self.item_is_delegate() {
+            return self.item_turn_session();
+        }
+        match &self.phase {
+            Phase::Attached {
+                session,
+                busy: true,
+            } => Some(session.clone()),
+            Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => None,
+        }
     }
 
     /// The job holding `serial`, if any.
@@ -827,8 +878,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

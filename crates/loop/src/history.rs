@@ -15,7 +15,7 @@ use log::{Log, Segment};
 use serde_json::Value;
 
 use crate::Error;
-use crate::handoff::Carry;
+use crate::compaction::Carry;
 use crate::resume::Resumed;
 use crate::reviewer::{PendingAsks, render_reviewed};
 
@@ -45,7 +45,7 @@ const FOLDED: &[EventKind] = &[
     EventKind::Rewound,
     EventKind::OpeningMessage,
     EventKind::SkillsResent,
-    EventKind::HandoffCompleted,
+    EventKind::CompactionCompleted,
     EventKind::ReviewerKept,
     EventKind::RepositoryCodeOffered,
     EventKind::RepositoryCodeResolved,
@@ -87,8 +87,8 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         seen_files: BTreeMap::new(),
         known_hosts: crate::known_hosts::KnownHosts::default(),
         session_blocks: 0,
-        // The reviewer's input follows the session's handoffs
-        // (`docs/permissions.md`, "At a handoff").
+        // The reviewer's input follows the session's compactions
+        // (`docs/permissions.md`, "At a compaction").
         reviewed: Vec::new(),
         orphans: Vec::new(),
         delegate_sessions: HashMap::new(),
@@ -112,7 +112,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // The jobs running and the session log's path as of the line read.
         running: Carry::default(),
         // Each turn's latest `turn_started` since the last completed
-        // handoff, with the state at it: a later handoff names one of
+        // compaction, with the state at it: a later compaction names one of
         // them. The position names its segment, so a turn in a parent
         // and one in the child never share it.
         starts: HashMap::new(),
@@ -230,13 +230,13 @@ fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
 
 /// Folds one line of segment `pass.index` into `resumed`: the workspace
 /// from the own segment's `session_started`, the model, the credential
-/// label and the thinking, the session-wide state, and the handoff
+/// label and the thinking, the session-wide state, and the compaction
 /// window. The ledger and the reviewer's block count fold only the own
 /// segment.
 fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
     let kind = line.kind();
     // The requests an earlier process left open are read from the raw
-    // payload: a line outside the handoff window never has to parse for the
+    // payload: a line outside the compaction window never has to parse for the
     // exit to report them. Interaction lines seed the exit the same way,
     // then fall through to the typed parse below, so the reviewer reads
     // the person's answers with what they answer.
@@ -331,10 +331,10 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         }
     }
     pass.running.fold_jobs(&event);
-    // A completed handoff starts a new context: what the old one saw is
+    // A completed compaction starts a new context: what the old one saw is
     // forgotten, as the live loop forgets it (`docs/tools.md`, "Stale
-    // files"). Any other handoff outcome keeps the record.
-    if let Event::HandoffCompleted(done) = &event
+    // files"). Any other compaction outcome keeps the record.
+    if let Event::CompactionCompleted(done) = &event
         && done.outcome == Outcome::Completed
     {
         resumed.seen_files.clear();
@@ -473,7 +473,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 path: sent.path.clone(),
             });
         }
-    } else if let Event::HandoffCompleted(done) = &event
+    } else if let Event::CompactionCompleted(done) = &event
         && done.outcome == Outcome::Completed
     {
         let turn = line.turn_id.as_ref();
@@ -483,10 +483,10 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             .unwrap_or_default();
         resumed.window = window;
         resumed.seed = seed;
-        // Only this context's loads resend: a later handoff rearms the
+        // Only this context's loads resend: a later compaction rearms the
         // resend from what its own context loaded.
         pass.running.skills.clear();
-        // Only this turn can complete another handoff before its
+        // Only this turn can complete another compaction before its
         // next `turn_started`.
         pass.starts.retain(|started, _| Some(started) == turn);
     }
@@ -612,8 +612,8 @@ fn rewrite_parts(parts: &mut [Value], dir: &Path) {
 
 /// Makes a parent segment's tool result `artifact` absolute against that
 /// segment's directory when it is relative: the artifact names a file in
-/// the artifacts directory of the session that wrote it, and the handoff
-/// note resolves it under the session log's directory (`docs/handoff.md`,
+/// the artifacts directory of the session that wrote it, and the compaction
+/// note resolves it under the session log's directory (`docs/compaction.md`,
 /// "Overflow"). Own lines and absolute paths pass through untouched. In
 /// memory only; nothing is written or copied.
 fn absolutize_artifact(line: &mut Envelope, dir: &Path) {

@@ -194,7 +194,7 @@ impl std::error::Error for SandboxApply {}
 pub(super) enum Drive {
     /// The existing pipeline: one drive pass, then the end.
     Plain,
-    /// The Seatbelt pipeline: every handoff waits for the marker.
+    /// The Seatbelt pipeline: every transfer waits for the marker.
     #[cfg(target_os = "macos")]
     Gated(Arc<super::sandbox::MarkerWatch>),
 }
@@ -282,7 +282,7 @@ fn open_streams(cmd: &mut Command, policy: MovePolicy) -> std::io::Result<SpawnS
 
 /// Drives a spawned child through the existing execution pipeline. The
 /// Seatbelt spawn shares it; only its command construction, marker
-/// stripping, and handoff gating differ, carried by `drive`.
+/// stripping, and transfer gating differ, carried by `drive`.
 #[allow(
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy, the spill and the drive gate are one call"
@@ -824,9 +824,9 @@ pub(crate) fn execute_confined(
     )
 }
 
-/// Drives a macOS call, gating every handoff on the confinement marker:
+/// Drives a macOS call, gating every transfer on the confinement marker:
 /// no `MovePolicy` — Foreground's move-after threshold nor immediate
-/// Background, Terminal or Monitor handoff — moves a confined call before
+/// Background, Terminal or Monitor transfer — moves a confined call before
 /// its marker is observed. Marker observed resumes normal move-policy
 /// behavior; the post-drive check fails the unobserved remainder closed.
 /// Unconfined calls drive exactly once, as before.

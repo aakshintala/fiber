@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use crate::delegate::group::listed;
 use contract::Envelope;
 use contract::clock::Clock as _;
+use contract::diag::{Op, Timing, TimingName};
 use contract::events::{EventKind, FiberExited, FinalMessage, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
@@ -285,6 +286,7 @@ struct Rig {
     job: JobId,
     events: std::path::PathBuf,
     worktree_run: Mutex<Option<super::WorktreeRun>>,
+    timing: Option<Timing>,
     /// Set by the runner thread as its first step, so an expiry can tell
     /// a thread that never started from one that never reached its first
     /// watch or park.
@@ -316,6 +318,7 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
         job: crate::registry::mint_job_id(),
         events,
         worktree_run: Mutex::new(None),
+        timing: None,
         runner_started: Arc::new(AtomicBool::new(false)),
     }
 }
@@ -374,6 +377,7 @@ impl Rig {
             after,
             timeout,
             on_usage,
+            self.timing.clone(),
         );
         let runner = runner.with_worktree(self.worktree_run.lock().unwrap().take());
         let launched = Launched {
@@ -903,6 +907,126 @@ fn the_folded_signal_comes_after_on_line_returns() {
     });
 }
 
+/// One owned trace record: the op and the subject the probe cloned off
+/// the seam's borrowed payload before boxing its guard.
+#[derive(Debug, PartialEq, Eq)]
+enum OwnedName {
+    Tool(String),
+    Job(JobId),
+}
+
+/// The channel-only probe beside the order test: it takes the seam's
+/// payload, clones it into an owned record before boxing, and sends that
+/// record on its guard's drop. The record path touches no registry lock.
+fn probe_timing(tx: mpsc::Sender<(Op, Option<OwnedName>)>) -> Timing {
+    Arc::new(
+        move |op: Op, name: Option<TimingName>, _started: Option<Instant>| {
+            let owned = name.map(|name| match name {
+                TimingName::Tool(tool) => OwnedName::Tool(tool.to_owned()),
+                TimingName::Job(job) => OwnedName::Job(job.clone()),
+            });
+            let tx = tx.clone();
+            Some(Box::new(ProbeGuard { op, owned, tx }) as Box<dyn Send>)
+        },
+    )
+}
+
+struct ProbeGuard {
+    op: Op,
+    owned: Option<OwnedName>,
+    tx: mpsc::Sender<(Op, Option<OwnedName>)>,
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        let _sent = self.tx.send((self.op, self.owned.take()));
+    }
+}
+
+/// Asserts the order `docs/state.md` ("Diagnostic logs") promises for one
+/// job id: `jobs.receive` precedes `jobs.deliver`, paired by `job`.
+fn assert_receive_then_deliver(
+    receive: &(Op, Option<OwnedName>),
+    deliver: &(Op, Option<OwnedName>),
+    job: &JobId,
+) {
+    assert_eq!(
+        receive.0,
+        Op::JobsReceive,
+        "the watcher trace fires first: {receive:?}"
+    );
+    assert_eq!(
+        deliver.0,
+        Op::JobsDeliver,
+        "the runner trace fires second: {deliver:?}"
+    );
+    assert_eq!(
+        receive.1,
+        Some(OwnedName::Job(job.clone())),
+        "the receive names the job: {receive:?}"
+    );
+    assert_eq!(
+        deliver.1,
+        Some(OwnedName::Job(job.clone())),
+        "the delivery names the same job: {deliver:?}"
+    );
+}
+
+/// The watcher receives the delegate's exit before the runner delivers
+/// it, paired by job id: the scripted watch yields one `fiber_exited`
+/// line while the child still blocks on its fifo, so the reap cannot beat
+/// the receive down the stdout fallback, which emits no receive. The two
+/// probe records are separate waits with their own bounds: the receive is
+/// taken before the release, the delivery after it.
+#[test]
+fn the_receive_and_deliver_traces_fire_in_order_for_one_exit() {
+    let dir = TempDir::new("fiber-delegate-trace-order");
+    let release = fifo(dir.path(), "release");
+    let shell = format!("read _ < '{}'; exit 0", release.display());
+    let mut rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
+        1, "Done.",
+    )])]);
+    // Backstop: kills the group if the test fails before the child exits.
+    let watchdog = Watchdog::matching(&release.to_string_lossy());
+    let (trace_tx, trace_rx) = mpsc::channel();
+    rig.timing = Some(probe_timing(trace_tx));
+    let (done, _park) = rig.start_timeout(&shell, BOUND, 1024, None, None, None);
+    let stop = Arc::new(AtomicBool::new(false));
+    let clock = Arc::clone(&rig.clock);
+    let script = Arc::clone(&rig.script);
+    let started = Arc::clone(&rig.runner_started);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+            drive_runner_clock(&stop, &clock, &script, &started, &deadline, None);
+        });
+        // The watcher folds the scripted line while the child still
+        // blocks: the receive lands with no reap in flight.
+        let receive_deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+        let receive = receive_deadline.recv_or_fail(&trace_rx, "the watcher to receive the exit");
+        // The fold signal lands after `on_line` returns, so the socket
+        // store already ran: releasing now reaps down the socket path.
+        wait_folded(&rig, 1);
+        release_fifo(&release, b"go\n");
+        let deliver_deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+        let deliver = deliver_deadline.recv_or_fail(&trace_rx, "the runner to deliver the exit");
+        assert_receive_then_deliver(&receive, &deliver, &rig.job);
+        stop.store(true, Ordering::Relaxed);
+    });
+    // The delivery proof is unchanged behaviour: the run completes as
+    // before, with the delegate's text.
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("Done.".into())
+    );
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&done)
+        .expect("the runner returns after `fiber_exited`");
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
 /// Wakes the runner through one refused-watch backoff: the runner parks
 /// at `at`, the test advances `gap`, and the watch runs again
 /// (docs/testing.md, "Waits and timeouts": a test advances a fake clock
@@ -1024,7 +1148,7 @@ fn kills(pgid: u32) -> usize {
 #[test]
 fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
     within(
-        "worktree handoff",
+        "worktree transfer",
         Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             for acknowledged in [true, false] {
@@ -1171,6 +1295,8 @@ fn an_unknown_kind_with_a_valid_usage_payload_is_not_adopted_forwarded_or_folded
         wake: Arc::new(Parker::new()),
         on_usage: Some(on_usage),
         worktree_guard: Some(guard),
+        timing: None,
+        job_id: crate::registry::mint_job_id(),
     }
     .run();
 
@@ -1641,6 +1767,31 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
         Some("Quick.".into())
     );
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn stdout_fallback_delivers_without_a_receive_trace() {
+    let line = json_line(1, "Fallback.");
+    let mut rig = rig(vec![]);
+    let watchdog = Watchdog::matching("fiber-delegate-fallback-trace");
+    let (trace_tx, trace_rx) = mpsc::channel();
+    rig.timing = Some(probe_timing(trace_tx));
+    rig.start(
+        &format!(": fiber-delegate-fallback-trace; printf '%s\\n' '{line}'; exit 0"),
+        BOUND,
+        1024,
+    );
+    let trace = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&trace_rx, "stdout fallback delivery trace");
+    assert_eq!(trace.0, Op::JobsDeliver);
+    assert_eq!(trace.1, Some(OwnedName::Job(rig.job.clone())));
+    assert!(
+        trace_rx.try_recv().is_err(),
+        "fallback has no receive trace"
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2676,6 +2827,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         None,
         None,
         None,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -2999,6 +3151,8 @@ fn run_watch(
         wake: waker,
         on_usage: None,
         worktree_guard: None,
+        timing: None,
+        job_id: crate::registry::mint_job_id(),
     }
     .run();
 }
@@ -3158,6 +3312,7 @@ fn the_fold_starts_from_the_run_boundary() {
         1024,
         watch,
         Some(5),
+        None,
         None,
         None,
     );
@@ -3503,6 +3658,8 @@ fn run_backfill(
         wake: waker,
         on_usage: Some(on_usage),
         worktree_guard: None,
+        timing: None,
+        job_id: crate::registry::mint_job_id(),
     }
     .run();
     let seen = seen.lock().unwrap().clone();

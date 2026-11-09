@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use contract::TurnId;
 use contract::events::{
-    Event, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome, TurnStarted,
-    group_notices, grouped_lead,
+    Event, PreambleReason, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome,
+    TurnStarted, group_notices, grouped_lead,
 };
-use contract::provider::Input;
+use contract::provider::{Input, ToolDefinition};
+use contract::tool::Tool;
 
 use crate::{Error, Loop, Preamble, Summary, cancel, inbox, mint, prompt, status};
 
@@ -99,8 +100,8 @@ impl Loop {
         );
         let person = input
             .iter()
-            .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
-        self.handoff.new_turn(person);
+            .any(|item| matches!(item, contract::events::InputItem::Compaction { .. }));
+        self.compaction.new_turn(person);
         // Armed with `turn_started` and its contexts: a shutdown lands
         // before all of them or after (`docs/extensions.md`, "Hooks").
         let cancel = Arc::clone(&self.cancel);
@@ -198,7 +199,7 @@ impl Loop {
 
     /// Builds the preamble without writing an opening or running the
     /// post-offer load, so a reload can build before the first turn.
-    pub(crate) fn build_preamble(&mut self) -> Result<(), Error> {
+    fn build_preamble(&mut self) -> Result<(), Error> {
         if let Some(notice) = self.construct_preamble()? {
             self.append_early(&Event::Notice(notice))?;
         }
@@ -234,7 +235,7 @@ impl Loop {
             self.provider.as_ref(),
             self.preamble_reason,
             self.replaced.clone(),
-            self.handoff.trigger_at,
+            self.compaction.trigger_at,
             self.tool_search.as_ref(),
         );
         // The loop owns the effective budget; the builder leaves it
@@ -374,7 +375,7 @@ impl Loop {
 
 impl Loop {
     /// Every tool a `ToolSearchResult` in the conversation holds loaded.
-    /// The conversation keeps every search result since the last handoff,
+    /// The conversation keeps every search result since the last compaction,
     /// so this is the loaded set (`docs/tools.md`, "Tool search").
     pub(crate) fn loaded_names(&self) -> BTreeSet<String> {
         self.conversation
@@ -461,10 +462,10 @@ impl Loop {
         }
     }
 
-    /// Moves the loaded names a completed handoff dropped back to
+    /// Moves the loaded names a completed compaction dropped back to
     /// `Deferred`: only names the loaded set lost publish (`docs/tools.md`,
     /// "Tool search"). With no deferral or no setter nothing publishes.
-    pub(crate) fn publish_handoff_rows(&self, before: &BTreeSet<String>) {
+    pub(crate) fn publish_compaction_rows(&self, before: &BTreeSet<String>) {
         let Some(rows) = self.tool_rows.as_ref() else {
             return;
         };
@@ -480,5 +481,89 @@ impl Loop {
         for name in before.difference(&after) {
             (rows.state)(name, ToolState::Deferred);
         }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test-only pause between the seam's snapshot and its publish, so a
+    /// test can force an interleaved flip from a second thread and pin that
+    /// the publish carries fresh bytes.
+    static SANDBOX_SEAM_PAUSE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Parks the seam's next snapshot-to-publish window on `paused`: it runs
+/// after the snapshot definition and before the publish, on the loop thread.
+#[cfg(test)]
+pub(crate) fn pause_sandbox_between_snapshot_and_publish(paused: Box<dyn FnOnce()>) {
+    SANDBOX_SEAM_PAUSE.with(|hook| {
+        *hook.borrow_mut() = Some(paused);
+    });
+}
+
+/// Runs the seam's parked pause, if any, then clears it.
+#[cfg(test)]
+fn pause_sandbox_for_test() {
+    SANDBOX_SEAM_PAUSE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+impl Loop {
+    /// The one invalidation every derived sandbox cache goes through on a
+    /// toggle flip and on a reload: refreshes the shell entry to the live
+    /// definition, then stops warming, clears the cached build, sets the
+    /// passed reason and rebuilds the preamble (which re-runs the prompt
+    /// build, re-derives the catalogue and sources, and publishes rows).
+    /// The entry is located without naming it: it is the registered entry
+    /// whose live definition moved since its snapshot, with the key taken
+    /// from the owned live definition. A sandbox flip moves only that
+    /// entry. The live definition locks the shared handle per statement
+    /// and releases, so no guard is held across the call here: holding one
+    /// would self-deadlock on the non-reentrant mutex. The loop observes
+    /// the setting only through these bytes — the tool seam exposes no
+    /// enabled flag, and the shell handle lives in a crate the loop never
+    /// links — so the enabled-level compare lives in the session-owned
+    /// switch (previous against new under the handle lock, with the verdict
+    /// traveling through the delivery), while this publish compares the
+    /// fresh bytes against the snapshot, re-running snapshot-plus-compute
+    /// once on mismatch, then publishing. Inbox serialization (one delivery
+    /// at a time, no scheduling point inside this synchronous seam) makes
+    /// the mismatch unreachable.
+    pub(crate) fn invalidate_sandbox(&mut self, reason: PreambleReason) -> Result<(), Error> {
+        // The registered snapshot is what the preamble build and the `/tools`
+        // publication read, not the live tool: rebuilding the preamble alone
+        // would leave the shell description, the search catalogue and the
+        // `/tools` metadata stale, so the seam refreshes the entry at the
+        // single site. No other caller clears the cached build or stops
+        // warming for sandbox. The publish decision below reads the owned
+        // bytes, the only sandbox state this crate can observe.
+        let mut moved: Vec<(String, Arc<dyn Tool>, ToolDefinition)> = Vec::new();
+        for (by, tool, stored) in self.tools.values() {
+            let live = tool.definition();
+            if live != *stored {
+                moved.push((by.clone(), Arc::clone(tool), live));
+            }
+        }
+        #[cfg(test)]
+        pause_sandbox_for_test();
+        for (by, tool, snapshot) in moved {
+            let fresh = tool.definition();
+            let definition = if fresh != snapshot {
+                tool.definition()
+            } else {
+                snapshot
+            };
+            let name = definition.name.clone();
+            self.tools.insert(name, (by, tool, definition));
+        }
+        self.warming.stop(self.log.clock().now());
+        self.preamble = None;
+        self.preamble_reason = reason;
+        self.build_preamble()?;
+        Ok(())
     }
 }

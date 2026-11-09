@@ -54,7 +54,7 @@ impl Loop {
                 // ids already left `running`.
                 let released: Vec<JobId> = running
                     .iter()
-                    .filter(|id| self.handoff.carry.owned(&id.0))
+                    .filter(|id| self.compaction.carry.owned(&id.0))
                     .cloned()
                     .collect();
                 release(&released);
@@ -85,7 +85,7 @@ impl Loop {
                     self.settle_normal_one(delivery)?;
                 }
                 suppress = false;
-                running.retain(|id| self.handoff.carry.owned(&id.0));
+                running.retain(|id| self.compaction.carry.owned(&id.0));
                 if running.is_empty() {
                     return Ok(());
                 }
@@ -116,7 +116,7 @@ impl Loop {
             | Delivery::Sandbox(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Close(_)
             | Delivery::Cancelled
             | Delivery::JobLine(_)
@@ -137,7 +137,7 @@ impl Loop {
 
     /// Stops every running job and writes each job end the loop holds or
     /// the inbox delivers, as `job_completed` with no turn, until no job
-    /// runs. Steers, handoffs, ending notices and monitor batches are
+    /// runs. Steers, compactions, ending notices and monitor batches are
     /// dropped unwritten. The stop is sent again on every pass, so a call
     /// that moved to the background after the first is stopped too. The
     /// wait has no deadline: the shutdown's bound limits it.
@@ -159,7 +159,7 @@ impl Loop {
                     }
                     Queued::Steer(..)
                     | Queued::Line(_)
-                    | Queued::Handoff(..)
+                    | Queued::Compaction(..)
                     | Queued::Pending(..) => {}
                 }
             }
@@ -241,7 +241,7 @@ impl Loop {
             return Ok(());
         }
         match delivery {
-            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+            Delivery::Job(notice) if self.compaction.carry.owned(&notice.completed.job_id.0) => {
                 self.end_extension_job(notice)?;
             }
             Delivery::Job(notice) => {
@@ -266,7 +266,7 @@ impl Loop {
             Delivery::Prompt(_, ack)
             | Delivery::ProposeNotes(_, ack)
             | Delivery::Steer(_, ack)
-            | Delivery::Handoff(_, _, ack)
+            | Delivery::Compaction(_, _, ack)
             | Delivery::Rewind(_, _, ack)
             | Delivery::ChangeWorkspace(_, _, ack)
             | Delivery::Model(_, ack)

@@ -19,8 +19,9 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+use contract::JobId;
 use contract::clock::Wake;
-use contract::diag::{Op, ProviderPurpose};
+use contract::diag::{Op, ProviderPurpose, TimingName};
 
 use super::*;
 use fakes::Deadline;
@@ -688,7 +689,7 @@ fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
         assert!(text.ends_with("}}\n"), "{text}");
         assert_eq!(text.lines().count(), 1, "{text}");
         let parsed: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
-        assert_timing_data(&parsed, "tool.run", Some("read"));
+        assert_timing_data(&parsed, "tool.run", Some("read"), None);
     }
 }
 
@@ -920,9 +921,9 @@ fn a_backwards_clock_contributes_zero() {
         .now()
         .checked_add(Duration::from_secs(1))
         .expect("one second ahead");
-    drop(timed(&diag, Op::TurnHandoff, None, Some(start)).expect("debug guard"));
+    drop(timed(&diag, Op::TurnCompaction, None, Some(start)).expect("debug guard"));
     let line = op_line(&home, "hub.log");
-    assert_eq!(line["data"]["op"], "turn.handoff");
+    assert_eq!(line["data"]["op"], "turn.compaction");
     assert_eq!(line["data"]["ms"], 0);
 }
 
@@ -950,9 +951,10 @@ fn a_frame_within_budget_writes_nothing_and_one_past_writes_sixteen() {
     assert_eq!(line["data"]["ms"], 16, "the budget binds frames only");
 }
 
-/// Every operation with and without a tool: the op and the tool the line
-/// carries.
-fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
+/// Every operation with and without a tool, plus the job-keyed timers:
+/// the op, the tool the line carries, and the job id it carries. A timer
+/// names one subject only: a row carries a tool or a job, never both.
+fn every_timed_case() -> Vec<(Op, Option<&'static str>, Option<&'static str>, &'static str)> {
     use Op::*;
     let bare = [
         (StartupConfig, "startup.config"),
@@ -985,9 +987,11 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (ToolRun, "tool.run"),
         (TurnRequest, "turn.request"),
         (TurnModelCall, "turn.model_call"),
-        (TurnHandoff, "turn.handoff"),
+        (TurnCompaction, "turn.compaction"),
         (McpConnect, "mcp.connect"),
         (JobsStart, "jobs.start"),
+        (JobsReceive, "jobs.receive"),
+        (JobsDeliver, "jobs.deliver"),
         (WorktreeCreate, "worktree.create"),
         (WorktreeRemove, "worktree.remove"),
         (PictureRun, "picture.run"),
@@ -998,8 +1002,8 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
     ];
     let mut cases = Vec::new();
     for (op, want) in bare {
-        cases.push((op, None, want));
-        cases.push((op, Some("shell"), want));
+        cases.push((op, None, None, want));
+        cases.push((op, Some("shell"), None, want));
     }
     use contract::diag::HookChain::*;
     for (chain, want) in [
@@ -1009,9 +1013,13 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (BeforeModelCall, "hook.before_model_call"),
         (TurnEnd, "hook.turn_end"),
     ] {
-        cases.push((Hook(chain), None, want));
-        cases.push((Hook(chain), Some("shell"), want));
+        cases.push((Hook(chain), None, None, want));
+        cases.push((Hook(chain), Some("shell"), None, want));
     }
+    // The job timers carry the job id and no tool: the receive precedes
+    // the delivery for one job id.
+    cases.push((JobsReceive, None, Some("job-1"), "jobs.receive"));
+    cases.push((JobsDeliver, None, Some("job-1"), "jobs.deliver"));
     cases
 }
 
@@ -1021,10 +1029,10 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
 const ALLOC_KEYS: [&str; 3] = ["alloc_bytes", "allocs", "live_delta_bytes"];
 
 /// Asserts the closed `data` key set on one parsed `op_timing` line: `op`
-/// and `ms`, plus `tool` exactly when the guard carried one, plus
-/// `ALLOC_KEYS` in an `alloc-stats` build. Every new timing test passes its
-/// lines through here.
-fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
+/// and `ms`, plus `tool` or `job` exactly when the guard carried one, plus
+/// `ALLOC_KEYS` in an `alloc-stats` build. Every timing test passes its lines
+/// through here.
+fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>, job: Option<&str>) {
     assert_eq!(line["code"], "op_timing");
     let data = line["data"].as_object().expect("data is an object");
     let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
@@ -1032,6 +1040,9 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
     let mut want = vec!["ms", "op"];
     if tool.is_some() {
         want.push("tool");
+    }
+    if job.is_some() {
+        want.push("job");
     }
     #[cfg(feature = "alloc-stats")]
     want.extend(ALLOC_KEYS);
@@ -1049,39 +1060,52 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
         Some(tool) => assert_eq!(data["tool"], tool),
         None => assert!(data.get("tool").is_none(), "{line}"),
     }
+    match job {
+        Some(job) => assert_eq!(data["job"], job),
+        None => assert!(data.get("job").is_none(), "{line}"),
+    }
 }
 
 #[test]
-fn op_timing_data_holds_only_op_ms_and_tool() {
+fn op_timing_data_holds_only_op_ms_tool_and_job() {
     let home = Home::new("ld-timed-data");
     let inner = fakes::clock::FakeClock::new();
     let clock: Arc<dyn Clock> = inner.clone();
     let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
     let cases = every_timed_case();
-    for (op, tool, _) in &cases {
+    for (op, tool, job, _) in &cases {
         let start = inner.now();
-        drop(timed(&diag, *op, *tool, Some(start)).expect("debug guard"));
+        match job {
+            // `timed` keeps the tool slot: job-keyed timers go through
+            // the seam's closure, which stamps the job id onto the guard.
+            Some(job) => {
+                let id = JobId((*job).to_owned());
+                let timing = diag.timings();
+                drop(timing(*op, Some(TimingName::Job(&id)), Some(start)).expect("debug guard"));
+            }
+            None => drop(timed(&diag, *op, *tool, Some(start)).expect("debug guard")),
+        }
     }
     let text = home.text("hub.log");
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), cases.len(), "one line per guard");
-    for (line, (_, tool, want)) in lines.iter().zip(&cases) {
-        // The raw bytes pin the key order: `op`, `ms`, then `tool`. An
-        // `alloc-stats` build ends the data with the alloc keys, the first
-        // of which follows; the order within them is not pinned.
+    for (line, (_, tool, job, want)) in lines.iter().zip(&cases) {
+        // The raw bytes pin the subject key order. In an `alloc-stats` build,
+        // the alloc keys follow the subject; their order is not pinned.
         #[cfg(feature = "alloc-stats")]
         let tail = ",\"alloc_bytes\":";
         #[cfg(not(feature = "alloc-stats"))]
         let tail = "}";
-        let data = match tool {
-            Some(tool) => {
-                format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"tool\":\"{tool}\"{tail}")
-            }
-            None => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0{tail}"),
+        let subject = match (tool, job) {
+            (Some(tool), None) => format!(",\"tool\":\"{tool}\""),
+            (None, Some(job)) => format!(",\"job\":\"{job}\""),
+            (None, None) => String::new(),
+            (Some(_), Some(_)) => panic!("a timer names one subject: {line}"),
         };
+        let data = format!("\"data\":{{\"op\":\"{want}\",\"ms\":0{subject}{tail}");
         assert!(line.contains(&data), "{line}");
         let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_timing_data(&parsed, want, *tool);
+        assert_timing_data(&parsed, want, *tool, *job);
     }
 }
 
@@ -1111,7 +1135,7 @@ fn every_process_shape_writes_the_closed_data_keys() {
             let text = home.text(&name);
             let parsed: serde_json::Value =
                 serde_json::from_str(text.lines().last().unwrap()).unwrap();
-            assert_timing_data(&parsed, want, tool);
+            assert_timing_data(&parsed, want, tool, None);
         }
     }
 }

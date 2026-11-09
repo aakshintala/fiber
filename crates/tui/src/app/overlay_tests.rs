@@ -2895,7 +2895,7 @@ fn install_without_a_cached_fold_installs_the_held_run() {
 /// The preview is exact for the last turns: folding the tail's
 /// turn-start lines draws the last screenful, the totals line, the open
 /// ledger's step numbers and the prompt bubble exactly as the whole log
-/// does. A log with an orphaned job completion, an automatic handoff
+/// does. A log with an orphaned job completion, an automatic compaction
 /// trigger and a ledger call from before the held turns lands with only
 /// those allowed kinds differing (B3).
 #[test]
@@ -3006,7 +3006,7 @@ fn the_landing_adds_the_lines_above_a_filled_preview() {
     for _ in 0..10 {
         push("usage_recorded", None, json!({}));
     }
-    // Before the held lines: a job starts, a handoff starts, a tool
+    // Before the held lines: a job starts, a compaction starts, a tool
     // call is requested.
     push(
         "job_started",
@@ -3014,7 +3014,7 @@ fn the_landing_adds_the_lines_above_a_filled_preview() {
         json!({"job_id": "j_1", "description": "build the docs",
             "output_path": "/tmp/o"}),
     );
-    push("handoff_started", None, json!({"trigger": "person"}));
+    push("compaction_started", None, json!({"trigger": "person"}));
     push(
         "turn_started",
         None,
@@ -3038,7 +3038,7 @@ fn the_landing_adds_the_lines_above_a_filled_preview() {
     for _ in 0..260 {
         push("usage_recorded", None, json!({}));
     }
-    // The held turns: the orphaned completion, the handoff trigger's
+    // The held turns: the orphaned completion, the compaction trigger's
     // completion, and the ledger call's result.
     push(
         "turn_started",
@@ -3066,7 +3066,7 @@ fn the_landing_adds_the_lines_above_a_filled_preview() {
             "error": {"code": "orphaned", "message": "j_1 orphaned."}}),
     );
     push(
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 300_000,
             "note_text": "From the hook.", "extension": "notes"}),
@@ -4393,7 +4393,7 @@ mod stacked {
     fn fake() -> Fake {
         Fake::new(vec![
             row(
-                "handoff.tokens",
+                "compaction.tokens",
                 Shown::Value("400000".to_owned()),
                 "default",
                 WriteScope::Any { repo: true },

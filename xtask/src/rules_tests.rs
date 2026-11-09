@@ -893,10 +893,10 @@ fn preserve_order_still_fails_when_a_normal_edge_enables_it() {
 
 const REGISTERED_TOOLS: [&str; 14] = [
     "ask_user",
+    "compact",
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "handoff",
     "jobs",
     "name_session",
     "read",
@@ -1211,22 +1211,19 @@ fn loop_tool_names_rejects_label_shapes_in_the_wrong_function() {
         file(
             "loop",
             "src/status.rs",
-            r#"fn other() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#.to_owned(),
+            r#"fn other() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#
+                .to_owned(),
         ),
         file(
             "loop",
             "src/skills.rs",
-            r#"fn other() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#.to_owned(),
+            r#"fn other() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#
+                .to_owned(),
         ),
         file(
             "loop",
-            "src/handoff/carry.rs",
+            "src/compaction/carry.rs",
             r#"fn other() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned(),
-        ),
-        file(
-            "loop",
-            "src/reviewer.rs",
-            r#"fn other() { let sections = Sections { handoff: crate::prompt::section(md, "handoff") }; }"#.to_owned(),
         ),
     ];
     assert_eq!(
@@ -1235,8 +1232,7 @@ fn loop_tool_names_rejects_label_shapes_in_the_wrong_function() {
             "crates/loop/src/opening.rs:1: built-in tool name shell",
             "crates/loop/src/status.rs:1: built-in tool name jobs",
             "crates/loop/src/skills.rs:1: built-in tool name skill",
-            "crates/loop/src/handoff/carry.rs:1: built-in tool name jobs",
-            "crates/loop/src/reviewer.rs:1: built-in tool name handoff",
+            "crates/loop/src/compaction/carry.rs:1: built-in tool name jobs",
         ]
     );
 }
@@ -1301,14 +1297,13 @@ fn loop_sites_skip_tool_identities_in_non_loop_crates() {
 }
 
 #[test]
-fn loop_tool_names_allows_only_the_five_known_label_contexts() {
+fn loop_tool_names_allows_only_the_four_known_label_contexts() {
     let tools = registrations(&REGISTERED_TOOLS);
     let labels = [
         file("loop", "src/opening.rs", "fn render() { let row = (\"shell\", environment.shell.as_str()); }".to_owned()),
         file("loop", "src/status.rs", "fn key() { let key = match state { SessionState::Jobs => (\"jobs\", None) }; }".to_owned()),
         file("loop", "src/skills.rs", "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; }".to_owned()),
-        file("loop", "src/handoff/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }".to_owned()),
-        file("loop", "src/reviewer.rs", "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; }".to_owned()),
+        file("loop", "src/compaction/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }".to_owned()),
     ];
     let mut files = vec![tools];
     files.extend(labels);
@@ -1342,16 +1337,10 @@ fn loop_tool_label_exceptions_allow_zero_or_one_use_but_not_two() {
             "let tag = if skill.model_invocable { \"skill\" } else { \"template\" };",
         ),
         (
-            "src/handoff/carry.rs",
+            "src/compaction/carry.rs",
             "restart",
             "jobs",
             "let args = &[(\"jobs\", listed.join(\"\\\\n\").as_str())];",
-        ),
-        (
-            "src/reviewer.rs",
-            "sections",
-            "handoff",
-            "let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") };",
         ),
     ];
 
@@ -1435,11 +1424,10 @@ fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
         file("loop", "src/opening.rs", "fn render() { let row = (\"shell\", environment.shell.as_str()); let name = \"shell\"; }".to_owned()),
         file("loop", "src/status.rs", "fn key() { let key = SessionState::Jobs => (\"jobs\", None); let name = \"jobs\"; }".to_owned()),
         file("loop", "src/skills.rs", "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; let name = \"skill\"; }".to_owned()),
-        file("loop", "src/handoff/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; let name = \"jobs\"; }".to_owned()),
-        file("loop", "src/reviewer.rs", "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; let name = \"handoff\"; }".to_owned()),
+        file("loop", "src/compaction/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; let name = \"jobs\"; }".to_owned()),
     ];
     let failures = loop_tool_names(&files);
-    assert_eq!(failures.len(), 5, "{failures:?}");
+    assert_eq!(failures.len(), 4, "{failures:?}");
     assert!(
         failures
             .iter()
@@ -1454,11 +1442,6 @@ fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
         failures
             .iter()
             .any(|line| line.contains("built-in tool name skill"))
-    );
-    assert!(
-        failures
-            .iter()
-            .any(|line| line.contains("built-in tool name handoff"))
     );
 }
 
@@ -2031,8 +2014,7 @@ fn scanner_bound_probe() {
                 file("loop", "src/opening.rs", r#"fn render() { let row = ("shell", environment.shell.as_str()); }"#.to_owned()),
                 file("loop", "src/status.rs", r#"fn key() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#.to_owned()),
                 file("loop", "src/skills.rs", r#"fn commands() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#.to_owned()),
-                file("loop", "src/handoff/carry.rs", r#"fn restart() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned()),
-                file("loop", "src/reviewer.rs", r#"fn sections() { let sections = Sections { handoff: crate::prompt::section(md, "handoff") }; }"#.to_owned()),
+                file("loop", "src/compaction/carry.rs", r#"fn restart() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned()),
             ];
             let mut files = vec![tools];
             files.extend(labels);
@@ -2918,32 +2900,17 @@ fn each_label_context_requires_every_neighbour_token() {
             ][..],
         ),
         (
-            file("loop", "src/handoff/carry.rs", String::new()),
+            file("loop", "src/compaction/carry.rs", String::new()),
             "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }",
             "jobs",
             "restart",
-            "fills the handoff template",
+            "fills the compaction template",
             &[
                 (-1, SourceKind::Punct('!')),
                 (1, SourceKind::Punct('!')),
                 (2, SourceKind::Ident("other".to_owned())),
                 (3, SourceKind::Punct('!')),
                 (4, SourceKind::Ident("other".to_owned())),
-            ][..],
-        ),
-        (
-            file("loop", "src/reviewer.rs", String::new()),
-            "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; }",
-            "handoff",
-            "sections",
-            "selects the handoff section",
-            &[
-                (-1, SourceKind::Punct('!')),
-                (-2, SourceKind::Ident("other".to_owned())),
-                (-4, SourceKind::Ident("other".to_owned())),
-                (-7, SourceKind::Ident("other".to_owned())),
-                (-10, SourceKind::Ident("other".to_owned())),
-                (-12, SourceKind::Ident("other".to_owned())),
             ][..],
         ),
     ];
@@ -3123,9 +3090,84 @@ fn support_tests_fails_a_shared_support_file_with_tests() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
+}
+
+/// A file of the `main` crate's tests, under `tests/`.
+fn main_test(path: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/{path}"), source.to_owned())
+}
+
+const SHARED_WITH_TEST: &str = "#[test]\nfn shared_holds() {}\n";
+const REACH_SHARED: &str = "#[path = \"../support/shared.rs\"]\nmod shared;\n";
+
+#[test]
+fn support_tests_counts_each_area_root_as_a_binary() {
+    // `tests/<dir>/main.rs` is a cargo test target, so two area roots
+    // compiling one support file run its test twice.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+        main_test("b/main.rs", REACH_SHARED),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/shared.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_an_area_root_beside_a_top_level_binary() {
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+        main_test("b.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/shared.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_passes_a_file_reached_from_one_area_root() {
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_does_not_count_a_member_of_an_area_as_a_binary() {
+    // `tests/a/other.rs` is a module file, not a target, so declaring the
+    // file from it adds no binary beside `tests/b.rs`.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/other.rs", REACH_SHARED),
+        main_test("b.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_does_not_count_a_nested_main_rs_as_a_binary() {
+    // Cargo discovers only `tests/<dir>/main.rs`, one level down.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test(
+            "a/b/main.rs",
+            "#[path = \"../../support/shared.rs\"]\nmod shared;\n",
+        ),
+        main_test("c.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
 }
 
 #[test]
@@ -3140,7 +3182,7 @@ fn support_tests_counts_every_mod_support_declarer_for_a_root_reached_file() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/pty.rs holds 1 #[test] collected by 3 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/pty.rs holds 1 #[test] collected by 3 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3176,7 +3218,7 @@ fn support_tests_fails_when_the_lib_harness_reaches_a_tested_support_file() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3222,7 +3264,7 @@ fn support_tests_counts_the_lib_harness_once_for_many_cfg_test_paths() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3272,7 +3314,7 @@ fn support_tests_counts_tests_nested_in_inline_modules() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 2 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 2 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3289,7 +3331,7 @@ fn support_tests_counts_tests_through_inline_module_declarers() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3309,7 +3351,7 @@ fn support_tests_ignores_non_test_bracket_attributes_in_the_count() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3330,7 +3372,7 @@ fn support_tests_ignores_a_single_ident_non_test_attribute() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3350,7 +3392,7 @@ fn support_tests_ignores_a_test_named_value_in_an_array() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3412,7 +3454,7 @@ fn support_tests_resolves_a_dotted_path_climbing_out_of_src() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }

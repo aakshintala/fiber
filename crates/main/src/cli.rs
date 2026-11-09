@@ -694,7 +694,7 @@ impl From<ImportSource> for config::ImportSource {
 pub(crate) enum ConfigCommands {
     /// Print the effective value and the layer it came from
     Get {
-        /// The dotted key, such as `model` or `handoff.tokens`.
+        /// The dotted key, such as `model` or `compaction.tokens`.
         #[arg(value_name = "key")]
         key: String,
     },
@@ -1037,13 +1037,13 @@ fn parse_session_id(text: &str) -> Result<String, String> {
 }
 
 /// One `-c` override: a dotted key and a value, as in
-/// `-c handoff.tokens=200000`. The parser checks only for the `=`; the
+/// `-c compaction.tokens=200000`. The parser checks only for the `=`; the
 /// configuration load checks the key path and the value's type.
 fn parse_override(text: &str) -> Result<String, String> {
     if text.contains('=') {
         Ok(text.to_owned())
     } else {
-        Err("expected a dotted key and a value, as in `-c handoff.tokens=200000`".to_owned())
+        Err("expected a dotted key and a value, as in `-c compaction.tokens=200000`".to_owned())
     }
 }
 

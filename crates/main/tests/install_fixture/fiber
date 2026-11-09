@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stands in for the released binary in crates/main/tests/install_script.rs.
+# Stands in for the released binary in crates/main/tests/commands/install_script.rs.
 # `--version` prints the version in $FIBER_HOME/version. `release-install`
 # appends its arguments to $FIBER_HOME/calls and exits with the number in
 # $FIBER_HOME/exit, or 0 when that file is missing. `setup` appends its

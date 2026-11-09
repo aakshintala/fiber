@@ -114,14 +114,14 @@ impl Loop {
         let logged = folded.preamble.clone();
         // The new session owns none of the jobs the folded history holds:
         // a rewind stopped them, and a fork leaves them with its parent.
-        // The handoff carry drops them too, so a handoff started in the new
+        // The compaction carry drops them too, so a compaction started in the new
         // session names no job. It continues the logged build verbatim, so it
         // writes no `model_changed` for a label the log changed after the
         // point (`docs/events.md`, "Rewind").
         folded.orphans = Vec::new();
         folded.settings = None;
         let mut rewound = Loop::resume(session, folded)?;
-        rewound.handoff.carry.jobs.clear();
+        rewound.compaction.carry.jobs.clear();
         // A rewind or fork starts for its own reason, whatever the
         // preamble it adopted was built for.
         rewound.lifecycle.reason = reason;

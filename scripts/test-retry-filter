@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Self-test for the `ci` nextest profile's retry filter (docs/testing/running.md,
+# "Flaky tests"): a failed binary-level test retries once and no other test
+# does. It builds a scratch package named `main` with an area-shaped test
+# binary (`tests/area/main.rs`), a single-file one (`tests/single.rs`) and a
+# bin unit test, runs the repo's `.config/nextest.toml` `ci` profile over it,
+# and reads the JUnit report: both integration probes must have failed once
+# and passed on retry, and the unit probe must have failed with no retry.
+#
+# RETRY_FILTER_CONFIG names another nextest config to run instead, to see
+# this script fail against a deliberately broken filter.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+config=$(realpath "${RETRY_FILTER_CONFIG:-.config/nextest.toml}")
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-retry-filter: $1" >&2
+  exit 1
+}
+
+mkdir -p "$tmp/pkg/src" "$tmp/pkg/tests/area" "$tmp/probes"
+cat >"$tmp/pkg/Cargo.toml" <<'EOF'
+[package]
+name = "main"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The repo config's `binary(=main_journeys)` override must find a binary of
+# that name, so the scratch package declares one the way `crates/main` does.
+[[test]]
+name = "main_journeys"
+path = "tests/main_journeys.rs"
+test = false
+
+[workspace]
+EOF
+echo '// Declared so the config journey override has a binary to name.' >"$tmp/pkg/tests/main_journeys.rs"
+
+# One probe: fails on its first attempt and passes on its second, through a
+# marker file named for the test. Each nextest attempt is a new process, so
+# the marker is the only thing a retry carries over.
+probe='fn fails_once(name: &str) {
+    let dir = std::env::var("RETRY_PROBE_DIR").expect("RETRY_PROBE_DIR");
+    let marker = std::path::Path::new(&dir).join(name);
+    if !marker.exists() {
+        std::fs::write(&marker, b"").expect("marker");
+        panic!("{name}: first attempt fails");
+    }
+}'
+
+cat >"$tmp/pkg/src/main.rs" <<EOF
+fn main() {}
+
+#[cfg(test)]
+mod tests {
+    $probe
+
+    #[test]
+    fn unit_fails_once() {
+        fails_once("unit_fails_once");
+    }
+}
+EOF
+printf 'mod probe;\n' >"$tmp/pkg/tests/area/main.rs"
+cat >"$tmp/pkg/tests/area/probe.rs" <<EOF
+$probe
+
+#[test]
+fn area_fails_once() {
+    fails_once("area_fails_once");
+}
+EOF
+cat >"$tmp/pkg/tests/single.rs" <<EOF
+$probe
+
+#[test]
+fn single_fails_once() {
+    fails_once("single_fails_once");
+}
+EOF
+
+code=0
+# The harness-provided override would otherwise retry the unit probe.
+RETRY_PROBE_DIR="$tmp/probes" CARGO_TARGET_DIR="$tmp/target" CARGO_NET_OFFLINE=true \
+  env -u NEXTEST_RETRIES cargo nextest run --manifest-path "$tmp/pkg/Cargo.toml" --config-file "$config" \
+  --profile ci --no-fail-fast >"$tmp/run.log" 2>&1 || code=$?
+[ "$code" -ne 0 ] || fail "the unit probe, which never retries, did not fail the run"
+
+# nextest keeps its store beside the manifest, wherever CARGO_TARGET_DIR points.
+junit=$(find "$tmp" -path '*/nextest/ci/junit.xml' | head -n 1)
+[ -n "$junit" ] || { tail -20 "$tmp/run.log" >&2; fail "no JUnit report for the ci profile"; }
+
+# The `<testcase>` element of $2 in suite $1, whole.
+case_block() {
+  awk -v suite="$1" -v case_name="$2" '
+    /<testsuite / { in_suite = index($0, "name=\"" suite "\"") > 0 }
+    in_suite && index($0, "<testcase name=\"" case_name "\"") { open = 1 }
+    open { print }
+    open && (/<\/testcase>/ || /<testcase [^>]*\/>/) { exit }
+  ' "$junit"
+}
+
+expect_retried() {
+  local block
+  block=$(case_block "$1" "$2")
+  [ -n "$block" ] || fail "$2 of $1 is not in the report"
+  case "$block" in *"<flakyFailure"*) ;; *) fail "$2 of $1 did not fail and pass on retry" ;; esac
+  case "$block" in *"<failure"*) fail "$2 of $1 still failed after its retry" ;; esac
+}
+
+expect_retried main::area probe::area_fails_once
+expect_retried main::single single_fails_once
+
+unit=$(case_block 'main::bin/main' tests::unit_fails_once)
+[ -n "$unit" ] || fail "tests::unit_fails_once of main::bin/main is not in the report"
+case "$unit" in *"<failure"*) ;; *) fail "tests::unit_fails_once of main::bin/main retried: the unit tests must not" ;; esac
+
+echo "scripts/test-retry-filter: ok"

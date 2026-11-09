@@ -1108,3 +1108,45 @@ fn person_bound_any_reverts_clashes_and_follows_live_edits() {
     let (freed, _) = keyset(&[("send", json!("ctrl+q"))]);
     assert!(freed.person_bound_any(&stroke("ctrl+q")));
 }
+
+/// Every context the keyboard can be in.
+const ALL_CONTEXTS: [Context; 6] = [
+    Context::Input,
+    Context::Steering,
+    Context::Conversation,
+    Context::Search,
+    Context::Overlay,
+    Context::Picker,
+];
+
+#[test]
+fn interrupt_turn_resolves_to_its_action_in_every_context() {
+    for context in ALL_CONTEXTS {
+        assert_eq!(
+            at(&[], "alt+i", context),
+            super::Resolved::Action("interrupt_turn"),
+            "{context:?}"
+        );
+    }
+}
+
+#[test]
+fn a_rebound_interrupt_turn_answers_the_new_key_only() {
+    let entries = [("interrupt_turn", json!("f5"))];
+    for context in ALL_CONTEXTS {
+        assert_eq!(
+            at(&entries, "f5", context),
+            super::Resolved::Action("interrupt_turn"),
+            "{context:?}"
+        );
+        assert_eq!(at(&entries, "alt+i", context), super::Resolved::Nothing);
+    }
+}
+
+#[test]
+fn an_unbound_interrupt_turn_answers_no_key() {
+    let entries = [("interrupt_turn", json!([]))];
+    for context in ALL_CONTEXTS {
+        assert_eq!(at(&entries, "alt+i", context), super::Resolved::Nothing);
+    }
+}

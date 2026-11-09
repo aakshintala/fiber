@@ -14,6 +14,7 @@
 )]
 
 mod common;
+use common::set_source_mtime;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -2431,6 +2432,8 @@ fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
     assert!(notices.is_empty(), "{notices:?}");
 }
 
+/// Backdates each source file and directory so age-only cache checks do not
+/// mistake the package installation time for a source change.
 /// Installs `fiber.test/mixed` with `init`: static `acme` data with
 /// `static_id`, a `providers/acme.lua` discovering `found_id`, and
 /// manifest-declared providers. `lazy` adds a manifest-declared lazy
@@ -2490,6 +2493,13 @@ fn a_disabled_mixed_package_keeps_provider_models_without_init_commands_or_hooks
     let setup = Setup::new();
     install_mixed(&setup, &mixed_init(), false, "static-model", "found-model");
     seed_acme(&setup);
+    set_source_mtime(
+        &setup
+            .home()
+            .join("extensions")
+            .join(dir_name("fiber.test/mixed")),
+        FakeClock::new().wall() - Duration::from_secs(1),
+    );
     let overrides = disabled_mixed();
     let set = RepositorySet::default();
     // The static data resolves with no session at all.

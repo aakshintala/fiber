@@ -61,7 +61,6 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "pwd" => &["cwd"],
         "settings" => &["config"],
         "keys" => &["keybindings", "keymap"],
-        "handoff" => &["compact"],
         "rules" => &["permissions"],
         "close" => &["stop"],
         "name" => &["rename"],
@@ -257,10 +256,10 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_fork,
     },
     CommandEntry {
-        name: "handoff",
-        description: "Starts a handoff.",
+        name: "compact",
+        description: "Starts a compaction.",
         hint: Some("[instructions]"),
-        run: run_handoff,
+        run: run_compaction,
     },
     CommandEntry {
         name: "name",
@@ -395,9 +394,9 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.toggle_rail())
 }
 
-fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
+fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("handoff", args).0)
+    Some(app.send_command("compact", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
@@ -1187,8 +1186,23 @@ impl App {
                 return Effect::None;
             }
         };
+        self.send_cancel(&session)
+    }
+
+    /// Interrupts the turn of the conversation on screen, whatever is open
+    /// over it: a delegate's own in its view, else the attached session's.
+    /// It closes nothing and leaves the draft and the steering queue.
+    pub(super) fn interrupt_turn(&mut self) -> Effect {
+        match self.interrupt_session() {
+            Some(session) => self.send_cancel(&session),
+            None => Effect::None,
+        }
+    }
+
+    /// One `cancel` of `session`'s turn, settled by its answer.
+    fn send_cancel(&mut self, session: &SessionId) -> Effect {
         let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
+        let line = session_command(&id, "cancel", session, None).to_string();
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }

@@ -495,7 +495,7 @@ Print the effective value and the layer it came from
 Usage: fiber config get <key>
 
 Arguments:
-  <key>  The dotted key, such as `model` or `handoff.tokens`
+  <key>  The dotted key, such as `model` or `compaction.tokens`
 
 Options:
   -h, --help  Print help

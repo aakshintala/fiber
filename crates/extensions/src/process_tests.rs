@@ -1115,7 +1115,7 @@ fn hook_registers_each_point_in_order() {
         "before_model_call",
         "after_tool",
         "turn_end",
-        "before_handoff",
+        "before_compaction",
     ];
     let home = Home::new();
     let init = points

@@ -1,0 +1,556 @@
+//! Binary-level tests of `recent.jsonl` and the hub's feed
+//! (`docs/invocation.md`, "The hub"; `docs/state.md`, "Recently exited
+//! sessions"): every session appends its own row as it exits, and the hub
+//! serves `feed` and `recent` across projects. A client that never sends
+//! `feed` still hears `attention` when a session needs the person
+//! (`docs/invocation.md`, "Attention").
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::fs;
+use std::path::Path;
+
+use fakes::ProviderServer;
+use serde_json::{Value, json};
+use support::*;
+
+/// The rows of `home`'s `recent.jsonl`, parsed.
+fn rows(home: &Path) -> Vec<Value> {
+    fs::read_to_string(home.join("recent.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The project key of `workspace`: the name of its `projects/<key>`
+/// directory.
+fn project_key(home: &Path, workspace: &Path) -> String {
+    let _ = home;
+    log::project_key(&worktree::project(workspace))
+}
+
+/// The `session_id` on the first stdout line of a run.
+fn session_of(stdout: &[u8]) -> String {
+    let first: Value =
+        serde_json::from_str(String::from_utf8_lossy(stdout).lines().next().unwrap()).unwrap();
+    first["session_id"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_fiber_ask_run_appends_exactly_one_exited_row() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let mut command = setup.fiber(&["ask", "hi"]);
+    command.current_dir(setup.workspace());
+    let output = run_to_exit(setup.deadline, "fiber ask", command);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let id = session_of(&output.stdout);
+    let rows = rows(&setup.home());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(row["session_id"], id.as_str());
+    assert_eq!(row["how"], "exited");
+    assert_eq!(
+        row["project"],
+        project_key(&setup.home(), &setup.workspace()).as_str()
+    );
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    assert_eq!(
+        fs::canonicalize(row["workspace"].as_str().unwrap()).unwrap(),
+        workspace
+    );
+    assert_eq!(row["status"]["state"], "idle");
+    assert_eq!(row["name"], row["status"]["name"]);
+    assert!(row["ts"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn a_session_that_exits_on_a_pending_approval_leaves_a_waiting_row() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[json!({
+        "type": "response.output_item.done",
+        "item": {"type": "function_call", "id": "fc_call_1", "call_id": "call_1", "name": "shell",
+            "arguments": json!({"command": "echo hi"}).to_string()}
+    })])])
+    .unwrap();
+    setup.provider(&server);
+    // A standing ask: the session asks a person, and the idle delay of 0
+    // ends it on the pending request (`docs/permissions.md`, "Headless").
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "session": {"idle_exit_ms": 0}}),
+    );
+    let id = doors::mint("s_");
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let output = run_to_exit(
+        setup.deadline,
+        "the session",
+        setup.fiber(&[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            &workspace,
+            "--prompt",
+            "run it",
+        ]),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows = rows(&setup.home());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["session_id"], id.as_str());
+    assert_eq!(rows[0]["how"], "exited");
+    assert_eq!(rows[0]["status"]["state"], "waiting", "{:?}", rows[0]);
+    assert_eq!(rows[0]["status"]["waiting"]["kind"], "approval");
+}
+
+#[test]
+fn a_session_that_never_got_a_prompt_appends_no_row() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(Vec::<fakes::Response>::new()).unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "session": {"idle_exit_ms": 0}}),
+    );
+    let id = doors::mint("s_");
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let output = run_to_exit(
+        setup.deadline,
+        "the session",
+        setup.fiber(&["session", "--id", &id, "--workspace", &workspace]),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(rows(&setup.home()).is_empty());
+    assert!(!setup.home().join("recent.jsonl").exists());
+}
+
+/// A second client on a running hub: connected once its `hub_hello`
+/// arrives.
+fn client(setup: &Setup) -> Socket {
+    let client = Socket::connect(setup.deadline, &setup.hub_socket());
+    assert_eq!(recv(&client, "hub_hello")["kind"], "hub_hello");
+    client
+}
+
+/// Subscribes `client` to the feed.
+#[track_caller]
+fn feed(client: &Socket) {
+    client.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = recv_answer(client, "c_feed", "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert_eq!(ack["payload"]["command_id"], "c_feed");
+}
+
+/// The session ids `recent` lists with `args`.
+#[track_caller]
+fn recent(client: &Socket, args: &Value) -> Vec<String> {
+    client.send(&json!({"id": "c_recent", "command": "recent", "args": args}).to_string());
+    let ack = recv_answer(client, "c_recent", "the recent answer");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    ack["payload"]["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["session_id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn recent_skips_a_delegates_row() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let mut command = setup.fiber(&["ask", "hi"]);
+    command.current_dir(setup.workspace());
+    let output = run_to_exit(setup.deadline, "fiber ask", command);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let root = session_of(&output.stdout);
+    // A delegate's row: the root's, under another id, its status naming
+    // the root as parent, with its own directory.
+    let mut delegate = rows(&setup.home()).remove(0);
+    let child = doors::mint("s_");
+    delegate["session_id"] = json!(child);
+    delegate["status"]["parent"] = json!(root);
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fs::create_dir_all(sessions.join(&child)).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(setup.home().join("recent.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut file, format!("{delegate}\n").as_bytes()).unwrap();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    assert_eq!(recent(&client, &json!({})), [root.as_str()]);
+    drop(client);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
+fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    // Every turn waits on the model until released: all three run at once.
+    server.hold();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    feed(&watch);
+    let control = client(&setup);
+    let first = setup.root.path().join("wa");
+    let second = setup.root.path().join("wb");
+    let outside = setup.root.path().join("wc");
+    for workspace in [&first, &second, &outside] {
+        fs::create_dir_all(workspace).unwrap();
+    }
+    let first_text = first.to_string_lossy().into_owned();
+    let second_text = second.to_string_lossy().into_owned();
+    let first_guard = SessionGuard::arm(setup.deadline, &first_text);
+    let second_guard = SessionGuard::arm(setup.deadline, &second_text);
+    let a = start_session(&control, &first_text, "first");
+    let b = start_session(&control, &second_text, "second");
+    // A `fiber ask` the hub did not start: it finds it in `run/`.
+    let mut ask = setup.fiber(&["ask", "third"]);
+    ask.current_dir(&outside);
+    let asking = std::thread::spawn(move || run_to_exit(setup.deadline, "fiber ask", ask));
+    assert!(
+        server.await_requests(3, setup.deadline),
+        "all three turns run"
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    let statuses = until(&watch, "three sessions' status", |line| {
+        if line["kind"] == "session_status" {
+            seen.insert(line["session_id"].as_str().unwrap().to_owned());
+        }
+        seen.len() == 3
+    });
+    assert!(
+        statuses
+            .iter()
+            .all(|line| line["kind"] == "session_status" && line["payload"].get("parent").is_none()),
+        "{statuses:?}"
+    );
+    server.release();
+    let output = asking.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let c = session_of(&output.stdout);
+    assert!(
+        seen.contains(&a) && seen.contains(&b) && seen.contains(&c),
+        "{seen:?}"
+    );
+    let left = until(&watch, "the ask session's session_left", |line| {
+        line["kind"] == "session_left" && line["payload"]["session_id"] == c.as_str()
+    });
+    assert_eq!(left.last().unwrap()["payload"]["how"], "exited");
+    // `close` ends the first session: it leaves the feed exited.
+    control.send(&format!(
+        r#"{{"id":"c_sub","session_id":"{a}","command":"subscribe","args":{{"level":"summary"}}}}"#
+    ));
+    until(&control, "the subscribe acknowledgement", |line| {
+        line["kind"] == "command_accepted"
+    });
+    control.send(&format!(
+        r#"{{"id":"c_close","session_id":"{a}","command":"close"}}"#
+    ));
+    until(&control, "the close acknowledgement", |line| {
+        line["payload"]["command_id"] == "c_close"
+    });
+    let left = until(&watch, "the first session's session_left", |line| {
+        line["kind"] == "session_left" && line["payload"]["session_id"] == a.as_str()
+    });
+    assert_eq!(
+        left.last().unwrap(),
+        &json!({
+            "kind": "session_left",
+            "ts": left.last().unwrap()["ts"],
+            "schema_version": 1,
+            "payload": {"session_id": a, "how": "exited"},
+        })
+    );
+    // Its process appends its row as it exits.
+    first_guard.wait_gone();
+    // A fresh feed: only the second session, still running.
+    let fresh = client(&setup);
+    feed(&fresh);
+    let snapshot = until(&fresh, "the second session's status", |line| {
+        line["kind"] != "attention" && line["session_id"] == b.as_str()
+    });
+    assert!(
+        snapshot
+            .iter()
+            .filter(|line| line["kind"] != "attention")
+            .all(|line| line["kind"] == "session_status"),
+        "{snapshot:?}"
+    );
+    let first_key = project_key(&setup.home(), &first);
+    let second_key = project_key(&setup.home(), &second);
+    assert_ne!(first_key, second_key);
+    assert_eq!(recent(&fresh, &json!({"project": first_key})), [a.as_str()]);
+    assert!(!recent(&fresh, &json!({"project": second_key})).contains(&a));
+    let everything = recent(&fresh, &json!({}));
+    assert!(
+        everything.contains(&a) && everything.contains(&c),
+        "{everything:?}"
+    );
+    assert!(!everything.contains(&b), "a running session is not recent");
+    // The second session ends on its own socket; then the hub.
+    close_session(&Socket::connect(setup.deadline, &setup.session_socket(&b)));
+    second_guard.wait_gone();
+    drop((watch, control, fresh));
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
+fn a_killed_session_is_crashed_until_dismissed() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // The turn never ends: the log's last line is not `fiber_exited`.
+    server.hold();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    feed(&watch);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let control = client(&setup);
+    let id = start_session(&control, &workspace, "doomed");
+    assert!(server.await_requests(1, setup.deadline), "the turn runs");
+    until(&watch, "the session's status", |line| {
+        line["kind"] == "session_status" && line["session_id"] == id.as_str()
+    });
+    support::kill_matching(setup.deadline, &workspace).unwrap();
+    guard.wait_gone();
+    let left = until(&watch, "the crash's session_left", |line| {
+        line["kind"] == "session_left"
+    });
+    assert_eq!(
+        left.last().unwrap()["payload"],
+        json!({"session_id": id, "how": "crashed"})
+    );
+    let rows = rows(&setup.home());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["session_id"], id.as_str());
+    assert_eq!(rows[0]["how"], "crashed");
+    // A fresh feed is sent the crash first: its status, then its
+    // `session_left`.
+    let fresh = client(&setup);
+    feed(&fresh);
+    assert_eq!(
+        recv(&fresh, "the crashed status")["session_id"],
+        id.as_str()
+    );
+    assert_eq!(recv(&fresh, "the crash")["payload"]["how"], "crashed");
+    fresh.send(
+        &json!({"id": "c_dismiss", "command": "dismiss", "args": {"session": id}}).to_string(),
+    );
+    let ack = recv_answer(&fresh, "c_dismiss", "the dismissal");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let again = client(&setup);
+    again.send(
+        &json!({"id": "c_dismiss", "command": "dismiss", "args": {"session": id}}).to_string(),
+    );
+    let ack = recv(&again, "the second dismissal");
+    assert_eq!(ack["payload"]["code"], "stale_request", "{ack}");
+    drop((watch, control, fresh, again));
+    server.release();
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
+fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() {
+    let setup = Setup::new();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    feed(&watch);
+    // A session killed mid-turn: its log has no `fiber_exited`.
+    let id = doors::mint("s_");
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(&id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        "{\"kind\":\"session_started\"}\n{\"kind\":\"fiber_started\"}\n{\"kind\":\"turn_started\"}\n",
+    )
+    .unwrap();
+    // The test holds the session's listener, as the killed process still
+    // does while the kernel closes its summary connection first.
+    let listener = std::os::unix::net::UnixListener::bind(setup.session_socket(&id)).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let accepted = listener.accept().map(|(stream, _)| stream);
+        tx.send((listener, accepted)).unwrap_or(());
+    });
+    let (listener, accepted) = setup
+        .deadline
+        .recv(&rx)
+        .expect("the hub connects to the session");
+    let summary = Socket::from(setup.deadline, accepted.unwrap());
+    assert_eq!(
+        recv(&summary, "the summary subscribe")["command"],
+        "subscribe"
+    );
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    summary.send(
+        &json!({
+            "kind": "session_status", "session_id": id, "ts": 5, "schema_version": 1,
+            "payload": {
+                "name": "doomed", "workspace": workspace, "project": "-w", "model": "fake/m",
+                "state": "streaming", "started": 0, "calls": 0, "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
+                "spend": {
+                    "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                    "cost": 0.0, "subscription_cost": 0.0,
+                },
+            },
+        })
+        .to_string(),
+    );
+    until(&watch, "the session's status", |line| {
+        line["kind"] == "session_status" && line["session_id"] == id.as_str()
+    });
+    drop(summary);
+    let left = until(&watch, "the crash's session_left", |line| {
+        line["kind"] == "session_left"
+    });
+    assert_eq!(
+        left.last().unwrap()["payload"],
+        json!({"session_id": id, "how": "crashed"})
+    );
+    let rows = rows(&setup.home());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["how"], "crashed");
+    drop((watch, listener));
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
+fn attention_reaches_a_client_without_a_feed_for_a_standing_ask_and_a_finished_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[json!({
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "id": "fc_call_1", "call_id": "call_1",
+                "name": "shell",
+                "arguments": json!({"command": "echo hi"}).to_string()}
+        })]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // A standing ask: the session waits on the person.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    // `watch` never sends a command: it hears only attention.
+    let (watch, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let control = client(&setup);
+    let id = start_session(&control, &workspace, "run it");
+    // The waiting attention is the watcher's first line.
+    let waiting = until(&watch, "the waiting attention", |line| {
+        line["kind"] == "attention"
+    });
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    let waiting = &waiting[0];
+    assert_eq!(waiting["kind"], "attention");
+    assert_eq!(waiting["schema_version"], 1);
+    assert!(waiting["ts"].as_u64().unwrap() > 0);
+    assert!(waiting.get("session_id").is_none());
+    assert_eq!(waiting["payload"]["session_id"], id.as_str());
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    assert_eq!(waiting["payload"]["summary"], "shell");
+    assert_eq!(waiting["payload"]["name"], "run it");
+    let canonical = fs::canonicalize(setup.workspace()).unwrap();
+    assert_eq!(
+        fs::canonicalize(waiting["payload"]["workspace"].as_str().unwrap()).unwrap(),
+        canonical
+    );
+    // Allowing the pending approval runs the turn to its end.
+    subscribe(&control, &id);
+    let asked = until(&control, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    control.send(&format!(
+        "{{\"id\":\"c_reply\",\"session_id\":\"{id}\",\"command\":\"reply\",\"args\":{{\"request_id\":\"{request}\",\"decision\":\"allow\"}}}}"
+    ));
+    until(&control, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The finished attention is the watcher's next line.
+    let finished = until(&watch, "the finished attention", |line| {
+        line["kind"] == "attention"
+    });
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    let finished = &finished[0];
+    assert_eq!(finished["payload"]["reason"], "finished");
+    assert_eq!(finished["payload"]["session_id"], id.as_str());
+    assert_eq!(finished["payload"]["name"], "run it");
+    assert_eq!(
+        fs::canonicalize(finished["payload"]["workspace"].as_str().unwrap()).unwrap(),
+        canonical
+    );
+    assert!(finished["payload"].get("summary").is_none());
+    // No third line: the watcher's stream held exactly the pair.
+    close_session(&Socket::connect(setup.deadline, &setup.session_socket(&id)));
+    guard.wait_gone();
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+    assert!(until_close(&watch).is_empty());
+    drop(control);
+}

@@ -1188,8 +1188,8 @@ fn a_suspended_resume_across_pages_reloads_unchanged() {
     assert_eq!(differs(&got, &live), None);
 }
 
-/// A handoff whose sizing preamble stands pages before it starts.
-fn handoff_session() -> Vec<Envelope> {
+/// A compaction whose sizing preamble stands pages before it starts.
+fn compaction_session() -> Vec<Envelope> {
     let mut stream = Stream::new(false);
     stream.durable(
         "turn_started",
@@ -1210,7 +1210,7 @@ fn handoff_session() -> Vec<Envelope> {
     }
     stream.durable("step_started", None, json!({}));
     stream.text("a_mcut", "after the cut");
-    stream.durable("handoff_started", None, json!({"trigger": "auto"}));
+    stream.durable("compaction_started", None, json!({"trigger": "auto"}));
     for step in 70..75 {
         stream.text(&format!("a_m{step}"), "still going");
     }
@@ -1219,8 +1219,8 @@ fn handoff_session() -> Vec<Envelope> {
 }
 
 #[test]
-fn a_handoff_sized_pages_earlier_reloads_unchanged() {
-    let lines = handoff_session();
+fn a_compaction_sized_pages_earlier_reloads_unchanged() {
+    let lines = compaction_session();
     let mut pages = Pages::new(80);
     for line in &lines {
         pages.apply(line);
@@ -1829,7 +1829,7 @@ fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
 }
 
 /// A page with one turn holding a closed group (a thought and a call with
-/// detail), a handoff note and an orphan list, all closed.
+/// detail), a compaction note and an orphan list, all closed.
 fn closed_sections() -> Part {
     let mut page = part();
     for (kind, action, payload) in [
@@ -1856,14 +1856,14 @@ fn closed_sections() -> Part {
             json!({"status": "completed", "content": [{"type": "text", "text": "file words"}]}),
         ),
         ("text_completed", Some("a_m1"), json!({"text": "reply one"})),
-        ("handoff_started", None, json!({"trigger": "auto"})),
+        ("compaction_started", None, json!({"trigger": "auto"})),
         (
             "text_completed",
             Some("a_m2"),
             json!({"text": "hook note words"}),
         ),
         (
-            "handoff_completed",
+            "compaction_completed",
             None,
             json!({"outcome": "completed", "tokens_before": 10}),
         ),
@@ -2133,11 +2133,11 @@ fn fill(stream: &mut Stream, n: usize) {
     }
 }
 
-/// A handoff, completed with an empty note.
-fn handed_off(stream: &mut Stream) {
-    stream.durable("handoff_started", None, json!({"trigger": "auto"}));
+/// A compaction, completed with an empty note.
+fn compacted(stream: &mut Stream) {
+    stream.durable("compaction_started", None, json!({"trigger": "auto"}));
     stream.durable(
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 1_000}),
     );
@@ -2286,13 +2286,13 @@ fn a_new_turn_on_a_continuing_page_opens_its_card() {
 
 #[test]
 fn a_cut_after_a_band_opens_the_next_page_with_an_edge() {
-    // The handoff completes before the candidate step: the page before
+    // The compaction completes before the candidate step: the page before
     // the cut ends with the band's rows, and the next page opens with an
-    // edge (`docs/tui.md`, "Handoff", "History and paging").
+    // edge (`docs/tui.md`, "Compaction", "History and paging").
     let mut stream = Stream::new(false);
     begun(&mut stream, "go");
     stream.text("a_m", "before");
-    handed_off(&mut stream);
+    compacted(&mut stream);
     fill(&mut stream, 60);
     stream.durable("step_started", None, json!({}));
     stream.text("a_m", "after");
@@ -2335,11 +2335,11 @@ fn a_cut_after_a_band_and_a_blank_reply_opens_the_next_page_with_an_edge() {
     // step and visible text: the page before the cut ends with the
     // band's rows, and the next page opens with an edge, because the
     // join is decided from the rows the pieces draw, never from entries
-    // (`docs/tui.md`, "Handoff", "History and paging").
+    // (`docs/tui.md`, "Compaction", "History and paging").
     let mut stream = Stream::new(false);
     begun(&mut stream, "go");
     stream.text("a_m", "before");
-    handed_off(&mut stream);
+    compacted(&mut stream);
     stream.text("a_m", "   ");
     fill(&mut stream, 60);
     stream.durable("step_started", None, json!({}));
@@ -2448,18 +2448,18 @@ fn a_blank_reply_cut_then_the_turn_completes_joins_once_it_draws() {
 
 #[test]
 fn a_cut_before_a_band_closes_the_piece_on_the_page_before() {
-    // A handoff starts between the candidate step and the text that
+    // A compaction starts between the candidate step and the text that
     // confirms it: the page before keeps its edge, and the next page
-    // starts with the band (`docs/tui.md`, "Handoff",
+    // starts with the band (`docs/tui.md`, "Compaction",
     // "History and paging").
     let mut stream = Stream::new(false);
     begun(&mut stream, "go");
     stream.text("a_m", "before");
     fill(&mut stream, 62);
     stream.durable("step_started", None, json!({}));
-    stream.durable("handoff_started", None, json!({"trigger": "auto"}));
+    stream.durable("compaction_started", None, json!({"trigger": "auto"}));
     stream.durable(
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 1_000}),
     );

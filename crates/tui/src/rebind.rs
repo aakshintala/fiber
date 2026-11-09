@@ -537,6 +537,7 @@ impl KeysScreen {
             below,
             field: None,
             footer: self.footer(),
+            chrome: None,
         };
         let shown = rows_height(&frame, height);
         frame.list = place(self.selected, self.top, &grown, shown);

@@ -42,8 +42,8 @@ pub struct Prepared {
     pub context_window: u64,
     /// The model's addendum.
     pub addendum: Option<String>,
-    /// Automatic handoff's settings for the new model.
-    pub handoff: crate::HandoffSettings,
+    /// Automatic compaction's settings for the new model.
+    pub compaction: crate::CompactionSettings,
     /// Who judges step 7's calls under the new model.
     pub reviewer: Result<crate::Reviewer, contract::shapes::Failure>,
     /// What applying the switch does to the hosted search tool
@@ -280,7 +280,7 @@ impl Loop {
             self.prompt.cache_lifetime = prepared.cache_lifetime;
             self.prompt.context_window = prepared.context_window;
             self.prompt.addendum = prepared.addendum;
-            self.handoff.settings = prepared.handoff;
+            self.compaction.settings = prepared.compaction;
             self.reviewer = prepared.reviewer;
             self.reviewer_sent = None;
             match prepared.web_search {

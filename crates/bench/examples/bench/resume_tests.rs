@@ -10,10 +10,10 @@ fn tokens(fixture: &Fixture) -> usize {
 fn the_fixtures_reply_sizes_sum_to_their_token_targets() {
     assert_eq!(tokens(&SMALL), 20_000);
     assert_eq!(tokens(&LARGE), 2_000_000);
-    assert_eq!(SMALL.handoffs, 0);
-    // A handoff after every turn but the last.
-    assert_eq!(LARGE.handoffs, LARGE.turns - 1);
-    assert_eq!(LARGE.handoffs, 7);
+    assert_eq!(SMALL.compactions, 0);
+    // A compaction after every turn but the last.
+    assert_eq!(LARGE.compactions, LARGE.turns - 1);
+    assert_eq!(LARGE.compactions, 7);
 }
 
 #[test]

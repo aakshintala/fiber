@@ -48,7 +48,7 @@ fn the_description_carries_the_naming_guidance() {
     assert!(
         definition
             .description
-            .contains("when the work's topic changes, a handoff included"),
+            .contains("when the work's topic changes, a compaction included"),
         "{}",
         definition.description
     );
@@ -76,7 +76,7 @@ fn the_result_has_no_content_and_carries_the_name_unchanged() {
     assert_eq!(
         output.control,
         Some(Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: None,
             name: Some("  Fix the parser ".into()),
@@ -94,7 +94,7 @@ fn length_or_characters_never_change_the_result() {
         assert_eq!(
             output.control,
             Some(Control {
-                handoff: None,
+                compact: None,
                 questions: None,
                 skill: None,
                 name: Some(name),

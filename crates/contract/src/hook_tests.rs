@@ -42,7 +42,7 @@ impl Hooks for Never {
     unused_hook!(turn_start, TurnStart, ContextAnswer);
     unused_hook!(before_model_call, BeforeModelCall, CheckAnswer);
     unused_hook!(turn_end, TurnEnd, ContextAnswer);
-    unused_hook!(before_handoff, BeforeHandoff, BeforeHandoffAnswer);
+    unused_hook!(before_compaction, BeforeCompaction, BeforeCompactionAnswer);
 
     fn deliver_to(&self, _: std::sync::mpsc::Sender<crate::inbox::Delivery>) {}
 }
@@ -56,7 +56,7 @@ impl Hooks for StateHooks {
     unused_hook!(turn_start, TurnStart, ContextAnswer);
     unused_hook!(before_model_call, BeforeModelCall, CheckAnswer);
     unused_hook!(turn_end, TurnEnd, ContextAnswer);
-    unused_hook!(before_handoff, BeforeHandoff, BeforeHandoffAnswer);
+    unused_hook!(before_compaction, BeforeCompaction, BeforeCompactionAnswer);
 
     fn deliver_to(&self, _: std::sync::mpsc::Sender<crate::inbox::Delivery>) {}
 

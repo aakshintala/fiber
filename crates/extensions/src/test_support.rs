@@ -20,7 +20,7 @@ pub(crate) struct Home {
 
 impl Home {
     pub(crate) fn new() -> Self {
-        let root = fakes::TempDir::new("fiber-handoff-hooks");
+        let root = fakes::TempDir::new("fiber-compaction-hooks");
         std::fs::create_dir(root.path().join("home")).unwrap();
         std::fs::create_dir(root.path().join("workspace")).unwrap();
         Self { root }

@@ -18,7 +18,9 @@ use crate::configure::{
     ToolGroup, ToolLists, ToolSwitches,
 };
 #[cfg(test)]
-use crate::configure::{Shown, WriteScope};
+use crate::configure::{SettingControl, SettingPresentation, Shown, WriteScope};
+#[cfg(test)]
+use contract::settings::SettingsTab;
 
 /// One notes save the view asked for: the workspace and each sent layer.
 pub(crate) type NotesSave = (PathBuf, Option<NotesWrite>, Option<NotesWrite>);
@@ -145,6 +147,16 @@ pub(crate) struct Fake {
     pub(crate) rows: Mutex<Result<Vec<SettingRow>, ConfigureError>>,
     /// Every workspace `settings` was asked about, in order.
     pub(crate) reads: Mutex<Vec<PathBuf>>,
+    /// Every `settings` read's workspace and exact ordered overrides.
+    pub(crate) settings_queries: Mutex<Vec<(PathBuf, Vec<String>)>>,
+    /// Every reset asked for, in order: workspace, layer, key and the
+    /// expected JSON.
+    pub(crate) resets: Mutex<Vec<Write>>,
+    /// The refusal the next resets get; `None` resets them.
+    pub(crate) refuse_reset: Mutex<Option<String>>,
+    /// What `settings` answers from the next saved write or reset on:
+    /// the file the write would have changed.
+    pub(crate) rows_after: Mutex<Option<Vec<SettingRow>>>,
     /// Every write asked for, in order.
     pub(crate) writes: Mutex<Vec<Write>>,
     /// The refusal the next writes get; `None` saves them.
@@ -249,6 +261,18 @@ pub(crate) struct Fake {
 }
 
 impl Fake {
+    /// Swaps in the rows a saved write leaves, once.
+    fn apply_rows_after(&self) {
+        let after = self
+            .rows_after
+            .lock()
+            .ok()
+            .and_then(|mut after| after.take());
+        if let (Some(after), Ok(mut rows)) = (after, self.rows.lock()) {
+            *rows = Ok(after);
+        }
+    }
+
     /// A seam answering `rows`, saving every write.
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
         Self {
@@ -260,6 +284,10 @@ impl Fake {
             pending: Mutex::new(false),
             rows: Mutex::new(Ok(rows)),
             reads: Mutex::new(Vec::new()),
+            settings_queries: Mutex::new(Vec::new()),
+            resets: Mutex::new(Vec::new()),
+            refuse_reset: Mutex::new(None),
+            rows_after: Mutex::new(None),
             writes: Mutex::new(Vec::new()),
             refuse: Mutex::new(None),
             warnings: Mutex::new(Vec::new()),
@@ -531,9 +559,24 @@ pub(crate) fn file(layer: Layer) -> PathBuf {
     })
 }
 
-/// A row for `key` holding `value` from `layer`, written within `scope`.
+/// A row for `key` holding `value` from `layer`, written within `scope`,
+/// edited as free text. The fixture states its control; nothing here
+/// derives one from the key.
 #[cfg(test)]
 pub(crate) fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> SettingRow {
+    controlled(key, value, layer, scope, SettingControl::Text)
+}
+
+/// The same with an explicit control and a tab-less presentation that
+/// labels the row with its key.
+#[cfg(test)]
+pub(crate) fn controlled(
+    key: &str,
+    value: Shown,
+    layer: &str,
+    scope: WriteScope,
+    control: SettingControl,
+) -> SettingRow {
     let file = match layer {
         "global" => Some(file(Layer::Global)),
         "project" => Some(file(Layer::Project)),
@@ -546,7 +589,21 @@ pub(crate) fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> Se
         layer: layer.to_owned(),
         file,
         scope,
+        presentation: SettingPresentation {
+            tab: None,
+            label: key.to_owned(),
+            description: format!("About {key}."),
+        },
+        control,
     }
+}
+
+/// `row` placed on `tab` under `label`.
+#[cfg(test)]
+pub(crate) fn placed(mut row: SettingRow, tab: SettingsTab, label: &str) -> SettingRow {
+    row.presentation.tab = Some(tab);
+    row.presentation.label = label.to_owned();
+    row
 }
 
 impl Configure for Fake {
@@ -605,9 +662,16 @@ impl Configure for Fake {
         )
     }
 
-    fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {
+    fn settings(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<SettingRow>, ConfigureError> {
         if let Ok(mut reads) = self.reads.lock() {
             reads.push(workspace.to_path_buf());
+        }
+        if let Ok(mut queries) = self.settings_queries.lock() {
+            queries.push((workspace.to_path_buf(), overrides.to_vec()));
         }
         self.rows.lock().map_or_else(
             |_| {
@@ -640,10 +704,48 @@ impl Configure for Fake {
                 code: ErrorCode::Usage,
                 message,
             }),
-            None => Ok(Saved {
-                file: file(layer),
-                warnings: self.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
+            None => {
+                self.apply_rows_after();
+                Ok(Saved {
+                    file: file(layer),
+                    warnings: self.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    fn reset(
+        &self,
+        workspace: &Path,
+        layer: Layer,
+        key: &str,
+        expected: &str,
+    ) -> Result<Saved, ConfigureError> {
+        if let Ok(mut resets) = self.resets.lock() {
+            resets.push((
+                workspace.to_path_buf(),
+                layer,
+                key.to_owned(),
+                expected.to_owned(),
+            ));
+        }
+        match self
+            .refuse_reset
+            .lock()
+            .ok()
+            .and_then(|refuse| refuse.clone())
+        {
+            Some(message) => Err(ConfigureError {
+                code: ErrorCode::StaleRequest,
+                message,
             }),
+            None => {
+                self.apply_rows_after();
+                Ok(Saved {
+                    file: file(layer),
+                    warnings: Vec::new(),
+                })
+            }
         }
     }
 
