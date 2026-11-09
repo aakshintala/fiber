@@ -1024,6 +1024,10 @@ fn delegates_value(card: &tui::ext::DelegatesCard<'_>) -> Value {
                 delegate.outcome.map(outcome_value),
             );
             insert_present(&mut out, "ended", delegate.ended.map(|ended| json!(ended)));
+            insert_present(&mut out, "cost", delegate.cost.map(|(billed, subscription)| json!({
+                "billed": billed,
+                "subscription": subscription,
+            })));
             Value::Object(out)
         }).collect::<Vec<_>>(),
         "flat": card.flat,

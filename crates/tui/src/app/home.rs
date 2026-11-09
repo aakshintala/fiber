@@ -833,6 +833,15 @@ impl App {
                             | super::Waiting::JobStop
                             | super::Waiting::JobInput,
                         ) => return None,
+                        Some(
+                            super::Waiting::Find
+                            | super::Waiting::Commands
+                            | super::Waiting::Model
+                            | super::Waiting::Reply
+                            | super::Waiting::OfferFile
+                            | super::Waiting::Steer
+                            | super::Waiting::Shell,
+                        ) => {}
                         None => {}
                     }
                     // A rejected `start` is home's blocker text, above the
@@ -1007,13 +1016,22 @@ impl App {
                             | super::Waiting::JobStop
                             | super::Waiting::JobInput,
                         ) => {}
+                        Some(
+                            super::Waiting::Find
+                            | super::Waiting::Commands
+                            | super::Waiting::Model
+                            | super::Waiting::Reply
+                            | super::Waiting::OfferFile
+                            | super::Waiting::Steer
+                            | super::Waiting::Shell,
+                        ) => {}
                     }
                     // The `commands` an opening sends is answered while
                     // its replay is still gated: the answer is no history,
                     // and it fills the `/` list now.
                     if accepted
                         && self.gated(&envelope.session_id)
-                        && self.completion.awaits(id)
+                        && answer.waiting == Some(super::Waiting::Commands)
                         && let Some(answer) =
                             super::read!(envelope, contract::events::CommandAccepted)
                     {
