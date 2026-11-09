@@ -208,7 +208,7 @@ none gets the hub's lines only. An id that is not `s_` and 16 lowercase hex
 digits is a usage error, exit 2. An id that names no session, a session
 whose log cannot be read, or a delegate fails with `session_not_found`, exit
 1, and writes no report. The Diagnostics section is in the saved file and
-never in the issue link, in either of its forms.
+never in the issue link, in either of its forms. It also holds the shapes of the last 20 painted frames with the scroll state that produced each one — per cell its width class, style and whether it is blank, plus the frame geometry, never glyphs — captured on every frame with no flag set in advance. The headless door draws no frames, so its report says no frames were captured.
 
 **Setting up.** `fiber setup` asks, in this order, and each answer runs the
 command that already does that job:

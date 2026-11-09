@@ -867,7 +867,7 @@ fn take_touched_consumes_the_mark() {
 }
 
 // The frame-shape ring: painted shapes with the scroll state that
-// produced each one (`docs/tui.md`, "Feedback").
+// produced each one (`docs/tui.md`, "Slash commands").
 
 // The look for `setting` on a terminal with `vars` set.
 fn look(setting: ThemeSetting, vars: &[(&str, &str)]) -> Look {

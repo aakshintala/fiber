@@ -39,7 +39,7 @@ pub(crate) struct Screen<B: Backend> {
     look: Look,
     /// The last painted frames' shapes, oldest first, with the scroll
     /// state that produced each one: always on, so a redraw bug arrives
-    /// with its evidence (`docs/tui.md`, "Feedback").
+    /// with its evidence (`docs/tui.md`, "Slash commands").
     frames: Vec<FrameShape>,
 }
 
