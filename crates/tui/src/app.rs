@@ -1017,6 +1017,17 @@ impl App {
                     continue;
                 }
                 self.change_workspace_dropped(&id);
+                // A lost line settles a model, reply, steer or shell
+                // wait with its entry: those register at queue time, so
+                // the entry the failure pops is theirs. A find, commands
+                // or offered-file wait has no entry to pop, so its own
+                // exits settle it instead.
+                if matches!(
+                    self.outbox.waiting(&id),
+                    Some(Waiting::Model | Waiting::Reply | Waiting::Steer | Waiting::Shell)
+                ) {
+                    self.outbox.settled(&id);
+                }
                 self.fail(&id);
             }
         }
@@ -1801,7 +1812,7 @@ impl App {
                     // as a closed stream does; without one the row lands
                     // on the attached session.
                     let session = hub_string(&hub.payload, "session_id").map(SessionId);
-                    self.rejected_session(id, code, message, session);
+                    self.rejected_session(id, code, message, session, answer.waiting.clone());
                     // The panel's refusal clears its query next, so the
                     // generic refusal still seeing it proves it settled
                     // first.
@@ -1888,18 +1899,28 @@ impl App {
     /// arm names its session outright.
     fn rejected(&mut self, id: &str, code: ErrorCode, message: String) {
         let session = self.session().cloned();
-        self.rejected_session(id, code, message, session);
+        // Carries no owner: its refusals are never model-owned (replies
+        // settle their own tag, starts and non-model session refusals
+        // keep today's probe).
+        self.rejected_session(id, code, message, session, None);
     }
 
     /// A command the terminal sent was refused for `session`: the
     /// notice, the refused shell run's error row on that session's
     /// pages, and the draft back in the box when the box is empty.
+    /// `waiting` is the answer's captured owner, if any. A refused
+    /// `model` command routes once here, by tag: `refused` sends model
+    /// refusals here without probing, and the hub arm names its own.
+    /// A choice from a dropped session stays silent; any other refusal
+    /// reports through the shared path below, and the wait settles
+    /// with it. Callers that never carry a model refusal pass none.
     fn rejected_session(
         &mut self,
         id: &str,
         code: ErrorCode,
         message: String,
         session: Option<SessionId>,
+        waiting: Option<Waiting>,
     ) {
         // Order seam: the panel's refusal clears `asked` next, so the
         // generic refusal still seeing it proves it settled first.
@@ -1907,9 +1928,22 @@ impl App {
         {
             self.rejected_saw_panel_asked = self.panel_state.asked_is(id);
         }
-        // A refused `model` command drops the writes its acceptance
-        // would have made.
-        self.model_picker_rejected(id);
+        if waiting == Some(Waiting::Model) {
+            // A refused `model` command drops the writes its acceptance
+            // would have made. A choice from a dropped session has no
+            // writes left: it stays silent, and the wait settles with
+            // the entry its answer would have closed.
+            if !self.model_picker_rejected(id) {
+                self.outbox.answered(id);
+                self.outbox.settled(id);
+                return;
+            }
+            self.outbox.settled(id);
+        } else {
+            // Any other refusal keeps today's probe, which drops a
+            // model choice's writes when its id reaches here untagged.
+            self.model_picker_rejected(id);
+        }
         match self.outbox.pending.get(id) {
             None => {}
             // Another client may have dropped or amended the row first.
@@ -2095,13 +2129,36 @@ impl App {
         {
             self.outbox.settled(id);
         }
+        // A find, steer or shell answer settles its tag here for the
+        // same reason: a delegate's steer answers on its item session,
+        // and any answer can arrive on another session after a switch.
+        // Only answers settle, never a `shell_command` row naming the
+        // same run, and the attached arms settle again below.
+        if matches!(
+            envelope.kind(),
+            EventKind::CommandAccepted | EventKind::CommandRejected
+        ) && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+            && matches!(
+                waiting,
+                Some(Waiting::Find | Waiting::Steer | Waiting::Shell)
+            )
+        {
+            self.outbox.settled(id);
+        }
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind()) {
             self.queue.fold(envelope);
             self.request_arrived(envelope);
         }
-        let mut send = self.reply_ack(envelope);
+        // A `reply` answer runs its handler only for the reply tag:
+        // any other id keeps today's fall-through, which finds no
+        // `reply` pending and folds nothing.
+        let mut send = if waiting == Some(&Waiting::Reply) {
+            self.reply_ack(envelope)
+        } else {
+            Vec::new()
+        };
         // A `model` command's acceptance settles what it waited on,
         // from its own session: choosing may span a switch, but a late
         // accept after one, or another session's, names no row.
@@ -2116,7 +2173,14 @@ impl App {
             {
                 self.outbox.settled(&id);
             }
-            self.model_picker_accepted(&id, &envelope.session_id);
+            if waiting == Some(&Waiting::Model) {
+                self.model_picker_accepted(&id, &envelope.session_id);
+                // Another session's accept names no row, and its wait
+                // stays for the own session's answer still to come.
+                if Some(&envelope.session_id) == self.session() {
+                    self.outbox.settled(&id);
+                }
+            }
             self.credential_accepted(&accepted);
         }
         // The open delegate's lines fold into the swapped screen, never
@@ -2145,7 +2209,7 @@ impl App {
                         if move_from.is_some() {
                             self.change_workspace_refused(&id.0, &rejected.code);
                         }
-                        self.refused(&id.0, &rejected.code, rejected.message);
+                        self.refused(&id.0, &rejected.code, rejected.message, waiting.cloned());
                     }
                 }
                 EventKind::FiberStarted
@@ -2253,7 +2317,7 @@ impl App {
                         if move_from.is_some() {
                             self.change_workspace_refused(&id.0, &rejected.code);
                         }
-                        self.refused(&id.0, &rejected.code, rejected.message);
+                        self.refused(&id.0, &rejected.code, rejected.message, waiting.cloned());
                     }
                 }
                 EventKind::FiberStarted
@@ -2330,8 +2394,11 @@ impl App {
             return send;
         }
         // The search's fetch answers here, never in the pages: its lines
-        // fold into the scan and go no further.
-        if let Some(lines) = self.find_answered(envelope) {
+        // fold into the scan and go no further. A tagged arm whose fetch
+        // is gone declines to the folds below, as the probe did.
+        if waiting == Some(&Waiting::Find)
+            && let Some(lines) = self.find_answered(envelope)
+        {
             send.extend(lines);
             return send;
         }
@@ -2368,8 +2435,28 @@ impl App {
                     }) {
                         send.extend(lines);
                     }
-                    self.commands_answered(&accepted);
-                    changed |= self.offer.file_answered(&accepted);
+                    if waiting == Some(&Waiting::Commands) {
+                        self.commands_answered(&accepted);
+                        // Only a `commands` result clears the wait: any
+                        // other result keeps the id, and the tag with it.
+                        if self.completion.commands_id.as_deref()
+                            != Some(accepted.command_id.0.as_str())
+                        {
+                            self.outbox.settled(&accepted.command_id.0);
+                        }
+                    }
+                    // The ask outlives the wait: an answer settles the
+                    // tag but leaves the ask for a late second answer,
+                    // so the handler runs on the ask and settles on
+                    // the tag.
+                    let file_answered = self.offer.file_answered(&accepted);
+                    if file_answered && waiting == Some(&Waiting::OfferFile) {
+                        self.outbox.settled(&accepted.command_id.0);
+                    }
+                    changed |= file_answered;
+                    if waiting == Some(&Waiting::Shell) {
+                        self.outbox.settled(&accepted.command_id.0);
+                    }
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
                         .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
@@ -2391,9 +2478,18 @@ impl App {
                     if move_from.is_some() {
                         self.change_workspace_refused(&id.0, &rejected.code);
                     }
-                    self.offer
-                        .file_refused(&id.0, &rejected.code, &rejected.message);
-                    self.refused(&id.0, &rejected.code, rejected.message);
+                    // A `duplicate_command` refusal keeps the ask, and
+                    // the tag with it; any other refusal settles the
+                    // tag. The handler runs on the ask, which outlives
+                    // the wait: a refusal after the answer still shows.
+                    if self
+                        .offer
+                        .file_refused(&id.0, &rejected.code, &rejected.message)
+                        && waiting == Some(&Waiting::OfferFile)
+                    {
+                        self.outbox.settled(&id.0);
+                    }
+                    self.refused(&id.0, &rejected.code, rejected.message, waiting.cloned());
                 }
             }
             // An offer's approval loads extensions with no `reloaded`,
@@ -2419,7 +2515,15 @@ impl App {
                 }
             }
             EventKind::RepositoryCodeOffered | EventKind::RepositoryCodeResolved => {
+                // Replacing the held offer, or resolving it away, drops
+                // the source view with it: its retired ask settles.
+                let asked = self.offer.source_asked();
                 self.offer.fold(envelope);
+                if let Some(asked) = asked
+                    && self.offer.source_asked().is_none()
+                {
+                    self.outbox.settled(&asked);
+                }
             }
             EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {

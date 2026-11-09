@@ -147,9 +147,11 @@ impl App {
         }
         if let Some((code, message)) = rejection {
             self.rejected(&id, code, message);
+            self.outbox.settled(&id);
             return Vec::new();
         }
         self.outbox.pending.remove(&id);
+        self.outbox.settled(&id);
         let Some(session) = self.queue.declined(&id) else {
             return Vec::new();
         };

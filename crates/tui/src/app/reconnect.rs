@@ -14,7 +14,7 @@ use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::Value;
 
-use super::{App, Link, Phase};
+use super::{App, Link, Phase, Waiting};
 use crate::home::Level;
 
 /// The delay after the first failure; each later one doubles it.
@@ -70,8 +70,16 @@ impl App {
     /// A session refused command `id`: a `duplicate_command` is a resent
     /// copy of one the session already holds, so the entry closes with no
     /// notice; a refusal for a choice from a dropped session stays
-    /// silent with it; any other refusal returns its draft.
-    pub(super) fn refused(&mut self, id: &str, code: &ErrorCode, message: String) {
+    /// silent with it; any other refusal returns its draft. `waiting` is
+    /// the answer's captured owner: a model refusal routes once by tag,
+    /// settling in `rejected_session`, instead of probing twice.
+    pub(super) fn refused(
+        &mut self,
+        id: &str,
+        code: &ErrorCode,
+        message: String,
+        waiting: Option<Waiting>,
+    ) {
         if *code == ErrorCode::DuplicateCommand {
             self.outbox.answered(id);
             // A resent copy the session already holds drops the waits
@@ -81,6 +89,9 @@ impl App {
             self.model_picker.awaiting.remove(id);
             self.model_picker.only_pending.remove(id);
             self.model_picker.sent.remove(id);
+        } else if waiting == Some(Waiting::Model) {
+            let session = self.session().cloned();
+            self.rejected_session(id, code.clone(), message, session, waiting);
         } else if self.model_picker_rejected(id) {
             self.rejected(id, code.clone(), message);
         } else {

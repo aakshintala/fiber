@@ -536,8 +536,9 @@ impl App {
         }
         let mut fetch = self.find.take_fetch()?;
         // The fetch's answer settles its kept line, which no fold path
-        // pops a pending entry for.
+        // pops a pending entry for, and its wait.
         self.outbox.answered(&fetch.id);
+        self.outbox.settled(&fetch.id);
         if fetch.generation != self.find.generation() {
             // A query change while it was in flight sends nothing: the
             // fetch stays recorded no more, its lines fold nowhere, and
@@ -619,6 +620,7 @@ impl App {
     /// The link went down: the fetch clears, and a running scan is
     /// incomplete with the notice that says why.
     pub(in crate::app) fn find_lost(&mut self) {
+        self.outbox.forget(&super::Waiting::Find);
         if self.find.lose() {
             self.notices
                 .push(ErrorCode::ConnectionFailed, search_incomplete_text());
@@ -740,6 +742,7 @@ impl App {
     /// incomplete text goes, while any connection text stands until the
     /// reconnect ends that cause.
     pub(super) fn close_find(&mut self) {
+        self.outbox.forget(&super::Waiting::Find);
         self.notices
             .clear_code(ErrorCode::ConnectionFailed, &search_incomplete_text());
         self.find.close();

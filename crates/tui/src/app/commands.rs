@@ -927,10 +927,16 @@ impl App {
         self.forget_images();
         self.panel_state.reset();
         self.session_views_reset();
+        // Replacing the whole offer retires its source view's ask, and
+        // dropping the commands id forgets its wait.
+        if let Some(asked) = self.offer.source_asked() {
+            self.outbox.settled(&asked);
+        }
         self.offer = crate::offer::Offer::default();
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
     }

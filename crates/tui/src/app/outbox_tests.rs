@@ -818,3 +818,71 @@ fn a_shell_send_registers_shell() {
     let id = out[0]["id"].as_str().unwrap_or_default();
     assert_eq!(app.outbox.waiting(id), None);
 }
+
+#[test]
+fn an_unknown_id_falls_through_to_the_generic_path() {
+    use crate::app::commands::commands_testkit::{attached, hub_line, session_line};
+    let mut app = attached();
+    // An accept and a refusal for ids nobody waits on settle their
+    // pending entries and fold nothing: the routers run their owners'
+    // handlers only for registered waits.
+    app.outbox
+        .pending
+        .insert("c_unknown".to_owned(), (Kind::Command, Draft::default()));
+    let out = app.on_line(hub_line(
+        "command_accepted",
+        json!({"command_id": "c_unknown", "session_id": SESSION}),
+    ));
+    assert!(out.is_empty());
+    assert!(!app.outbox.pending.contains_key("c_unknown"));
+    app.outbox
+        .pending
+        .insert("c_quiet".to_owned(), (Kind::Command, Draft::default()));
+    let out = app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": "c_quiet"}),
+    ));
+    assert!(out.is_empty());
+    assert!(!app.outbox.pending.contains_key("c_quiet"));
+    app.outbox
+        .pending
+        .insert("c_noisy".to_owned(), (Kind::Command, Draft::default()));
+    let out = app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id": "c_noisy", "code": "busy", "message": "no"}),
+    ));
+    assert!(out.is_empty());
+    assert!(!app.outbox.pending.contains_key("c_noisy"));
+    assert_eq!(app.notice(), Some("no"));
+}
+
+#[test]
+fn a_second_answer_for_one_id_changes_nothing() {
+    use crate::app::commands::commands_testkit::attached;
+    let mut app = attached();
+    fold_session_line(
+        &mut app,
+        session_envelope(
+            "interaction_requested",
+            json!({"request_id": "r_c", "kind": "confirm", "prompt": "Continue?",
+                "action_ids": ["a_1"]}),
+        ),
+    );
+    // Declining answers with a `reply` the accept then cancels.
+    let effect = app.on_click(crate::mouse::TargetId::Form(
+        crate::approvals::form::Spot::Chat,
+    ));
+    let (id, line) = sent_id(effect);
+    assert_eq!(line["command"], "reply");
+    // The first answer runs the reply handler: its cancel goes out
+    // and the wait settles with the entry.
+    let answer = || session_envelope("command_accepted", json!({"command_id": id}));
+    let first = app.on_line(answer());
+    assert_eq!(first.len(), 1);
+    assert_eq!(app.outbox.waiting(&id), None);
+    // The wait is consumed: a second answer for the id finds no tag
+    // and falls through without sending another cancel.
+    let second = app.on_line(answer());
+    assert!(second.is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+}
