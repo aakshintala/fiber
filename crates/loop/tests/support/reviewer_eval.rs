@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
+use contract::events::{Decision, ReviewerRef};
 use contract::shapes::{DeclaredEffects, Effect};
 use serde_json::{Map, Value};
 
@@ -48,8 +49,7 @@ impl SourceKind {
             "sampled" => Some(SourceKind::Sampled),
             "seeded" => Some(SourceKind::Seeded),
             "synthetic" => Some(SourceKind::Synthetic),
-            _ => None,
-        }
+            _ =>         }
     }
 }
 
@@ -76,8 +76,7 @@ impl Label {
         match raw {
             "block" => Some(Label::Block),
             "pass" => Some(Label::Pass),
-            _ => None,
-        }
+            _ =>         }
     }
 }
 
@@ -117,8 +116,7 @@ impl ReviewedKind {
             "person" => Some(ReviewedKind::Person),
             "call" => Some(ReviewedKind::Call),
             "reply" => Some(ReviewedKind::Reply),
-            _ => None,
-        }
+            _ =>         }
     }
 }
 
@@ -148,6 +146,19 @@ pub(crate) struct Source {
     pub seq: Option<u64>,
 }
 
+/// A reviewer decision recorded beside a set line, so the sweep can
+/// report disagreement per line: the decision, the reason it carried and
+/// the reviewer that decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedVerdict {
+    /// The recorded decision.
+    pub decision: Decision,
+    /// Why, in words, when the decision carried one.
+    pub reason: Option<String>,
+    /// The reviewer that decided, when the decision named one.
+    pub reviewer: Option<ReviewerRef>,
+}
+
 /// One labelled line of the reviewer-eval set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SetLine {
@@ -171,6 +182,9 @@ pub(crate) struct SetLine {
     pub reviewed: Vec<ReviewedItem>,
     /// Both families' verdicts.
     pub labels: Labels,
+    /// The recorded reviewer verdict, on deny lines; absent on the
+    /// committed set.
+    pub recorded: Option<RecordedVerdict>,
 }
 
 /// One string field of a line object.
@@ -226,8 +240,7 @@ fn parse_declared(value: &Value) -> Result<DeclaredEffects, String> {
         .and_then(Value::as_bool)
         .ok_or_else(|| "review: bad set line: declared has no reversible".to_owned())?;
     let paths = match value.get("paths") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(paths)) => {
+        None | Some(Value::Null) =>         Some(Value::Array(paths)) => {
             let mut parsed_paths = Vec::new();
             for path in paths {
                 parsed_paths.push(
@@ -388,7 +401,86 @@ fn set_line_value(entry: &SetLine) -> Value {
         Value::Array(entry.reviewed.iter().map(reviewed_item_value).collect()),
     );
     map.insert("labels".to_owned(), Value::Object(labels));
+    if let Some(recorded) = &entry.recorded {
+        map.insert("recorded".to_owned(), recorded_value(recorded));
+    }
     Value::Object(map)
+}
+
+/// Prints one recorded reviewer verdict: the decision word, the reason
+/// or null, and the reviewer object or null.
+fn recorded_value(recorded: &RecordedVerdict) -> Value {
+    let decision = match recorded.decision {
+        Decision::Allow => "allow",
+        Decision::Deny => "deny",
+    };
+    let reviewer = match &recorded.reviewer {
+        Some(reviewer) => {
+            let mut map = Map::new();
+            map.insert(
+                "model".to_owned(),
+                Value::String(reviewer.model.clone()),
+            );
+            map.insert("stage".to_owned(), Value::Number(reviewer.stage.into()));
+            Value::Object(map)
+        }
+        None => Value::Null,
+    };
+    let mut map = Map::new();
+    map.insert("decision".to_owned(), Value::String(decision.to_owned()));
+    map.insert(
+        "reason".to_owned(),
+        recorded.reason.clone().map_or(Value::Null, Value::String),
+    );
+    map.insert("reviewer".to_owned(), reviewer);
+    Value::Object(map)
+}
+
+/// Parses one recorded reviewer verdict: absent or null reads as no
+/// verdict, anything else must carry a known decision word, a
+/// string-or-null reason and a null-or-shaped reviewer.
+fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
+    let decision = match value.get("decision").and_then(Value::as_str) {
+        Some("allow") => Decision::Allow,
+        Some("deny") => Decision::Deny,
+        _ => {
+            return Err(format!(
+                "review: bad set line {id}: the recorded decision is not allow or deny"
+            ));
+        }
+    };
+    let reason = match value.get("reason") {
+        None | Some(Value::Null) =>         Some(Value::String(reason)) => Some(reason.clone()),
+        Some(_) => {
+            return Err(format!(
+                "review: bad set line {id}: the recorded reason is not a string"
+            ));
+        }
+    };
+    let reviewer = match value.get("reviewer") {
+        None | Some(Value::Null) =>         Some(reviewer) => {
+            let model = reviewer
+                .get("model")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("review: bad set line {id}: the recorded reviewer names no model")
+                })?
+                .to_owned();
+            let stage = reviewer
+                .get("stage")
+                .and_then(Value::as_u64)
+                .and_then(|stage| u8::try_from(stage).ok())
+                .ok_or_else(|| {
+                    format!("review: bad set line {id}: the recorded reviewer names no stage")
+                })?;
+            Some(ReviewerRef { model, stage })
+        }
+    };
+    Ok(RecordedVerdict {
+        decision,
+        reason,
+        reviewer,
+    })
 }
 
 /// Parses one committed set line, rejecting empty ids and tools.
@@ -417,8 +509,7 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
         .get("declared")
         .ok_or_else(|| format!("review: bad set line {id}: no declared effects"))?;
     let hosts = match value.get("hosts") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(hosts)) => {
+        None | Some(Value::Null) =>         Some(Value::Array(hosts)) => {
             let mut parsed = Vec::new();
             for host in hosts {
                 parsed.push(
@@ -473,6 +564,10 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
             "review: bad set line {label_id}: a label is not a string"
         )),
     };
+    let recorded = match value.get("recorded") {
+        None | Some(Value::Null) => None,
+        Some(recorded) => Some(parse_recorded(recorded, &id)?),
+    };
     Ok(SetLine {
         id,
         source,
@@ -487,6 +582,7 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
             family1: family("family1")?,
             family2: family("family2")?,
         },
+        recorded,
     })
 }
 
@@ -591,8 +687,7 @@ pub(crate) fn reviewed_items(reviewed: &[r#loop::Reviewed]) -> Vec<ReviewedItem>
                     ReviewedKind::Person,
                     Some(kept.seq.0),
                     Some(kept.item),
-                    None,
-                ),
+                                    ),
                 r#loop::Shown::Reply(_) => (ReviewedKind::Reply, None, None, None),
             };
             let text = match &item.input {
@@ -1001,9 +1096,7 @@ fn content_text(content: &Value) -> Option<String> {
             }
             Some(texts.join("\n"))
         }
-        Value::Null => None,
-        Value::Object(_) | Value::Bool(_) | Value::Number(_) => None,
-    }
+        Value::Null =>         Value::Object(_) | Value::Bool(_) | Value::Number(_) =>     }
 }
 
 /// Whether a message content array holds a result block, which the fold
@@ -1352,8 +1445,7 @@ fn shell_declared(
                 paths: Some(paths),
                 confined: false,
             },
-            None,
-        )
+                    )
     } else if elements.iter().any(|words| is_gh_read(words)) {
         let mut paths = Vec::new();
         for words in &elements {
@@ -1378,11 +1470,9 @@ fn shell_declared(
             DeclaredEffects {
                 effects: vec![Effect::Executes],
                 reversible: false,
-                paths: None,
-                confined: false,
+                paths:                 confined: false,
             },
-            None,
-        )
+                    )
     }
 }
 
@@ -1426,8 +1516,7 @@ pub(crate) fn declared_for(
                 ]),
                 confined: false,
             },
-            None,
-        ));
+                    ));
     }
     if tool == "write" {
         let Some(raw) = str_field(arguments, "path") else {
@@ -1448,8 +1537,7 @@ pub(crate) fn declared_for(
                 paths: Some(vec![ctx.scrub_text(&resolved.to_string_lossy())]),
                 confined: false,
             },
-            None,
-        ));
+                    ));
     }
     if tool == "edit" {
         let path = native_path(arguments, workspace, ctx).map_err(|_| unsupported(tool))?;
@@ -1463,8 +1551,7 @@ pub(crate) fn declared_for(
                 paths: Some(vec![path]),
                 confined: false,
             },
-            None,
-        ));
+                    ));
     }
     if tool == "shell" || tool == "bash" {
         let Some(command) = str_field(arguments, "command") else {
@@ -1472,11 +1559,9 @@ pub(crate) fn declared_for(
                 DeclaredEffects {
                     effects: vec![Effect::Executes],
                     reversible: false,
-                    paths: None,
-                    confined: false,
+                    paths:                     confined: false,
                 },
-                None,
-            ));
+                            ));
         };
         let workdir = str_field(arguments, "workdir");
         return Ok(shell_declared(command, workdir, workspace, ctx));
@@ -1492,8 +1577,7 @@ pub(crate) fn declared_for(
             DeclaredEffects {
                 effects: vec![Effect::Network],
                 reversible: false,
-                paths: None,
-                confined: false,
+                paths:                 confined: false,
             },
             Some(vec![host]),
         ));
@@ -1503,8 +1587,7 @@ pub(crate) fn declared_for(
             DeclaredEffects {
                 effects: vec![Effect::Network],
                 reversible: true,
-                paths: None,
-                confined: false,
+                paths:                 confined: false,
             },
             Some(Vec::new()),
         ));
@@ -1634,10 +1717,8 @@ pub(crate) fn foreign_to_label_input(input: ForeignInput<'_>) -> SetLine {
             })
             .collect(),
         labels: Labels {
-            family1: None,
-            family2: None,
-        },
-    }
+            family1:             family2:         },
+        recorded:     }
 }
 
 /// One native session file's running fold: the `reviewed[]` prefix, the
@@ -1658,17 +1739,14 @@ impl FileFold {
             self.reviewed.push(ReviewedItem {
                 kind: ReviewedKind::Reply,
                 seq: Some(reply_seq),
-                item: None,
-                action: None,
-                text: ctx.scrub_text(&format!("The agent: {reply}")),
+                item:                 action:                 text: ctx.scrub_text(&format!("The agent: {reply}")),
             });
         }
         self.reviewed.push(ReviewedItem {
             kind: ReviewedKind::Person,
             seq: Some(seq),
             item: Some(0),
-            action: None,
-            text: ctx.scrub_text(text),
+            action:             text: ctx.scrub_text(text),
         });
     }
 
@@ -1684,8 +1762,7 @@ impl FileFold {
         self.reviewed.push(ReviewedItem {
             kind: ReviewedKind::Call,
             seq: Some(seq),
-            item: None,
-            action: Some(id.to_owned()),
+            item:             action: Some(id.to_owned()),
             text: format!("Tool call: {rendered}"),
         });
         self.reviewed.clone()

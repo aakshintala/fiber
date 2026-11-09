@@ -17,8 +17,8 @@ mod support;
 
 use contract::events::{
     AskStep, DecidedBy, Decision, Event, EventKind, InputItem, PermissionRequested,
-    PermissionResolved, SessionStarted, ToolCallRequested, ToolCallStarted, TurnOutcome,
-    TurnStarted, Variables, VariablesSource,
+    PermissionResolved, ReviewerRef, SessionStarted, ToolCallRequested, ToolCallStarted,
+    TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
@@ -37,9 +37,9 @@ use support::review::{
     is_committed_synthetic_session, run_sampled, run_scan, run_synthetic_embedded,
 };
 use support::reviewer_eval::{
-    Allowlist, DropKind, ForeignInput, Label, Labels, MAX_SAMPLED, NativeLine, ReviewedItem,
-    ReviewedKind, SampleOpts, ScrubCtx, SecretClass, SetLine, Source, SourceKind, Unsupported,
-    declared_for, drop_kind, emit_line, foreign_to_label_input, parse_claude_file,
+    Allowlist, DropKind, ForeignInput, Label, Labels, MAX_SAMPLED, NativeLine, RecordedVerdict,
+    ReviewedItem, ReviewedKind, SampleOpts, ScrubCtx, SecretClass, SetLine, Source, SourceKind,
+    Unsupported, declared_for, drop_kind, emit_line, foreign_to_label_input, parse_claude_file,
     parse_claude_line, parse_line, parse_pi_file, parse_pi_line, parse_sample_flags, sample,
     scan_line, split_argv, validate_seeded,
 };
@@ -280,11 +280,144 @@ fn set_line_round_trips_with_added_folders_order() {
             family1: None,
             family2: None,
         },
+        recorded: None,
     };
     let text = emit_line(&line).unwrap();
     let back = parse_line(&text).unwrap();
     assert_eq!(back, line);
     assert_eq!(back.added_folders.len(), 2);
+}
+
+/// One set line carrying a full recorded reviewer verdict.
+fn recorded_set_line() -> SetLine {
+    SetLine {
+        id: "a_deny".to_owned(),
+        source: Source {
+            kind: SourceKind::Sampled,
+            session: "s_deny".to_owned(),
+            seq: Some(9),
+        },
+        tool: "shell".to_owned(),
+        arguments: json!({"command": "restart-service nightly"}),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: false,
+            paths: None,
+            confined: false,
+        },
+        hosts: None,
+        workspace: "$HOME/work/fiber".to_owned(),
+        added_folders: Vec::new(),
+        reviewed: vec![ReviewedItem {
+            kind: ReviewedKind::Call,
+            seq: None,
+            item: None,
+            action: Some("a_deny".to_owned()),
+            text: "Tool call: shell ...".to_owned(),
+        }],
+        labels: Labels {
+            family1: None,
+            family2: None,
+        },
+        recorded: Some(RecordedVerdict {
+            decision: Decision::Deny,
+            reason: Some("nightly runs need a person".to_owned()),
+            reviewer: Some(ReviewerRef {
+                model: "fake/reviewer".to_owned(),
+                stage: 2,
+            }),
+        }),
+    }
+}
+
+#[test]
+fn recorded_verdict_round_trips_with_full_fields() {
+    let line = recorded_set_line();
+    let text = emit_line(&line).unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["recorded"]["decision"], json!("deny"));
+    assert_eq!(
+        value["recorded"]["reason"],
+        json!("nightly runs need a person")
+    );
+    assert_eq!(
+        value["recorded"]["reviewer"]["model"],
+        json!("fake/reviewer")
+    );
+    assert_eq!(value["recorded"]["reviewer"]["stage"], json!(2));
+    let back = parse_line(&text).unwrap();
+    assert_eq!(back, line);
+}
+
+#[test]
+fn recorded_verdict_round_trips_when_absent() {
+    let mut line = recorded_set_line();
+    line.recorded = None;
+    let text = emit_line(&line).unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert!(value.get("recorded").is_none(), "{text}");
+    let back = parse_line(&text).unwrap();
+    assert_eq!(back, line);
+    assert_eq!(back.recorded, None);
+}
+
+#[test]
+fn recorded_verdict_stays_absent_on_committed_shape_lines() {
+    let line = json!({
+        "id": "a_01", "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "shell", "arguments": {}, "declared": {"effects": ["executes"], "reversible": false},
+        "workspace": "w", "added_folders": [], "reviewed": [],
+        "labels": {"family1": null, "family2": null},
+    });
+    assert_eq!(parse_line(&line.to_string()).unwrap().recorded, None);
+    let mut nulled = line.clone();
+    nulled["recorded"] = Value::Null;
+    assert_eq!(parse_line(&nulled.to_string()).unwrap().recorded, None);
+}
+
+#[test]
+fn recorded_verdict_rejects_bad_shapes() {
+    let line = json!({
+        "id": "a_01", "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "shell", "arguments": {}, "declared": {"effects": ["executes"], "reversible": false},
+        "workspace": "w", "added_folders": [], "reviewed": [],
+        "labels": {"family1": null, "family2": null},
+    });
+    let full = json!({
+        "decision": "deny",
+        "reason": "nightly runs need a person",
+        "reviewer": {"model": "fake/reviewer", "stage": 2},
+    });
+    let bad = |recorded: Value| {
+        let mut shaped = line.clone();
+        shaped["recorded"] = recorded;
+        shaped
+    };
+    let shape = |mut recorded: Value| {
+        if let Some(object) = recorded.as_object_mut() {
+            let template = full.as_object().unwrap();
+            for (key, value) in template {
+                object.entry(key.clone()).or_insert(value.clone());
+            }
+        }
+        recorded
+    };
+    for recorded in [
+        json!("deny"),
+        json!({"reason": null, "reviewer": null}),
+        shape(json!({"decision": null})),
+        shape(json!({"decision": "block"})),
+        shape(json!({"decision": "deny", "reason": 7})),
+        shape(json!({"decision": "deny", "reviewer": "fake/reviewer"})),
+        shape(json!({"decision": "deny", "reviewer": {"stage": 2}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer"}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": "2"}})),
+        shape(json!({"decision": "deny", "reviewer": {"model": "fake/reviewer", "stage": 300}})),
+    ] {
+        let shaped = bad(recorded);
+        let problem = parse_line(&shaped.to_string()).unwrap_err();
+        assert!(problem.contains("review: bad set line"), "{problem}");
+    }
 }
 
 #[test]
