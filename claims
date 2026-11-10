@@ -294,3 +294,6 @@ crates/tui/src/app.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-
 crates/tui/src/app/attach_fold.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/hub/listed.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/cli/src/sessions.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/models_dev_table.rs	fiber-4459	plan	2026-11-10T14:05:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/codex/providers/codex.json	fiber-4459	plan	2026-11-10T14:05:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/tests/providers_data.rs	fiber-4459	plan	2026-11-10T14:05:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
