@@ -1325,7 +1325,9 @@ fn the_first_frame_row_shows_each_fixtures_median() {
     ));
     let results = with_metric(head(), "terminal_attach_ms", Value::Array(full));
     let out = judge(&results, Some(&base()), Event::PullRequest);
-    // `docs/performance.md`, "Measuring": medians under the flat 50 ms bound pass with five samples per fixture.
+    // `docs/performance.md`, "Measuring" and `docs/performance.md`,
+    // "When a budget is exceeded": medians under the flat 50 ms bound pass
+    // with five samples per fixture.
     assert_eq!(out.failures, Vec::<String>::new());
     let line = row(&out.comment, "Terminal to its first frame, attaching");
     // Each fixture's median, not one median across both, and no formula
@@ -5015,8 +5017,9 @@ fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
         "Terminal attaching, to the end of the opening pass",
     );
     assert!(line.ends_with("| advisory |"), "{line}");
-    // `docs/performance.md`, "When a budget is exceeded": five samples per
-    // fixture, and one named failure for each malformed attach metric.
+    // `docs/performance.md`, "Measuring" and `docs/performance.md`,
+    // "When a budget is exceeded": five samples per fixture, and one named
+    // failure for each malformed attach metric.
     // Missing fixture/ms, unknown fixture and wrong run count all fail.
     for build in [
         Value::Array(attach_entries("1 MiB", 1_050_231, &[41.0; 5])),
@@ -5068,8 +5071,9 @@ fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
 
 #[test]
 fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
-    // `docs/performance.md`, "When a budget is exceeded": per-fixture medians,
-    // sample counts and one named failure per over-ceiling fixture.
+    // `docs/performance.md`, "Measuring" and `docs/performance.md`,
+    // "When a budget is exceeded": per-fixture medians, sample counts and
+    // one named failure per over-ceiling fixture.
     // Mixed entry ordering still judges per-fixture medians.
     let mut entries = attach_entries("10 MiB", 10_492_016, &[1400.0; 5]);
     entries.extend(attach_entries("1 MiB", 1_050_231, &[31.0; 5]));
