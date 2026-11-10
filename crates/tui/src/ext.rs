@@ -331,6 +331,8 @@ pub trait Renderer: std::fmt::Debug {
     /// The eligible slash commands for the `/` list, in final-name
     /// order (`docs/extensions.md`, "Commands and screens"). The
     /// default registers no command.
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
     fn tui_commands(&self, _ctx: &SessionCtx) -> Vec<TuiCommand> {
         Vec::new()
     }
