@@ -676,45 +676,26 @@ fn regenerated_set_rejects_an_empty_set() {
 /// shape still fails the scan by design, and the set carries no such run.
 fn has_session_id(text: &str) -> bool {
     let bytes = text.as_bytes();
-    let groups = [8usize, 4, 4, 4, 12];
-    for start in 0..bytes.len() {
-        let mut at = start;
-        let mut ok = true;
-        for (index, len) in groups.iter().enumerate() {
-            if index > 0 {
-                if bytes.get(at) != Some(&b'-') {
-                    ok = false;
-                    break;
-                }
-                at += 1;
-            }
-            for _ in 0..*len {
-                match bytes.get(at) {
-                    Some(cell) if cell.is_ascii_hexdigit() => at += 1,
-                    _ => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if !ok {
-                break;
-            }
-        }
-        if ok {
-            return true;
-        }
-    }
-    false
+    bytes.windows(36).any(|window| {
+        window[8] == b'-'
+            && window[13] == b'-'
+            && window[18] == b'-'
+            && window[23] == b'-'
+            && window
+                .iter()
+                .enumerate()
+                .all(|(at, cell)| matches!(at, 8 | 13 | 18 | 23) || cell.is_ascii_hexdigit())
+    })
 }
 
 /// Scans one committed set line for the nine confidentiality classes the
 /// committed script checks: the lane-supplied home, owner, host, profile
 /// and project literals, the macOS and Linux home literals, session-id
-/// shapes, and the closed secret matchers. Lane-supplied literals never
-/// enter the repository, so the committed-file test below passes empty
-/// stand-ins for those classes while the mechanism test pins every class
-/// with synthetic values.
+/// shapes, and the closed secret matchers. The committed-file test below
+/// pins the observed confidential project literals (`QuotaBar`,
+/// `pi-extensions`) and empty stand-ins for the classes the set never
+/// observed (home, owner, hosts, profiles arrive only as placeholder
+/// tokens); the mechanism test pins every class with synthetic values.
 fn confidential_hits(
     line: &str,
     home: &str,
@@ -750,23 +731,17 @@ fn confidential_hits(
     if let Some(class) = scan_line(line) {
         hit(class);
     }
-    if hosts
-        .iter()
-        .any(|host| !host.is_empty() && line.contains(host))
-    {
-        hit("host");
-    }
-    if profiles
-        .iter()
-        .any(|profile| !profile.is_empty() && line.contains(profile))
-    {
-        hit("profile");
-    }
-    if projects
-        .iter()
-        .any(|project| !project.is_empty() && line.contains(project))
-    {
-        hit("project");
+    for (literals, class) in [
+        (hosts, "host"),
+        (profiles, "profile"),
+        (projects, "project"),
+    ] {
+        if literals
+            .iter()
+            .any(|literal| !literal.is_empty() && line.contains(literal))
+        {
+            hit(class);
+        }
     }
     hits
 }
@@ -785,7 +760,8 @@ fn committed_set_holds_no_confidential_values() {
     ] {
         for line in set.lines().filter(|line| !line.trim().is_empty()) {
             assert!(
-                confidential_hits(line, "", &[], &[], &[], &[]).is_empty(),
+                confidential_hits(line, "", &[], &[], &[], &["QuotaBar", "pi-extensions"])
+                    .is_empty(),
                 "{name} leaks a confidential value: {line}"
             );
         }

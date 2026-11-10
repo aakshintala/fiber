@@ -61,7 +61,7 @@ if ! cmp -s "$TMP/tail.jsonl" "$SEEDED"; then
   echo "extract.sh: the seeded tail differs from seeded.jsonl" >&2
   exit 1
 fi
-"$FIX_DIR/check_confidential.sh" "$OUT" "$SEEDED"
+"$FIX_DIR/check_confidential.sh" --project QuotaBar --project pi-extensions "$OUT" "$SEEDED"
 
 python3 - "$OUT" <<'PYEOF'
 import json
