@@ -285,3 +285,8 @@ docs/tui.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aaksh
 docs/mockups/settings.html	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/examples/review_sweep.rs	fiber-4538	plan	2026-11-10T08:43:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/review_sweep.rs	fiber-4538	plan	2026-11-10T08:43:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tools.md	fiber-4353	plan	2026-11-10T08:48:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell.rs	fiber-4353	plan	2026-11-10T08:48:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/background.rs	fiber-4353	plan	2026-11-10T08:48:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/background_tests.rs	fiber-4353	plan	2026-11-10T08:48:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/error/shell.rs	fiber-4353	plan	2026-11-10T08:48:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
