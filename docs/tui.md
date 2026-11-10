@@ -662,6 +662,8 @@ design:
   followed by how to add the first entry where the view can add one ("No
   rules yet. Rules appear when you allow a call always.").
 - **A click** on a row does what Enter does on it.
+- **Moving past the end wraps.** ↓ on the last row focuses the first, ↑ on
+  the first focuses the last, and ←→ across tabs wrap the same way.
 
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
@@ -1058,17 +1060,21 @@ install still running.
   a rule's row is "allow shell:git status · added 2d ago in review #688 · "
   and the ✕ in `error`. The last row is "Ctrl+G opens the rules file", dim.
 - **`/settings`:** every configuration key with no `*` in its path, sorted
-  into tabs by what it is for. The design is from #4280, and
+  into tabs by what it is for, except `hub.port`, which `fiber config set`
+  and `fiber hub install --port` write. The design is from #4280, and
   `docs/mockups/settings.html` is a clickable mockup of it. The mockup's
-  values are made up; this section is the authority.
+  values are made up; this section is the authority. No row takes typed
+  text where its valid values can be listed or bounded.
   - **Top rows:** the view's name row, then "Changes save automatically",
     dim, then the tab bar: Appearance, Notifications, Models, Permissions,
-    Sessions, Advanced. The open tab is bold on the `surface` tint, and ←→
-    moves between tabs. The view opens on Appearance.
+    Sessions, Advanced. The open tab is bold on an `accent` fill with the
+    `background` colour for its text; the other tabs are dim. ←→ moves
+    between tabs and wraps from the last tab to the first and back. The
+    view opens on Appearance.
   - **Tabs:** each key with no `*` in its path belongs to exactly one tab,
     named in its `KEYS` entry, unless a screen row covers it: then that row
     draws it, and the key has no row of its own. Every `KEYS` entry has a
-    label and a one-line description. The six screen rows are not `KEYS`
+    label and a one-line description. The screen rows are not `KEYS`
     entries; each has its own label, one-line description and tab. A test
     fails when an entry lacks its label or description, when a key with no
     `*` lacks its tab and no screen row covers it, or when a screen row
@@ -1077,47 +1083,111 @@ install still running.
     `diagnostics.level`). Permissions holds the reviewer keys first, then
     the sandbox keys.
   - **Rows:** each row is the key's label, then its value, spaced one blank
-    line apart on terminals tall enough, with "› " marking the focused row.
-    A value set anywhere but global is followed by its layer, dim
-    (`project`, `repository`, `-c`); a global or default value shows no
-    layer. A key with `*` in its path has no row of its own; six rows
-    open a screen instead: Key bindings (`/keys`), Credentials
-    (`/credential`), Rules (`/rules`), Tools (`/tools`), Skills (`/skills`)
-    and MCP servers (`/mcp`). Such a row's value reads "Open /keys ›". Key
-    bindings ends Appearance, Credentials ends Models, Rules then Tools end
-    Permissions, and Skills then MCP servers end Sessions.
+    line apart on terminals tall enough. ↑↓ move between rows and wrap
+    from the last row to the first and back.
+    - The focused row's "› " and label are bold in `accent`. Other labels
+      are plain.
+    - A value is in `info`, bold on the focused row. An unset value reads
+      "Default", dim. Every value shows its unit: "30 min", "$10",
+      "400k tokens", "80% used".
+    - A value set anywhere but global is followed by its layer in
+      `attention` (`project`, `repository`, `-c`); a global or default
+      value shows no layer.
+    - A key with `*` in its path has no row of its own. Eight rows open a
+      screen or start a skill instead: Key bindings (`/keys`), Scoped
+      models (`/scoped-models`), Credentials (`/credential`), Rules
+      (`/rules`), Tools (`/tools`), Reviewer notes (`/reviewer-setup`),
+      Skills (`/skills`) and MCP servers (`/mcp`). Such a row's value is in
+      `secondary`: "Open /keys ›", or a count where the screen keeps one
+      ("All models ›", "3 models ›", "2 off ›"). Key bindings ends
+      Appearance; Scoped models then Credentials end Models; Reviewer
+      notes, Rules then Tools end Permissions; and Skills then MCP servers
+      end Sessions. Scoped models covers `scoped_models`, Reviewer notes
+      covers `reviewer.context` and Skills covers `skills.disabled`.
+    - Reviewer notes reads "Edit with /reviewer-setup ›", with the notes'
+      first line dim under it, or "None yet" dim. Enter on it, or on
+      Credentials, closes `/settings` and runs the command in the session
+      on screen. On home, with no session, it first starts a session in
+      the current directory, then runs the command there.
   - **Controls:** Enter or Space changes the focused value, by its type.
-    - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
+    - A boolean shows `[x] On` in `added` or `[ ] Off` dim, and the key
+      flips it.
     - A key with a fixed set of values (`thinking`, `cache.lifetime`,
-      `diagnostics.level`, `tui.theme`) steps to the next value. For
-      `tui.theme`, each step previews the theme live. An unset key shows
-      "Default"; the first step writes the first value, and steps wrap in
-      the schema's order. Delete returns it to unset.
+      `diagnostics.level`, `tui.theme`, `tui.logo_glyph`) steps to the
+      next value. For `tui.theme`, each step previews the theme live. An
+      unset key shows "Default"; the first step writes the first value,
+      and steps wrap in the schema's order. Delete returns it to unset.
     - A model reference ends in " ›" and opens the model picker; its
       choice saves to the row's key.
-    - A list (`sandbox.allow_write`, `scoped_models`, `tui.panel.cards`,
-      `repository_extensions`) ends in " ›" and opens a sub-page of its own,
-      one list per screen, titled with the key's label. It uses the controls
-      `/settings` already has and saves on every change.
+    - A key whose valid values are known only at run time ends in " ›"
+      and opens a pick list of them, with "Default" first: installed search
+      backends for `web_search.backend`, and the names under `hubs` for
+      `hub.default`. Enter picks and saves; Esc closes without a change.
+    - A number with a natural range is a slider, `▕████░░░░▏` in `info`
+      followed by the value and its unit. ←→ on the focused row, and Enter,
+      move it one step; Enter steps up and wraps from the top of the range to the bottom.
+
+      | Key | Range | Step | Shown as |
+      |---|---|---|---|
+      | `tui.rail.width` | 10–40% | 1 | "15% of screen width · 33 columns" |
+      | `tui.panel.width` | 15–45% | 1 | "21% of screen width · 46 columns" |
+      | `quota.notice_at` | 50–95% | 5 | "80% used" |
+      | `compaction.window_fraction` | 50–90% | 5 | "70% of the context window" |
+      | `cache.warm_cap` | 0–11 | 1 | "2 cache lifetimes" |
+      | `retry.attempts` | 0–10 | 1 | "3 retries" |
+
+      The column count for a width is what the share gives on the current
+      screen, after the rail's 22–48 and the panel's 30–60 column limits.
+    - A number with no natural top is a list of values that Enter steps
+      through, wrapping at the end; ←→ step back and forward.
+
+      | Key | Values |
+      |---|---|
+      | `compaction.tokens` | 100k, 200k, 400k, 600k, 800k, 1M tokens |
+      | `budget.usd` | No limit, $1, $5, $10, $25, $50, $100 |
+      | `reviewer.block_limits.consecutive` | 1, 2, 3, 5, 10 blocks |
+      | `reviewer.block_limits.session` | 5, 10, 20, 50, 100 blocks |
+      | `retry.initial_delay_ms` | 0.5 s, 1 s, 2 s, 5 s, 10 s |
+      | `retry.max_delay_ms` | 10 s, 30 s, 1 min, 2 min, 5 min |
+      | `hub.idle_exit_ms`, `session.idle_exit_ms` | 5 min, 15 min, 30 min, 1 h, 2 h |
+      | `model_lists.refresh_after` | 1 h, 6 h, 12 h, 24 h, 3 d, 7 d |
+
+      Each list holds the key's default. A value a file sets that is not
+      in the list shows with "(custom)" after it, and the next step goes
+      to the nearest listed value in that direction.
+    - `tui.panel.cards` ends in " ›" and opens a checklist of the panel's
+      cards and the installed extensions' widgets, in the panel's order,
+      the ticked ones first. Space ticks or unticks; ⌥↑ and ⌥↓ move a card
+      one place. Each change saves the list.
+    - A list of paths or addresses (`sandbox.allow_write`,
+      `sandbox.deny_read`, `repository_extensions`, `hub.allowed_origins`)
+      ends in " ›" and opens a sub-page of its own, one list per screen,
+      titled with the key's label. It uses the controls `/settings` already
+      has and saves on every change.
       - Rows: one per entry, in order, then a last row "+ Add". An empty
         list shows only "+ Add".
-      - Enter on "+ Add" opens an empty field, and Enter on an entry opens a
-        field holding its text. These are the free-text fields: Enter saves
-        and Esc cancels. A value the type check rejects keeps the field
-        open, with the error under it.
+      - For a list of paths, Enter on "+ Add" opens a folder browser:
+        the sandbox lists start in the home directory and
+        `repository_extensions` in the repository, and cannot leave it.
+        ↑↓ move, → opens the focused folder, ← goes up, and Enter picks
+        the focused folder. Only folders that exist are shown. Enter on an
+        entry opens the browser at that entry.
+      - For `hub.allowed_origins`, Enter on "+ Add" opens a field with
+        "https://fiber.example.ts.net" dim in it as the example, and Enter
+        on an entry opens a field holding its text. The field refuses
+        anything but a scheme `http` or `https`, a host and an optional
+        port, with the error under it, before it saves. Esc cancels.
       - Delete removes the focused entry. ⌥↑ and ⌥↓ move it one place.
       - A `repository_extensions` entry shows its `path` as its text, then
-        `[x] required` or `[ ] required`. Enter edits the path, and Space
-        flips `required`. A new entry starts with `required` off.
+        `[x] required` or `[ ] required`. Space flips `required`. A new
+        entry starts with `required` off.
       - Each add, edit, remove, reorder or flip saves the whole list at once,
         through the same path as `fiber config set`, to the layer the value
         comes from (Saving). Nothing waits to be saved.
-      - With no field open, Esc returns to `/settings` with the list row
-        focused.
+      - With no browser or field open, Esc returns to `/settings` with the
+        list row focused.
       - The footer is "Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back",
         with the keys bold.
-    - A number or free text opens a field in place of the value. Enter
-      saves it and Esc cancels.
 
     Every change goes through the same path as `fiber config set`, which
     checks its type.
@@ -1151,7 +1221,7 @@ install still running.
 
   › Reviewer model            gpt-6-luna ›
 
-    Blocks before asking you  3
+    Blocks before asking you  3 blocks
 
     Sandbox                   [x] On  repository
 
