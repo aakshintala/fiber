@@ -8,11 +8,16 @@ use super::super::commands::commands_testkit::{
     session_line, shown, table_lines, turn_starts, type_any, type_text,
 };
 use crate::app::{App, Effect};
+use crate::ext::{
+    Decision, Input as RendererInput, RawSpan, Renderer, SessionCtx, SessionVersion, TuiCommand,
+};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use contract::ErrorCode;
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[test]
@@ -1154,4 +1159,237 @@ fn reset_session_forgets_the_commands_tag() {
     app.reset_session();
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(app.completion.commands_id.is_none());
+}
+
+/// A renderer serving canned TUI commands: the adapter's rows as the
+/// terminal sees them.
+#[derive(Debug)]
+struct TuiServing {
+    commands: RefCell<Vec<TuiCommand>>,
+}
+
+impl TuiServing {
+    fn serving(commands: Vec<TuiCommand>) -> Self {
+        Self {
+            commands: RefCell::new(commands),
+        }
+    }
+}
+
+impl Renderer for TuiServing {
+    fn name(&self) -> &str {
+        "tui-serving"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, _ctx: &SessionCtx) -> Vec<TuiCommand> {
+        self.commands.borrow().clone()
+    }
+}
+
+/// A TUI command row for `name` from `extension`.
+fn tui_cmd(name: &str, extension: &str) -> TuiCommand {
+    TuiCommand {
+        name: name.to_owned(),
+        description: format!("Runs {name}."),
+        extension: extension.to_owned(),
+    }
+}
+
+/// The `/` list's names in order.
+fn slash_names(app: &App) -> Vec<String> {
+    app.completion
+        .slash_rows
+        .iter()
+        .map(|row| row.name.clone())
+        .collect()
+}
+
+/// Whether a `command_conflict` notice names every name in `names`.
+fn has_conflict(app: &App, names: &[&str]) -> bool {
+    app.notices().iter().any(|notice| {
+        matches!(notice, crate::app::NoticeLine::Notice { code, text, .. }
+            if *code == ErrorCode::CommandConflict && names.iter().all(|name| text.contains(name)))
+    })
+}
+
+#[test]
+fn command_tui_rows_follow_session_rows() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    answer_commands(&mut app, &["tdd"]);
+    let names = slash_names(&app);
+    let table = crate::slash::rows(&[]);
+    // `docs/tui.md`, "Slash commands": the `/` list shows built-in commands in this order; the rest of the list is the session's answer, then the one TUI list (`docs/extensions.md`, "Commands and screens").
+    assert_eq!(names.len(), table.len() + 2);
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>()[..table.len()],
+        table
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(&names[table.len()..], ["tdd", "ledger-diff"]);
+    let rows = &app.completion.slash_rows;
+    assert_eq!(rows[table.len()].tag, "skill");
+    assert!(!rows[table.len()].extension);
+    assert_eq!(rows[table.len() + 1].tag, "acme");
+    assert!(rows[table.len() + 1].extension);
+}
+
+#[test]
+fn command_extension_clash_keeps_no_row() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "other",
+    )])));
+    let id = answer_rows(
+        &mut app,
+        json!([
+            {"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true},
+            {"name": "tdd", "description": "Runs tdd.", "tag": "skill"},
+        ]),
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+    // An extension-marked session row sharing a TUI name keeps no row on either side.
+    assert!(!slash_names(&app).contains(&"deploy".to_owned()));
+    assert!(slash_names(&app).contains(&"tdd".to_owned()));
+    assert_eq!(app.completion.tui_conflicts, ["deploy".to_owned()].into());
+    // `docs/extensions.md`, "Commands and screens": a name registered twice gets one `notice` naming both, once until `/reload`.
+    assert!(has_conflict(&app, &["deploy", "acme", "other"]));
+    let before = app
+        .notices()
+        .iter()
+        .filter(|notice| {
+            matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+        })
+        .count();
+    assert_eq!(before, 1);
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": "c_late", "result": {"commands": [
+            {"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    let after = app
+        .notices()
+        .iter()
+        .filter(|notice| {
+            matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+        })
+        .count();
+    assert_eq!(after, 1, "a stale answer adds no second notice");
+}
+
+#[test]
+fn command_tui_name_shadows_skill_template_and_prompt_rows() {
+    for tag in ["skill", "template", "github"] {
+        let mut app = attached();
+        app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+            "review", "acme",
+        )])));
+        answer_rows(
+            &mut app,
+            json!([{"name": "review", "description": "Reviews.", "tag": tag}]),
+        );
+        // One row per name (`docs/extensions.md`, "Commands and screens"): the TUI row stays, the shadowed row is left out with no notice.
+        let matching: Vec<&crate::slash::Row> = app
+            .completion
+            .slash_rows
+            .iter()
+            .filter(|row| row.name == "review")
+            .collect();
+        assert_eq!(matching.len(), 1, "{tag}");
+        assert_eq!(matching[0].tag, "acme", "{tag}");
+        assert!(matching[0].extension, "{tag}");
+        assert!(app.completion.tui_conflicts.is_empty(), "{tag}");
+        assert!(!has_conflict(&app, &["review"]), "{tag}");
+    }
+}
+
+#[test]
+fn command_renamed_finals_list_side_by_side() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![
+        tui_cmd("ledger-a", "a"),
+        tui_cmd("ledger-diff", "b"),
+    ])));
+    answer_commands(&mut app, &[]);
+    // Distinct finals coexist: a rename resolving a clash restores exactly one row per name.
+    let names = slash_names(&app);
+    assert!(names.contains(&"ledger-a".to_owned()));
+    assert!(names.contains(&"ledger-diff".to_owned()));
+    assert!(app.completion.tui_conflicts.is_empty());
+    assert!(!has_conflict(&app, &["ledger"]));
+}
+
+#[test]
+fn command_install_refresh_shows_tui_rows_on_home() {
+    let mut app = connected();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    // Home lists the installed TUI commands with no session answer.
+    type_text(&mut app, "/led");
+    assert_eq!(shown(&app), ["/ledger-diff  Runs ledger-diff.  acme"]);
+}
+
+#[test]
+fn command_tui_rows_persist_across_reset_session() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    answer_commands(&mut app, &["tdd"]);
+    assert!(slash_names(&app).contains(&"tdd".to_owned()));
+    app.reset_session();
+    // Home keeps the TUI rows while the session rows go with the session.
+    let names = slash_names(&app);
+    assert!(!names.contains(&"tdd".to_owned()));
+    assert!(names.contains(&"ledger-diff".to_owned()));
+    assert!(app.completion.extensions.is_empty());
+    assert_eq!(app.completion.tui_commands.len(), 1);
+}
+
+#[test]
+fn command_stale_answer_resurrects_nothing() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    answer_commands(&mut app, &["tdd"]);
+    let before = slash_names(&app);
+    let stale = session_line(
+        "command_accepted",
+        json!({"command_id": "c_stale", "result": {"commands": [
+            {"name": "old", "description": "Old.", "tag": "skill"}]}}),
+    );
+    assert!(app.on_line(stale).is_empty());
+    // Only the latest `commands` sent fills the list: a stale answer changes nothing.
+    assert_eq!(slash_names(&app), before);
+    assert!(!slash_names(&app).contains(&"old".to_owned()));
 }

@@ -6,6 +6,9 @@ use crate::app::outbox::{Outbox, Waiting};
 use crate::app::testkit::{hello, home_with, now};
 use crate::app::{App, Effect};
 use crate::approvals::form::Spot;
+use crate::ext::{
+    Decision, Input as RendererInput, RawSpan, Renderer, SessionCtx, SessionVersion, TuiCommand,
+};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::model_picker::Choice;
@@ -770,4 +773,100 @@ fn a_gated_non_commands_answer_still_gates() {
     assert!(app.completion.extensions.is_empty());
     assert_eq!(app.opening_session(), Some(session));
     assert_eq!(app.outbox.waiting(&id), Some(Waiting::Steer));
+}
+
+/// A renderer serving the TUI command only while the halves name acme
+/// 1.0.0: the adapter's eligibility gate as the terminal sees it.
+#[derive(Debug)]
+struct Halved;
+
+impl Renderer for Halved {
+    fn name(&self) -> &str {
+        "halved"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, ctx: &SessionCtx) -> Vec<TuiCommand> {
+        let eligible = ctx
+            .halves
+            .as_ref()
+            .is_some_and(|halves| halves.get("acme").is_some_and(|half| half == "1.0.0"));
+        eligible
+            .then(|| {
+                vec![TuiCommand {
+                    name: "ledger-diff".to_owned(),
+                    description: "Diffs.".to_owned(),
+                    extension: "acme".to_owned(),
+                }]
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// An `extensions_loaded` line naming `version` for acme.
+fn halves_loaded(version: &str) -> Line {
+    session_line(
+        "extensions_loaded",
+        json!({"extensions": [{"name": "acme", "version": version}]}),
+    )
+}
+
+#[test]
+fn command_extensions_loaded_refreshes_tui_eligibility_before_requery() {
+    let mut app = attached();
+    app.install_renderer(std::rc::Rc::new(Halved));
+    // Newly compatible halves list the TUI row before the commands answer arrives.
+    let asked = app.on_line(halves_loaded("1.0.0"));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    assert!(
+        app.completion
+            .slash_rows
+            .iter()
+            .any(|row| row.name == "ledger-diff"),
+        "TUI eligibility refreshes against the recorded halves before re-query"
+    );
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    assert!(
+        app.completion
+            .slash_rows
+            .iter()
+            .any(|row| row.name == "ledger-diff"),
+        "the session answer keeps the TUI rows"
+    );
+    // Newly incompatible halves drop the TUI row without waiting for the answer, and re-query still goes out.
+    let asked = app.on_line(halves_loaded("9.9.9"));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    assert!(
+        app.completion
+            .slash_rows
+            .iter()
+            .all(|row| row.name != "ledger-diff"),
+        "a newly incompatible TUI row drops before the commands answer"
+    );
 }

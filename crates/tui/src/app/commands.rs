@@ -949,9 +949,11 @@ impl App {
             self.outbox.settled(&asked);
         }
         self.offer = crate::offer::Offer::default();
-        self.completion.slash_rows = slash::rows(&[]);
+        self.completion.session_answer.clear();
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        // The session rows go with the session; the TUI rows stay for home.
+        self.merge_slash_rows();
         self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
@@ -1041,9 +1043,11 @@ impl App {
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`, `extensions_loaded`, and `turn_started`; its answer,
     /// and no older one, fills the `/` list.
-    /// Until it answers, the list holds the built-ins only.
+    /// Until it answers, the list holds the built-ins and the TUI
+    /// commands only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let line = self.completion.ask_commands(session);
+        self.merge_slash_rows();
         if let Some(id) = &self.completion.commands_id {
             self.outbox.wait(id, super::outbox::Waiting::Commands);
         }
@@ -1051,9 +1055,12 @@ impl App {
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
-    /// sent replaces the session's rows of the `/` list.
+    /// sent replaces the session's rows of the `/` list, re-resolved
+    /// against the TUI commands.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        self.completion.commands_answered(accepted);
+        if self.completion.commands_answered(accepted) {
+            self.merge_slash_rows();
+        }
     }
 
     /// Whether the draft starts with an unknown slash command: its first

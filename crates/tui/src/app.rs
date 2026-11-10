@@ -579,6 +579,9 @@ impl App {
         // A new session's images start over: a late answer or viewer
         // completion from the last one is dropped.
         self.forget_images();
+        // Attachment changes the halves the TUI commands gate on:
+        // refresh their eligibility before anything re-queries.
+        self.refresh_tui_commands();
     }
 
     /// Hands one key to the surfaces on top, topmost first
@@ -1558,6 +1561,9 @@ impl App {
             }
         }
         self.handle.set(renderer);
+        // A new renderer brings new TUI commands: refresh the `/` list
+        // from it, covering both install paths.
+        self.refresh_tui_commands();
     }
 
     /// Installs once, then invalidates every live displayed or folding cache.
@@ -2567,6 +2573,9 @@ impl App {
             // too (`docs/invocation.md`, "What each command does").
             EventKind::Reloaded | EventKind::ExtensionsLoaded | EventKind::TurnStarted => {
                 self.record_extensions(envelope);
+                // The halves changed under the installed renderer:
+                // refresh TUI eligibility before re-querying the session.
+                self.refresh_tui_commands();
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
