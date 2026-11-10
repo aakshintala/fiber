@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{BufReader, ErrorKind};
+use std::io::{BufRead as _, BufReader, ErrorKind};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::Ordering;
@@ -578,8 +578,10 @@ fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
         Wrote::Gone => return SessionOutcome::Gone,
         Wrote::Unconfirmed => return SessionOutcome::Unconfirmed,
     }
+    // Bytes stay in `pending` across readiness waits; see `keeper_line`.
+    let mut pending: Vec<u8> = Vec::new();
     loop {
-        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+        match keeper_line(&mut read, &mut pending) {
             // A keeper never writes: any line is a live session, still running.
             Ok(Some(_)) => return SessionOutcome::Unconfirmed,
             Ok(None) => return SessionOutcome::KeeperConfirmed,
@@ -590,6 +592,56 @@ fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
             }
             // A reset socket is closed: the keeper stopped.
             Err(_) => return SessionOutcome::KeeperConfirmed,
+        }
+    }
+}
+
+/// One line for the keeper leg, accumulated across readiness waits:
+/// bytes the socket yields stay in `pending`, so a mid-drain
+/// `WouldBlock` never loses the head the way a fresh `read_line`
+/// would. Reports what `framing::read_line` would whenever the bytes
+/// arrive, however many waits that takes: a complete or partial-final
+/// line as `Some`, a clean EOF as `None`, past-the-cap as
+/// `InvalidData`.
+// Exempt: which chunk trips the cap and whether a tail is partial
+// needs chunking control no test can force, as in `read_ack`; the
+// `WouldBlock` guard in the loop above stays mutant-covered by the
+// overlong tests.
+#[cfg_attr(false, mutants::skip)]
+fn keeper_line(
+    read: &mut BufReader<UnixStream>,
+    pending: &mut Vec<u8>,
+) -> std::io::Result<Option<Vec<u8>>> {
+    loop {
+        match read.fill_buf() {
+            Ok([]) => {
+                if pending.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(std::mem::take(pending)));
+            }
+            Ok(buf) => {
+                if pending.len() + buf.len() > support::framing::MAX_LINE {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "a line is longer than its cap",
+                    ));
+                }
+                if let Some(end) = buf.iter().position(|byte| *byte == b'\n') {
+                    // `end` is a position inside `buf`: the slice cannot
+                    // miss.
+                    #[allow(clippy::indexing_slicing, reason = "position() stays within buf")]
+                    let head = &buf[..end];
+                    pending.extend_from_slice(head);
+                    read.consume(end + 1);
+                    return Ok(Some(std::mem::take(pending)));
+                }
+                let chunk = buf.to_vec();
+                read.consume(chunk.len());
+                pending.extend_from_slice(&chunk);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
         }
     }
 }

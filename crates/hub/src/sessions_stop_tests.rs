@@ -10,7 +10,7 @@
 )]
 
 use std::fs;
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{BufReader, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};

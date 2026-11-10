@@ -2226,7 +2226,8 @@ fn workspace_files_cap_at_10_mib() {
 
 /// A bound socket that serves every connection until dropped: the
 /// live peer answers each subscribe with a status line, the keeper
-/// accepts and closes at once, so every probe sees the same answer.
+/// reads the subscribe and then closes, so every probe sees EOF after
+/// its send instead of racing the close with it.
 struct Served {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -2259,6 +2260,12 @@ impl Served {
                             continue;
                         };
                         if !answer {
+                            // Read the probe's subscribe before closing:
+                            // closing first would race the probe's send,
+                            // reading EOF on one run and refused on the next.
+                            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                            let mut line = String::new();
+                            reader.read_line(&mut line).unwrap_or(0);
                             continue;
                         }
                         let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
