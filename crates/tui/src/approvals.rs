@@ -57,6 +57,10 @@ struct Request {
 
 /// What a request asks: an approval, a question form or a one-question
 /// interaction.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the queue holds a few requests; boxing its approval arm would add indirection on every fold and key press"
+)]
 #[derive(Debug, Clone)]
 enum Ask {
     Approval(Approval),
