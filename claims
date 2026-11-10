@@ -266,3 +266,6 @@ crates/loop/tests/fixtures/reviewer_eval/check_confidential.sh	fiber-477	plan	20
 docs/workflow.md	fiber-477	plan	2026-11-10T12:45:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tui/src/app/home.rs	fiber-4490	plan	2026-11-10T12:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/home/recent.rs	fiber-4490	plan	2026-11-10T12:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/feed.rs	fiber-4494	plan	2026-11-10T12:55:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/delete.rs	fiber-4494	plan	2026-11-10T12:55:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/invocation.md	fiber-4494	plan	2026-11-10T12:55:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
