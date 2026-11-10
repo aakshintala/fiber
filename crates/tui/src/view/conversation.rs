@@ -173,15 +173,14 @@ fn conversation_rows(
             && !(pinned && y == area.y)
             && y < last
             && copied_row(app, area) != Some(y)
+            && let Some(text) = texts.get(at)
         {
             marks::paint_clicks(
                 &app.pages().ext.cache,
-                &texts[at].clicks,
+                &text.clicks,
                 &line,
-                &texts[at],
-                area.x,
-                y,
-                area.width,
+                text,
+                Rect::new(area.x, y, area.width, 1),
                 &mut ext_targets,
             );
         }

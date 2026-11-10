@@ -218,9 +218,7 @@ fn paint_replacement(
                 tail: line.pad,
                 ..crate::rows::RowText::plain()
             },
-            area.x,
-            row,
-            area.width,
+            Rect::new(area.x, row, area.width, 1),
             targets,
         );
     }

@@ -1184,6 +1184,12 @@ impl Cache {
     }
 
     /// Every click key a stored line or a painted fragment still names.
+    /// The walk accumulates a set, so the maps' iteration order never
+    /// reaches the result.
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "accumulates a set; order never reaches output"
+    )]
     fn live_click_keys(&self) -> std::collections::HashSet<ClickKey> {
         fn extend(lines: &[FittedLine], live: &mut std::collections::HashSet<ClickKey>) {
             for line in lines {

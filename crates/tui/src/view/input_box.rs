@@ -664,9 +664,7 @@ fn paint_row(app: &App, area: Rect, bottom: &mut u16, buf: &mut Buffer, targets:
             tail: first.pad,
             ..crate::rows::RowText::plain()
         },
-        x,
-        y,
-        wide,
+        Rect::new(x, y, wide, 1),
         targets,
     );
 }

@@ -744,9 +744,7 @@ pub(super) fn paint(
                 tail: line.pad,
                 ..crate::rows::RowText::plain()
             },
-            x,
-            row,
-            wide,
+            Rect::new(x, row, wide, 1),
             targets,
         );
     }

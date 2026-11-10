@@ -102,36 +102,39 @@ pub(crate) const HINT: &str = "Enter opens · y copies";
 
 /// Paints one row's click ranges as targets and records their drawn
 /// text: each range's cells in the row with its interned key, clipped
-/// to the drawn width. Extension spans take the click over a link in
-/// the same cells, so the caller pushes these after the row's other
-/// targets; a click the handler declines falls back to the target
-/// under them (`docs/tui.md`, "Input and focus"). Zero-width ranges
-/// and decoration rows emit nothing: shed rows and columns lend no
-/// target.
+/// to the row's drawn width. Extension spans take the click over a
+/// link in the same cells, so the caller pushes these after the row's
+/// other targets; a click the handler declines falls back to the
+/// target under them (`docs/tui.md`, "Input and focus"). Zero-width
+/// ranges and decoration rows emit nothing: shed rows and columns
+/// lend no target. The paint covers the single row `rect.y`.
 pub(super) fn paint_clicks(
     cache: &Cache,
     clicks: &[(Range<u16>, ClickKey)],
     line: &Line<'static>,
     text: &RowText,
-    x: u16,
-    y: u16,
-    width: u16,
+    rect: Rect,
     targets: &mut Vec<Target>,
 ) {
-    if text.decoration || clicks.is_empty() || width == 0 {
+    if text.decoration || clicks.is_empty() || rect.width == 0 {
         return;
     }
     for (range, key) in clicks {
-        let start = range.start.min(width);
-        let end = range.end.min(width);
+        let start = range.start.min(rect.width);
+        let end = range.end.min(rect.width);
         if start >= end {
             continue;
         }
         targets.push(Target {
             id: TargetId::Extension(*key),
-            rect: Rect::new(x.saturating_add(start), y, end.saturating_sub(start), 1),
+            rect: Rect::new(
+                rect.x.saturating_add(start),
+                rect.y,
+                end.saturating_sub(start),
+                1,
+            ),
         });
-        cache.paint_click(*key, y, text.join, range_text(line, text, start, end));
+        cache.paint_click(*key, rect.y, text.join, range_text(line, text, start, end));
     }
 }
 

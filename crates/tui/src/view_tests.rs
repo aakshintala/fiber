@@ -5927,13 +5927,19 @@ fn click_targets_draw_over_a_group_replacement() {
         .lines()
         .position(|line| line.contains("qzx-click"))
         .expect("the replacement row paints");
+    let row16 = u16::try_from(row).expect("a visible row");
     let ext = extensions(&targets);
     assert_eq!(ext.len(), 1, "{targets:?}");
     // The range sits on the row's own cells, past the gutter.
-    let text_x = text_col(&buf, row as u16, "qzx-click").expect("the replacement text draws");
+    let text_x = text_col(&buf, row16, "qzx-click").expect("the replacement text draws");
     assert_eq!(
         ext[0].rect,
-        Rect::new(text_x, row as u16, "qzx-click".len() as u16, 1),
+        Rect::new(
+            text_x,
+            row16,
+            u16::try_from("qzx-click".len()).expect("a short test span"),
+            1
+        ),
         "{targets:?}"
     );
     let TargetId::Extension(key) = ext[0].id else {
@@ -5956,7 +5962,7 @@ fn click_targets_draw_over_a_group_replacement() {
             TargetId::Line(crate::app::Target::Call(_))
         ) && target
             .rect
-            .contains(ratatui::layout::Position::new(ext[0].rect.x, row as u16))),
+            .contains(ratatui::layout::Position::new(ext[0].rect.x, row16))),
         "{targets:?}"
     );
 }
@@ -6278,7 +6284,10 @@ fn click_input_status_replacement_draws_at_its_row() {
     // The status row draws at the text column, past the indicator.
     assert_eq!(ext[0].rect.y as usize, row);
     assert_eq!(ext[0].rect.x, 2);
-    assert_eq!(ext[0].rect.width, "qzx-badge-token".len() as u16);
+    assert_eq!(
+        ext[0].rect.width,
+        u16::try_from("qzx-badge-token".len()).expect("a short test span")
+    );
 }
 
 #[test]
@@ -6303,13 +6312,17 @@ fn click_status_rows_replacement_draws_at_the_status_offset() {
         .lines()
         .position(|line| line.contains("qzx-status"))
         .expect("the status replacement paints");
+    let row16 = u16::try_from(row).expect("a visible row");
     let ext = extensions(&targets);
     assert_eq!(ext.len(), 1, "{targets:?}");
     assert_eq!(ext[0].rect.y as usize, row);
     // The range sits on the row's own cells, at the status offset.
-    let text_x = text_col(&buf, row as u16, "qzx-status").expect("the replacement text draws");
+    let text_x = text_col(&buf, row16, "qzx-status").expect("the replacement text draws");
     assert_eq!(ext[0].rect.x, text_x);
-    assert_eq!(ext[0].rect.width, "qzx-status".len() as u16);
+    assert_eq!(
+        ext[0].rect.width,
+        u16::try_from("qzx-status".len()).expect("a short test span")
+    );
 }
 
 #[test]
@@ -6344,11 +6357,15 @@ fn click_steering_replacement_draws_its_ranges() {
         .lines()
         .position(|line| line.contains("qzx-steer"))
         .expect("the steering replacement paints");
+    let row16 = u16::try_from(row).expect("a visible row");
     let ext = extensions(&targets);
     assert_eq!(ext.len(), 1, "{targets:?}");
     assert_eq!(ext[0].rect.y as usize, row);
     // The range sits on the row's own cells, at the card's text offset.
-    let text_x = text_col(&buf, row as u16, "qzx-steer").expect("the replacement text draws");
+    let text_x = text_col(&buf, row16, "qzx-steer").expect("the replacement text draws");
     assert_eq!(ext[0].rect.x, text_x);
-    assert_eq!(ext[0].rect.width, "qzx-steer".len() as u16);
+    assert_eq!(
+        ext[0].rect.width,
+        u16::try_from("qzx-steer".len()).expect("a short test span")
+    );
 }
