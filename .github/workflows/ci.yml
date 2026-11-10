@@ -573,7 +573,10 @@ jobs:
       # flake_decide closed before any lookup. The marker travels in the
       # leg's artifact on the two-leg matrix, and in this job's outputs on
       # the one-leg test_linux matrix, whose list upload stays conditional
-      # on a non-empty list.
+      # on a non-empty list. A record step skipped after an earlier
+      # failure leaves no output, so its completeness condition applies
+      # only when its execution ran; a record that ran but whose parser
+      # failed still marks the collection incomplete.
       - name: Mark the collection complete or not
         id: collection
         if: always()
@@ -585,10 +588,10 @@ jobs:
           if [ "${{ matrix.runner }}" = ubuntu-24.04 ] && [ "${{ steps.flaky_hub.outputs.complete }}" = false ]; then
             complete=false
           fi
-          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.alloc_tests.outcome }}" != skipped ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
             complete=false
           fi
-          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.dhat_tests.outcome }}" != skipped ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
             complete=false
           fi
           if [ "$complete" = true ]; then
