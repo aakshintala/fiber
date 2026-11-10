@@ -567,14 +567,12 @@ fn models_lists_every_first_party_model_and_drops_none() {
             }
         }
     }
-    expected.sort_by_key(|reference| reference.split('/').next().unwrap_or("").to_owned());
-    assert_eq!(listed_ids(&run), expected);
-    assert!(
-        listed_ids(&run)
-            .iter()
-            .any(|id| id == "codex/gpt-6.1-terra"),
-        "models --json lists codex/gpt-6.1-terra"
-    );
+    // No doc promises the listing order (`docs/testing.md`, "Event streams"),
+    // so the membership comparison is order-insensitive.
+    expected.sort();
+    let mut listed = listed_ids(&run);
+    listed.sort();
+    assert_eq!(listed, expected);
     let terra = run
         .stdout
         .lines()

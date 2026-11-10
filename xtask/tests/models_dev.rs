@@ -248,7 +248,7 @@ fn codex_is_generated_from_the_snapshot() {
             "gpt-6.1-sol",
             "gpt-6.1-terra"
         ],
-        "codex lists exactly its five models"
+        "codex lists exactly its five models (docs/model-routing.md, \"What a provider extension declares\")"
     );
     for model in models {
         assert_eq!(
