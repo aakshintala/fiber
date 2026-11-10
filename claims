@@ -224,3 +224,4 @@ crates/main/examples/review_sweep.rs	fiber-4538	plan	2026-11-10T10:17:54Z	Amoghs
 crates/main/tests/support/review_sweep.rs	fiber-4538	plan	2026-11-10T10:17:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/package.rs	fiber-4538	plan	2026-11-10T10:17:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_host/review_sweep.rs	fiber-4538	plan	2026-11-10T10:17:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/tests/paging_open.rs	fiber-4546	plan	2026-11-10T10:48:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
