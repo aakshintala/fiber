@@ -23,16 +23,14 @@ fn install(setup: &Setup, name: &str, source: &str) {
     std::fs::create_dir_all(dir.join("tui")).unwrap();
     std::fs::write(dir.join("init.lua"), "").unwrap();
     std::fs::write(dir.join("tui/init.lua"), source).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(dir);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(dir),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A bare home and workspace with a connected hub and a scripted turn:

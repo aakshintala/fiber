@@ -87,16 +87,14 @@ fn install_models(setup: &Setup, models: &Value, configured: &str) {
             "models": models,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": configured}),
@@ -1151,16 +1149,14 @@ fn install_extension(setup: &Setup, short: &str, data: &Value, init: Option<&str
     if let Some(init) = init {
         fs::write(source.join(format!("providers/{provider}.lua")), init).unwrap();
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Provider `other` with `om` on `openai-responses` at the fake server,
@@ -1815,16 +1811,14 @@ fn install_labeled_provider(setup: &Setup, server: &ProviderServer) {
                         "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     for label in ["work", "home"] {
         config::store_credential(
             &setup.home(),

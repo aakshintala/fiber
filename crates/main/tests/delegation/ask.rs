@@ -66,16 +66,14 @@ impl Setup {
                     "thinking_levels": ["low", "high"], "thinking_default": "low"}]
             }),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         write(
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
@@ -2816,18 +2814,16 @@ fn a_slash_prompt_runs_a_prompt_template() {
 fn slash_init_sends_the_first_party_template() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+    );
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
-        ),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     setup.provider(&server);
     let installed =
         fs::read_to_string(setup.home().join("extensions/init/prompts/init/SKILL.md")).unwrap();
@@ -2848,18 +2844,16 @@ fn slash_init_sends_the_first_party_template() {
 fn a_personal_init_template_overrides_the_first_party_one() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+    );
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
-        ),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     setup.provider(&server);
     let dir = setup.home().join("skills/init");
     fs::create_dir_all(&dir).unwrap();
@@ -2935,16 +2929,14 @@ fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
 /// Installs the fixture extension and points its provider at `server`,
 /// with `fixture/m1` as the configured model.
 fn fixture(setup: &Setup, server: &ProviderServer) {
-    extensions::plan(
+    let request = extensions::Request::Path(fakes::lua_fixture());
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(fakes::lua_fixture()),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     // The installed manifest declares the fixture provider at the test
     // server's URL, so the session admits its models.
     let dir = setup
@@ -3242,16 +3234,14 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "plain",
@@ -3503,16 +3493,14 @@ fn inline_extension(
     if let Some(data) = data {
         write(&source.join("providers").join(format!("{name}.json")), data);
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write(
         &setup.home().join("config.json"),
         &json!({"model": format!("{name}/m1")}),
@@ -3755,16 +3743,14 @@ fn provider_with(
         &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"},
                 "models": models}),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write(&setup.home().join("config.json"), global);
 }
 
@@ -4019,16 +4005,14 @@ fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>
     }
     write(&source.join("extension.json"), &manifest);
     write(&source.join("providers/syn.json"), &data);
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Every `model` the fake server was asked for, in request order.
