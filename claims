@@ -297,3 +297,4 @@ crates/cli/src/sessions.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-
 xtask/src/models_dev_table.rs	fiber-4459	plan	2026-11-10T14:05:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/codex/providers/codex.json	fiber-4459	plan	2026-11-10T14:05:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/tests/providers_data.rs	fiber-4459	plan	2026-11-10T14:05:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/resume_tests.rs	fiber-4445	plan	2026-11-10T14:08:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
