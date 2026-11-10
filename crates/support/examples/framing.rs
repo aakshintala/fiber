@@ -2,7 +2,7 @@
 //! through the wire line reader with a stalled read after a cut point,
 //! printing what the read returns and what a follow-up read finds.
 //!
-//! `cargo run -p support --example framing -- <file> --error-after <n> [--max <n>]`
+//! `cargo run -p support --example framing -- <file> --error-after <n> [--mode old|new] [--max <n>]`
 
 #![allow(
     clippy::print_stdout,
@@ -16,10 +16,9 @@ mod framing_input;
 use std::io;
 use std::process::ExitCode;
 
-use framing_input::FragmentThenError;
+use framing_input::{FragmentThenError, Mode};
 
-const USAGE: &str =
-    "usage: cargo run -p support --example framing -- <file> --error-after <n> [--max <n>]";
+const USAGE: &str = "usage: cargo run -p support --example framing -- <file> --error-after <n> [--mode old|new] [--max <n>]";
 
 fn main() -> ExitCode {
     let args = match framing_input::parse(std::env::args().skip(1)) {
@@ -38,8 +37,19 @@ fn main() -> ExitCode {
     };
     let max = args.max.unwrap_or(support::framing::MAX_LINE);
     let mut read = FragmentThenError::new(data, args.error_after);
-    print_outcome("first", support::framing::read_line(&mut read, max));
-    print_outcome("second", support::framing::read_line(&mut read, max));
+    match args.mode {
+        Mode::Old => {
+            print_outcome("first", support::framing::read_line(&mut read, max));
+            print_outcome("second", support::framing::read_line(&mut read, max));
+        }
+        Mode::New => {
+            print_partial_outcome("first", support::framing::read_line_partial(&mut read, max));
+            print_partial_outcome(
+                "second",
+                support::framing::read_line_partial(&mut read, max),
+            );
+        }
+    }
     ExitCode::SUCCESS
 }
 
@@ -50,5 +60,19 @@ fn print_outcome(tag: &str, outcome: io::Result<Option<Vec<u8>>>) {
         Ok(Some(line)) => println!("{tag}: ok {}", String::from_utf8_lossy(&line)),
         Ok(None) => println!("{tag}: none"),
         Err(error) => println!("{tag}: err {:?}", error.kind()),
+    }
+}
+
+/// One partial-preserving read's outcome on its own line: as above, with the
+/// consumed bytes after the error kind when the failed read kept any.
+fn print_partial_outcome(tag: &str, outcome: Result<Option<Vec<u8>>, (io::Error, Vec<u8>)>) {
+    match outcome {
+        Ok(line) => print_outcome(tag, Ok(line)),
+        Err((error, partial)) if partial.is_empty() => print_outcome(tag, Err(error)),
+        Err((error, partial)) => println!(
+            "{tag}: err {:?} partial {}",
+            error.kind(),
+            String::from_utf8_lossy(&partial)
+        ),
     }
 }

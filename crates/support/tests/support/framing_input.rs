@@ -6,17 +6,28 @@
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
 
+/// Which wire-reader API the jig drives: the existing line reader, or the
+/// partial-preserving one beside it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    Old,
+    New,
+}
+
 /// How the jig is invoked: the file holding the bytes, how many of them
-/// arrive before the read stalls, and the read cap when the caller pins one.
+/// arrive before the read stalls, the reader API, and the read cap when the
+/// caller pins one.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Args {
     pub(crate) file: PathBuf,
     pub(crate) error_after: usize,
+    pub(crate) mode: Mode,
     pub(crate) max: Option<usize>,
 }
 
-/// Reads `framing <file> --error-after <n> [--max <n>]`: the file first and
-/// bare, then one value per flag. Anything else is a usage error.
+/// Reads `framing <file> --error-after <n> [--mode old|new] [--max <n>]`: the
+/// file first and bare, then one value per flag. Anything else is a usage
+/// error.
 pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, ()> {
     let mut args = args.into_iter();
     let file = args
@@ -24,25 +35,46 @@ pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, ()> 
         .filter(|file| !file.starts_with('-'))
         .ok_or(())?;
     let mut error_after = None;
+    let mut mode = None;
     let mut max = None;
     while let Some(flag) = args.next() {
-        let place = match flag.as_str() {
-            "--error-after" => &mut error_after,
-            "--max" => &mut max,
+        match flag.as_str() {
+            "--error-after" | "--max" => {
+                let place = if flag == "--error-after" {
+                    &mut error_after
+                } else {
+                    &mut max
+                };
+                if place.is_some() {
+                    return Err(());
+                }
+                let value = args
+                    .next()
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or(())?;
+                *place = Some(value.parse::<usize>().map_err(|_| ())?);
+            }
+            "--mode" => {
+                if mode.is_some() {
+                    return Err(());
+                }
+                let value = args
+                    .next()
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or(())?;
+                mode = Some(match value.as_str() {
+                    "old" => Mode::Old,
+                    "new" => Mode::New,
+                    _ => return Err(()),
+                });
+            }
             _ => return Err(()),
-        };
-        if place.is_some() {
-            return Err(());
         }
-        let value = args
-            .next()
-            .filter(|value| !value.starts_with('-'))
-            .ok_or(())?;
-        *place = Some(value.parse::<usize>().map_err(|_| ())?);
     }
     Ok(Args {
         file: PathBuf::from(file),
         error_after: error_after.ok_or(())?,
+        mode: mode.unwrap_or(Mode::Old),
         max,
     })
 }

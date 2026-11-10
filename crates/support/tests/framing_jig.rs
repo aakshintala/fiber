@@ -155,3 +155,51 @@ fn an_over_long_line_errors_on_both_reads() {
     let out = run_case(b"abcd", &["--error-after", "4", "--max", "3"]);
     assert_eq!(out, "first: err InvalidData\nsecond: err InvalidData\n");
 }
+
+#[test]
+fn the_new_mode_returns_the_torn_fragment_with_the_error() {
+    let line = br#"{"id":"c_2","command":"prompt"}"#;
+    let fragment = &line[..line.len() - 1];
+    let cut = error_after_arg(fragment.len());
+    let out = run_case(line, &["--error-after", &cut, "--mode", "new"]);
+    assert_eq!(
+        out,
+        format!(
+            "first: err WouldBlock partial {}\nsecond: none\n",
+            String::from_utf8_lossy(fragment)
+        )
+    );
+}
+
+#[test]
+fn the_new_mode_matches_the_old_mode_past_a_whole_line() {
+    let mut bytes = br#"{"id":"c_2","command":"prompt"}"#.to_vec();
+    bytes.push(b'\n');
+    let cut = error_after_arg(bytes.len());
+    let out = run_case(&bytes, &["--error-after", &cut, "--mode", "new"]);
+    assert_eq!(
+        out,
+        "first: ok {\"id\":\"c_2\",\"command\":\"prompt\"}\nsecond: none\n"
+    );
+}
+
+#[test]
+fn the_new_mode_matches_the_old_mode_on_empty_input() {
+    let out = run_case(b"", &["--error-after", "0", "--mode", "new"]);
+    assert_eq!(out, "first: none\nsecond: none\n");
+}
+
+#[test]
+fn the_new_mode_matches_the_old_mode_on_crlf() {
+    let out = run_case(b"a\r\n", &["--error-after", "3", "--mode", "new"]);
+    assert_eq!(out, "first: ok a\nsecond: none\n");
+}
+
+#[test]
+fn the_new_mode_matches_the_old_mode_on_an_over_long_line() {
+    let out = run_case(
+        b"abcd",
+        &["--error-after", "4", "--max", "3", "--mode", "new"],
+    );
+    assert_eq!(out, "first: err InvalidData\nsecond: err InvalidData\n");
+}
