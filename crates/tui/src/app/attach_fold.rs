@@ -401,6 +401,13 @@ impl App {
         };
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
         self.end_overlay();
+        // The pass end recounts once at the width in force: the newest
+        // width a mid-pass resize owed, if any.
+        // debt: first landing drains the owed width, retain it until no
+        // pass remains once two concurrent passes are covered.
+        if let Some(width) = self.recount_owed.take() {
+            self.attached_screen_mut().pages_mut().set_width(width);
+        }
         if let Some((session, seq, offset)) = anchor {
             let pages = self.attached_screen_mut().pages_mut();
             pages.hold_anchor(&session, seq, offset);
@@ -447,8 +454,12 @@ impl App {
 
     /// Whether the scroll bar draws its thumb: the counts are exact
     /// while the screen is not frozen, except on the attached screen
-    /// while the overlay keeps the preview.
+    /// while the overlay keeps the preview. While an opening pass runs,
+    /// the screen shows the pages already held, so no thumb draws.
     pub(crate) fn counts_exact(&self) -> bool {
+        if self.pass_open() {
+            return false;
+        }
         if self.screen.frozen() {
             return false;
         }
@@ -638,6 +649,11 @@ impl App {
                     };
                     self.land_inner(*fold, held);
                 }
+                // The pass ends without its boundary, so no landing
+                // recounts: an owed width ends with the pass.
+                // debt: kept ends drop the owed width, apply or retain it
+                // once non-landing ends are decided (see Follow-ups).
+                self.recount_owed = None;
                 self.overlay = Overlay::Kept { last };
                 self.attached_screen_mut().set_frozen(false);
             }

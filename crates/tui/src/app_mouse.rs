@@ -466,8 +466,12 @@ impl App {
     /// PageDown scroll by a screen (`docs/tui.md`, "Turns"): up pauses
     /// following, down resumes it at the bottom, and past the top the next
     /// frame pages history in, as `settle` and `needs` already do for a
-    /// page (`docs/tui.md`, "History and paging").
+    /// page (`docs/tui.md`, "History and paging"). While an opening pass
+    /// runs, the screen stays as it was, so the wheel step is dropped.
     fn scroll_conversation_inner(&mut self, up: bool) {
+        if self.pass_open() {
+            return;
+        }
         let height = self.conversation_height();
         self.screen.scroll_rows(up, WHEEL_ROWS, height);
     }

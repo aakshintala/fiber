@@ -346,6 +346,10 @@ pub(crate) struct App {
     /// A `/copy` waiting for the opening pass to end (`docs/tui.md`,
     /// "Selection and copy").
     copy_owed: bool,
+    /// A width the opening pass owes the pages: a resize records it
+    /// instead of recounting, and the pass end recounts once at the
+    /// width in force then (`docs/tui.md`, "History and paging").
+    recount_owed: Option<u16>,
     /// A `/pwd` waiting for the attached session's `session_started` to
     /// fold (`docs/tui.md`, "Slash commands").
     pwd_pending: bool,
@@ -493,6 +497,7 @@ impl App {
             history: history::History::default(),
             copied: false,
             copy_owed: false,
+            recount_owed: None,
             pwd_pending: false,
             pending_turn: None,
             focus: None,
@@ -543,6 +548,8 @@ impl App {
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
+        // A recount owed mid-pass was for the screen before this one.
+        self.recount_owed = None;
         // A `/pwd` waiting on the old session's root ends with the
         // switch: the new session's fold answers only its own wait.
         self.pwd_pending = false;
@@ -968,6 +975,9 @@ impl App {
         // The pass ends here without folding: a `/copy` waiting on it
         // has nothing new to copy.
         self.copy_owed = false;
+        // The pass ends here without folding: no landing recounts, so
+        // an owed width ends with it.
+        self.recount_owed = None;
         self.outbox.forget(&outbox::Waiting::Abandoned);
         self.end_overlay();
         if self.outbox.is_up() {
@@ -2675,8 +2685,12 @@ impl App {
     }
 
     /// PageUp and PageDown move by the conversation height less one.
-    /// The input boundary owns the layout pass.
+    /// The input boundary owns the layout pass. While an opening pass
+    /// runs, the screen stays as it was, so the page is dropped.
     fn page_inner(&mut self, up: bool) {
+        if self.pass_open() {
+            return;
+        }
         let height = self.conversation_height();
         self.screen.page(up, height);
     }

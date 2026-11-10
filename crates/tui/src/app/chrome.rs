@@ -224,9 +224,19 @@ impl App {
         let width = crate::view::scroll_bar::text_width(
             self.column_width().saturating_sub(self.chrome.gutter()),
         );
-        // A new width moves every row, so a selection clears.
-        if self.screen.wrap_at(width) {
-            self.clear_selection();
+        // While a pass is open the recount waits: the newest width is
+        // owed, and the pass end recounts once at the width in force
+        // then. A later resize overwrites the owed width.
+        if self.pass_open() {
+            self.recount_owed = Some(width);
+        } else {
+            // The recount runs now at the newest width, so a width an
+            // earlier pass owed is stale.
+            self.recount_owed = None;
+            // A new width moves every row, so a selection clears.
+            if self.screen.wrap_at(width) {
+                self.clear_selection();
+            }
         }
         self.rewrap_call_view();
         if moved {
