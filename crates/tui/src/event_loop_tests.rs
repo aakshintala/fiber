@@ -2272,7 +2272,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             Input::Bytes(b"\x1b[<0;1;7m".to_vec()),
         ],
     );
-    let (reader, subscribe) = command(reader, "the subscribe command");
+    // The archived scoped ask rides beside the scoped one ahead of the
+    // open; `command_past_reads` steps past both `recent` lines.
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
@@ -2367,7 +2369,9 @@ fn an_exit_sends_its_lines_then_quits() {
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
-    let (reader, subscribe) = command(reader, "the subscribe");
+    // The archived scoped ask rides beside the scoped one; `command_past_reads`
+    // steps past both `recent` lines.
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
