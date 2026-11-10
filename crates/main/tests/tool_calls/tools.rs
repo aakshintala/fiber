@@ -4134,20 +4134,10 @@ fn a_moved_pipeline_timeout_names_the_held_output_loss() {
     // other test's process.
     let waited = waited_timeout_text("sh -c 'echo done; sleep 601' | tail -n 1", "sleep 601");
     assert!(
-        waited.contains("Fiber stopped the whole process group."),
-        "the wait names the group stop: {waited}"
-    );
-    assert!(
-        waited.contains("A pipeline stage that prints only when it exits"),
-        "the wait names the held output: {waited}"
-    );
-    assert!(
-        waited.contains("lost its output at the stop"),
-        "the wait names the loss: {waited}"
-    );
-    assert!(
-        waited.contains("rerun without it, or with `run_in_background`"),
-        "the wait names the remedy: {waited}"
+        waited.contains(
+            "A pipeline stage that prints only when it exits (such as `| tail`) lost its output at the stop; rerun without it, or with `run_in_background`."
+        ),
+        "the wait carries the full pipe sentence (loss and remedy): {waited}"
     );
 }
 
