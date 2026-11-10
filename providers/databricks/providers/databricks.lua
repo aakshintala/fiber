@@ -9,7 +9,10 @@
 -- `reasoning_effort`. A service ending `-image`, or matching an
 -- `image_generation` row, is left out, as is one with no window: a model
 -- without one is left out with `model_invalid` (docs/model-routing.md,
--- "What a provider extension declares"). Gateway metadata comes only from
+-- "What a provider extension declares"). A kept service whose bare name no
+-- serving-endpoint name matches is left out too, named once in the
+-- diagnostic log with its id and the reason (docs/model-routing.md,
+-- "Model discovery"). Gateway metadata comes only from
 -- the external-provider catalog, matched by `modelKey` and `metadataFor`;
 -- the context-window pair 922000/128000 reads as 1,050,000. Discovery
 -- pages each endpoint's `next_page_token` back as `page_token`, at most 20
