@@ -11,9 +11,15 @@ use crate::{JobId, SessionId};
 /// How many output frames and endings a hosted call may hold ahead of its
 /// driver: past this the keeper's reader waits instead of buffering the
 /// flood in the session (see #4054). 64 frames of at most 8 KiB are 512 KiB
-/// standing; the runner's burst copies triple that transiently, still under
-/// the handover's 4 MiB growth budget with room to spare. // ruling: #4054
+/// standing. // ruling: #4054
 pub const HOST_EVENT_QUEUE: usize = 64;
+
+/// How many queued frames one runner pass takes: the pass copies its burst
+/// about eight times over (the burst itself, the fresh bytes, the decoded
+/// text, the splitter's carry and lines, the joined batch and its JSON), so
+/// 16 frames of at most 8 KiB peak near 1 MiB transiently. Queue plus burst
+/// stay under the handover's 4 MiB growth budget (see #4054). // ruling: #4054
+pub const HOST_BURST_FRAMES: usize = 16;
 
 /// Runs shell processes outside the session process.
 pub trait CommandHost: Send + Sync {

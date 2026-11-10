@@ -118,15 +118,12 @@ impl AdoptedRun {
                 }
                 return self.end.take();
             };
-            // What is already queued goes out together: one delta per burst
-            // keeps a flood from becoming one event per frame, and one
-            // delivery per burst spends one token of a monitor's budget.
-            let mut burst = vec![first];
-            while !matches!(burst.last(), Some(HostEvent::Exit(_)))
-                && let Ok(more) = self.events.try_recv()
-            {
-                burst.push(more);
-            }
+            // What is already queued goes out together, up to a bounded
+            // burst: one delta per burst keeps a flood from becoming one
+            // event per frame, one delivery per burst spends one token of a
+            // monitor's budget, and the cap keeps a stalled runner's catch-up
+            // pass from copying the whole queue several times over at once.
+            let burst = take_burst(first, &self.events); // ruling: #4054
             let mut shown = String::new();
             let mut fresh = Vec::new();
             for event in burst {
@@ -227,6 +224,22 @@ impl Drop for AdoptedRun {
         // may no longer be the session's, for a job the keeper still runs.
         self.forget_end();
     }
+}
+
+/// Takes what one pass delivers: the frame already in hand plus what is
+/// already queued, up to [`HOST_BURST_FRAMES`], stopping after an ending.
+/// The cap bounds one pass's transient copies (see #4054); the rest waits
+/// for the next pass. // ruling: #4054
+fn take_burst(first: HostEvent, events: &Receiver<HostEvent>) -> Vec<HostEvent> {
+    use contract::keeper::HOST_BURST_FRAMES;
+    let mut burst = vec![first];
+    while burst.len() < HOST_BURST_FRAMES
+        && !matches!(burst.last(), Some(HostEvent::Exit(_)))
+        && let Ok(more) = events.try_recv()
+    {
+        burst.push(more);
+    }
+    burst
 }
 
 /// The newest 64 KiB of a delta, from a character boundary

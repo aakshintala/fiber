@@ -494,3 +494,33 @@ fn a_restored_monitor_that_floods_for_thirty_seconds_is_stopped_and_ends_flooded
             .is_none()
     );
 }
+
+#[test]
+fn take_burst_takes_at_most_the_bound_and_stops_after_an_ending() {
+    use super::take_burst;
+    // A full queue behind a stalled runner: one pass takes the bound and
+    // leaves the rest queued, so the pass's copies stay small.
+    let (send, received) = mpsc::channel();
+    for _ in 0..contract::keeper::HOST_EVENT_QUEUE {
+        send.send(out("x\n")).unwrap();
+    }
+    let burst = take_burst(out("first\n"), &received);
+    assert_eq!(burst.len(), contract::keeper::HOST_BURST_FRAMES);
+    assert_eq!(
+        received.try_iter().count(),
+        contract::keeper::HOST_EVENT_QUEUE + 1 - contract::keeper::HOST_BURST_FRAMES,
+        "the rest waits for the next pass"
+    );
+    // An ending stops the burst even with more queued behind it.
+    let (send, received) = mpsc::channel();
+    for _ in 0..5 {
+        send.send(out("x\n")).unwrap();
+    }
+    send.send(exit(0)).unwrap();
+    for _ in 0..20 {
+        send.send(out("y\n")).unwrap();
+    }
+    let burst = take_burst(out("first\n"), &received);
+    assert_eq!(burst.len(), 1 + 5 + 1, "the burst ends at the ending");
+    assert_eq!(received.try_iter().count(), 20);
+}

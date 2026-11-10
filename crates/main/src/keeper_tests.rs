@@ -798,15 +798,18 @@ fn dropping_the_host_sends_no_shutdown_to_a_retained_keeper() {
 #[test]
 #[expect(
     clippy::assertions_on_constants,
-    reason = "pins the shared queue bound against the RSS budget"
+    reason = "pins the shared queue and burst bounds against the RSS budget"
 )]
 fn handover_queue_fits_the_growth_budget() {
-    // 8 KiB is the keeper reader's largest frame; a full queue stands once
-    // and the runner's burst copies it twice (fresh, shown), so the bound
-    // keeps the worst case under the flood test's 4 MiB growth budget.
+    // 8 KiB is the keeper reader's largest frame. A full queue stands once;
+    // one pass copies its burst about eight times over (burst, fresh bytes,
+    // decoded text, splitter carry and lines, joined batch and its JSON).
+    // Both bounds together keep the worst case under the flood test's 4 MiB
+    // growth budget.
     assert!(
-        contract::keeper::HOST_EVENT_QUEUE * 8 * 3 <= 4 * 1024,
-        "the queue bound outgrew the RSS budget"
+        contract::keeper::HOST_EVENT_QUEUE * 8 + contract::keeper::HOST_BURST_FRAMES * 8 * 8
+            <= 4 * 1024,
+        "the queue and burst bounds outgrew the RSS budget"
     );
 }
 
