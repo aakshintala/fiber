@@ -478,3 +478,4 @@ crates/tui/src/app_mouse.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-
 crates/tui/src/app/chrome.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/attach_fold.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/overlay_tests.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screens/journeys.rs	fiber-4496	plan	2026-11-10T00:58:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
