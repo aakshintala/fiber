@@ -183,7 +183,7 @@ fn compact_sends_its_instructions() {
     let lines = sent(enter(&mut app, "/compact"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "compact");
-    assert_eq!(lines[0].get("args"), None);
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn import_sends_import_without_args_when_bare() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "import");
     assert_eq!(lines[0]["session_id"], SESSION);
-    assert_eq!(lines[0].get("args"), None);
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]

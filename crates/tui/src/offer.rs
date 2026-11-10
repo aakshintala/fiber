@@ -15,12 +15,13 @@ use contract::{Envelope, ErrorCode, RequestId, SessionId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::app::{read, session_command};
+use crate::app::{read, session_line};
 use crate::diff::{diff_lines, gutter_prefix, gutter_width, styled_spans};
 use crate::keys::{Edit, Key};
 use crate::swapped::Ink;
 use crate::text::to_u16;
 use crate::theme::{Role, style};
+use contract::commands::Command;
 
 /// The line every offer shows.
 pub(crate) const TUI_FILES: &str = "A package's TUI files are never installed from a repository.";
@@ -421,10 +422,13 @@ impl Offer {
                 decisions: held.decisions.clone(),
             },
         };
-        let args = serde_json::to_value(reply).ok();
         held.source = None;
         held.status = Status::Answered { by: id.to_owned() };
-        Some(session_command(id, "reply", session, args).to_string())
+        Some(session_line(
+            &contract::CommandId(id.to_owned()),
+            session,
+            Command::Reply(reply),
+        ))
     }
 
     /// The reply `id` failed: the offer it answered opens again with the

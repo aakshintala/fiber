@@ -23,7 +23,6 @@ use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
-use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
 use crate::install_worker::HooksJob;
@@ -32,6 +31,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Ended, Pages};
+use contract::commands::SubscribeLevel;
 use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
@@ -104,7 +104,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
-pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, session_line};
 pub(crate) use select::SurfaceId;
 pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
@@ -1882,7 +1882,7 @@ impl App {
     fn started(&mut self, session: SessionId, draft: Draft) -> Vec<String> {
         self.attach(session.clone());
         vec![
-            self.subscribe(&session, Level::Full),
+            self.subscribe(&session, SubscribeLevel::Full),
             self.ask_commands(&session),
             self.first_prompt(&session, draft),
         ]

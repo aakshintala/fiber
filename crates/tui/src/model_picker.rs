@@ -6,12 +6,11 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
-
 use crate::catalogue::{Catalogue, ModelEntry, Price, Refresh};
 use crate::keys::Key;
 use crate::swapped::List;
 use crate::text::controls_to_space;
+use contract::commands::ModelArgs;
 
 mod filter;
 #[cfg(test)]
@@ -1552,10 +1551,10 @@ pub(crate) fn scoped_save(models: &[ModelEntry], marks: &[bool], old: &[String])
 
 /// A choice as the `model` command's args: `thinking` rides along
 /// exactly when the choice names a level.
-pub(crate) fn command_args(choice: &Choice) -> Value {
-    match &choice.level {
-        Some(level) => json!({"model": choice.reference, "thinking": level}),
-        None => json!({"model": choice.reference}),
+pub(crate) fn command_args(choice: &Choice) -> ModelArgs {
+    ModelArgs {
+        model: choice.reference.clone(),
+        thinking: choice.level.clone(),
     }
 }
 

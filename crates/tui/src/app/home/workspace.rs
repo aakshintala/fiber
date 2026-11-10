@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
-use super::super::{App, Effect, Waiting, mint};
+use super::super::{App, Effect, Waiting};
 use super::typed::{Resolved, Typed};
 use super::{Home, typed};
 use crate::home::PickerScreen;
@@ -349,7 +349,7 @@ impl App {
             .due(|dir| out.iter().any(|asked| asked == dir))
             .into_iter()
             .map(|dir| {
-                let id = mint();
+                let id = support::mint("c_");
                 outbox.wait(&id, Waiting::Directories(dir.clone()));
                 directories_line(&id, &dir)
             })

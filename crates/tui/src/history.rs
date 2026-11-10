@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use super::commands::{Completions, Rows};
 use super::overlay::Overlay;
-use super::{App, Effect, mint};
+use super::{App, Effect};
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
 
@@ -229,7 +229,7 @@ impl History {
         if !up || self.ended || !more {
             return None;
         }
-        let id = mint();
+        let id = support::mint("c_");
         let mut args = json!({ "project": project });
         if let (Some(before), Some(object)) = (self.before, args.as_object_mut()) {
             object.insert("before".to_owned(), json!(before));

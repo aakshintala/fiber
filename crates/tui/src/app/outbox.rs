@@ -7,10 +7,10 @@
 //! with `App`, which owns the queue, the offer, the phase and the draft.
 
 use std::collections::HashMap;
-use std::hash::{BuildHasher, RandomState};
 
-use contract::SessionId;
-use serde_json::{Value, json};
+use contract::commands::{Command, CommandLine, HistoryArgs, SubscribeLevel};
+use contract::{CommandId, Seq, SessionId};
+use serde_json::Value;
 
 use crate::import_report::ImportSource;
 use crate::input::Draft;
@@ -83,7 +83,7 @@ pub(crate) enum Waiting {
     /// A home `subscribe` for a session's level.
     Subscribe {
         session: SessionId,
-        level: crate::home::Level,
+        level: SubscribeLevel,
     },
     /// A `close` with `now` stopping a live row.
     Stop,
@@ -361,26 +361,21 @@ impl Outbox {
     }
 }
 
-/// A new command id from random bytes, as `doors::mint` makes one: `c_`
-/// and 16 hex digits. `tui` keeps its own copy because it may not depend on
-/// `doors`. `RandomState` seeds its keys from the operating system's
-/// randomness.
-pub(crate) fn mint() -> String {
-    format!("c_{:016x}", RandomState::new().hash_one(()))
-}
-
-/// A command for a session: `session_id` beside `id`, `command` and `args`.
-pub(crate) fn session_command(
-    id: &str,
-    command: &str,
-    session: &SessionId,
-    args: Option<Value>,
-) -> Value {
-    let mut line = json!({"id": id, "command": command, "session_id": session.0});
-    if let (Some(args), Some(object)) = (args, line.as_object_mut()) {
-        object.insert("args".to_owned(), args);
+/// A command line for a session: `command` serialized as a
+/// [`CommandLine`] with `session_id` beside `id`, `command` and `args`,
+/// written as one JSON object line (`docs/invocation.md`, "The command
+/// line"). Key order is not a wire rule: the hub and the readers parse by
+/// key. The fallback never fires for typed structs.
+pub(crate) fn session_line(id: &CommandId, session: &SessionId, command: Command) -> String {
+    let mut line = serde_json::to_value(CommandLine {
+        id: id.clone(),
+        command,
+    })
+    .unwrap_or(Value::Null);
+    if let Some(object) = line.as_object_mut() {
+        object.insert("session_id".to_owned(), Value::String(session.0.clone()));
     }
-    line
+    line.to_string()
 }
 
 /// The `history` args for `segment`'s window, read under the serving
@@ -390,20 +385,14 @@ pub(crate) fn session_command(
 pub(crate) fn history_args(
     own: &SessionId,
     segment: &SessionId,
-    from: Option<u64>,
-    to: Option<u64>,
-) -> Value {
-    let mut args = serde_json::Map::new();
-    if segment != own {
-        args.insert("session_id".to_owned(), Value::String(segment.0.clone()));
+    from: Option<Seq>,
+    to: Option<Seq>,
+) -> HistoryArgs {
+    HistoryArgs {
+        session_id: (segment != own).then(|| segment.clone()),
+        from_seq: from,
+        to_seq: to,
     }
-    if let Some(from) = from {
-        args.insert("from_seq".to_owned(), Value::Number(from.into()));
-    }
-    if let Some(to) = to {
-        args.insert("to_seq".to_owned(), Value::Number(to.into()));
-    }
-    Value::Object(args)
 }
 
 #[cfg(test)]
