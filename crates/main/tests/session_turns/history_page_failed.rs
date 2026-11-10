@@ -489,8 +489,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // The open fetches the whole log tip-to-root and the fake hub
     // signals after writing the last window's answer, so the scroll
     // below starts only once the open holds every line: one receive
-    // through the held deadline (docs/testing.md, "Waits and
-    // timeouts").
+    // through the held deadline (`docs/testing.md`, "Waits and timeouts").
     if setup.deadline.recv(&open_done_rx).is_err() {
         panic!(
             "waited until the deadline for the open to fetch the whole log: hub saw {:?}",

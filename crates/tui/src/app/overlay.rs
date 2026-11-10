@@ -3,9 +3,9 @@
 //! the pass folds into, swapped in at its end (`docs/tui.md`, "History
 //! and paging").
 
+use contract::commands::HistoryArgs;
 use contract::events::EventKind;
 use contract::{Envelope, Seq, SessionId};
-use serde_json::{Value, json};
 
 use super::{App, history_args};
 use crate::window::Pages;
@@ -217,14 +217,18 @@ impl Tail {
     /// first held line, or the parent the held run continues from when
     /// it reached its segment's first line. Past the seam every window
     /// names its segment: the held run spans the crossing.
-    pub(super) fn next_args(&self) -> Value {
+    pub(super) fn next_args(&self) -> HistoryArgs {
         match self.lines.first().and_then(|line| line.seq) {
             Some(first) => {
                 // The tip stays on the attached segment: the walk only
                 // ever prepends the named parent, so the newest line's
                 // session is the serving one.
                 let Some(newest) = self.lines.last() else {
-                    return json!({});
+                    return HistoryArgs {
+                        session_id: None,
+                        from_seq: None,
+                        to_seq: None,
+                    };
                 };
                 if first == Seq(0)
                     && let Some(forked) = self.forked_from().filter(|_| !self.crossed)
@@ -233,20 +237,28 @@ impl Tail {
                         &newest.session_id,
                         &forked.session_id,
                         None,
-                        Some(forked.seq.0),
+                        Some(forked.seq),
                     );
                 }
                 let Some(oldest) = self.lines.first() else {
-                    return json!({});
+                    return HistoryArgs {
+                        session_id: None,
+                        from_seq: None,
+                        to_seq: None,
+                    };
                 };
                 history_args(
                     &newest.session_id,
                     &oldest.session_id,
                     None,
-                    Some(first.0.saturating_sub(1)),
+                    Some(contract::Seq(first.0.saturating_sub(1))),
                 )
             }
-            None => json!({}),
+            None => HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: None,
+            },
         }
     }
 

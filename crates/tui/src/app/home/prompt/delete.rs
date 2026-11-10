@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 mod settlement;
-use super::super::super::{App, Effect, Phase, Waiting, mint};
+use super::super::super::{App, Effect, Phase, Waiting};
 use super::super::{refusal, refusal_code};
 use super::Prompt;
 use crate::home::title;
@@ -102,7 +102,7 @@ impl App {
             })
             .unwrap_or_else(|| session.0.clone());
         let home = &mut self.home;
-        let command = mint();
+        let command = support::mint("c_");
         let line = json!({
             "id": command,
             "command": "delete",

@@ -5,9 +5,10 @@
 use super::super::{App, Effect};
 use crate::OpenAt;
 use crate::app::testkit::{hello, home_with};
-use crate::home::{Level, Spot};
+use crate::home::Spot;
 use crate::link::Line;
 use contract::SessionId;
+use contract::commands::{HistoryArgs, SubscribeLevel};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -247,7 +248,7 @@ fn a_list_launch_with_no_rows_leaves_the_box_focused() {
 #[test]
 fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let mut app = home_at(OpenAt::List);
-    // `docs/invocation.md:1044` (the hub speaks first on each connection).
+    // `docs/invocation.md`, "What the hub speaks" (the hub speaks first on each connection).
     let lines = commands(app.on_line(hello()));
     let recent = lines
         .iter()
@@ -421,7 +422,11 @@ fn a_history_answer_after_the_last_draw_still_raises_full() {
     // The tail's window: the read is requested but unanswered.
     assert_eq!(
         app.tail_next(),
-        Some(json!({})),
+        Some(HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        }),
         "the first window reads the tail"
     );
     drawn(&mut app);
@@ -489,7 +494,7 @@ fn an_expected_full_open_puts_the_label_on_its_summary_subscribe() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(
         id("s_aaaaaaaaaaaaaaaa"),
-        Some(crate::home::Level::Full),
+        Some(contract::commands::SubscribeLevel::Full),
         Some("work".to_owned()),
         false,
     ));
@@ -517,9 +522,10 @@ fn a_row_open_and_a_reconnect_carry_no_label() {
     assert_eq!(subscribes.len(), 1);
     assert_eq!(subscribes[0]["args"], json!({"level": "summary"}));
     // An ordinary subscription carries none either.
-    let line: Value = serde_json::from_str(
-        &app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), crate::home::Level::Summary),
-    )
+    let line: Value = serde_json::from_str(&app.subscribe(
+        &id("s_aaaaaaaaaaaaaaaa"),
+        contract::commands::SubscribeLevel::Summary,
+    ))
     .unwrap();
     assert_eq!(line["args"], json!({"level": "summary"}));
 }
@@ -547,7 +553,7 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(
         id("s_aaaaaaaaaaaaaaaa"),
-        Some(crate::home::Level::Full),
+        Some(contract::commands::SubscribeLevel::Full),
         Some("work".to_owned()),
         false,
     ));
@@ -584,7 +590,7 @@ fn a_gated_non_notice_line_is_dropped_without_a_notice() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(
         id("s_aaaaaaaaaaaaaaaa"),
-        Some(crate::home::Level::Full),
+        Some(contract::commands::SubscribeLevel::Full),
         Some("work".to_owned()),
         false,
     ));
@@ -621,14 +627,18 @@ fn an_open_sends_summary_and_no_full() {
 #[test]
 fn an_open_with_summary_expected_sends_no_subscribe() {
     let mut app = home_at(OpenAt::Home);
-    let subscribe = app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), Level::Summary);
+    let subscribe = app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), SubscribeLevel::Summary);
     let subscribe: Value = serde_json::from_str(&subscribe).unwrap_or_else(|err| panic!("{err}"));
     let ack = subscribe["id"]
         .as_str()
         .unwrap_or_else(|| panic!("summary id"));
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
-    let lines =
-        commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None, false));
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some(SubscribeLevel::Summary),
+        None,
+        false,
+    ));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "commands");
     // The raise is due at once: the first frame releases it.
@@ -646,7 +656,7 @@ fn an_open_with_summary_expected_sends_no_subscribe() {
 /// ends with the link up and queues no lowering line.
 fn full_with_live_row(app: &mut App, session: &str) {
     app.on_line(status(session));
-    let subscribe: Value = serde_json::from_str(&app.subscribe(&id(session), Level::Full))
+    let subscribe: Value = serde_json::from_str(&app.subscribe(&id(session), SubscribeLevel::Full))
         .unwrap_or_else(|err| panic!("{err}"));
     let ack = subscribe["id"]
         .as_str()
@@ -919,13 +929,13 @@ fn an_open_waits_for_an_existing_summary_subscribe() {
     for accepted in [true, false] {
         let mut app = home_at(OpenAt::Home);
         let session = id("s_aaaaaaaaaaaaaaaa");
-        let subscribe = app.subscribe(&session, Level::Summary);
+        let subscribe = app.subscribe(&session, SubscribeLevel::Summary);
         let subscribe: Value =
             serde_json::from_str(&subscribe).unwrap_or_else(|err| panic!("{err}"));
         let ack = subscribe["id"]
             .as_str()
             .unwrap_or_else(|| panic!("summary id"));
-        let lines = app.open_session(session.clone(), Some(Level::Summary), None, false);
+        let lines = app.open_session(session.clone(), Some(SubscribeLevel::Summary), None, false);
         assert!(lines.is_empty(), "commands waits for acceptance: {lines:?}");
         assert!(app.take_raise().is_none());
         assert!(app.gated(&session));
@@ -952,7 +962,7 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(
         id("s_aaaaaaaaaaaaaaaa"),
-        Some(Level::Full),
+        Some(SubscribeLevel::Full),
         Some("work".to_owned()),
         false,
     ));
@@ -1074,8 +1084,12 @@ fn a_near_miss_io_failed_refusal_renders_verbatim() {
 #[test]
 fn an_openings_commands_answer_fills_the_slash_list_while_its_replay_is_gated() {
     let mut app = home_at(OpenAt::Home);
-    let lines =
-        commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Full), None, false));
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some(SubscribeLevel::Full),
+        None,
+        false,
+    ));
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
@@ -1112,7 +1126,7 @@ fn subscribes_register_a_tag_settled_by_their_answer() {
     use crate::app::Waiting;
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let line: Value = serde_json::from_str(&app.subscribe(&session, Level::Summary))
+    let line: Value = serde_json::from_str(&app.subscribe(&session, SubscribeLevel::Summary))
         .unwrap_or_else(|err| panic!("{err}"));
     let ack = line["id"]
         .as_str()
@@ -1121,7 +1135,7 @@ fn subscribes_register_a_tag_settled_by_their_answer() {
         app.outbox.waiting(ack),
         Some(Waiting::Subscribe {
             session: id("s_aaaaaaaaaaaaaaaa"),
-            level: Level::Summary,
+            level: SubscribeLevel::Summary,
         })
     );
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
@@ -1138,7 +1152,7 @@ fn a_refused_subscribe_settles_its_tag() {
         app.outbox.waiting(ack),
         Some(Waiting::Subscribe {
             session: id("s_aaaaaaaaaaaaaaaa"),
-            level: Level::Summary,
+            level: SubscribeLevel::Summary,
         })
     );
     app.on_line(refused(ack, "held by another process"));
@@ -1151,7 +1165,7 @@ fn a_subscribe_answer_for_another_session_changes_nothing_here() {
     use crate::app::Waiting;
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let line: Value = serde_json::from_str(&app.subscribe(&session, Level::Summary))
+    let line: Value = serde_json::from_str(&app.subscribe(&session, SubscribeLevel::Summary))
         .unwrap_or_else(|err| panic!("{err}"));
     let ack = line["id"]
         .as_str()
@@ -1164,7 +1178,7 @@ fn a_subscribe_answer_for_another_session_changes_nothing_here() {
         app.outbox.waiting(ack),
         Some(Waiting::Subscribe {
             session: id("s_aaaaaaaaaaaaaaaa"),
-            level: Level::Summary,
+            level: SubscribeLevel::Summary,
         })
     );
     assert_eq!(app.notice(), notice.as_deref());
@@ -1178,7 +1192,7 @@ fn a_second_subscribe_answer_changes_nothing() {
     use crate::app::Waiting;
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let line: Value = serde_json::from_str(&app.subscribe(&session, Level::Summary))
+    let line: Value = serde_json::from_str(&app.subscribe(&session, SubscribeLevel::Summary))
         .unwrap_or_else(|err| panic!("{err}"));
     let ack = line["id"]
         .as_str()
@@ -1187,7 +1201,7 @@ fn a_second_subscribe_answer_changes_nothing() {
         app.outbox.waiting(ack),
         Some(Waiting::Subscribe {
             session: id("s_aaaaaaaaaaaaaaaa"),
-            level: Level::Summary,
+            level: SubscribeLevel::Summary,
         })
     );
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
@@ -1198,7 +1212,7 @@ fn a_second_subscribe_answer_changes_nothing() {
 }
 
 /// Sends a subscribe for `session` at `level` and returns its id.
-fn subscribe_id(app: &mut App, session: &SessionId, level: Level) -> String {
+fn subscribe_id(app: &mut App, session: &SessionId, level: SubscribeLevel) -> String {
     let line: Value =
         serde_json::from_str(&app.subscribe(session, level)).unwrap_or_else(|err| panic!("{err}"));
     line["id"]
@@ -1218,14 +1232,17 @@ fn the_subscribe_tag_is_the_only_record() {
     let session = id("s_aaaaaaaaaaaaaaaa");
     assert_eq!(app.subscribed_level(&session), None);
     assert!(!app.subscribe_pending(&session));
-    let full = subscribe_id(&mut app, &session, Level::Full);
-    let summary = subscribe_id(&mut app, &session, Level::Summary);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
+    let summary = subscribe_id(&mut app, &session, SubscribeLevel::Summary);
     // The last subscribe sent is the level expected.
-    assert_eq!(app.subscribed_level(&session), Some(Level::Summary));
+    assert_eq!(
+        app.subscribed_level(&session),
+        Some(SubscribeLevel::Summary)
+    );
     // The Summary tag settles out of band: the Full ask is the last
     // one left, and a subscribe is still pending.
     app.outbox.settled(&summary);
-    assert_eq!(app.subscribed_level(&session), Some(Level::Full));
+    assert_eq!(app.subscribed_level(&session), Some(SubscribeLevel::Full));
     assert!(app.subscribe_pending(&session));
     app.outbox.settled(&full);
     assert!(!app.subscribe_pending(&session));
@@ -1236,18 +1253,24 @@ fn the_subscribe_tag_is_the_only_record() {
 fn an_accepted_level_outlives_its_tag_and_the_last_tag_wins_over_it() {
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let full = subscribe_id(&mut app, &session, Level::Full);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &full));
     assert!(holds_full(&app, &session));
-    assert_eq!(app.subscribed_level(&session), Some(Level::Full));
+    assert_eq!(app.subscribed_level(&session), Some(SubscribeLevel::Full));
     assert!(!app.subscribe_pending(&session));
-    let summary = subscribe_id(&mut app, &session, Level::Summary);
+    let summary = subscribe_id(&mut app, &session, SubscribeLevel::Summary);
     // The lowering is out: it is the level expected, though `full` is
     // still what the connection holds.
-    assert_eq!(app.subscribed_level(&session), Some(Level::Summary));
+    assert_eq!(
+        app.subscribed_level(&session),
+        Some(SubscribeLevel::Summary)
+    );
     assert!(holds_full(&app, &session));
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary));
-    assert_eq!(app.subscribed_level(&session), Some(Level::Summary));
+    assert_eq!(
+        app.subscribed_level(&session),
+        Some(SubscribeLevel::Summary)
+    );
     assert!(!holds_full(&app, &session));
 }
 
@@ -1255,10 +1278,10 @@ fn an_accepted_level_outlives_its_tag_and_the_last_tag_wins_over_it() {
 fn a_late_subscribe_answer_after_reset_matches_nothing() {
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let full = subscribe_id(&mut app, &session, Level::Full);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
     assert!(app.outbox.waiting(&full).is_some());
     assert!(app.subscribe_pending(&session));
-    assert_eq!(app.subscribed_level(&session), Some(Level::Full));
+    assert_eq!(app.subscribed_level(&session), Some(SubscribeLevel::Full));
     app.home_reset();
     assert_eq!(app.outbox.waiting(&full), None);
     assert!(!app.subscribe_pending(&session));
@@ -1271,13 +1294,16 @@ fn a_late_subscribe_answer_after_reset_matches_nothing() {
 fn a_reset_forgets_a_lowering_sent_just_before_it() {
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let full = subscribe_id(&mut app, &session, Level::Full);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &full));
-    let summary = subscribe_id(&mut app, &session, Level::Summary);
+    let summary = subscribe_id(&mut app, &session, SubscribeLevel::Summary);
     assert!(holds_full(&app, &session));
     assert!(app.outbox.waiting(&summary).is_some());
     assert!(app.subscribe_pending(&session));
-    assert_eq!(app.subscribed_level(&session), Some(Level::Summary));
+    assert_eq!(
+        app.subscribed_level(&session),
+        Some(SubscribeLevel::Summary)
+    );
     app.home_reset();
     assert_eq!(app.outbox.waiting(&summary), None);
     assert!(!app.subscribe_pending(&session));
@@ -1288,7 +1314,7 @@ fn a_reset_forgets_a_lowering_sent_just_before_it() {
 fn a_session_answer_from_another_session_leaves_the_tag() {
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let full = subscribe_id(&mut app, &session, Level::Full);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
     app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &full));
     assert!(app.subscribe_pending(&session));
     assert!(!holds_full(&app, &session));
@@ -1302,13 +1328,13 @@ fn a_session_answer_from_another_session_leaves_the_tag() {
 fn a_rejected_subscribe_keeps_the_accepted_level() {
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
-    let full = subscribe_id(&mut app, &session, Level::Full);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &full));
-    let summary = subscribe_id(&mut app, &session, Level::Summary);
+    let summary = subscribe_id(&mut app, &session, SubscribeLevel::Summary);
     app.on_line(refused(&summary, "held by another process"));
     assert!(holds_full(&app, &session));
     assert!(!app.subscribe_pending(&session));
-    assert_eq!(app.subscribed_level(&session), Some(Level::Full));
+    assert_eq!(app.subscribed_level(&session), Some(SubscribeLevel::Full));
 }
 
 #[test]
@@ -1321,14 +1347,14 @@ fn pending_summary_ignores_a_full_ask() {
             .pending_summary(&app.outbox, &id("s_aaaaaaaaaaaaaaaa"))
     };
     assert_eq!(pending(&app), None);
-    let summary = subscribe_id(&mut app, &session, Level::Summary);
+    let summary = subscribe_id(&mut app, &session, SubscribeLevel::Summary);
     assert_eq!(pending(&app), Some(summary.clone()));
     // A `full` ask after it is the last one out: no summary is pending.
-    let full = subscribe_id(&mut app, &session, Level::Full);
+    let full = subscribe_id(&mut app, &session, SubscribeLevel::Full);
     assert_eq!(pending(&app), None);
     // Another session's summary is not this session's.
     let other = id("s_bbbbbbbbbbbbbbbb");
-    subscribe_id(&mut app, &other, Level::Summary);
+    subscribe_id(&mut app, &other, SubscribeLevel::Summary);
     assert_eq!(pending(&app), None);
     app.outbox.settled(&full);
     assert_eq!(pending(&app), Some(summary));

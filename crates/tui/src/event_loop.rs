@@ -413,7 +413,7 @@ pub(crate) fn run_with(
 
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
 /// in the iterator's order, as the session's signal handling takes it
-/// (`docs/invocation.md`, "Three signals, one path"): co-pending
+/// (`docs/invocation.md`, "Shutdown"): co-pending
 /// signals have no bound order, and no test pins one. Left blocked on
 /// quit; it ends with the process.
 fn spawn_signal(mut signals: Signals, tx: Sender<Input>) {

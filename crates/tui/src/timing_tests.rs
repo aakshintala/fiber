@@ -1,4 +1,4 @@
-//! The terminal's timing scopes (`docs/state.md`, "Diagnostic logs"): the
+//! The terminal's timing scopes (`docs/state.md`, "What each part holds"): the
 //! attach latches and the first-render, attach and frame scopes.
 
 use std::io::{BufRead, BufReader, Write};
@@ -169,7 +169,7 @@ fn first_render_writes_one_line_in_the_wire_shape() {
     let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.first_render());
     let lines = op_lines(home.path());
-    // docs/state.md:430-432 promises the entry-to-first-draw operation.
+    // `docs/state.md`, "What each part holds" promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
     assert_eq!(lines[0]["data"]["ms"], 0, "the frozen clock reads zero");
 }
@@ -183,7 +183,7 @@ fn discarded_first_render_writes_nothing() {
     let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     crate::timing::discard(timing.first_render());
     crate::timing::discard(None);
-    // docs/state.md:430-432 says setup before the first draw writes none.
+    // `docs/state.md`, "What each part holds" says setup before the first draw writes none.
     assert!(
         !log_file(home.path()).exists(),
         "a discarded guard writes no line"
@@ -201,14 +201,14 @@ fn attached_frame_nests_beyond_first_render() {
     let attached_frame = timing.attached_frame();
     drop(first_render);
     let lines = op_lines(home.path());
-    // docs/state.md:431-435: first-render and attached-frame share entry; attached-frame ends later.
+    // `docs/state.md`, "What each part holds": first-render and attached-frame share entry; attached-frame ends later.
     assert_terminal_wire(&lines, "tui.first_render");
     drop(attached_frame);
     let attached: Vec<Value> = op_lines(home.path())
         .into_iter()
         .filter(|line| line["data"]["op"] == "tui.attached_frame")
         .collect();
-    // docs/state.md:432-435 promises one attached-frame line per process.
+    // `docs/state.md`, "What each part holds" promises one attached-frame line per process.
     assert_terminal_wire(&attached, "tui.attached_frame");
 }
 
@@ -220,7 +220,7 @@ fn discarded_attached_frame_writes_nothing() {
     let clock = FakeClock::new();
     let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     crate::timing::discard(timing.attached_frame());
-    // docs/state.md:432-435 says an attach that ends before the draw writes none.
+    // `docs/state.md`, "What each part holds" says an attach that ends before the draw writes none.
     assert!(
         !log_file(home.path()).exists(),
         "a discarded attached-frame guard writes no line"
@@ -237,7 +237,7 @@ fn log_read_writes_once_per_process() {
     drop(timing.log_read());
     drop(timing.log_read());
     let lines = op_lines(home.path());
-    // docs/state.md:435-440 promises one first-page read line per process.
+    // `docs/state.md`, "What each part holds" promises one first-page read line per process.
     assert_terminal_wire(&lines, "tui.log_read");
 }
 
@@ -251,7 +251,7 @@ fn transcript_writes_once_per_process() {
     drop(timing.transcript());
     drop(timing.transcript());
     let lines = op_lines(home.path());
-    // docs/state.md:438-440 promises one successful transcript-fold line per process.
+    // `docs/state.md`, "What each part holds" promises one successful transcript-fold line per process.
     assert_terminal_wire(&lines, "tui.transcript");
 }
 
@@ -263,7 +263,7 @@ fn extensions_writes_one_line_in_the_wire_shape() {
     let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.extensions());
     let lines = op_lines(home.path());
-    // docs/state.md:428-429 promises one line when the loader exists.
+    // `docs/state.md`, "What each part holds" promises one line when the loader exists.
     assert_terminal_wire(&lines, "tui.extensions");
 }
 
@@ -275,13 +275,13 @@ fn attach_summary_writes_once_per_process() {
     let clock = FakeClock::new();
     let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.attach_summary());
-    // docs/state.md:444-446,453 promises at most one summary line per process.
+    // `docs/state.md`, "What each part holds" promises at most one summary line per process.
     assert!(
         timing.attach_summary().is_none(),
         "a second attach takes no summary guard"
     );
     let lines = op_lines(home.path());
-    // docs/state.md:444-446,453 promises the scope and once-per-process count.
+    // `docs/state.md`, "What each part holds" promises the scope and once-per-process count.
     assert_terminal_wire(&lines, "tui.attach_summary");
 }
 
@@ -293,13 +293,13 @@ fn tail_wait_writes_once_per_process() {
     let clock = FakeClock::new();
     let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.tail_wait());
-    // docs/state.md:446-448,453 promises at most one tail-wait line per process.
+    // `docs/state.md`, "What each part holds" promises at most one tail-wait line per process.
     assert!(
         timing.tail_wait().is_none(),
         "a second tail phase takes no guard"
     );
     let lines = op_lines(home.path());
-    // docs/state.md:446-448,453 promises the scope and once-per-process count.
+    // `docs/state.md`, "What each part holds" promises the scope and once-per-process count.
     assert_terminal_wire(&lines, "tui.tail_wait");
 }
 
@@ -311,13 +311,13 @@ fn preview_fold_writes_once_per_process() {
     let clock = FakeClock::new();
     let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.preview_fold());
-    // docs/state.md:448-450,453 promises at most one answer-fold line per process.
+    // `docs/state.md`, "What each part holds" promises at most one answer-fold line per process.
     assert!(
         timing.preview_fold().is_none(),
         "a later answer fold takes no guard"
     );
     let lines = op_lines(home.path());
-    // docs/state.md:448-450,453 promises the scope and once-per-process count.
+    // `docs/state.md`, "What each part holds" promises the scope and once-per-process count.
     assert_terminal_wire(&lines, "tui.preview_fold");
 }
 
@@ -329,13 +329,13 @@ fn tail_install_writes_once_per_process() {
     let clock = FakeClock::new();
     let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.tail_install());
-    // docs/state.md:450-454 promises at most one install line per process.
+    // `docs/state.md`, "What each part holds" promises at most one install line per process.
     assert!(
         timing.tail_install().is_none(),
         "a second install takes no guard"
     );
     let lines = op_lines(home.path());
-    // docs/state.md:450-454 promises the scope and once-per-process count.
+    // `docs/state.md`, "What each part holds" promises the scope and once-per-process count.
     assert_terminal_wire(&lines, "tui.tail_install");
 }
 
@@ -368,7 +368,7 @@ fn frame_over_budget_writes_through_the_loop() {
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame(&rx), None);
     let lines = op_lines(home.path());
-    // docs/state.md:441-443 promises an over-budget frame line.
+    // `docs/state.md`, "What each part holds" promises an over-budget frame line.
     assert_terminal_wire(&lines, "tui.frame");
     assert!(
         lines[0]["data"]["ms"].as_u64().is_some_and(|ms| ms >= 20),
@@ -388,7 +388,7 @@ fn frame_within_budget_writes_nothing() {
     lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame(&rx), None);
-    // docs/state.md:441-443 says an in-budget frame writes none.
+    // `docs/state.md`, "What each part holds" says an in-budget frame writes none.
     assert!(
         !log_file(home.path()).exists(),
         "a frame within budget writes no line"
@@ -451,7 +451,7 @@ fn window(log: &[Value], from: u64, to: u64) -> Vec<Value> {
 
 /// The first fetched page times `tui.log_read` to completion, and its
 /// successful load times `tui.transcript`, each once per process
-/// (`docs/state.md`, "Diagnostic logs").
+/// (`docs/state.md`, "What each part holds").
 #[test]
 fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
     let home = fakes::TempDir::new("tui-timing-page-in");
@@ -560,14 +560,14 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
         .filter(|line| line["data"]["op"] == "tui.log_read")
         .cloned()
         .collect();
-    // docs/state.md:435-440 promises one first-page read line per process.
+    // `docs/state.md`, "What each part holds" promises one first-page read line per process.
     assert_terminal_wire(&log_read, "tui.log_read");
     let transcript: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.transcript")
         .cloned()
         .collect();
-    // docs/state.md:438-440 promises one successful transcript-fold line per process.
+    // `docs/state.md`, "What each part holds" promises one successful transcript-fold line per process.
     assert_terminal_wire(&transcript, "tui.transcript");
 }
 
@@ -576,7 +576,7 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
 /// asserts no transcript line after the failure, then a later successful
 /// `app.load` of the failed page writes exactly one. Flipping the
 /// success-only guard to take the latch on failure writes a transcript
-/// line before that load and fails (`docs/state.md`, "Diagnostic logs").
+/// line before that load and fails (`docs/state.md`, "What each part holds").
 #[test]
 fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
     let home = fakes::TempDir::new("tui-timing-page-in-failed");
@@ -673,14 +673,14 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         .filter(|line| line["data"]["op"] == "tui.log_read")
         .cloned()
         .collect();
-    // docs/state.md:435-440 promises one first-page read line per process.
+    // `docs/state.md`, "What each part holds" promises one first-page read line per process.
     assert_terminal_wire(&log_read, "tui.log_read");
     let transcript: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.transcript")
         .cloned()
         .collect();
-    // docs/state.md:438-440 says a failed fetch leaves the transcript latch unset.
+    // `docs/state.md`, "What each part holds" says a failed fetch leaves the transcript latch unset.
     assert!(
         transcript.is_empty(),
         "a failed fetch leaves tui.transcript unset: {transcript:?}"
@@ -719,14 +719,14 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         .filter(|line| line["data"]["op"] == "tui.log_read")
         .cloned()
         .collect();
-    // docs/state.md:435-440 promises one first-page read line per process.
+    // `docs/state.md`, "What each part holds" promises one first-page read line per process.
     assert_terminal_wire(&log_read, "tui.log_read");
     let transcript: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.transcript")
         .cloned()
         .collect();
-    // docs/state.md:438-440 promises one successful transcript-fold line per process.
+    // `docs/state.md`, "What each part holds" promises one successful transcript-fold line per process.
     assert_terminal_wire(&transcript, "tui.transcript");
 }
 
@@ -839,7 +839,7 @@ fn summary_span_covers_the_send_through_the_acceptance() {
         "the poll drops the guard after the acceptance"
     );
     let lines = op_lines(home.path());
-    // docs/state.md:444-446,453 promises the scope and once-per-process count.
+    // `docs/state.md`, "What each part holds" promises the scope and once-per-process count.
     assert_terminal_wire(&lines, "tui.attach_summary");
 }
 
@@ -858,7 +858,7 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
         lp.summary_span.is_none(),
         "a latched timer starts no guard for a second open"
     );
-    // docs/state.md:444-446,453 promises at most one summary line per process.
+    // `docs/state.md`, "What each part holds" promises at most one summary line per process.
     assert!(
         !log_file(home.path()).exists(),
         "a second open writes no second line"
@@ -873,7 +873,7 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
 /// one `tui.tail_install` line covers installation, which installs the
 /// newest candidate without another fold (`docs/tui.md`, "History and
 /// paging"). A `Phase::Count` read takes no attach guard, so swapping
-/// the arms leaves none here (`docs/state.md`, "Diagnostic logs").
+/// the arms leaves none here (`docs/state.md`, "What each part holds").
 #[test]
 fn attached_frame_waits_for_the_tail_install_and_draw() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
@@ -946,36 +946,36 @@ fn attached_frame_waits_for_the_tail_install_and_draw() {
         .filter(|line| line["data"]["op"] == "tui.attached_frame")
         .cloned()
         .collect();
-    // docs/state.md:432-435 promises one line at the first attached-history draw.
+    // `docs/state.md`, "What each part holds" promises one line at the first attached-history draw.
     assert_terminal_wire(&attached, "tui.attached_frame");
     let waits: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.tail_wait")
         .cloned()
         .collect();
-    // docs/state.md:446-448,453 promises one tail-wait line per process.
+    // `docs/state.md`, "What each part holds" promises one tail-wait line per process.
     assert_terminal_wire(&waits, "tui.tail_wait");
     let folds: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.preview_fold")
         .cloned()
         .collect();
-    // docs/state.md:448-450,453 promises one answer-fold line per process.
+    // `docs/state.md`, "What each part holds" promises one answer-fold line per process.
     assert_eq!(folds.len(), 1, "the answer fold only: {folds:?}");
-    // docs/state.md:448-450,453 promises one answer-fold line per process.
+    // `docs/state.md`, "What each part holds" promises one answer-fold line per process.
     assert_terminal_wires(&folds, "tui.preview_fold");
     let installs: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.tail_install")
         .cloned()
         .collect();
-    // docs/state.md:450-454 promises one install line per process.
+    // `docs/state.md`, "What each part holds" promises one install line per process.
     assert_eq!(
         installs.len(),
         1,
         "the install without another fold: {installs:?}"
     );
-    // docs/state.md:450-454 promises one install line per process.
+    // `docs/state.md`, "What each part holds" promises one install line per process.
     assert_terminal_wires(&installs, "tui.tail_install");
 }
 
@@ -993,7 +993,7 @@ fn attached_frame_stays_open_when_tail_is_due_without_a_stream() {
         "a due open without a stream does not end the guard"
     );
     crate::timing::discard(lp.attached_frame.take());
-    // docs/state.md:432-435 promises no line when an attach has no stream.
+    // `docs/state.md`, "What each part holds" promises no line when an attach has no stream.
     assert!(
         !log_file(home.path()).exists(),
         "no stream means no attached-frame line"
@@ -1032,7 +1032,7 @@ fn attached_frame_stays_open_when_tail_fetch_is_lost() {
         "a lost tail read does not end the guard"
     );
     crate::timing::discard(lp.attached_frame);
-    // docs/state.md:432-435 promises no attached-frame line when no history draw occurs.
+    // `docs/state.md`, "What each part holds" promises no attached-frame line when no history draw occurs.
     assert!(
         op_lines(home.path())
             .iter()
@@ -1050,7 +1050,7 @@ fn refused_connect_writes_only_first_render() {
         clock
     });
     let lines = refused_run_with_startup(home.path(), diag, None);
-    // docs/state.md:430-432 promises the entry-to-first-draw operation.
+    // `docs/state.md`, "What each part holds" promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
     // The `None` guard this run passes writes no startup line: the only
     // line is the first render's.

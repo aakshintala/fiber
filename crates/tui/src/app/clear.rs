@@ -4,9 +4,9 @@ use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::json;
 
-use super::{App, Effect, Kind, mint, session_command};
-use crate::home::Level;
+use super::{App, Effect, Kind, session_line};
 use crate::input::Draft;
+use contract::commands::{CloseArgs, Command, SubscribeLevel};
 
 /// A `/clear` start waiting for its answer: the cleared session, the
 /// credential its args named, and whether its close goes with `now`.
@@ -107,7 +107,7 @@ impl App {
                 object.insert("continues".to_owned(), json!(old.0.clone()));
             }
         }
-        let id = mint();
+        let id = support::mint("c_");
         self.panel_state.note_start(&args);
         let line = json!({"id": id, "command": "start", "args": args}).to_string();
         self.draft.clear();
@@ -157,19 +157,17 @@ impl App {
         self.panel_state.carry_clear_credential(pending.credential);
         self.attached_screen_mut().clear();
         self.attach(session.clone());
-        let id = mint();
-        let close = session_command(
-            &id,
-            "close",
+        let id = support::mint("c_");
+        let close = session_line(
+            &contract::CommandId(id.clone()),
             &pending.old,
-            Some(json!({"now": pending.now})),
-        )
-        .to_string();
+            Command::Close(CloseArgs { now: pending.now }),
+        );
         self.outbox
             .insert(id.clone(), Kind::Command, Draft::default());
         self.outbox.wait(&id, super::outbox::Waiting::ClearClose);
         vec![
-            self.subscribe(&session, Level::Full),
+            self.subscribe(&session, SubscribeLevel::Full),
             self.ask_commands(&session),
             close,
         ]

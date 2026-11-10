@@ -1,6 +1,5 @@
 //! `fiber session --continues <old>`: starts the session where the named
-//! session's recorded worktree is (`docs/invocation.md`, "`start`
-//! `continues`"). The old log's first line must be `session_started`
+//! session's recorded worktree is (`docs/invocation.md`, "What the hub speaks"). The old log's first line must be `session_started`
 //! recording a worktree that identifies `workspace`, the original
 //! `args.workspace` spelling the dispatch passes; the new session runs
 //! through `run_new` with that worktree, the `per_run` layer the

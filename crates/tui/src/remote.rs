@@ -966,7 +966,7 @@ impl RemoteCopy {
         version: String,
     ) -> std::io::Result<Self> {
         use std::os::unix::fs::DirBuilderExt;
-        let dir = dir_parent.join(format!("fiber-{}", crate::app::mint()));
+        let dir = dir_parent.join(format!("fiber-{}", support::mint("c_")));
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let temp = dir.join(
             hub.file_name()

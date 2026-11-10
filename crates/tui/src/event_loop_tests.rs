@@ -2259,9 +2259,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             break line;
         }
     };
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -2361,9 +2361,9 @@ fn an_exit_sends_its_lines_then_quits() {
             break line;
         }
     };
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
@@ -3455,8 +3455,7 @@ fn with_a_model_home_opens_as_before() {
 }
 
 /// A signal quits the loop with 128 plus its number, closing nothing
-/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`,
-/// "Exit codes").
+/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`, "Lifecycle").
 #[test]
 fn a_signal_quits_with_128_plus_its_number() {
     use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -3593,7 +3592,7 @@ fn attached_frame_waits_for_a_completed_tail_read() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435 ends the scope only at the installed-history draw.
+    // `docs/state.md`, "What each part holds" ends the scope only at the installed-history draw.
     assert!(!path.exists(), "no completed tail read means no line");
 }
 
@@ -3625,7 +3624,7 @@ fn attached_frame_waits_for_an_attached_session() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435 ends the scope at a draw holding attached-session history.
+    // `docs/state.md`, "What each part holds" ends the scope at a draw holding attached-session history.
     assert!(!path.exists(), "a home frame writes no attached-frame line");
 }
 
@@ -3658,7 +3657,7 @@ fn attached_frame_is_discarded_without_a_stream() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435: an attach with no stream writes no line.
+    // `docs/state.md`, "What each part holds": an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
 }
 

@@ -2219,6 +2219,7 @@ fn reopened_history(older_ending: bool) {
     let (hand_tx, hand_rx) = mpsc::channel();
     let link = WireLink::new(Arc::clone(&wire), hand_tx);
     let count = Arc::clone(&link.count);
+    let count_for_taken = Arc::clone(&link.count);
     let (mut lp, theirs, tx, rx) = opened();
     let session_id = lp.app.session().unwrap().clone();
     let feed = Feed::new(tx.clone(), lp.hub.credits());
@@ -2381,6 +2382,17 @@ fn reopened_history(older_ending: bool) {
         wait.recv_or_fail(&histories, "the initial history request"),
         0
     );
+    // Its own bound, made when this wait starts: the replay drain is a slow
+    // step of its own, and must not use up the late-answer wait's time
+    // (`docs/testing.md`, "Waits and timeouts"). The count is the existing
+    // hand-out signal the server's late-answer wait reads.
+    let drained = Deadline::after(DEADLINE);
+    while count_for_taken.load(Ordering::SeqCst) < prefix + script_len {
+        if drained.left().is_zero() {
+            panic!("waited {DEADLINE:?} for the replay to drain");
+        }
+        std::thread::yield_now();
+    }
     Deadline::after(DEADLINE).recv_or_fail(&taken, "the reader to take the late answer");
     // The fold held page zero, so the top owes nothing: a few pages down
     // reach the page after it, which the landing dropped.
@@ -2400,10 +2412,15 @@ fn reopened_history(older_ending: bool) {
         held_zero.iter().any(|row| row.contains("read")),
         "page zero keeps the first turn's tool steps: {held_zero:?}"
     );
-    let second = wait.recv_or_fail(&histories, "history after the reopened fold");
+    // Its own bound, made when this wait starts: the replay drain above
+    // is a slow step of its own, and must not use up this step's time.
+    let second =
+        Deadline::after(DEADLINE).recv_or_fail(&histories, "history after the reopened fold");
     tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
+    // (`docs/tui.md`, "History and paging": a pass blocks `history`, so the
+    // reopened fold's history waits until the pass ends; scrolling waits too).
     assert!(
         second >= prefix + script_len,
         "history before the last fold line: {second}, prefix {prefix}, replay {script_len}"
@@ -2417,6 +2434,8 @@ fn reopened_history(older_ending: bool) {
     let seen = Deadline::after(DEADLINE).recv_or_fail(&server_done, "the command server to end");
     server.join().unwrap();
     command_reader.join().unwrap();
+    // (`docs/tui.md`, "History and paging": the late answer is discarded by
+    // its id, and the page loads in a frame after the pass ends).
     assert!(seen > 1, "pages load after the pass ends");
 }
 
@@ -3972,7 +3991,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         .iter()
         .filter(|command| command["command"] == "commands")
         .collect();
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
@@ -4091,9 +4110,8 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
         taken.push(count);
         count
     };
-    // docs/tui.md, "History and paging": queued hub lines share one frame
-    // in arrival order, up to 4,096 inputs (docs/testing.md, "Event
-    // streams"). Each count below derives from what the test queued under
+    // `docs/tui.md`, "History and paging": queued hub lines share one frame
+    // in arrival order, up to 4,096 inputs (`docs/testing.md`, "Event streams"). Each count below derives from what the test queued under
     // that cap: the ack plus `head` lines fill the first batch, exactly
     // `SHORT` lines sit behind the emptied channel, and the rest plus the
     // live lines land last.
@@ -4152,7 +4170,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
         .iter()
         .filter(|command| command["command"] == "commands")
         .collect();
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
@@ -4190,7 +4208,7 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
         .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
         .expect("the full subscribe");
     let replayed = &seen_commands[full_at + 1..];
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
     assert!(
         replayed
@@ -5642,7 +5660,7 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
     // the wait on the tick, or after, ending it on the key with the tick
     // still queued: either way the stash and the loss match, so drain to
     // the disconnect, acking a stray tick. One deadline for the whole
-    // drain (docs/testing.md, "Waits and timeouts"): a fresh deadline
+    // drain (`docs/testing.md`, "Waits and timeouts"): a fresh deadline
     // per receive would keep resetting the wait.
     let drain = Deadline::after(DEADLINE);
     loop {
@@ -5656,15 +5674,13 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
             Err(error) => panic!("waited {DEADLINE:?} for the disconnect: {error}"),
         }
     }
-    // The loss reconnects as after a disconnect (docs/tui.md, "History
-    // and paging", and "A dropped connection" for the banner and the
+    // The loss reconnects as after a disconnect (`docs/tui.md`, "History and paging", and "A dropped connection" for the banner and the
     // draft staying).
     assert_eq!(
         lp.app.banner().as_deref(),
         Some("Connection lost · reconnecting (attempt 1)…")
     );
-    // The key pressed during the wait waits stashed (docs/tui.md,
-    // "History and paging": stashed lines fold in order): every stashed
+    // The key pressed during the wait waits stashed (`docs/tui.md`, "History and paging": stashed lines fold in order): every stashed
     // line is that key, however many the wait held — no count, just
     // what the wait held.
     assert!(
@@ -5800,8 +5816,7 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
     assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
     assert!(!lp.hub.has_stream(), "the expired wait hangs up");
-    // The input at the deadline waits for after the loss (docs/tui.md,
-    // "History and paging": stashed lines fold in order): the matching
+    // The input at the deadline waits for after the loss (`docs/tui.md`, "History and paging": stashed lines fold in order): the matching
     // answer is among what the wait held, however many lines that is.
     assert!(
         lp.hub
@@ -6256,8 +6271,7 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
     }
 }
 
-/// The attach spans' boundary and state-machine cases (`docs/state.md`,
-/// "Diagnostic logs"), moved out of the production sources
+/// The attach spans' boundary and state-machine cases (`docs/state.md`, "What each part holds"), moved out of the production sources
 /// (`docs/code-quality.md`, "Size"): the event-loop wiring from
 /// `event_loop.rs` and the `Timing` state machine from `timing.rs`,
 /// landed here as one set of cases. The two inline modules shared most

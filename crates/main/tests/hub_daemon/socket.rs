@@ -895,7 +895,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     // commands"); `usage_recorded`, one per model call with no promised
     // position (`docs/events.md`, "`usage_recorded`"); and
     // `steering_queue`, written whenever the queue changes
-    // (`docs/events.md`, "`steering_queue"`). The `c_msg` take's own pair
+    // (`docs/events.md`, "`steering_queue`"). The `c_msg` take's own pair
     // is pinned on its own below instead of placed in the order.
     let settled: Vec<&Value> = lines
         .iter()
@@ -954,7 +954,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     // `opening_message` arrive as a set: each is written at process or
     // session start before the first model request, with no promised
     // relative order (`docs/events.md`, "`extensions_loaded`",
-    // "`preamble_built`", "`opening_message`"; `docs/testing.md`,
+    // "`preamble_built`", "opening_message`"; `docs/testing.md`,
     // "Event streams"); `turn_started`, since
     // `prompt` starts a turn (`docs/invocation.md`, "Driver commands");
     // `step_started`, then the reply's items in the order the model
@@ -1018,7 +1018,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     accepted.sort_unstable();
     assert_eq!(accepted, ["c_msg", "c_prompt", "c_reply"], "{lines:?}");
     // One `usage_recorded` per model call (`docs/events.md`,
-    // "`usage_recorded`): the turn makes two model calls, the held call's
+    // "`usage_recorded`"): the turn makes two model calls, the held call's
     // reply and the closing text reply, as the two requests asserted below
     // against the provider server show.
     assert_eq!(
@@ -1030,7 +1030,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         "{lines:?}"
     );
     // `steering_queue` is written whenever the queue changes
-    // (`docs/events.md`, "`steering_queue"`): the take adds `c_msg` and
+    // (`docs/events.md`, "`steering_queue`"): the take adds `c_msg` and
     // the step boundary drains it, so exactly two.
     assert_eq!(
         lines
@@ -1186,7 +1186,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     // commands"); `usage_recorded`, one per model call with no promised
     // position (`docs/events.md`, "`usage_recorded`"); and
     // `steering_queue`, written whenever the queue changes
-    // (`docs/events.md`, "`steering_queue"`). The `c_msg` take's own pair
+    // (`docs/events.md`, "`steering_queue`"). The `c_msg` take's own pair
     // is pinned on its own below instead of placed in the order.
     let settled: Vec<&Value> = lines
         .iter()
@@ -1318,7 +1318,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         ],
         &["clients"],
         None,
-        "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails; docs/testing.md:109-111: Where its count is fixed, such as one `clients` line per attach, the test asserts the count, so a duplicate or a missing line still fails",
+        r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails; `docs/testing.md`, "Event streams": Where its count is fixed, such as one `clients` line per attach, the test asserts the count, so a duplicate or a missing line still fails"#,
     );
     // Every driver command is answered with exactly one `command_accepted`
     // or `command_rejected` (`docs/invocation.md`, "Driver commands"), so
@@ -1349,7 +1349,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     assert_session_order(
         startup,
         &["session_started", "fiber_started"],
-        "docs/events.md:285-286: in a new session it follows `session_started`, which is always the log's first line",
+        r#"`docs/events.md`, "`fiber_started`": in a new session it follows `session_started`, which is always the log's first line"#,
     );
     // `preamble_built` follows `fiber_started` and comes before the next
     // model request, which opens with `assistant_message_started`
@@ -1362,21 +1362,21 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
             "preamble_built",
             "assistant_message_started",
         ],
-        "docs/events.md:984-985: `preamble_built` follows `session_started` or `fiber_started`, `reloaded`, or `model_changed`, before the next model request; docs/events.md:549-551: Every model call the loop makes for the conversation opens with one, the note request included, written before the request is sent",
+        r#"`docs/events.md`, "`preamble_built`": `preamble_built` follows `session_started` or `fiber_started`, `reloaded`, or `model_changed`, before the next model request; `docs/events.md`, "`assistant_message_started`": Every model call the loop makes for the conversation opens with one, the note request included, written before the request is sent"#,
     );
     // `extensions_loaded` is written at each process start before the first
     // model request (`docs/events.md`, "`extensions_loaded`").
     assert_session_order(
         startup,
         &["extensions_loaded", "assistant_message_started"],
-        "docs/events.md:1174-1175: Written at each process start, a resume included, before the first model request",
+        r#"`docs/events.md`, "`extensions_loaded`": Written at each process start, a resume included, before the first model request"#,
     );
     // A process's first turn runs `session_start` hooks after the opening
     // message and before `turn_started` (`docs/loop.md`, "Starting a turn").
     assert_session_order(
         &kinds,
         &["opening_message", "turn_started"],
-        "docs/loop.md:24-26: A process's first turn first runs `session_start` hooks, after the opening message and before `turn_started`",
+        r#"`docs/loop.md`, "Starting a turn": A process's first turn first runs `session_start` hooks, after the opening message and before `turn_started`"#,
     );
     // `turn_started` is written before the first model request,
     // `step_started` opens the step before anything else in it, and the
@@ -1394,7 +1394,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
             "tool_call_requested",
             "assistant_message_completed",
         ],
-        "docs/loop.md:22-23: `turn_started` is written, and `turn_start` runs before the first model request; docs/loop.md:33: Write `step_started`; docs/events.md:534-535: `step_started` opens it, written before anything else in the step; docs/events.md:583-586: A reply's items are logged in the order the model produced them: its `text_completed`, `reasoning_completed` and `tool_call_requested` lines follow its `assistant_message_started` in that order, and its `assistant_message_completed` closes it",
+        r#"`docs/loop.md`, "Starting a turn": `turn_started` is written, and `turn_start` runs before the first model request; `docs/loop.md`, "One step": Write `step_started`; `docs/events.md`, "`step_started`": `step_started` opens it, written before anything else in the step; `docs/events.md`, "`text_completed`": A reply's items are logged in the order the model produced them: its `text_completed`, `reasoning_completed` and `tool_call_requested` lines follow its `assistant_message_started` in that order, and its `assistant_message_completed` closes it"#,
     );
     // The reply is streamed (step 4) before its calls are decided (step 5:
     // every call is decided before any runs), the `permission_resolved`
@@ -1417,14 +1417,14 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
             "text_completed",
             "assistant_message_completed",
         ],
-        "docs/loop.md:43-51: Send it and stream the reply, then for each tool call in the reply decide permission, and every call is decided before any runs; docs/permissions.md:638-640: The `permission_resolved` lines for one reply are written in request order, before any of that reply's `tool_call_started`; docs/loop.md:36-37: each steering message is logged as its own `steering_applied`; docs/events.md:583-586: A reply's items are logged in the order the model produced them, and its `assistant_message_completed` closes it",
+        r#"`docs/loop.md`, "One step": Send it and stream the reply, then for each tool call in the reply decide permission, and every call is decided before any runs; `docs/permissions.md`, "What the log records": The `permission_resolved` lines for one reply are written in request order, before any of that reply's `tool_call_started`; `docs/loop.md`, "One step": each steering message is logged as its own `steering_applied`; `docs/events.md`, "`text_completed`": A reply's items are logged in the order the model produced them, and its `assistant_message_completed` closes it"#,
     );
     // When `turn_end` returns nothing, `turn_completed` is written, closing
     // the turn (`docs/loop.md`, "Ending a turn").
     assert_session_order(
         &kinds,
         &["assistant_message_completed", "turn_completed"],
-        "docs/loop.md:136-137: When `turn_end` returns nothing, `turn_completed` is written",
+        r#"`docs/loop.md`, "Ending a turn": When `turn_end` returns nothing, `turn_completed` is written"#,
     );
     let resolved = lines
         .iter()

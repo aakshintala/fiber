@@ -212,8 +212,7 @@ fn links_and_the_image_line_take_the_link_look() {
 
     // Shift+Tab reaches the conversation, then down the drawn stops to
     // a link. The walk's length derives from the stop set the frame
-    // draws: every click target is a focus stop (docs/tui.md, "Moving
-    // through the conversation"), so step until the focused link's
+    // draws: every click target is a focus stop (`docs/tui.md`, "Moving through the conversation"), so step until the focused link's
     // hint shows, at most one Down per drawn row. A new segment adds
     // its own stop and the walk takes it without recounting. Every key
     // waits for the frame the previous key drew: the output offset is

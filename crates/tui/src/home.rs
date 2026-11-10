@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use contract::commands::SubscribeLevel;
 use contract::events::{SessionState, SessionStatus, WaitingKind};
 use contract::{Envelope, SessionId};
 use ratatui::text::Line;
@@ -219,7 +220,7 @@ pub struct Launch {
     pub model: Option<String>,
     /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run
     /// layer: each `start` carries them in `overrides`
-    /// (`docs/invocation.md`, "Sessions"). Empty in the jigs, which
+    /// (`docs/invocation.md`, "Commands and flags"). Empty in the jigs, which
     /// launch with no flags.
     pub overrides: Vec<String>,
     /// `thinking`: the chip's level, unset for the default.
@@ -416,38 +417,28 @@ pub(crate) struct TypedScreen {
     pub(crate) missing: bool,
 }
 
-/// A subscription level on this connection: `summary` carries only the
-/// latest `session_status`, `full` folds the whole stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Level {
-    /// Only the latest status.
-    Summary,
-    /// The whole stream.
-    Full,
-}
-
 /// The levels this connection holds per session. A subscribe waiting for
 /// its answer is only its outbox `Subscribe` tag: the accepted level
 /// changes when an acceptance is folded, and a rejection leaves it.
 #[derive(Default)]
 pub(crate) struct Subs {
-    accepted: HashMap<SessionId, Level>,
+    accepted: HashMap<SessionId, SubscribeLevel>,
 }
 
 impl Subs {
     /// Records `level` as the accepted one for `session`.
-    pub(crate) fn accept(&mut self, session: SessionId, level: Level) {
+    pub(crate) fn accept(&mut self, session: SessionId, level: SubscribeLevel) {
         self.accepted.insert(session, level);
     }
 
     /// The accepted level for `session`, if any.
-    pub(crate) fn accepted_level(&self, session: &SessionId) -> Option<Level> {
+    pub(crate) fn accepted_level(&self, session: &SessionId) -> Option<SubscribeLevel> {
         self.accepted.get(session).copied()
     }
 
     /// Whether the accepted level for `session` is `full`.
     pub(crate) fn full(&self, session: &SessionId) -> bool {
-        self.accepted.get(session) == Some(&Level::Full)
+        self.accepted.get(session) == Some(&SubscribeLevel::Full)
     }
 }
 
@@ -456,11 +447,11 @@ impl Subs {
 /// `summary`, when no subscribe goes out and the raise follows the
 /// first frame at once. The `full` raise follows the first frame in
 /// every case, sent by `take_raise` after `draw`.
-const SUMMARY_ONLY: [Level; 1] = [Level::Summary];
+const SUMMARY_ONLY: [SubscribeLevel; 1] = [SubscribeLevel::Summary];
 
-pub(crate) fn opening(expected: Option<Level>) -> &'static [Level] {
+pub(crate) fn opening(expected: Option<SubscribeLevel>) -> &'static [SubscribeLevel] {
     match expected {
-        Some(Level::Summary) => &[],
+        Some(SubscribeLevel::Summary) => &[],
         _ => &SUMMARY_ONLY,
     }
 }

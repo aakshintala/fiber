@@ -183,7 +183,7 @@ fn compact_sends_its_instructions() {
     let lines = sent(enter(&mut app, "/compact"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "compact");
-    assert_eq!(lines[0].get("args"), None);
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn import_sends_import_without_args_when_bare() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "import");
     assert_eq!(lines[0]["session_id"], SESSION);
-    assert_eq!(lines[0].get("args"), None);
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -799,7 +799,7 @@ fn report_keys_keep_the_held_conversation_position() {
     // The replayed start asks `commands` again; answering with no rows
     // leaves the held row to the anchor below.
     let asked = app.on_line(held);
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(asked.len(), 1);
     let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
     assert_eq!(asked["command"], "commands");
