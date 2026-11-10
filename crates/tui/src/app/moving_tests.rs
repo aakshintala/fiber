@@ -206,6 +206,7 @@ fn clicking_interrupt_sends_cancel() {
         Effect::None
         | Effect::Quit
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }

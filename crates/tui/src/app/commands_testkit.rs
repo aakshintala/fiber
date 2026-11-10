@@ -91,6 +91,10 @@ pub(crate) fn sent(effect: Effect) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -100,6 +104,7 @@ pub(crate) fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),

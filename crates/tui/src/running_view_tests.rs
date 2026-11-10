@@ -134,6 +134,7 @@ fn opened(app: &mut App) {
             | crate::app::Effect::Search { .. }
             | crate::app::Effect::Editor { .. }
             | crate::app::Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | crate::app::Effect::Copy(_)
             | crate::app::Effect::OpenLink(_)
             | crate::app::Effect::OpenFile(_)

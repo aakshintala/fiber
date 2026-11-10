@@ -359,6 +359,10 @@ fn an_amend_sends_the_drafts_images() {
     app.on_image(0, Ok("AAA".to_owned()));
     let lines: Vec<serde_json::Value> = match app.on_key(Key::Enter, now) {
         Effect::Send(lines) => lines
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .collect(),
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
@@ -371,6 +375,7 @@ fn an_amend_sends_the_drafts_images() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("Enter amends"),

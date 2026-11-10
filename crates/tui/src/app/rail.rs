@@ -6,11 +6,12 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use contract::ErrorCode;
+use contract::commands::hub::{Dismiss, HubCommand};
 use contract::events::SessionState;
-use contract::{Envelope, RequestId, SessionId};
-use serde_json::{Map, Value, json};
+use contract::{CommandId, Envelope, RequestId, SessionId};
+use serde_json::{Map, Value};
 
-use super::{App, Effect, Phase};
+use super::{App, Effect, Phase, Sent, hub_line};
 use crate::focus::Area;
 use crate::home::{Left, Row, State};
 use crate::keys::{Edit, Event, Key, default_event};
@@ -848,11 +849,14 @@ impl App {
             return Effect::None;
         }
         let session = row.id.clone();
-        let id = support::mint("c_");
-        let line = json!({"id": id, "command": "dismiss", "args": {"session": session.0}});
+        let id = CommandId(support::mint("c_"));
+        let sent = Sent {
+            line: hub_line(&id, HubCommand::Dismiss(Dismiss { session: session.clone() })),
+            id: id.clone(),
+        };
         self.outbox
-            .wait(&id, super::outbox::Waiting::Dismiss(session));
-        Effect::Send(vec![line.to_string()])
+            .wait(&id.0, super::outbox::Waiting::Dismiss(session));
+        Effect::SendTracked(vec![sent])
     }
 
     /// A project header's "+": home, with the workspace of the card with
@@ -944,12 +948,14 @@ fn spot_key(spot: Spot) -> u64 {
     }
 }
 
-/// The lines an effect sends; none for any other effect.
+/// The lines an effect sends; none for any other effect. Tracked
+/// lines unwrap to their lines: the callers pass session lines, which
+/// settle by parsing as before.
 fn sent(effect: Effect) -> Vec<String> {
-    if let Effect::Send(lines) = effect {
-        lines
-    } else {
-        Vec::new()
+    match effect {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        _ => Vec::new(),
     }
 }
 

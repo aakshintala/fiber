@@ -77,6 +77,7 @@ fn one_line(effect: Effect) -> String {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => {
@@ -241,6 +242,7 @@ fn esc_busy_sends_cancel() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => {
@@ -501,6 +503,7 @@ fn rejected_cancel_shows_nothing() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => {

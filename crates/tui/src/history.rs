@@ -12,11 +12,13 @@ use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::InputItem;
 use contract::shapes::{ContentPart, Origin};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::commands::{Completions, Rows};
 use super::overlay::Overlay;
-use super::{App, Effect};
+use super::{App, Effect, Sent, hub_line};
+use contract::commands::hub::{HubCommand, PromptHistory};
+use contract::CommandId;
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
 
@@ -222,20 +224,25 @@ impl History {
     /// said older lines remain. Returns the minted id with the line; the
     /// caller registers the outbox tag, which is the sole record of the
     /// waiting id and the one-out guard.
-    fn fetch(&mut self, up: bool) -> Option<(String, String)> {
+    fn fetch(&mut self, up: bool) -> Option<Sent> {
         let more = !self.started || self.before.is_some();
         let project = self.project.clone()?;
         if !up || self.ended || !more {
             return None;
         }
-        let id = support::mint("c_");
-        let mut args = json!({ "project": project });
-        if let (Some(before), Some(object)) = (self.before, args.as_object_mut()) {
-            object.insert("before".to_owned(), json!(before));
-        }
-        let line = json!({"id": id, "command": "prompt_history", "args": args}).to_string();
+        let id = CommandId(support::mint("c_"));
+        let sent = Sent {
+            line: hub_line(
+                &id,
+                HubCommand::PromptHistory(PromptHistory {
+                    project,
+                    before: self.before,
+                }),
+            ),
+            id: id.clone(),
+        };
         self.started = true;
-        Some((id, line))
+        Some(sent)
     }
 
     /// Whether the draft, as `text`, is still the entry recall put there.
@@ -462,26 +469,26 @@ impl App {
     /// Registers the history owner's id before its command leaves the
     /// app. The tag is the one-out guard: while one page waits, no second
     /// fetch goes out.
-    fn fetch_history(&mut self, up: bool) -> Option<String> {
+    fn fetch_history(&mut self, up: bool) -> Option<Sent> {
         if self.outbox.waiting_any(&crate::app::Waiting::History) {
             return None;
         }
-        let (id, line) = self.history.fetch(up)?;
-        self.outbox.wait(&id, crate::app::Waiting::History);
-        Some(line)
+        let sent = self.history.fetch(up)?;
+        self.outbox.wait(&sent.id.0, crate::app::Waiting::History);
+        Some(sent)
     }
 
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
         let up = self.outbox.is_up();
-        let line = self
+        let sent = self
             .history
             .search
             .is_some()
             .then(|| self.fetch_history(up))
             .flatten();
-        send(line.into_iter().collect())
+        send_tracked(sent.into_iter().collect())
     }
 
     /// The search panel for the overlay frame: its query line, then
@@ -527,20 +534,20 @@ impl App {
     /// changes.
     fn older(&mut self) -> Effect {
         let up = self.outbox.is_up();
-        let mut lines = Vec::new();
+        let mut sents = Vec::new();
         if !self.history.started {
-            lines.extend(self.fetch_history(up));
+            sents.extend(self.fetch_history(up));
         }
         let next = self.history.browse.as_ref().map_or(0, |(at, _)| at + 1);
         if let Some(entry) = self.history.entry(self.session(), next) {
             self.draft.set(&entry);
             self.history.browse = Some((next, entry));
         } else {
-            lines.extend(self.fetch_history(up));
+            sents.extend(self.fetch_history(up));
             self.history.waiting = self.outbox.waiting_any(&crate::app::Waiting::History);
             self.history.cover = None;
         }
-        send(lines)
+        send_tracked(sents)
     }
 
     /// Shows the next newer entry; past the newest, the empty draft.
@@ -579,12 +586,18 @@ impl App {
         let unchanged = self.history.cover.is_none_or(|cover| cover == self.cover());
         if std::mem::take(&mut self.history.waiting)
             && unchanged
-            && let Effect::Send(more) = self.older()
+            && let Effect::SendTracked(more) = self.older()
         {
-            lines.extend(more);
+            for sent in more {
+                self.outbox.note_hub_sent(&sent.id, &sent.line);
+                lines.push(sent.line);
+            }
         }
-        if let Effect::Send(more) = self.more() {
-            lines.extend(more);
+        if let Effect::SendTracked(more) = self.more() {
+            for sent in more {
+                self.outbox.note_hub_sent(&sent.id, &sent.line);
+                lines.push(sent.line);
+            }
         }
         Some(lines)
     }
@@ -683,12 +696,12 @@ impl App {
     }
 }
 
-/// An effect sending `lines`, or none when there are none.
-fn send(lines: Vec<String>) -> Effect {
+/// An effect sending tracked `lines`, or none when there are none.
+fn send_tracked(lines: Vec<Sent>) -> Effect {
     if lines.is_empty() {
         Effect::None
     } else {
-        Effect::Send(lines)
+        Effect::SendTracked(lines)
     }
 }
 

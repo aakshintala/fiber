@@ -293,8 +293,13 @@ pub(crate) fn sent(effect: Effect) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .collect(),
         Effect::None
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)

@@ -128,6 +128,7 @@ fn directories_of(effect: &Effect) -> Vec<(String, String)> {
         Effect::None
         | Effect::Quit
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -393,7 +394,10 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
             chips(&app).iter().any(|chip| chip.contains("worktree")),
             git
         );
-        assert_eq!(app.start_args()["workspace"], "/sentinel/launch-dir");
+        assert_eq!(
+            app.start_args().unwrap().workspace,
+            "/sentinel/launch-dir"
+        );
     }
 }
 
@@ -1256,18 +1260,13 @@ fn empty_values_carry_no_workspace() {
         App::new(Some(PathBuf::from("/w"))).workspace(),
         Some(PathBuf::from("/w"))
     );
-    // A default launch names an empty local directory: also none, with
-    // no workspace key in the start arguments.
+    // A default launch names an empty local directory: no start, so
+    // the hub is never asked to refuse a missing workspace.
     let mut app = App::new(None);
     app.set_home(Launch::default());
     assert_eq!(app.workspace(), None);
     assert_eq!(app.home_workspace(), None);
-    assert!(
-        !app.start_args()
-            .as_object()
-            .unwrap_or_else(|| panic!("start args are an object"))
-            .contains_key("workspace")
-    );
+    assert_eq!(app.start_args(), None);
     // An unreadable status row carries an empty workspace: it yields
     // none, so it never becomes a recent or the workspace in use.
     let mut app = remote();

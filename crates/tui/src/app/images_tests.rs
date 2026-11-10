@@ -213,9 +213,11 @@ fn image_id(app: &App, session: &str, path: &str) -> u32 {
 fn sent(effect: Effect) -> Vec<String> {
     match effect {
         Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }
@@ -372,6 +374,7 @@ fn enter_on_the_focused_image_opens_it() {
             Effect::None
             | Effect::Quit
             | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::ReadImage(_)
             | Effect::Feedback { .. }

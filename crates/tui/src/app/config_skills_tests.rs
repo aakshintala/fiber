@@ -81,6 +81,10 @@ fn slash_skills(app: &mut App) -> Effect {
 fn sent(effect: Effect) -> Vec<serde_json::Value> {
     match effect {
         Effect::Send(lines) => lines
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .collect(),
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
@@ -93,6 +97,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),

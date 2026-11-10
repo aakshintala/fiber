@@ -27,7 +27,7 @@ use ratatui::backend::Backend;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
 
-use crate::app::{App, Effect};
+use crate::app::{App, Effect, Sent};
 use crate::catalogue;
 use crate::graphics::logo;
 use crate::home::Launch;
@@ -665,6 +665,14 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Sends tracked lines during an input route, before that input's
+    /// settlement: a failure settles by each carried id.
+    fn send_tracked_inner(&mut self, lines: &[Sent]) {
+        if let Some(unsent) = self.hub.send_tracked(lines, &mut self.app) {
+            self.app.write_failed_tracked_inner(&unsent);
+        }
+    }
+
     /// Dispatches parsed events without settling; the input boundary owns the layout pass.
     fn handle_events_inner(&mut self, events: Vec<Event>) -> Option<i32> {
         self.app.set_now(
@@ -743,12 +751,20 @@ impl<B: Backend> Loop<B> {
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.send_inner(&lines),
+                Effect::SendTracked(lines) => self.send_tracked_inner(&lines),
                 Effect::Quit => return Some(0),
                 Effect::Exit(lines) => {
                     // The quit question's closes go out, then the
                     // terminal quits: a close never written keeps
                     // its resume line.
                     self.send_inner(&lines);
+                    return Some(0);
+                }
+                Effect::ExitTracked(lines) => {
+                    // The quit question's tracked closes go out, then
+                    // the terminal quits, failure or not: a close never
+                    // written keeps its resume line.
+                    self.send_tracked_inner(&lines);
                     return Some(0);
                 }
                 Effect::ListFiles => self.list_files(),

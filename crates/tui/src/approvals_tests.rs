@@ -1112,6 +1112,7 @@ mod through_the_app {
             | Effect::Search { .. }
             | Effect::Editor { .. }
             | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::Copy(_)
             | Effect::OpenLink(_)
             | Effect::OpenFile(_) => {

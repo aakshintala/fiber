@@ -130,12 +130,17 @@ fn open_inline(app: &mut App, id: usize) {
 fn sent(effect: Effect) -> Vec<Value> {
     match effect {
         Effect::Send(lines) => lines
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .collect(),
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
         Effect::None => Vec::new(),
         Effect::Quit
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -1000,8 +1005,10 @@ fn type_query(app: &mut App, query: &str) {
             } => generation = gen_no,
             Effect::None
             | Effect::Send(_)
+            | Effect::SendTracked(_)
             | Effect::Quit
             | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::Search { .. }
             | Effect::Editor { .. }

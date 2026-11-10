@@ -6,15 +6,15 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::ErrorCode;
-use contract::SessionId;
+use contract::commands::hub::HubCommand;
+use contract::{CommandId, SessionId};
 use contract::commands::{
     AddDirectoryArgs, ChangeWorkspaceArgs, CloseArgs, Command, Compact, ContentArgs, ImportArgs,
     Name, RunCommand, SandboxArgs,
 };
 use contract::events::CommandAccepted;
-use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, Surface, session_line};
+use super::{App, Effect, Kind, Link, Phase, Sent, Surface, hub_line, session_line};
 use crate::editor::{OpenFile, Target};
 use crate::import_report::ImportSource;
 use crate::input::Draft;
@@ -1155,12 +1155,32 @@ impl App {
                 if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
                     return self.open_model_picker(crate::model_picker::Mode::Choose);
                 }
-                let mut args = self.start_args();
+                let Some(mut start) = self.start_args() else {
+                    // Without a workspace the hub would refuse the
+                    // missing key as `invalid_arguments`: keep the
+                    // draft, as the link-down path does.
+                    return Effect::None;
+                };
                 // A session-only choice on home rides this `start`.
-                self.with_start_model(&mut args);
-                self.panel_state.note_start(&args);
-                let line = json!({"id": id, "command": "start", "args": args});
-                (Kind::Start, line.to_string())
+                self.with_start_model(&mut start);
+                self.panel_state
+                    .note_start(&serde_json::to_value(&start).unwrap_or(serde_json::Value::Null));
+                let id = CommandId(id);
+                let sent = Sent {
+                    line: hub_line(&id, HubCommand::Start(start)),
+                    id: id.clone(),
+                };
+                self.phase = Phase::Pending {
+                    command_id: sent.id.0.clone(),
+                };
+                let draft = std::mem::take(&mut self.draft);
+                return match self
+                    .outbox
+                    .send(sent.id.0.clone(), Kind::Start, draft, sent.line.clone())
+                {
+                    Some(_) => Effect::SendTracked(vec![sent]),
+                    None => Effect::None,
+                };
             }
             (Phase::Attached { session, .. }, Some((command, send))) => {
                 (Kind::Shell, shell::command(&id, session, command, send))

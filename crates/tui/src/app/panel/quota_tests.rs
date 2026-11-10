@@ -273,6 +273,10 @@ fn no_queries_without_a_card_session_or_live_link() {
 fn sent(effect: crate::app::Effect) -> Vec<Value> {
     match effect {
         crate::app::Effect::Send(lines) => lines
+        crate::app::Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .collect(),
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
@@ -285,6 +289,7 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
         | crate::app::Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_) => Vec::new(),

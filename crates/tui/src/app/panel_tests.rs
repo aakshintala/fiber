@@ -797,6 +797,10 @@ fn keys(app: &App) -> Vec<u64> {
 fn open(app: &mut App, key: u64) -> Vec<Value> {
     match app.home_click(HomeSpot::Entry(key)) {
         Effect::Send(lines) => lines
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
@@ -807,6 +811,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
@@ -1719,6 +1724,7 @@ fn the_quota_spot_opens_the_view_and_fetches() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("no fetch line"),

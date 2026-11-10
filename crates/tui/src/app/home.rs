@@ -2,7 +2,7 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use std::cell::Cell;
 
@@ -18,6 +18,7 @@ use crate::home::{
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
+use contract::commands::hub::Start;
 use contract::{ErrorCode, SessionId};
 
 mod chips;
@@ -1454,13 +1455,14 @@ impl App {
     /// worktree switch adds `"worktree": true` only while it shows and
     /// is on. Sending one hides the placeholder and clears the blocker
     /// lines until the run ends.
-    pub(super) fn start_args(&mut self) -> Value {
+    pub(super) fn start_args(&mut self) -> Option<Start> {
         let home = &mut self.home;
         home.prompted = true;
         home.blockers = Vec::new();
         home.blocker_keys = Vec::new();
-        // An empty pick or launch directory is none: no `workspace`
-        // key names a remote home, as the hub treats a missing key.
+        // An empty pick or launch directory is none: without one the
+        // hub would refuse the missing `workspace` as
+        // `invalid_arguments`, so no start goes out.
         let workspace = home
             .chooser
             .chosen()
@@ -1472,28 +1474,17 @@ impl App {
                     .workspace()
                     .filter(|workspace| !workspace.as_os_str().is_empty())
                     .map(|workspace| workspace.display().to_string())
-            });
-        let mut args = json!({});
-        if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
-            object.insert("workspace".to_owned(), Value::String(workspace));
-        }
-        if let Some(object) = args.as_object_mut() {
-            if !self.launch_overrides.is_empty() {
-                object.insert(
-                    "overrides".to_owned(),
-                    Value::Array(
-                        self.launch_overrides
-                            .iter()
-                            .map(|override_text| Value::String(override_text.clone()))
-                            .collect(),
-                    ),
-                );
-            }
-            if home.chooser.worktree() && home.in_git() {
-                object.insert("worktree".to_owned(), json!(true));
-            }
-        }
-        args
+            })?;
+        Some(Start {
+            workspace,
+            model: None,
+            overrides: (!self.launch_overrides.is_empty())
+                .then(|| self.launch_overrides.clone()),
+            worktree: (home.chooser.worktree() && home.in_git()).then_some(true),
+            continues: None,
+            supervised: None,
+            content: None,
+        })
     }
 }
 

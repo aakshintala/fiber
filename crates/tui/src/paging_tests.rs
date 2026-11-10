@@ -591,6 +591,7 @@ fn refolding_leaves_session_state_alone() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -1564,6 +1565,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("expected a sent line"),

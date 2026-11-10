@@ -16,7 +16,7 @@ use contract::events::{
     TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
+use contract::{CommandId, Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value};
@@ -104,7 +104,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
-pub(crate) use outbox::{Kind, Link, Phase, history_args, session_line};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, hub_line, session_line};
 pub(crate) use select::SurfaceId;
 pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
@@ -157,6 +157,17 @@ pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
 /// up (`docs/permissions.md`, "Setting up the notes").
 const FIRST_BLOCK_NOTICE: &str = "The reviewer blocked a call while both layers of the notes are empty. Set them up with the reviewer-setup skill: run /reviewer-setup.";
 
+/// A hub command line with its command id carried alongside: the loop
+/// sends the line and settles a failed write by the carried id, never
+/// by parsing the id back out of the line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sent {
+    /// The command's id, as the hub answers it as `command_id`.
+    pub(crate) id: CommandId,
+    /// The line as written, with the same id under `id`.
+    pub(crate) line: String,
+}
+
 /// What a key does.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Effect {
@@ -164,10 +175,15 @@ pub(crate) enum Effect {
     None,
     /// Send these command lines to the hub.
     Send(Vec<String>),
+    /// Send these hub command lines to the hub, settling a failed
+    /// write by each carried id.
+    SendTracked(Vec<Sent>),
     /// Quit the terminal.
     Quit,
     /// Send these command lines, then quit.
     Exit(Vec<String>),
+    /// Send these hub command lines, then quit.
+    ExitTracked(Vec<Sent>),
     /// Start the `@` panel's search worker on a listing of the workspace's
     /// files, searching for an empty query at the current generation.
     ListFiles,
@@ -780,7 +796,12 @@ impl App {
             },
         };
         lines.extend(self.home_outgoing());
-        lines.extend(self.sessions_outgoing());
+        // The `sessions` snapshot cruises the fold: its id rides
+        // paired, so a failed write settles by the carried id.
+        for sent in self.sessions_outgoing() {
+            self.outbox.note_hub_sent(&sent.id, &sent.line);
+            lines.push(sent.line);
+        }
         self.reconcile_attention();
         if matches!(&self.overlay, Overlay::Folding { landing: true, .. }) {
             if let Overlay::Folding { landing, .. } = &mut self.overlay {
@@ -1022,31 +1043,72 @@ impl App {
         self.home_unsent(unsent);
         self.disconnected_inner();
         for line in unsent {
-            if let Some(id) = serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
-            {
-                if self.clear_lost(&id) {
-                    continue;
-                }
-                if self.outbox.is_kept(&id) {
-                    continue;
-                }
-                self.change_workspace_dropped(&id);
-                // A lost line settles a model, reply, steer or shell
-                // wait with its entry: those register at queue time, so
-                // the entry the failure pops is theirs. A find, commands
-                // or offered-file wait has no entry to pop, so its own
-                // exits settle it instead.
-                if matches!(
-                    self.outbox.waiting(&id),
-                    Some(Waiting::Model | Waiting::Reply | Waiting::Steer | Waiting::Shell)
-                ) {
-                    self.outbox.settled(&id);
-                }
-                self.fail(&id);
+            // A fold-cruising hub line settles by the id noted when it
+            // was built; a session line parses its id as before.
+            if let Some(id) = self.outbox.hub_id(line).map(|id| id.0).or_else(|| {
+                serde_json::from_str::<Value>(line)
+                    .ok()
+                    .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+            }) {
+                self.write_failed_id(&id);
             }
         }
+    }
+
+    /// Applies a failed command write as its own input and settles once:
+    /// commands never written fail as if rejected, so a draft they carried
+    /// returns to an empty draft. A line already written and kept for
+    /// resending keeps its pending entry and leaves the draft alone, so
+    /// the next connection sends it again (`docs/invocation.md`, "The
+    /// command line"). A close from the quit question that was never
+    /// written keeps its resume line.
+    pub(crate) fn on_write_failed_tracked(&mut self, unsent: &[Sent]) {
+        self.write_failed_tracked_inner(unsent);
+        self.settle();
+    }
+
+    /// Test entry point for a failed tracked write.
+    #[cfg(test)]
+    pub(crate) fn write_failed_tracked(&mut self, unsent: &[Sent]) {
+        self.on_write_failed_tracked(unsent);
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    /// The same settlement as the untracked path, keyed by the carried
+    /// id, never parsed: a tampered line id cannot mis-settle.
+    pub(crate) fn write_failed_tracked_inner(&mut self, unsent: &[Sent]) {
+        let ids: Vec<String> = unsent.iter().map(|sent| sent.id.0.clone()).collect();
+        self.home_unsent_tracked(unsent);
+        self.disconnected_inner();
+        for id in &ids {
+            self.write_failed_id(id);
+        }
+    }
+
+    /// Settles one unwritten command by its id: a lost line clears the
+    /// clear wait, skips a kept line, drops a workspace change and fails
+    /// the pending entry, settling a model, reply, steer or shell wait
+    /// with its entry.
+    fn write_failed_id(&mut self, id: &str) {
+        if self.clear_lost(id) {
+            return;
+        }
+        if self.outbox.is_kept(id) {
+            return;
+        }
+        self.change_workspace_dropped(id);
+        // A lost line settles a model, reply, steer or shell
+        // wait with its entry: those register at queue time, so
+        // the entry the failure pops is theirs. A find, commands
+        // or offered-file wait has no entry to pop, so its own
+        // exits settle it instead.
+        if matches!(
+            self.outbox.waiting(id),
+            Some(Waiting::Model | Waiting::Reply | Waiting::Steer | Waiting::Shell)
+        ) {
+            self.outbox.settled(id);
+        }
+        self.fail(id);
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
@@ -1640,7 +1702,14 @@ impl App {
         match hub.kind() {
             HubEventKind::HubHello if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.hub_hello_version(&hub.payload);
-                let mut lines = std::mem::take(&mut self.outbox.held);
+                // Held lines carry their ids into the fold: each is
+                // paired in the registry, so a failed flush settles by
+                // the carried id.
+                let mut lines = Vec::new();
+                for sent in std::mem::take(&mut self.outbox.held) {
+                    self.outbox.note_hub_sent(&sent.id, &sent.line);
+                    lines.push(sent.line);
+                }
                 lines.extend(self.reconnected());
                 self.outbox.link = Link::Up;
                 lines

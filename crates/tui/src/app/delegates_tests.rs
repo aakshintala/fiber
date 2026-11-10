@@ -348,6 +348,10 @@ fn open_first(app: &mut App) -> Vec<Value> {
         .unwrap_or_else(|| panic!("a row"));
     match app.home_click(HomeSpot::Entry(key)) {
         Effect::Send(lines) => lines
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
@@ -358,6 +362,7 @@ fn open_first(app: &mut App) -> Vec<Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -561,7 +566,7 @@ fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
         Effect::None
     );
     match app.session_view_key(&Key::Enter) {
-        Some(Effect::Send(_)) => {}
+        Some(Effect::Send(_)) | Some(Effect::SendTracked(_)) => {}
         Some(_) | None => panic!("opening sends"),
     }
     assert!(app.item_open());
@@ -586,6 +591,7 @@ fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -654,6 +660,7 @@ fn a_job_view_draws_no_fallback() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
