@@ -297,3 +297,8 @@ docs/tui.md	fiber-4526	plan	2026-11-10T09:34:41Z	Amoghs-MacBook-Pro:/Users/aaksh
 docs/mockups/settings.html	fiber-4526	plan	2026-11-10T09:34:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/config_views_tests.rs	fiber-4526	plan	2026-11-10T09:34:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/snapshots/tui__app__config_views__tests__settings_has_no_screen_reader_row.snap	fiber-4526	grant	2026-11-10T09:38:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/config/4526-remove-screen-reader-key	
+crates/tools/src/shell_tests.rs	fiber-4353	plan	2026-11-10T09:42:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/error_tests.rs	fiber-4353	plan	2026-11-10T09:42:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/command_tests.rs	fiber-4353	plan	2026-11-10T09:42:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/hosted.rs	fiber-4353	plan	2026-11-10T09:42:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/tools.rs	fiber-4353	plan	2026-11-10T09:42:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
