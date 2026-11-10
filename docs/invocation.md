@@ -267,7 +267,7 @@ prints each such notice.
 | `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
 | `mcp login <server>` | Logs in to a server that needs OAuth. |
 | `mcp logout <server>` | Deletes a server's stored token. |
-| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). |
+| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). Not built yet: see #600. |
 
 **Configuration.** `fiber config` reads and writes configuration
 (`docs/configuration.md`, "When Fiber writes").

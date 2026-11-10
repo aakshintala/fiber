@@ -1844,6 +1844,8 @@ names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
 `cursor-agent`, `hooks`, `init`, `memory` and `export` are short names for
 `github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
 the name it registers (`docs/delegates.md`, "Harness extensions").
+`azure`, `claude` and `cursor-agent` are not built yet: see #224, #545 and
+#546.
 A short name also names the extension's directories in Fiber home
 (`docs/state.md`, "What each part holds").
 

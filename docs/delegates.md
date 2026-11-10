@@ -29,7 +29,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - Every other harness is an extension: data plus Lua, as a provider is. What it
   declares is [Harness extensions](#harness-extensions).
 - Fiber ships the Claude Code and cursor-agent harnesses. codex and others
-  follow, unless adding them is trivial.
+  follow, unless adding them is trivial. Not built yet: see #545 and #546.
 - A harness loads whatever the person configured for it: their hooks,
   plugins, skills, MCP servers, instructions and memory. Fiber passes only the
   flags that drive the program.
@@ -391,6 +391,8 @@ path is `invalid_arguments` and a git failure is `io_failed`.
 
 ## Harness extensions
 
+**Not built yet: see #545.**
+
 Settled by
 [Harness extensions: running another agent as a delegate](https://github.com/aakshintala/fiber/issues/77);
 that ticket's resolution holds the probes and the rejected alternatives.
@@ -459,6 +461,8 @@ As Lua, none of which runs on a model request:
   models in `delegate_models`.
 
 ### Delegates on another harness
+
+**Not built yet: see #545 and #547.**
 
 A delegate on another harness has no socket of its own, so its parent stands
 in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):

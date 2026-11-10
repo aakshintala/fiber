@@ -1223,7 +1223,7 @@ hub.
 - **A keeper that dies leaves its jobs unaccounted for.** If the keeper itself dies before
   a job's `job_completed` is written, the resumed session writes that job
   `orphaned` and touches no process.
-- **A delegate on another harness is kept.** The keeper holds its pipes and
+- **A delegate on another harness is kept.** Not built yet: see #3904. The keeper holds its pipes and
   writes each line it prints to its output file, as for any job. While the
   session lives, the session reads the lines as they arrive. After a crash,
   a harness written in Lua has each line handed to its `line` in the keeper:
