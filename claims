@@ -275,7 +275,6 @@ crates/tui/src/app.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-
 crates/tui/src/app/attach_fold.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/hub/listed.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/cli/src/sessions.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/archive_tests.rs	fiber-4562	plan	2026-11-10T15:22:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/prompt/reviewer.md	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer_tests.rs	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
