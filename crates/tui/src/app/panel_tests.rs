@@ -804,7 +804,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         Effect::None
@@ -1717,6 +1717,13 @@ fn the_quota_spot_opens_the_view_and_fetches() {
         Effect::Send(lines) => lines
             .iter()
             .map(|line| serde_json::from_str::<Value>(line).unwrap_or_default())
+            .collect::<Vec<_>>(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str::<Value>(line).unwrap_or_default()
+            })
             .collect::<Vec<_>>(),
         Effect::None
         | Effect::Quit

@@ -753,13 +753,6 @@ impl<B: Backend> Loop<B> {
                 Effect::Send(lines) => self.send_inner(&lines),
                 Effect::SendTracked(lines) => self.send_tracked_inner(&lines),
                 Effect::Quit => return Some(0),
-                Effect::Exit(lines) => {
-                    // The quit question's closes go out, then the
-                    // terminal quits: a close never written keeps
-                    // its resume line.
-                    self.send_inner(&lines);
-                    return Some(0);
-                }
                 Effect::ExitTracked(lines) => {
                     // The quit question's tracked closes go out, then
                     // the terminal quits, failure or not: a close never

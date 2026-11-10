@@ -582,6 +582,7 @@ fn refolding_leaves_session_state_alone() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1556,6 +1557,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles

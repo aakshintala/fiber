@@ -955,7 +955,19 @@ fn sent(effect: Effect) -> Vec<String> {
     match effect {
         Effect::Send(lines) => lines,
         Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
-        _ => Vec::new(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::FindPause { .. }
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
+        | Effect::OpenFile(_) => Vec::new(),
     }
 }
 

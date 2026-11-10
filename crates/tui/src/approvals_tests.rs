@@ -1103,6 +1103,10 @@ mod through_the_app {
                 assert_eq!(lines.len(), 1);
                 lines.into_iter().next().unwrap_or_default()
             }
+            Effect::SendTracked(sents) => {
+                assert_eq!(sents.len(), 1);
+                sents.into_iter().next().map(|sent| sent.line).unwrap_or_default()
+            }
             Effect::None
             | Effect::Quit
             | Effect::ListFiles

@@ -946,7 +946,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         Effect::None
@@ -1433,7 +1433,8 @@ fn a_click_on_a_row_opens_it() {
             assert_eq!(commands["command"], "commands");
             assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
         }
-        Effect::None
+        Effect::SendTracked(_)
+        | Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
@@ -4800,50 +4801,51 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    let line: Value =
+        serde_json::from_str(&lines[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/w");
     assert_eq!(line["args"]["worktree"], true);
     // Shown and off: the key is absent.
     let mut app = git_home();
-    assert!(app.start_args().get("worktree").is_none());
+    assert_eq!(app.start_args().unwrap().worktree, None);
     // Hidden, even with the switch on: the key is absent.
     let mut app = home_with(80, 24, launch());
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
-    let args = app.start_args();
-    assert_eq!(args["workspace"], "/w");
-    assert!(args.get("worktree").is_none());
+    let args = app.start_args().unwrap();
+    assert_eq!(args.workspace, "/w");
+    assert_eq!(args.worktree, None);
 }
 
 #[test]
 fn start_carries_the_terminal_layer_in_overrides() {
     // No layer, no key: the shape every existing start keeps.
     let mut app = home_with(80, 24, launch());
-    let bare = app.start_args();
-    assert_eq!(bare["workspace"], "/w");
-    assert!(bare.get("overrides").is_none());
+    let bare = app.start_args().unwrap();
+    assert_eq!(bare.workspace, "/w");
+    assert_eq!(bare.overrides, None);
     // The layer rides in order, beside the workspace.
     app.set_launch_overrides(vec![
         "model=acme/m".to_owned(),
         "retry.attempts=2".to_owned(),
     ]);
-    let args = app.start_args();
-    assert_eq!(args["workspace"], "/w");
+    let args = app.start_args().unwrap();
+    assert_eq!(args.workspace, "/w");
     assert_eq!(
-        args["overrides"],
-        json!(["model=acme/m", "retry.attempts=2"])
+        args.overrides,
+        Some(vec!["model=acme/m".to_owned(), "retry.attempts=2".to_owned()])
     );
-    assert!(args.get("worktree").is_none());
+    assert_eq!(args.worktree, None);
     // Beside the worktree switch: both keys ride.
     let mut app = git_home();
     app.launch_overrides = vec!["model=acme/m".to_owned()];
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
-    let args = app.start_args();
-    assert_eq!(args["overrides"], json!(["model=acme/m"]));
-    assert_eq!(args["worktree"], true);
+    let args = app.start_args().unwrap();
+    assert_eq!(args.overrides, Some(vec!["model=acme/m".to_owned()]));
+    assert_eq!(args.worktree, Some(true));
 }
 
 /// Focuses the last list stop from the entry bar.
@@ -4902,7 +4904,7 @@ fn stop(app: &mut App) -> Vec<Value> {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         Effect::None
@@ -7382,7 +7384,7 @@ fn an_early_import_registers_its_tag_at_queue_time() {
         .outbox
         .held
         .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
+        .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{err}")))
         .collect();
     let import = held
         .iter()

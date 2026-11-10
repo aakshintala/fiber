@@ -609,6 +609,10 @@ fn sent_id(effect: Effect) -> String {
                 .unwrap_or_else(|| panic!("no id"))
                 .to_owned()
         }
+        Effect::SendTracked(sents) => {
+            assert_eq!(sents.len(), 1);
+            sents[0].id.0.clone()
+        }
         Effect::None
         | Effect::Quit
         | Effect::ListFiles

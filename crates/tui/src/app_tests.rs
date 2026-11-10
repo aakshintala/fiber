@@ -68,6 +68,10 @@ fn one_line(effect: Effect) -> String {
             assert_eq!(lines.len(), 1);
             lines.into_iter().next().unwrap_or_default()
         }
+        Effect::SendTracked(sents) => {
+            assert_eq!(sents.len(), 1);
+            sents.into_iter().next().map(|sent| sent.line).unwrap_or_default()
+        }
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -233,7 +237,8 @@ fn esc_busy_sends_cancel() {
             let value = parse(&lines[0]);
             assert_eq!(value.get("command"), Some(&serde_json::json!("cancel")));
         }
-        Effect::None
+        Effect::SendTracked(_)
+        | Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
@@ -494,7 +499,8 @@ fn rejected_cancel_shows_nothing() {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        Effect::None
+        Effect::SendTracked(_)
+        | Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)

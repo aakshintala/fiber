@@ -1810,7 +1810,8 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_through_on_mouse() {
             assert_eq!(lines.len(), 1, "{lines:?}");
             serde_json::from_str::<serde_json::Value>(&lines[0]).unwrap_or_default()
         }
-        crate::app::Effect::None
+        crate::app::Effect::SendTracked(_)
+        | crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)

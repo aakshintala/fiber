@@ -180,8 +180,6 @@ pub(crate) enum Effect {
     SendTracked(Vec<Sent>),
     /// Quit the terminal.
     Quit,
-    /// Send these command lines, then quit.
-    Exit(Vec<String>),
     /// Send these hub command lines, then quit.
     ExitTracked(Vec<Sent>),
     /// Start the `@` panel's search worker on a listing of the workspace's
@@ -1055,22 +1053,12 @@ impl App {
         }
     }
 
-    /// Applies a failed command write as its own input and settles once:
-    /// commands never written fail as if rejected, so a draft they carried
-    /// returns to an empty draft. A line already written and kept for
-    /// resending keeps its pending entry and leaves the draft alone, so
-    /// the next connection sends it again (`docs/invocation.md`, "The
-    /// command line"). A close from the quit question that was never
-    /// written keeps its resume line.
-    pub(crate) fn on_write_failed_tracked(&mut self, unsent: &[Sent]) {
-        self.write_failed_tracked_inner(unsent);
-        self.settle();
-    }
-
-    /// Test entry point for a failed tracked write.
+    /// Test entry point for a failed tracked write: applies it as its
+    /// own input and settles once, as the untracked test entry does.
     #[cfg(test)]
     pub(crate) fn write_failed_tracked(&mut self, unsent: &[Sent]) {
-        self.on_write_failed_tracked(unsent);
+        self.write_failed_tracked_inner(unsent);
+        self.settle();
     }
 
     /// Handles the route without settling; the caller owns the layout pass.

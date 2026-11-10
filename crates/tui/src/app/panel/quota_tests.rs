@@ -280,7 +280,7 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_default())
+                serde_json::from_str(line).unwrap_or_default()
             })
             .collect(),
         crate::app::Effect::None

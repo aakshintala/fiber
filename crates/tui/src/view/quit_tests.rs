@@ -250,6 +250,22 @@ fn stripped(effect: &Effect) -> Effect {
                 })
                 .collect(),
         ),
+        Effect::ExitTracked(sents) => Effect::ExitTracked(
+            sents
+                .iter()
+                .map(|sent| {
+                    let mut line: serde_json::Value =
+                        serde_json::from_str(&sent.line).unwrap_or_default();
+                    if let Some(object) = line.as_object_mut() {
+                        object.remove("id");
+                    }
+                    crate::app::Sent {
+                        id: sent.id.clone(),
+                        line: line.to_string(),
+                    }
+                })
+                .collect(),
+        ),
         Effect::Send(lines) => Effect::Send(
             lines
                 .iter()
@@ -260,6 +276,22 @@ fn stripped(effect: &Effect) -> Effect {
                         object.remove("id");
                     }
                     line.to_string()
+                })
+                .collect(),
+        ),
+        Effect::SendTracked(sents) => Effect::SendTracked(
+            sents
+                .iter()
+                .map(|sent| {
+                    let mut line: serde_json::Value =
+                        serde_json::from_str(&sent.line).unwrap_or_default();
+                    if let Some(object) = line.as_object_mut() {
+                        object.remove("id");
+                    }
+                    crate::app::Sent {
+                        id: sent.id.clone(),
+                        line: line.to_string(),
+                    }
                 })
                 .collect(),
         ),

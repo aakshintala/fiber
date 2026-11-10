@@ -159,7 +159,7 @@ fn opened(app: &mut App) {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         crate::app::Effect::None
@@ -245,7 +245,7 @@ fn open_job(app: &mut App, job: &str) {
         .serial_of_job(&contract::JobId(job.to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
     match app.on_click(TargetId::Panel(crate::app::panel::Spot::Job(serial))) {
-        crate::app::Effect::Send(_) => {}
+        crate::app::Effect::Send(_) | crate::app::Effect::SendTracked(_) => {}
         crate::app::Effect::None => {}
         crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
@@ -321,7 +321,8 @@ fn open_item(app: &mut App) {
                 }
             }
         }
-        crate::app::Effect::None => {}
+        crate::app::Effect::SendTracked(_)
+        | crate::app::Effect::None => {}
         crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
@@ -644,7 +645,7 @@ fn clicking_stop_sends_job_stop_to_the_parent() {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         crate::app::Effect::None
@@ -706,7 +707,7 @@ fn the_stop_target_is_reached_from_the_keyboard() {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         crate::app::Effect::None
@@ -1668,7 +1669,7 @@ fn click_open(app: &mut App) -> String {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         crate::app::Effect::None

@@ -203,7 +203,8 @@ fn clicking_interrupt_sends_cancel() {
                 .any(|line| line.contains("\"command\":\"cancel\"")),
             "{lines:?}"
         ),
-        Effect::None
+        Effect::SendTracked(_)
+        | Effect::None
         | Effect::Quit
         | Effect::Exit(_)
         | Effect::ExitTracked(_)

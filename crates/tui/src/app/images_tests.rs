@@ -369,7 +369,8 @@ fn enter_on_the_focused_image_opens_it() {
     started_with_image(&mut app, "artifacts/shot.png");
     app.focus = Some(TargetId::Line(Target::Image(1)));
     match app.focus_key(&Key::Enter) {
-        Some(Effect::Send(lines)) => assert_eq!(lines.len(), 1),
+        Some(Effect::SendTracked(sents)) => assert_eq!(sents.len(), 1),
+        Some(Effect::Send(_)) => panic!("expected a tracked send"),
         Some(
             Effect::None
             | Effect::Quit

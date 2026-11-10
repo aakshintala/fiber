@@ -422,7 +422,7 @@ impl App {
         for id in dropped {
             self.outbox.settled(&id);
         }
-        self.delete_command_unsent(&ids, &stops);
+        self.delete_command_unsent(ids, &stops);
     }
 
     /// The sessions working now, in list order, the attached one last

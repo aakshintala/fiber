@@ -247,7 +247,7 @@ fn rewrite(app: &mut App, action: &str, arguments: Value) {
 /// Opens job `job`'s view; opening sends or nothing, never anything else.
 fn open_job(app: &mut App, job: &str) {
     match app.open_item(&JobId(job.to_owned())) {
-        Effect::None | Effect::Send(_) => {}
+        Effect::None | Effect::Send(_) | Effect::SendTracked(_) => {}
         Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }

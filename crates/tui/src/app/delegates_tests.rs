@@ -355,7 +355,7 @@ fn open_first(app: &mut App) -> Vec<Value> {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
             })
             .collect(),
         Effect::None
@@ -586,7 +586,7 @@ fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
     opened(&mut app);
     finished_two_turn_delegate(&mut app);
     match app.on_click(TargetId::Panel(PanelSpot::Delegate(job_serial(&app)))) {
-        Effect::Send(_) => {}
+        Effect::Send(_) | Effect::SendTracked(_) => {}
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -657,6 +657,7 @@ fn a_job_view_draws_no_fallback() {
     match app.on_click(TargetId::Panel(PanelSpot::Job(job_serial(&app)))) {
         Effect::None => {}
         Effect::Send(_)
+        | Effect::SendTracked(_)
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }

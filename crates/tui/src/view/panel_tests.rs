@@ -3052,6 +3052,15 @@ fn open_send(app: &mut App, job: &str) -> Option<Vec<serde_json::Value>> {
                 })
                 .collect(),
         ),
+        crate::app::Effect::SendTracked(sents) => Some(
+            sents
+                .iter()
+                .map(|sent| {
+                    let line = &sent.line;
+                    serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+                })
+                .collect(),
+        ),
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
