@@ -38,6 +38,20 @@
           "status": 200,
           "body": "{\"models\":[{\"model_name\":\"claude-opus-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":200000,\"max_output\":32000}},{\"model_name\":\"gpt-6-sol\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":400000,\"max_output\":160000}},{\"model_name\":\"acme-custom\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":64000,\"max_output\":8000}}]}"
         }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://adb-1.azuredatabricks.net/api/2.0/serving-endpoints",
+          "headers": {
+            "authorization": "Bearer dapi-test",
+            "Databricks-Ai-Gateway-Request-Tags": "{\"source\":\"fiber\"}"
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"endpoints\":[{\"name\":\"claude-opus-5\"},{\"name\":\"gpt-6-sol\"},{\"name\":\"claude-opus-5-20251101\"},{\"name\":\"acme-custom\"}]}"
+        }
       }
     ]
   },
