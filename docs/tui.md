@@ -69,7 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete, Backspace and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete, Backspace and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -303,9 +303,13 @@ each row.
 Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project, and "archived · N" from the `total` of one with `archived`. The terminal asks for them when the project first appears, after a reconnect, and when one of the project's sessions leaves, is deleted or is archived, with one ask of each in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
-the hub. A resume the hub refuses because the workspace is gone shows
-"Cannot resume: <path> no longer exists. Delete removes the session.": it
-adds no rail card, and the row stays under "exited". Opening an archived row resumes it the same way, which unarchives it. A ✕ on a live row stops that session ("Quit"). Delete on a
+the hub. A session whose workspace is gone and cannot be made again opens
+read only: the hub replays its log (`docs/invocation.md`, "Lifecycle"), and
+the conversation shows as it would live, paging as any session does. A
+one-row bar replaces the input box: "<path> no longer exists. Read only.",
+dim, with the path in `attention`. It adds no rail card, takes no prompt,
+and Esc or ⌥0 go back home; the row stays where it was, archived or
+exited. Opening an archived row resumes it the same way, which unarchives it. A ✕ on a live row stops that session ("Quit"). Delete on a
 focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. A ✕ on an exited row, or Backspace on it, archives that session through the hub and asks nothing, since opening it undoes that. Backspace on a live, unreadable or archived row does nothing, and an archived row has no ✕. Delete or Shift+Backspace on a
 selected exited or archived row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
@@ -1195,6 +1199,7 @@ install still running.
       | `retry.max_delay_ms` | 10 s, 30 s, 1 min, 2 min, 5 min |
       | `hub.idle_exit_ms`, `session.idle_exit_ms` | 5 min, 15 min, 30 min, 1 h, 2 h |
       | `model_lists.refresh_after` | 1 h, 6 h, 12 h, 24 h, 3 d, 7 d |
+      | `session.keep_exited` | Keep all, 5, 10, 20, 50 sessions |
 
       Each list holds the key's default. A value a file sets that is not
       in the list shows with "(custom)" after it, and the next step goes
@@ -2385,6 +2390,7 @@ through the `input_status` slot ("Extension seams").
 | Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
 | Move focus from the input box into the conversation | `navigate` | Shift+Tab | click an item |
 | Move focus to the next or previous item | `focus_next_prev` | ↓ ↑, j k | click an item |
+| Move to the first row of the next or previous project in the session list | `focus_project` | Shift+↓ Shift+↑ | click a row |
 | Open the focused item | `open_focused` | Enter | click it |
 | Copy the focused item | `copy_focused` | y | select it |
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
