@@ -81,11 +81,13 @@ fn run(argv: &[String]) -> Result<(), String> {
                 .map_err(|error| format!("the current directory: {error}"))?;
             let clock: Arc<dyn Clock> = Arc::new(fakes::clock::SystemClock);
             let mut reports = Vec::with_capacity(models.len());
+            let budget = Arc::new(sweep::RequestBudget::new());
             for model in &models {
                 let (provider, sweep_model) = reviewer_provider(&home, &workspace, model, &clock)?;
-                let (tallies, outcomes) = sweep::sweep(&entries, runs, live, |entry| {
-                    sweep::drive(entry, &provider, &clock, &sweep_model)
-                })?;
+                let (tallies, outcomes, _) =
+                    sweep::sweep(&entries, runs, live, &budget, |entry| {
+                        sweep::drive(entry, &provider, &clock, &sweep_model, &budget)
+                    })?;
                 for outcome in &outcomes {
                     if let sweep::Outcome::Errored(errored) = outcome {
                         eprintln!(

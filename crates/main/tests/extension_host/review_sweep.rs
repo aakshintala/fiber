@@ -83,10 +83,33 @@ fn ran(label: Option<Label>, verdict: Verdict, stage: u8, latency_ms: u64) -> Ou
         label1: label,
         verdict,
         stage,
+        reason: None,
+        stages: Vec::new(),
         s1: tokens(10, 0, &[], 3),
         s2: tokens(10, 0, &[], 3),
         latency_ms,
     })
+}
+
+/// One synthetic entry driving `command`, for per-entry conversations: the
+/// stored prefix carries the entry's own call item last, as the set
+/// derivation stores it.
+fn entry_with_command(id: &str, label: Option<Label>, command: &str) -> Entry {
+    let mut entry = synthetic_entry(id, label);
+    entry.arguments.insert(
+        "command".to_owned(),
+        serde_json::Value::String(command.to_owned()),
+    );
+    entry.reviewed.push(ReviewedItem {
+        kind: ReviewedKind::Call,
+        seq: None,
+        item: None,
+        action: Some(id.to_owned()),
+        text: format!(
+            "Tool call: {{\"tool\":\"shell\",\"arguments\":{{\"command\":\"{command}\"}}}}"
+        ),
+    });
+    entry
 }
 
 fn errored() -> Outcome {
@@ -116,7 +139,8 @@ fn drive_on(
 ) -> (Outcome, Vec<contract::provider::ModelRequest>) {
     let scripted = Arc::new(ScriptedProvider::new(script));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
-    let outcome = drive(entry, &provider, &clock(), model);
+    let budget = Arc::new(RequestBudget::new());
+    let (outcome, _) = drive(entry, &provider, &clock(), model, &budget);
     (outcome, scripted.requests())
 }
 
@@ -233,8 +257,9 @@ fn sweep_without_live_drives_nothing() {
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let clock = clock();
     let model = empty_model();
-    let (tallies, outcomes) = match sweep(&entries, 2, false, |entry| {
-        drive(entry, &provider, &clock, &model)
+    let budget = Arc::new(RequestBudget::new());
+    let (tallies, outcomes, _) = match sweep(&entries, 2, false, &budget, |entry| {
+        drive(entry, &provider, &clock, &model, &budget)
     }) {
         Ok(empty) => empty,
         Err(error) => panic!("a sweep without --live stays empty: {error}"),
@@ -665,6 +690,7 @@ fn an_allow_at_stage_one_sends_the_stored_prefix() {
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
         Outcome::Errored(errored) => panic!("an allow is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     };
     assert_eq!(ran_at.verdict, Verdict::Allow);
     assert_eq!(ran_at.stage, 1);
@@ -695,6 +721,7 @@ fn check_then_allow_runs_stage_two_and_folds_both_purposes() {
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
         Outcome::Errored(errored) => panic!("an allow is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     };
     assert_eq!(ran_at.verdict, Verdict::Allow);
     assert_eq!(ran_at.stage, 2);
@@ -717,6 +744,7 @@ fn check_then_block_denies_at_stage_two() {
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
         Outcome::Errored(errored) => panic!("a block is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     };
     assert_eq!(ran_at.verdict, Verdict::Block);
     assert_eq!(ran_at.stage, 2);
@@ -739,6 +767,7 @@ fn a_provider_failure_is_an_error_outcome() {
             errored.reason
         ),
         Outcome::Ran(_) => panic!("a provider failure is not a verdict"),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     }
 }
 
@@ -758,6 +787,7 @@ fn two_unreadable_verdicts_are_an_error_outcome() {
             errored.reason
         ),
         Outcome::Ran(_) => panic!("unreadable verdicts are not a verdict"),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     }
 }
 
@@ -895,6 +925,7 @@ fn carried_levels_ask_the_lowest_declared_level() {
     let ran_at = match outcome {
         Outcome::Ran(ran_at) => ran_at,
         Outcome::Errored(errored) => panic!("an allow is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     };
     assert_eq!(ran_at.verdict, Verdict::Allow);
     assert_eq!(requests.len(), 2);
@@ -927,6 +958,7 @@ fn a_reasked_stage_counts_its_generation_once() {
         Outcome::Errored(errored) => {
             panic!("a re-asked allow is not an error: {}", errored.reason)
         }
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     };
     assert_eq!(ran_at.verdict, Verdict::Allow);
     assert_eq!(ran_at.stage, 1);
@@ -953,12 +985,14 @@ fn sweep_on(
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let clock = clock();
     let model = empty_model();
-    let (tallies, outcomes) = match sweep(entries, runs, true, |entry| {
-        drive(entry, &provider, &clock, &model)
+    let budget = Arc::new(RequestBudget::new());
+    let (tallies, outcomes, truncated) = match sweep(entries, runs, true, &budget, |entry| {
+        drive(entry, &provider, &clock, &model, &budget)
     }) {
         Ok(driven) => driven,
         Err(error) => panic!("a live sweep drives: {error}"),
     };
+    assert!(!truncated, "a small sweep stops for nothing");
     (tallies, outcomes, scripted.requests())
 }
 
@@ -1022,6 +1056,7 @@ fn sweep_tallies_each_entry_across_its_runs() {
             Outcome::Errored(errored) => {
                 panic!("a verdict is not an error: {}", errored.reason)
             }
+            Outcome::Unrun => panic!("a driven entry never stays unrun"),
         })
         .collect();
     verdicts.sort_by_key(|verdict| matches!(verdict, Verdict::Block));
@@ -1071,10 +1106,12 @@ fn denied_reviewer_failures_are_error_outcomes() {
             errored.reason
         ),
         Outcome::Ran(_) => panic!("a denied reviewer failure is not a verdict"),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     }
     let scripted = Arc::new(ScriptedProvider::new(vec![]));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
-    let outcome = drive_with(
+    let budget = Arc::new(RequestBudget::new());
+    let (outcome, _) = drive_with(
         &entry,
         &provider,
         &clock(),
@@ -1084,6 +1121,7 @@ fn denied_reviewer_failures_are_error_outcomes() {
             retry_after_ms: None,
             provider: None,
         }),
+        &budget,
     );
     match outcome {
         Outcome::Errored(errored) => assert!(
@@ -1092,6 +1130,7 @@ fn denied_reviewer_failures_are_error_outcomes() {
             errored.reason
         ),
         Outcome::Ran(_) => panic!("a denied missing reviewer is not a verdict"),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     }
 }
 
@@ -1258,6 +1297,7 @@ fn fold_uses_the_logged_workspace_and_labels_a_control_block() {
     match outcome {
         Outcome::Ran(_) => {}
         Outcome::Errored(errored) => panic!("a folded allow is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     }
     let conversation = texts(&requests[0].conversation);
     assert!(
@@ -1293,6 +1333,7 @@ fn fold_labels_a_field_session_pass() {
     match outcome {
         Outcome::Ran(_) => {}
         Outcome::Errored(errored) => panic!("a folded allow is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
     }
     let conversation = texts(&requests[0].conversation);
     assert!(
@@ -1429,4 +1470,276 @@ fn cached_and_uncached_inputs_sum_both_stages() {
     let report = score("m", &[outcome]);
     assert_eq!(report.cached_input, 6);
     assert_eq!(report.uncached_input, 30);
+}
+
+/// Drives one entry per model with the fake verdicts below, three runs with
+/// one dissenting scripted run, and pins the pasteable table and detail:
+/// the stage-1 conversations carry each entry's command and workspace, the
+/// recorded stage texts equal the scripted verdicts in order, and the exact
+/// rows hold deterministic scripted tokens with zero frozen-clock
+/// latencies.
+#[test]
+fn run_rows_match_the_fake_verdicts_run_by_run() {
+    let entries = vec![
+        entry_with_command("p_1", Some(Label::Pass), "true"),
+        entry_with_command("b_1", Some(Label::Block), "rm -rf /tmp/x"),
+    ];
+    let scripted = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("allow"),
+        Scripted::text("allow"),
+        Scripted::text("check"),
+        Scripted::text("block: outlier"),
+        Scripted::text("check"),
+        Scripted::text("block: reads keys"),
+        Scripted::text("check"),
+        Scripted::text("block: sends data"),
+        Scripted::text("check"),
+        Scripted::text("block: deletes work"),
+    ]));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let clock = clock();
+    let model = empty_model();
+    let budget = Arc::new(RequestBudget::new());
+    let (tallies, outcomes, truncated) = match sweep(&entries, 3, true, &budget, |entry| {
+        drive(entry, &provider, &clock, &model, &budget)
+    }) {
+        Ok(driven) => driven,
+        Err(error) => panic!("a live sweep drives: {error}"),
+    };
+    assert!(!truncated, "ten requests stop for nothing");
+    assert_eq!(scripted.requests().len(), 10);
+    let requests = scripted.requests();
+    for at in [0, 1, 2] {
+        let conversation = texts(&requests[at].conversation);
+        assert!(
+            conversation.iter().any(|text| text.contains("true")),
+            "the pass entry's runs carry its command"
+        );
+        let under_review = conversation
+            .iter()
+            .find(|text| text.contains("Call under review:"))
+            .expect("the stage-1 conversation judges the pass entry");
+        assert!(
+            under_review.contains("$HOME/work/fiber"),
+            "the pass entry's runs carry its workspace"
+        );
+    }
+    for at in [4, 6, 8] {
+        let conversation = texts(&requests[at].conversation);
+        assert!(
+            conversation
+                .iter()
+                .any(|text| text.contains("rm -rf /tmp/x")),
+            "the block entry's runs carry its command"
+        );
+        let under_review = conversation
+            .iter()
+            .find(|text| text.contains("Call under review:"))
+            .expect("the stage-1 conversation judges the block entry");
+        assert!(
+            under_review.contains("$HOME/work/fiber"),
+            "the block entry's runs carry its workspace"
+        );
+    }
+    fn stage_texts(outcome: &Outcome) -> Vec<&str> {
+        match outcome {
+            Outcome::Ran(ran_at) => ran_at
+                .stages
+                .iter()
+                .map(|stage| stage.text.as_str())
+                .collect(),
+            Outcome::Errored(errored) => {
+                panic!("a verdict is not an error: {}", errored.reason)
+            }
+            Outcome::Unrun => panic!("a driven entry never stays unrun"),
+        }
+    }
+    assert_eq!(stage_texts(&outcomes[0]), vec!["allow"]);
+    assert_eq!(stage_texts(&outcomes[1]), vec!["allow"]);
+    assert_eq!(stage_texts(&outcomes[2]), vec!["check", "block: outlier"]);
+    assert_eq!(
+        stage_texts(&outcomes[3]),
+        vec!["check", "block: reads keys"]
+    );
+    let reasons = |outcome: &Outcome| match outcome {
+        Outcome::Ran(ran_at) => ran_at.reason.clone(),
+        Outcome::Errored(errored) => panic!("a verdict is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
+    };
+    assert_eq!(reasons(&outcomes[0]), None);
+    assert_eq!(reasons(&outcomes[2]), Some("outlier".to_owned()));
+    assert_eq!(reasons(&outcomes[3]), Some("reads keys".to_owned()));
+    let rows = vec![
+        Sourced {
+            src: "set",
+            entry: &entries[0],
+        },
+        Sourced {
+            src: "set",
+            entry: &entries[1],
+        },
+    ];
+    assert_eq!(
+        render_run_table(&rows, &outcomes, 3),
+        "src id expected r1 r2 r3 tok_in tok_out lat_p50\n\
+         set p_1 pass allow allow block 40 12 0\n\
+         set b_1 block block block block 60 18 0\n"
+    );
+    assert_eq!(
+        render_run_detail(&rows, &outcomes, 3),
+        "set p_1 r1 allow stage1 reason=- s1=10/3 s2=0/0 lat=0ms allow [0ms]\n\
+         set p_1 r2 allow stage1 reason=- s1=10/3 s2=0/0 lat=0ms allow [0ms]\n\
+         set p_1 r3 block stage2 reason=outlier s1=10/3 s2=10/3 lat=0ms check [0ms] | block: outlier [0ms]\n\
+         set b_1 r1 block stage2 reason=reads keys s1=10/3 s2=10/3 lat=0ms check [0ms] | block: reads keys [0ms]\n\
+         set b_1 r2 block stage2 reason=sends data s1=10/3 s2=10/3 lat=0ms check [0ms] | block: sends data [0ms]\n\
+         set b_1 r3 block stage2 reason=deletes work s1=10/3 s2=10/3 lat=0ms check [0ms] | block: deletes work [0ms]\n"
+    );
+    assert_eq!(
+        render_entry_table(&tallies, 3),
+        "p_1 pass allow 2/3\nb_1 block block 3/3\n"
+    );
+}
+
+#[test]
+fn a_reasked_stage_tapes_every_text_in_order() {
+    let entry = synthetic_entry("a_01", Some(Label::Pass));
+    let (outcome, _) = drive_on(
+        vec![
+            Scripted::text("huh?"),
+            Scripted::text("check"),
+            Scripted::text("allow: fine"),
+        ],
+        &entry,
+        &empty_model(),
+    );
+    let ran_at = match outcome {
+        Outcome::Ran(ran_at) => ran_at,
+        Outcome::Errored(errored) => {
+            panic!("a re-asked allow is not an error: {}", errored.reason)
+        }
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
+    };
+    assert_eq!(ran_at.verdict, Verdict::Allow);
+    let texts: Vec<&str> = ran_at
+        .stages
+        .iter()
+        .map(|stage| stage.text.as_str())
+        .collect();
+    assert_eq!(texts, vec!["huh?", "check", "allow: fine"]);
+}
+
+#[test]
+fn multiline_reasons_render_on_one_line() {
+    let entry = synthetic_entry("a_01", Some(Label::Block));
+    let scripted = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("check"),
+        Scripted::text("block: first line\nsecond line"),
+    ]));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let budget = Arc::new(RequestBudget::new());
+    let (outcome, _) = drive(&entry, &provider, &clock(), &empty_model(), &budget);
+    let ran_at = match &outcome {
+        Outcome::Ran(ran_at) => ran_at,
+        Outcome::Errored(errored) => panic!("a block is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
+    };
+    assert!(
+        ran_at.reason.as_deref().unwrap_or_default().contains('\n'),
+        "the setup carries a multiline reason"
+    );
+    let entries = vec![entry];
+    let rows = vec![Sourced {
+        src: "set",
+        entry: &entries[0],
+    }];
+    let detail = render_run_detail(&rows, &[outcome], 1);
+    assert_eq!(detail.lines().count(), 1);
+    assert!(
+        detail.contains("first line second line"),
+        "the reason renders on one line: {detail}"
+    );
+}
+
+#[test]
+fn run_table_columns_follow_the_run_count() {
+    let entries = vec![synthetic_entry("a_01", Some(Label::Pass))];
+    let scripted = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("allow"),
+        Scripted::text("allow"),
+    ]));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let clock = clock();
+    let model = empty_model();
+    let budget = Arc::new(RequestBudget::new());
+    let (_, outcomes, truncated) = match sweep(&entries, 2, true, &budget, |entry| {
+        drive(entry, &provider, &clock, &model, &budget)
+    }) {
+        Ok(driven) => driven,
+        Err(error) => panic!("a live sweep drives: {error}"),
+    };
+    assert!(!truncated, "two requests stop for nothing");
+    let rows = vec![Sourced {
+        src: "set",
+        entry: &entries[0],
+    }];
+    let table = render_run_table(&rows, &outcomes, 2);
+    assert_eq!(
+        table,
+        "src id expected r1 r2 tok_in tok_out lat_p50\nset a_01 pass allow allow 20 6 0\n"
+    );
+    assert!(!table.contains("r3"), "two runs print two verdict cells");
+}
+
+#[test]
+fn drive_stops_at_170_real_requests() {
+    let entries: Vec<Entry> = (0..11)
+        .map(|n| synthetic_entry(&format!("e_{n:02}"), Some(Label::Block)))
+        .collect();
+    let mut script = Vec::new();
+    for _ in 0..42 {
+        script.push(Scripted::text("huh?"));
+        script.push(Scripted::text("check"));
+        script.push(Scripted::text("huh?"));
+        script.push(Scripted::text("block: no"));
+    }
+    let scripted = Arc::new(ScriptedProvider::new(script));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let clock = clock();
+    let model = empty_model();
+    let budget = Arc::new(RequestBudget::new());
+    let (_, outcomes, truncated) = match sweep(&entries, 4, true, &budget, |entry| {
+        drive(entry, &provider, &clock, &model, &budget)
+    }) {
+        Ok(driven) => driven,
+        Err(error) => panic!("a live sweep drives: {error}"),
+    };
+    assert!(truncated, "176 planned requests stop at the budget");
+    assert_eq!(budget.sent.load(std::sync::atomic::Ordering::SeqCst), 168);
+    for at in [40, 41] {
+        match &outcomes[at] {
+            Outcome::Ran(ran_at) => assert_eq!(ran_at.verdict, Verdict::Block),
+            Outcome::Errored(errored) => panic!("a block is not an error: {}", errored.reason),
+            Outcome::Unrun => panic!("the first two runs of entry 11 drive"),
+        }
+    }
+    for at in [42, 43] {
+        match &outcomes[at] {
+            Outcome::Unrun => {}
+            Outcome::Ran(_) => panic!("the last two runs of entry 11 stay unrun"),
+            Outcome::Errored(errored) => panic!("a block is not an error: {}", errored.reason),
+        }
+    }
+    let rows: Vec<Sourced> = entries
+        .iter()
+        .map(|entry| Sourced { src: "set", entry })
+        .collect();
+    let table = render_run_table(&rows, &outcomes, 4);
+    let last = table
+        .lines()
+        .find(|line| line.starts_with("set e_10 "))
+        .expect("the table holds the stopped entry");
+    assert!(
+        last.contains("block block unrun unrun"),
+        "the table marks the stopped cells unrun: {last}"
+    );
 }

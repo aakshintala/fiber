@@ -6,14 +6,17 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use contract::clock::Clock;
 use contract::events::{
     AskStep, DecidedBy, Decision, Escalation, Event, EventKind, KeptMessage, ReviewedCall,
     ReviewerUse, ToolCallRequested, ToolCallStarted,
 };
-use contract::provider::{Cost, Input, Provider};
+use contract::provider::{
+    CallError, Cost, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Failure, Tokens};
 use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
@@ -1080,11 +1083,23 @@ pub(crate) struct RanOutcome {
     pub(crate) verdict: Verdict,
     /// 1 when stage 1 allowed, 2 when a `check` ran stage 2.
     pub(crate) stage: u8,
+    /// Why the reviewer decided so, as the resolved line records it.
+    pub(crate) reason: Option<String>,
+    /// One record per reviewer model call, in call order.
+    pub(crate) stages: Vec<StageRecord>,
     /// The stage-1 call's tokens.
     pub(crate) s1: Tokens,
     /// The stage-2 call's tokens, or zeros when stage 1 allowed.
     pub(crate) s2: Tokens,
     /// Milliseconds the review took on the injected clock.
+    pub(crate) latency_ms: u64,
+}
+
+/// One reviewer model call the eval taped: its verbatim text plus latency.
+pub(crate) struct StageRecord {
+    /// The reply's text parts concatenated, verbatim, never re-parsed.
+    pub(crate) text: String,
+    /// Milliseconds the call took on the injected clock.
     pub(crate) latency_ms: u64,
 }
 
@@ -1104,6 +1119,8 @@ pub(crate) enum Outcome {
     Ran(RanOutcome),
     /// The reviewer never judged it.
     Errored(ErrorOutcome),
+    /// The budget stopped the sweep before this entry-run drove.
+    Unrun,
 }
 
 /// Adds two token counts, saturating on overflow.
@@ -1304,14 +1321,156 @@ pub(crate) struct SweepModel {
     pub(crate) thinking_levels: Vec<ThinkingLevel>,
 }
 
+/// The billed-request budget one sweep command shares: the sent count plus
+/// the cap. The example builds one per command and shares it with `sweep`
+/// and the stage tape: the tape increments the counter on call end,
+/// `sweep` refuses an entry-run that would cross the limit. The counter is
+/// a bare atomic, never held across a call.
+pub(crate) struct RequestBudget {
+    /// Reviewer requests sent through the taped provider so far.
+    pub(crate) sent: AtomicU64,
+    /// The owner's billed cap per sweep command.
+    pub(crate) limit: u64,
+}
+
+impl RequestBudget {
+    /// A fresh budget against the billed cap.
+    pub(crate) fn new() -> Self {
+        Self {
+            sent: AtomicU64::new(0),
+            limit: MAX_REVIEWER_CALLS,
+        }
+    }
+}
+
+/// Concatenates the text parts of one reply: what the reviewer stage said.
+fn reply_text(reply: &Reply) -> String {
+    let mut text = String::new();
+    for action in &reply.actions {
+        if let ReplyAction::Text(completed) = action {
+            text.push_str(&completed.text);
+        }
+    }
+    text
+}
+
+/// A provider decorator that tapes every reviewer call's reply text plus
+/// latency and counts the billed request. Owned inside `drive` and wrapped
+/// around the reviewer provider only: the session keeps the original
+/// handle, so the tape holds reviewer stages exactly. The calls lock is
+/// held only for a push on call end and a drain or count before return,
+/// never across a provider call; the budget counter is a separate atomic.
+/// It delegates `wire_tools`, `cost_lookup`, `defers` and `warms` to the
+/// inner provider untouched.
+struct Tape {
+    /// The provider the reviewer would have used unwrapped.
+    inner: Arc<dyn Provider>,
+    /// The injected clock the latencies read.
+    clock: Arc<dyn Clock>,
+    /// The shared billed-request count.
+    budget: Arc<RequestBudget>,
+    /// One record per ended call, in call order.
+    calls: Arc<Mutex<Vec<StageRecord>>>,
+}
+
+impl Tape {
+    /// How many calls have ended through this tape.
+    fn count(&self) -> u64 {
+        u64::try_from(
+            self.calls
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .len(),
+        )
+        .unwrap_or(u64::MAX)
+    }
+
+    /// Takes every taped record, in call order.
+    fn drain(&self) -> Vec<StageRecord> {
+        std::mem::take(&mut self.calls.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+/// One taped reviewer call: the inner call plus the shared tape.
+struct TapeCall {
+    /// The provider's own call, which still sends the request.
+    inner: Box<dyn ModelCall>,
+    /// The injected clock the latency reads.
+    clock: Arc<dyn Clock>,
+    /// The shared billed-request count.
+    budget: Arc<RequestBudget>,
+    /// Where the record lands on call end.
+    calls: Arc<Mutex<Vec<StageRecord>>>,
+}
+
+impl ModelCall for TapeCall {
+    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let start = self.clock.now();
+        let end = self.inner.run(sink);
+        // Both instants come from the injected clock; saturating keeps a
+        // backward wall-clock step from panicking the sweep.
+        let latency_ms = self
+            .clock
+            .now()
+            .saturating_duration_since(start)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let text = end.as_ref().map(reply_text).unwrap_or_default();
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(StageRecord { text, latency_ms });
+        self.budget.sent.fetch_add(1, Ordering::SeqCst);
+        end
+    }
+
+    fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+impl Provider for Tape {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        Box::new(TapeCall {
+            inner: self.inner.call(request),
+            clock: Arc::clone(&self.clock),
+            budget: Arc::clone(&self.budget),
+            calls: Arc::clone(&self.calls),
+        })
+    }
+
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, Value>> {
+        self.inner.wire_tools(tools)
+    }
+
+    fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
+        self.inner.cost_lookup()
+    }
+
+    fn defers(&self) -> bool {
+        self.inner.defers()
+    }
+
+    fn warms(&self, request: &ModelRequest) -> bool {
+        self.inner.warms(request)
+    }
+}
+
 /// Drives `entry` through `Loop::review` on the injected `provider` with
-/// the resolved reviewer `model`, timing it on the injected `clock`.
+/// the resolved reviewer `model`, timing it on the injected `clock` and
+/// counting its reviewer requests against `budget`. Returns the outcome
+/// with the entry-run's reviewer request count.
 pub(crate) fn drive(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
     model: &SweepModel,
-) -> Outcome {
+    budget: &Arc<RequestBudget>,
+) -> (Outcome, u64) {
     drive_with(
         entry,
         provider,
@@ -1327,24 +1486,28 @@ pub(crate) fn drive(
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: u64::MAX,
         }),
+        budget,
     )
 }
 
 /// Drives `entry` through `Loop::review` on the injected `provider` with
-/// the given reviewer setup, timing it on the injected `clock`. A loop
-/// that cannot start, a review the provider fails, and a usage fold that
-/// cannot read are error outcomes, never verdicts. A denied reviewer
-/// failure is one too: the dropped inbox leaves the escalation unanswered,
-/// so the denial resolves by cancel and the untouched generic arm below
-/// reports it as an error — excluded from both denominators and counted
-/// in `errors`. The seam exists so tests can install a failing reviewer;
-/// `drive` always installs its metadata reviewer as `Ok`.
+/// the given reviewer setup, timing it on the injected `clock` and
+/// counting its reviewer requests against `budget`. A loop that cannot
+/// start, a review the provider fails, and a usage fold that cannot read
+/// are error outcomes, never verdicts. A denied reviewer failure is one
+/// too: the dropped inbox leaves the escalation unanswered, so the denial
+/// resolves by cancel and the untouched generic arm below reports it as an
+/// error — excluded from both denominators and counted in `errors`. The
+/// seam exists so tests can install a failing reviewer; `drive` always
+/// installs its metadata reviewer as `Ok`. Returns the outcome with the
+/// entry-run's reviewer request count.
 pub(crate) fn drive_with(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
     reviewer: Result<Reviewer, Failure>,
-) -> Outcome {
+    budget: &Arc<RequestBudget>,
+) -> (Outcome, u64) {
     let errored = |reason: String| {
         Outcome::Errored(ErrorOutcome {
             id: entry.id.clone(),
@@ -1353,7 +1516,7 @@ pub(crate) fn drive_with(
     };
     let rebuilt = match rebuild(entry) {
         Ok(rebuilt) => rebuilt,
-        Err(error) => return errored(error),
+        Err(error) => return (errored(error), 0),
     };
     let home = fakes::TempDir::new("fiber-sweep");
     let log = match log::Log::create(
@@ -1362,7 +1525,12 @@ pub(crate) fn drive_with(
         Arc::clone(clock),
     ) {
         Ok(log) => log,
-        Err(error) => return errored(format!("review_sweep: cannot start its loop: {error}")),
+        Err(error) => {
+            return (
+                errored(format!("review_sweep: cannot start its loop: {error}")),
+                0,
+            );
+        }
     };
     let scratch = log.dir().to_path_buf();
     let session_log = scratch.join("events.jsonl").display().to_string();
@@ -1392,11 +1560,37 @@ pub(crate) fn drive_with(
             rules: Arc::new(NoRules),
         },
     };
+    // The tape wraps the reviewer provider only: the session above keeps
+    // the original handle, so the tape holds reviewer stages exactly. A
+    // reviewer that never set up still tapes nothing: its path makes no
+    // model call.
+    let inner = match &reviewer {
+        Ok(review) => Arc::clone(&review.provider),
+        Err(_) => Arc::clone(provider),
+    };
+    let tape = Arc::new(Tape {
+        inner,
+        clock: Arc::clone(clock),
+        budget: Arc::clone(budget),
+        calls: Arc::new(Mutex::new(Vec::new())),
+    });
+    let tapped = reviewer.map(|review| Reviewer {
+        provider: tape.clone(),
+        model: review.model,
+        thinking_levels: review.thinking_levels,
+        cache_lifetime: review.cache_lifetime,
+        context_window: review.context_window,
+    });
     let mut looped = match Loop::start(session, None) {
         Ok(looped) => looped,
-        Err(error) => return errored(format!("review_sweep: cannot start its loop: {error}")),
+        Err(error) => {
+            return (
+                errored(format!("review_sweep: cannot start its loop: {error}")),
+                0,
+            );
+        }
     }
-    .reviewer(reviewer, BlockLimits::default())
+    .reviewer(tapped, BlockLimits::default())
     .reviewer_notes(String::new());
     // No person answers an escalation: dropping the sender closes the
     // inbox, so an escalated call denies as gone instead of waiting.
@@ -1413,10 +1607,13 @@ pub(crate) fn drive_with(
     } = rebuilt;
     let start = clock.now();
     if let Err(error) = looped.review(&call, &id, &turn, prepared) {
-        return errored(format!(
-            "review_sweep: review of {} failed: {error}",
-            entry.id
-        ));
+        return (
+            errored(format!(
+                "review_sweep: review of {} failed: {error}",
+                entry.id
+            )),
+            tape.count(),
+        );
     }
     // Both instants come from the injected clock; saturating keeps a
     // backward wall-clock step from panicking the sweep.
@@ -1428,7 +1625,7 @@ pub(crate) fn drive_with(
         .unwrap_or(u64::MAX);
     let (decision, decided_by, reason) = match resolved_for(&scratch, &id.0) {
         Ok(resolved) => resolved,
-        Err(error) => return errored(error),
+        Err(error) => return (errored(error), tape.count()),
     };
     let verdict = match (decision, decided_by) {
         (Decision::Allow, _) => Verdict::Allow,
@@ -1436,29 +1633,39 @@ pub(crate) fn drive_with(
         (Decision::Deny, _) => {
             let cause = match escalation_for(&scratch, &id.0) {
                 Ok(cause) => cause,
-                Err(error) => return errored(error),
+                Err(error) => return (errored(error), tape.count()),
             };
-            return errored(format!(
-                "review_sweep: review of {} never judged: {}",
-                entry.id,
-                cause
-                    .or(reason)
-                    .unwrap_or_else(|| "no reason recorded".to_owned())
-            ));
+            return (
+                errored(format!(
+                    "review_sweep: review of {} never judged: {}",
+                    entry.id,
+                    cause
+                        .or(reason)
+                        .unwrap_or_else(|| "no reason recorded".to_owned())
+                )),
+                tape.count(),
+            );
         }
     };
     let (s1, s2, stage2) = match fold_usage(&scratch, &id.0) {
         Ok(fold) => fold,
-        Err(error) => return errored(error),
+        Err(error) => return (errored(error), tape.count()),
     };
-    Outcome::Ran(RanOutcome {
-        label1: entry.label1,
-        verdict,
-        stage: u8::from(stage2) + 1,
-        s1,
-        s2,
-        latency_ms,
-    })
+    let stages = tape.drain();
+    let count = u64::try_from(stages.len()).unwrap_or(u64::MAX);
+    (
+        Outcome::Ran(RanOutcome {
+            label1: entry.label1,
+            verdict,
+            stage: u8::from(stage2) + 1,
+            reason,
+            stages,
+            s1,
+            s2,
+            latency_ms,
+        }),
+        count,
+    )
 }
 
 /// Token totals for one review stage.
@@ -1549,7 +1756,11 @@ pub(crate) fn score(model: &str, outcomes: &[Outcome]) -> ModelReport {
     let mut latencies = Vec::new();
     for outcome in outcomes {
         let Outcome::Ran(ran_at) = outcome else {
-            report.errors = report.errors.saturating_add(1);
+            // An error never judged, so it counts apart; an unrun never
+            // drove, so it counts nowhere.
+            if matches!(outcome, Outcome::Errored(_)) {
+                report.errors = report.errors.saturating_add(1);
+            }
             continue;
         };
         report.runs = report.runs.saturating_add(1);
@@ -1658,25 +1869,53 @@ pub(crate) struct EntryTally {
 /// Drives each entry `runs` times in turn through `drive_entry`, so one
 /// entry's repetitions go out back to back and later runs can reuse the
 /// prompt cache. With `live` unset the sweep drives nothing and returns
-/// empty, so the no-network proof holds at the core level. Returns the
-/// per-entry tallies beside every outcome in drive order, for the entry
-/// table and the pooled model row.
+/// empty, so the no-network proof holds at the core level. Before each
+/// entry-run the sweep checks the shared budget: when the worst case for
+/// one more run would cross the cap it stops, marks every remaining
+/// entry-run unrun, and reports truncated. Returns the per-entry tallies
+/// beside every outcome in drive order, for the entry table and the pooled
+/// model row.
 pub(crate) fn sweep(
     entries: &[Entry],
     runs: u32,
     live: bool,
-    drive_entry: impl Fn(&Entry) -> Outcome,
-) -> Result<(Vec<EntryTally>, Vec<Outcome>), String> {
+    budget: &Arc<RequestBudget>,
+    drive_entry: impl Fn(&Entry) -> (Outcome, u64),
+) -> Result<(Vec<EntryTally>, Vec<Outcome>, bool), String> {
     if !live {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new(), false));
     }
     let mut tallies = Vec::with_capacity(entries.len());
     let mut outcomes = Vec::new();
-    for entry in entries {
+    for (at, entry) in entries.iter().enumerate() {
         let mut allows = 0u64;
         let mut blocks = 0u64;
-        for _ in 0..runs {
-            let outcome = drive_entry(entry);
+        let mut driven = 0u32;
+        while driven < runs {
+            if budget.sent.load(Ordering::SeqCst).saturating_add(4) > budget.limit {
+                for _ in driven..runs {
+                    outcomes.push(Outcome::Unrun);
+                }
+                tallies.push(EntryTally {
+                    id: entry.id.clone(),
+                    label: entry.label1,
+                    allows,
+                    blocks,
+                });
+                for rest in entries.iter().skip(at + 1) {
+                    for _ in 0..runs {
+                        outcomes.push(Outcome::Unrun);
+                    }
+                    tallies.push(EntryTally {
+                        id: rest.id.clone(),
+                        label: rest.label1,
+                        allows: 0,
+                        blocks: 0,
+                    });
+                }
+                return Ok((tallies, outcomes, true));
+            }
+            let (outcome, _) = drive_entry(entry);
             match &outcome {
                 Outcome::Ran(ran_at) => match ran_at.verdict {
                     Verdict::Allow => {
@@ -1686,9 +1925,12 @@ pub(crate) fn sweep(
                         blocks = blocks.saturating_add(1);
                     }
                 },
-                Outcome::Errored(_) => {}
+                // An error casts no vote here; the model row counts it. A
+                // driver never reports unrun: only this stop marks it.
+                Outcome::Errored(_) | Outcome::Unrun => {}
             }
             outcomes.push(outcome);
+            driven = driven.saturating_add(1);
         }
         tallies.push(EntryTally {
             id: entry.id.clone(),
@@ -1697,7 +1939,7 @@ pub(crate) fn sweep(
             blocks,
         });
     }
-    Ok((tallies, outcomes))
+    Ok((tallies, outcomes, false))
 }
 
 /// Renders the per-entry table: one `id label verdict count/runs` line per
@@ -1719,4 +1961,148 @@ pub(crate) fn render_entry_table(tallies: &[EntryTally], runs: u32) -> String {
         table.push_str(&format!("{} {label} {side} {count}/{runs}\n", tally.id));
     }
     table
+}
+
+/// One run-table row's source tag beside its entry: the tag distinguishes
+/// twin rows sharing an id, one per input form.
+pub(crate) struct Sourced<'a> {
+    /// Where the entry came from: `set` or `dir`.
+    pub(crate) src: &'static str,
+    /// The entry the row reports.
+    pub(crate) entry: &'a Entry,
+}
+
+/// One verdict cell: what the reviewer judged, or the miss when it never
+/// drove or never judged.
+fn run_cell(outcome: Option<&Outcome>) -> &'static str {
+    match outcome {
+        Some(Outcome::Ran(ran_at)) => match ran_at.verdict {
+            Verdict::Allow => "allow",
+            Verdict::Block => "block",
+        },
+        Some(Outcome::Errored(_)) => "error",
+        Some(Outcome::Unrun) | None => "unrun",
+    }
+}
+
+/// Sums one call's cache-write classes into the token total.
+fn cache_write_sum(tokens: &Tokens) -> u64 {
+    tokens.cache_write.values().sum::<u64>()
+}
+
+/// Renders text on one line: newlines become spaces, cut at `max`
+/// characters.
+fn one_line(text: &str, max: usize) -> String {
+    text.chars()
+        .map(|cell| {
+            if cell == '\n' || cell == '\r' {
+                ' '
+            } else {
+                cell
+            }
+        })
+        .take(max)
+        .collect()
+}
+
+/// Renders the pasteable per-run table: one space-separated row per
+/// slow-path call, with the source tag distinguishing twin rows, the
+/// expected verdict, one verdict cell per run, and the token and latency
+/// totals. Entry token totals sum both stages over runs; latency is the
+/// per-entry upper-middle, mirroring the model row.
+pub(crate) fn render_run_table(rows: &[Sourced], outcomes: &[Outcome], runs: u32) -> String {
+    let mut table = String::from("src id expected");
+    for run in 1..=runs {
+        table.push_str(&format!(" r{run}"));
+    }
+    table.push_str(" tok_in tok_out lat_p50\n");
+    let mut driven = outcomes.iter();
+    for row in rows {
+        let expected = match row.entry.label1 {
+            Some(Label::Pass) => "pass",
+            Some(Label::Block) => "block",
+            None => "unlabelled",
+        };
+        let mut cells = String::new();
+        let mut tok_in = 0u64;
+        let mut tok_out = 0u64;
+        let mut latencies = Vec::new();
+        for _ in 0..runs {
+            let outcome = driven.next();
+            cells.push(' ');
+            cells.push_str(run_cell(outcome));
+            if let Some(Outcome::Ran(ran_at)) = outcome {
+                tok_in = tok_in
+                    .saturating_add(ran_at.s1.input)
+                    .saturating_add(ran_at.s1.cache_read)
+                    .saturating_add(cache_write_sum(&ran_at.s1))
+                    .saturating_add(ran_at.s2.input)
+                    .saturating_add(ran_at.s2.cache_read)
+                    .saturating_add(cache_write_sum(&ran_at.s2));
+                tok_out = tok_out
+                    .saturating_add(ran_at.s1.output)
+                    .saturating_add(ran_at.s2.output);
+                latencies.push(ran_at.latency_ms);
+            }
+        }
+        latencies.sort_unstable();
+        let latency = latencies
+            .get(latencies.len() / 2)
+            .map_or_else(|| "n/a".to_owned(), |p50| p50.to_string());
+        table.push_str(&format!(
+            "{} {} {expected}{cells} {tok_in} {tok_out} {latency}\n",
+            row.src, row.entry.id
+        ));
+    }
+    table
+}
+
+/// Renders the free-text detail beside the run table: one line per run
+/// with its verdict, deciding stage, reason, per-stage tokens, latency
+/// and the recorded stage texts. Reasons and texts render single-lined,
+/// cut at 160 characters, so the diagnosis keeps its words while the table
+/// stays greppable.
+pub(crate) fn render_run_detail(rows: &[Sourced], outcomes: &[Outcome], runs: u32) -> String {
+    let mut detail = String::new();
+    let mut driven = outcomes.iter();
+    for row in rows {
+        for run in 1..=runs {
+            match driven.next() {
+                Some(Outcome::Ran(ran_at)) => {
+                    let verdict = match ran_at.verdict {
+                        Verdict::Allow => "allow",
+                        Verdict::Block => "block",
+                    };
+                    let texts = ran_at
+                        .stages
+                        .iter()
+                        .map(|stage| {
+                            format!("{} [{}ms]", one_line(&stage.text, 160), stage.latency_ms)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    detail.push_str(&format!(
+                        "{} {} r{run} {verdict} stage{} reason={} s1={}/{} s2={}/{} lat={}ms {}\n",
+                        row.src,
+                        row.entry.id,
+                        ran_at.stage,
+                        one_line(ran_at.reason.as_deref().unwrap_or("-"), 160),
+                        ran_at.s1.input,
+                        ran_at.s1.output,
+                        ran_at.s2.input,
+                        ran_at.s2.output,
+                        ran_at.latency_ms,
+                        texts
+                    ));
+                }
+                Some(Outcome::Errored(_)) => {
+                    detail.push_str(&format!("{} {} r{run} error\n", row.src, row.entry.id));
+                }
+                Some(Outcome::Unrun) | None => {
+                    detail.push_str(&format!("{} {} r{run} unrun\n", row.src, row.entry.id));
+                }
+            }
+        }
+    }
+    detail
 }
