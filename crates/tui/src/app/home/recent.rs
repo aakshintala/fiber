@@ -370,22 +370,6 @@ impl Recent {
         sessions.is_archived_dirty(project)
     }
 
-    /// Clears an archived-dirty marker and sends exactly one follow-up
-    /// after a valid archived answer.
-    fn follow_up_archived(
-        &mut self,
-        project: &str,
-        sessions: &mut Sessions,
-        connected: bool,
-        outbox: &mut Outbox,
-    ) -> Vec<String> {
-        if !sessions.is_archived_dirty(project) {
-            return Vec::new();
-        }
-        sessions.clear_archived_dirty(project);
-        self.archived_first(project, sessions, connected, outbox)
-    }
-
     /// Asks the next archived scoped `recent` page for `project` past
     /// `before`, recording its id. While one is in flight for the
     /// project, sends nothing: paging is not a re-trigger, so it marks
@@ -673,7 +657,8 @@ impl App {
                             .answer_archived(&project, rows, total, &mut home.sessions);
                     home.refill_picker();
                     let mut lines = if dirty {
-                        home.recent.follow_up_archived(
+                        home.sessions.clear_archived_dirty(&project);
+                        home.recent.archived_first(
                             &project,
                             &mut home.sessions,
                             connected,

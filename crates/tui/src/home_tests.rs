@@ -1330,3 +1330,88 @@ fn status_left_and_remove_leave_every_stored_total_untouched() {
     sessions.remove(&SessionId("s_a".into()));
     assert_eq!(sessions.total_for(PROJECT), Some(5));
 }
+
+#[test]
+fn archived_scoped_reconciles_an_exited_row_into_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+        true,
+    );
+    let key = sessions
+        .row(&SessionId("s_a".to_owned()))
+        .unwrap_or_else(|| panic!("the exited row"))
+        .key;
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+    );
+    sessions.note_archived_total(PROJECT, 1);
+    // `docs/tui.md`, "The session list" (an archived session is on
+    // neither the exited rows nor the rail): the exited row leaves the
+    // exited list with its key and folds into the archived map, so the
+    // held count has a row to show in the fold. Skipping the duplicate
+    // keeps it under exited with no row in the fold and fails this.
+    assert!(sessions.all().iter().all(|row| row.id.0 != "s_a"));
+    let archived = sessions
+        .row(&SessionId("s_a".to_owned()))
+        .unwrap_or_else(|| panic!("the reconciled archived row"));
+    assert_eq!(archived.key, key);
+    assert!(sessions.is_archived(&SessionId("s_a".to_owned())));
+    assert!(sessions.cards().iter().all(|row| row.id.0 != "s_a"));
+    let sections = sessions.sections(Some(PROJECT));
+    assert!(sections[0].exited.is_empty());
+    assert_eq!(sections[0].archived.len(), 1);
+    assert_eq!(sections[0].archived_total, Some(1));
+    // A second archived page listing the same id again adds nothing.
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+    );
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
+fn archived_scoped_keeps_a_live_feed_row_out_of_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_live", PROJECT, 0));
+    // A stale archived answer naming the live id archives nothing: the
+    // live row stays on the feed and the rail, with no archived row.
+    // Moving it would fail the live assertions below.
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_live", "live", "exited", None)])).0,
+    );
+    assert!(!sessions.is_archived(&SessionId("s_live".to_owned())));
+    assert!(
+        sessions
+            .feed_row(&SessionId("s_live".to_owned()))
+            .is_some_and(|row| row.left.is_none())
+    );
+    assert!(sessions.cards().iter().any(|row| row.id.0 == "s_live"));
+}
+
+#[test]
+fn archived_scoped_reconciles_a_feed_exited_row_into_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_f", PROJECT, 0));
+    sessions.left(&SessionId("s_f".into()), Left::Exited);
+    let key = sessions
+        .row(&SessionId("s_f".to_owned()))
+        .unwrap_or_else(|| panic!("the feed exited row"))
+        .key;
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_f", "f", "exited", None)])).0,
+    );
+    // `docs/tui.md`, "The session list" (an archived session is on
+    // neither the exited rows nor the rail): the feed exited row leaves
+    // the feed with its key and folds into the archived map.
+    assert!(sessions.all().iter().all(|row| row.id.0 != "s_f"));
+    let archived = sessions
+        .row(&SessionId("s_f".to_owned()))
+        .unwrap_or_else(|| panic!("the reconciled archived row"))
+        .key;
+    assert_eq!(archived, key);
+    assert!(sessions.is_archived(&SessionId("s_f".to_owned())));
+}

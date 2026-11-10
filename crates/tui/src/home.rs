@@ -778,15 +778,10 @@ impl Sessions {
                 return;
             }
         }
-        let mut evicted = false;
         for rows in self.archived.values_mut() {
-            let before = rows.len();
             rows.retain(|row| row.id != *id);
-            evicted |= rows.len() != before;
         }
-        if evicted {
-            self.archived.retain(|_, rows| !rows.is_empty());
-        }
+        self.archived.retain(|_, rows| !rows.is_empty());
     }
 
     /// Folds an unscoped `recent` page into the rows: the first page
@@ -894,24 +889,40 @@ impl Sessions {
     }
 
     /// Appends an archived project-scoped `recent` page: rows of other
-    /// projects stay untouched. A feed or exited duplicate is skipped,
-    /// as is an id an earlier archived page already listed, so archived
-    /// pages accumulate newest first. Never touches the unscoped cursor
-    /// or `more()`.
+    /// projects stay untouched. An id an earlier archived page already
+    /// listed is skipped, so archived pages accumulate newest first. An
+    /// exited row already loaded moves into the archived map with its
+    /// key, so an archived session is on neither the exited rows nor the
+    /// rail (`docs/tui.md`, "The session list"). A live feed duplicate
+    /// is skipped, so a stale archived answer never archives a live
+    /// session. Never touches the unscoped cursor or `more()`.
     pub(crate) fn archived_scoped(&mut self, project: &str, rows: Vec<Row>) {
         // The hub already scoped the page to the project, so the fold
         // only deduplicates.
         for mut row in rows {
-            if self.feed.iter().any(|feed| feed.id == row.id)
-                || self.recent.iter().any(|recent| recent.id == row.id)
-                || self
-                    .archived
-                    .get(project)
-                    .is_some_and(|kept| kept.iter().any(|kept| kept.id == row.id))
+            if self
+                .archived
+                .get(project)
+                .is_some_and(|kept| kept.iter().any(|kept| kept.id == row.id))
             {
                 continue;
             }
-            row.key = self.fresh();
+            if self
+                .feed
+                .iter()
+                .find(|feed| feed.id == row.id)
+                .is_some_and(|feed| feed.left.is_none())
+            {
+                continue;
+            }
+            let key = if let Some(at) = self.feed.iter().position(|feed| feed.id == row.id) {
+                self.feed.remove(at).key
+            } else if let Some(at) = self.recent.iter().position(|recent| recent.id == row.id) {
+                self.recent.remove(at).key
+            } else {
+                self.fresh()
+            };
+            row.key = key;
             self.archived
                 .entry(project.to_owned())
                 .or_default()
