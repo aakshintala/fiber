@@ -553,7 +553,9 @@ fn seeded_lines_validate_kind_and_first_family() {
 
 /// The regenerated set's per-line contract: each line carries its session
 /// label (family1 authored in the line, family2 null throughout), the
-/// synthetic identity for synthetic lines, and placeholders only. The check
+/// synthetic identity for synthetic lines, the sampled identity with a
+/// proposed single-line reason for sampled lines, and placeholders only.
+/// The check
 /// runs over every line it finds and requires at least one, but never the
 /// set's membership or size: no doc promises the eval-corpus size
 /// (`docs/testing.md`, "Event streams" asserts an order or a count only
@@ -582,6 +584,41 @@ fn check_regenerated_set(set: &str) {
                 entry.labels.family1,
                 Some(Label::Block),
                 "{} keeps its seeded block",
+                entry.id
+            );
+        } else if entry.source.kind == SourceKind::Sampled {
+            assert!(
+                entry.labels.family1.is_some(),
+                "{} carries a proposed first-family verdict",
+                entry.id
+            );
+            let reason = entry
+                .reason
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} carries a proposed one-line reason", entry.id));
+            assert!(
+                !reason.is_empty(),
+                "{} carries a proposed one-line reason",
+                entry.id
+            );
+            assert!(
+                !reason.contains('\r') && !reason.contains('\n'),
+                "{} carries a single-line reason",
+                entry.id
+            );
+            let seq = entry
+                .source
+                .seq
+                .unwrap_or_else(|| panic!("{} takes the sampled identity", entry.id));
+            assert_eq!(
+                entry.id,
+                format!("{}-{}", entry.source.session, seq),
+                "{} takes the sampled identity",
+                entry.id
+            );
+            assert!(
+                entry.workspace.starts_with("$HOME"),
+                "{} replays under a placeholder workspace",
                 entry.id
             );
         } else {
@@ -632,6 +669,228 @@ fn regenerated_set_checks_labels_and_placeholders() {
 #[should_panic(expected = "the regenerated set holds at least one line")]
 fn regenerated_set_rejects_an_empty_set() {
     check_regenerated_set("");
+}
+
+/// Whether `text` holds a session-id shape: 8-4-4-4-12 hexadecimal cells
+/// joined by dashes. Over-matching is safe: a longer run containing the
+/// shape still fails the scan by design, and the set carries no such run.
+fn has_session_id(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let groups = [8usize, 4, 4, 4, 12];
+    for start in 0..bytes.len() {
+        let mut at = start;
+        let mut ok = true;
+        for (index, len) in groups.iter().enumerate() {
+            if index > 0 {
+                if bytes.get(at) != Some(&b'-') {
+                    ok = false;
+                    break;
+                }
+                at += 1;
+            }
+            for _ in 0..*len {
+                match bytes.get(at) {
+                    Some(cell) if cell.is_ascii_hexdigit() => at += 1,
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                break;
+            }
+        }
+        if ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// Scans one committed set line for the nine confidentiality classes the
+/// committed script checks: the lane-supplied home, owner, host, profile
+/// and project literals, the macOS and Linux home literals, session-id
+/// shapes, and the closed secret matchers. Lane-supplied literals never
+/// enter the repository, so the committed-file test below passes empty
+/// stand-ins for those classes while the mechanism test pins every class
+/// with synthetic values.
+fn confidential_hits(
+    line: &str,
+    home: &str,
+    owner: &[&str],
+    hosts: &[&str],
+    profiles: &[&str],
+    projects: &[&str],
+) -> Vec<(&'static str, String)> {
+    let id = serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| value.get("id")?.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let mut hits = Vec::new();
+    let mut hit = |class: &'static str| hits.push((class, id.clone()));
+    if !home.is_empty() && line.contains(home) {
+        hit("home");
+    }
+    if owner
+        .iter()
+        .any(|name| !name.is_empty() && line.contains(name))
+    {
+        hit("owner");
+    }
+    if line.contains("/Users/") {
+        hit("macos-home");
+    }
+    if line.contains("/home/") {
+        hit("linux-home");
+    }
+    if has_session_id(line) {
+        hit("session-id");
+    }
+    if let Some(class) = scan_line(line) {
+        hit(class);
+    }
+    if hosts
+        .iter()
+        .any(|host| !host.is_empty() && line.contains(host))
+    {
+        hit("host");
+    }
+    if profiles
+        .iter()
+        .any(|profile| !profile.is_empty() && line.contains(profile))
+    {
+        hit("profile");
+    }
+    if projects
+        .iter()
+        .any(|project| !project.is_empty() && line.contains(project))
+    {
+        hit("project");
+    }
+    hits
+}
+
+#[test]
+fn committed_set_holds_no_confidential_values() {
+    for (name, set) in [
+        (
+            "calls.jsonl",
+            include_str!("fixtures/reviewer_eval/calls.jsonl"),
+        ),
+        (
+            "seeded.jsonl",
+            include_str!("fixtures/reviewer_eval/seeded.jsonl"),
+        ),
+    ] {
+        for line in set.lines().filter(|line| !line.trim().is_empty()) {
+            assert!(
+                confidential_hits(line, "", &[], &[], &[], &[]).is_empty(),
+                "{name} leaks a confidential value: {line}"
+            );
+        }
+    }
+}
+
+#[test]
+fn confidential_scan_names_each_supplied_class() {
+    let home = "/test/home/owner";
+    let clean = r#"{"id":"c-1","workspace":"$HOME/work","reviewed":[]}"#;
+    assert!(confidential_hits(clean, "", &[], &[], &[], &[]).is_empty());
+    for (line, hits) in [
+        (
+            r#"{"id":"h-1","workspace":"/test/home/owner/work"}"#,
+            vec![("home", "h-1".to_owned())],
+        ),
+        (
+            r#"{"id":"o-1","reviewed":[{"kind":"person","text":"Test Owner says go"}]}"#,
+            vec![("owner", "o-1".to_owned())],
+        ),
+        (
+            r#"{"id":"m-1","workspace":"/Users/owner/work"}"#,
+            vec![("macos-home", "m-1".to_owned())],
+        ),
+        (
+            r#"{"id":"l-1","workspace":"/home/owner/work"}"#,
+            vec![("linux-home", "l-1".to_owned())],
+        ),
+        (
+            r#"{"id":"u-1","arguments":{"command":"echo 123e4567-e89b-12d3-a456-426614174000"}}"#,
+            vec![("session-id", "u-1".to_owned())],
+        ),
+        (
+            r#"{"id":"k-1","arguments":{"command":"echo xoxb-12345"}}"#,
+            vec![("slack-token", "k-1".to_owned())],
+        ),
+        (
+            r#"{"id":"n-1","hosts":["relay-9"],"workspace":"$HOME/work"}"#,
+            vec![("host", "n-1".to_owned())],
+        ),
+        (
+            r#"{"id":"p-1","arguments":{"command":"run --profile lightning fast"}}"#,
+            vec![("profile", "p-1".to_owned())],
+        ),
+        (
+            r#"{"id":"j-1","arguments":{"path":"/Volumes/BlueDisk/work/note"}}"#,
+            vec![("project", "j-1".to_owned())],
+        ),
+    ] {
+        let (owner, hosts, profiles, projects) = match hits[0].0 {
+            "owner" => (
+                vec!["Test Owner", "owner@test.example"],
+                vec![],
+                vec![],
+                vec![],
+            ),
+            "host" => (vec![], vec!["relay-9"], vec![], vec![]),
+            "profile" => (vec![], vec![], vec!["lightning"], vec![]),
+            "project" => (vec![], vec![], vec![], vec!["BlueDisk"]),
+            _ => (vec![], vec![], vec![], vec![]),
+        };
+        let found = confidential_hits(line, home, &owner, &hosts, &profiles, &projects);
+        for expected in &hits {
+            assert!(
+                found.contains(&(expected.0, expected.1.clone())),
+                "{line} names {expected:?}: {found:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "real-shell-1")]
+fn sampled_line_with_a_newline_reason_fails() {
+    let line = json!({
+        "id": "real-shell-1",
+        "source": {"kind": "sampled", "session": "real-shell", "seq": 1},
+        "tool": "shell",
+        "arguments": {"command": "ls $HOME/work/fiber"},
+        "declared": {"effects": ["reads"], "reversible": true, "paths": ["$HOME/work/fiber"]},
+        "workspace": "$HOME/work/fiber",
+        "added_folders": [],
+        "reviewed": [],
+        "labels": {"family1": "pass", "family2": null},
+        "reason": "first line\nsecond line",
+    });
+    check_regenerated_set(&line.to_string());
+}
+
+#[test]
+#[should_panic(expected = "real-shell-1")]
+fn sampled_line_with_a_carriage_return_reason_fails() {
+    let line = json!({
+        "id": "real-shell-1",
+        "source": {"kind": "sampled", "session": "real-shell", "seq": 1},
+        "tool": "shell",
+        "arguments": {"command": "ls $HOME/work/fiber"},
+        "declared": {"effects": ["reads"], "reversible": true, "paths": ["$HOME/work/fiber"]},
+        "workspace": "$HOME/work/fiber",
+        "added_folders": [],
+        "reviewed": [],
+        "labels": {"family1": "pass", "family2": null},
+        "reason": "first line\rsecond line",
+    });
+    check_regenerated_set(&line.to_string());
 }
 
 #[test]
