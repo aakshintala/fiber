@@ -1630,7 +1630,7 @@ and text match one already shown does not show again.
 - At most 3 show, then "+N more", which lists them.
 - The "N approvals waiting" row (see "An approval") sits above the notices, and on a screen too short for both it drops first.
 - A notice that arrives during a drag waits for the release.
-- In the screen-reader mode notices are lines in reading order.
+**Not built yet: see #1506.**
 
 An accepted `/import` answer opens one import report overlay ("Look",
 "Overlays") and adds no notices. The report is titled "Imported from
@@ -2911,24 +2911,11 @@ bits, and the 256-colour form is computed ("Look").
 ### Reduced motion
 
 Every animation has a still form. `tui.reduced_motion` turns reduced motion
-on, and it is on whenever a screen reader is detected.
+on; detection is not built yet (see #1506).
 
 ### Screen readers
 
-Fiber detects VoiceOver on macOS and AT-SPI on Linux at start,
-and draws flat:
-
-- no tints, half-block edges, stripes or animation
-- one line per item, in reading order
-- state in words rather than glyphs
-- images as their one line, never inline
-
-Each line starts with what the item is: "you 14:03:" and the prompt,
-"reply:", "thought:", "tool read src/main.rs: 120 lines", "image:" and the
-image's one line, "waiting: approval for shell rm -rf /tmp/x", "running:
-shell, elapsed 12s", "done: completed, 2 tool calls".
-
-`--screen-reader` and `tui.screen_reader` force the flat mode on or off.
+**Not built yet: see #1506.**
 
 ### Images
 
@@ -3040,7 +3027,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   If the own segment fills first, the count phase adds ancestors above the
   preview without refolding its visible pages. On one segment the preview
   holds the filled run and the pass counts the rest, so the landing adds the
-  rows above it.
+  rows above it. A tail or count read that is rejected or abandoned installs
+  nothing: the previous transcript stays and the busy indicator is left to
+  the live session, with a notice when the read was rejected.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
@@ -3742,7 +3731,11 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 | `tui.panel.cards` | Which cards the panel shows, and their order |
 | `tui.theme` | The theme; unset, it follows the terminal's appearance |
 | `tui.reduced_motion` | Reduced motion |
-| `tui.screen_reader` | Forces the flat screen-reader mode on or off |
+
+**Not built yet: see #1506.**
+
+| Key | What it sets |
+|---|---|
 | `tui.attention.notification` | The OSC 9 desktop notification |
 | `tui.attention.bell` | The bell |
 | `tui.attention.title` | The state in the terminal title |

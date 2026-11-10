@@ -10,7 +10,7 @@ use contract::clock::Clock;
 
 use crate::Error;
 use crate::git::Origin;
-use crate::install::{Scratch, io, remove, unique_name};
+use crate::install::{Scratch, io, remove, remove_stale_dirs, unique_name};
 use crate::installed::read;
 use crate::manage::{Adopted, Plan, plan_updates};
 use crate::prepare::{Observe, prepare_binary};
@@ -87,6 +87,10 @@ pub struct StagedUpdate<'c> {
     plan: Plan<'c>,
     _scratch: Scratch,
     home: PathBuf,
+    /// The adopted archive members as (short, full name) pairs: a member
+    /// the release newly names commits under its short, so the slugged
+    /// directory an older install used is stale once the commit succeeds.
+    adopted: Vec<(String, String)>,
     docs_fresh: Option<PathBuf>,
     binary: PathBuf,
     binary_dir: Option<PathBuf>,
@@ -106,6 +110,11 @@ impl<'c> StagedUpdate<'c> {
     /// before. The lock is released before the docs swap.
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         self.plan.commit_prepared()?;
+        // A newly named member commits under its short, so the slugged
+        // directory an older install used is stale. A stale directory
+        // that cannot be removed fails the commit, so success leaves one
+        // directory.
+        remove_stale_dirs(&self.home, &self.adopted)?;
         self.plan.unlock();
         if let Some(fresh) = &self.docs_fresh {
             swap_docs_in(&self.home, fresh)?;
@@ -207,7 +216,7 @@ pub fn stage_update_observed<'c>(
     let extensions_dir = scratch.path().join("extensions");
     fs::create_dir(&extensions_dir).map_err(io(&extensions_dir))?;
     unpack_release_archive(&extensions_archive, &extensions_dir, EXTENSIONS)?;
-    let shorts = layout(&extensions_dir, &compat(&release.version))?;
+    let members = layout(&extensions_dir, &compat(&release.version))?;
     let tag = format!("v{}", release.version);
     let commit = origin.tag_commit(FIBER_REPO, &tag, clock)?;
     let mut plan = plan_updates(home, &compat(&release.version), origin, clock)?;
@@ -221,19 +230,21 @@ pub fn stage_update_observed<'c>(
         })
         .transpose()?;
     let installed = read(home)?;
-    for short in &shorts {
-        let name = config::full_name(short);
-        if let Some(member) = installed.installed.iter().find(|i| i.name == name) {
+    let mut adopted = Vec::new();
+    for (short, name) in &members {
+        if let Some(member) = installed.installed.iter().find(|i| i.name == *name) {
             plan.adopt(
                 home,
                 &compat(&release.version),
                 &Adopted {
                     installed: member,
+                    short,
                     version: &release.version,
                     commit: &commit,
                     source: &extensions_dir.join(short),
                 },
             )?;
+            adopted.push((short.clone(), name.clone()));
         }
     }
     // Only the member binaries pre-stage, before the person's approval:
@@ -245,6 +256,7 @@ pub fn stage_update_observed<'c>(
         plan,
         _scratch: scratch,
         home: home.into(),
+        adopted,
         docs_fresh,
         binary,
         binary_dir: installed_binary
