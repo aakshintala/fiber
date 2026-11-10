@@ -704,9 +704,7 @@ impl Loop {
     /// no new read. A readable first line that is not `session_started`
     /// reads as no worktree, while the exit still settles.
     fn settle_worktree(lines: &[Envelope]) -> Option<contract::shapes::Worktree> {
-        let Some(first) = lines.first() else {
-            return None;
-        };
+        let first = lines.first()?;
         match Event::from_envelope(first) {
             Ok(Some(Event::SessionStarted(started))) => started.worktree,
             _ => None,
