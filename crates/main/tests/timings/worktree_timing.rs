@@ -1,5 +1,4 @@
-//! Worktree create and remove timers at the binary level (`docs/state.md`,
-//! "Diagnostic logs"): the built `fiber` runs `ask --worktree` against
+//! Worktree create and remove timers at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask --worktree` against
 //! the fake provider server. At `debug` a clean run writes one
 //! `worktree.create` in the pid file and one `worktree.remove` in the
 //! session file, each with only `op` and `ms`; at `info` nothing is

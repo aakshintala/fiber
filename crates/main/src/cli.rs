@@ -138,7 +138,7 @@ pub(crate) struct TopLevel {
 struct Cli {
     /// The model for this terminal run, as a person types it: bare
     /// `fiber` only, carried on each `start` in `overrides`
-    /// (`docs/invocation.md`, "Sessions").
+    /// (`docs/invocation.md`, "Commands and flags").
     #[arg(long, value_name = "model")]
     model: Option<String>,
 
@@ -843,8 +843,7 @@ pub(crate) struct SessionArgs {
 
     /// Continue the session this rewind names as the session its `rewound`
     /// line points at: hidden and free to change, passed by the hub that
-    /// starts a rewind's new session (`docs/invocation.md`, "`rewind`
-    /// starts a new session process").
+    /// starts a rewind's new session (`docs/invocation.md`, "What each command does").
     #[arg(
         long = "rewound-from",
         value_name = "session_id",

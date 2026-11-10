@@ -140,8 +140,7 @@ thread_local! {
 }
 
 /// How many borrowed decodes the calling thread has made
-/// (`docs/testing.md`, "a test of how much work something does counts
-/// the work"). The counted-work test reads it on the folding thread.
+/// (`docs/testing.md`, "Testing"). The counted-work test reads it on the folding thread.
 #[cfg(test)]
 pub(crate) fn decode_count() -> usize {
     DECODE_COUNT.with(|count| count.get())
@@ -416,7 +415,7 @@ pub(crate) struct App {
     reconnect: reconnect::Reconnect,
     /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run
     /// layer: each `start` carries them in `overrides`
-    /// (`docs/invocation.md`, "Sessions").
+    /// (`docs/invocation.md`, "Commands and flags").
     launch_overrides: Vec<String>,
     /// The `/clear` start and close correlations (`docs/tui.md`,
     /// "Clearing").

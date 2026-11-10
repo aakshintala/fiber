@@ -248,7 +248,7 @@ fn a_list_launch_with_no_rows_leaves_the_box_focused() {
 #[test]
 fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let mut app = home_at(OpenAt::List);
-    // `docs/invocation.md:1044` (the hub speaks first on each connection).
+    // `docs/invocation.md`, "What the hub speaks" (the hub speaks first on each connection).
     let lines = commands(app.on_line(hello()));
     let recent = lines
         .iter()

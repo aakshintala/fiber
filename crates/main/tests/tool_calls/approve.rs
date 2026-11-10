@@ -1,5 +1,4 @@
-//! Binary-level tests of `fiber approve` (`docs/extensions.md`, "Approving
-//! outside a session"; `docs/testing.md`, "Levels"): the built `fiber` runs
+//! Binary-level tests of `fiber approve` (`docs/extensions.md`, "Code a repository ships"; `docs/testing.md`, "Levels"): the built `fiber` runs
 //! in a temporary git repository with its own `FIBER_HOME`, and nothing here
 //! touches the network. Every run carries a wall-clock deadline.
 

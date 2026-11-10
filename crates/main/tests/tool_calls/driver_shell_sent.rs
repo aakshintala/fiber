@@ -292,7 +292,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
 
     let server = ProviderServer::start([
         // A pending approval lets the loop drain shell deliveries without
-        // ending the turn (docs/testing.md, "Waits and timeouts").
+        // ending the turn (`docs/testing.md`, "Waits and timeouts").
         stream(&[function_call(
             "call_1",
             "shell",

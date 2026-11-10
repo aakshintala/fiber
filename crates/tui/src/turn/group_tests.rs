@@ -1253,7 +1253,7 @@ fn a_protected_restore_draws_a_warning_row_under_its_call() {
         ..Group::default()
     };
     let rows = ledger_rows(&group, 100);
-    // `docs/events.md:697-701`: the terminal folds one warning row beneath
+    // `docs/events.md`, "`tool_call_completed`": the terminal folds one warning row beneath
     // the call.
     assert_eq!(rows.len(), 2, "the call's row, then its warning: {rows:?}");
     assert!(

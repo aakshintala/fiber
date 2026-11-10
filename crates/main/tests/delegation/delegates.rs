@@ -351,7 +351,7 @@ fn event_windows_reject_missing_extra_duplicate_and_invalid_anchors() {
 /// caller checks against the cited delegate relations
 /// (`docs/events.md`, "Jobs").
 fn cancellation_kinds<'a>(lines: &'a [Value], lo: usize, hi: usize, expected: &[&str]) -> &'a str {
-    // docs/events.md, "Usage and notices": one copied usage and one finish
+    // `docs/events.md`, "Usage and notices": one copied usage and one finish
     // per run, in either order within the window; the turn end and the job
     // end bound it.
     support::assert_set_between(lines, lo, hi, &["usage_recorded", "delegate_finished"]);
@@ -471,28 +471,28 @@ fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
 
 /// The verbatim count rule the multiset calls cite
 /// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
 
 /// The combined citation the `job_delta` exclusion carries: the narrow
 /// exception (`docs/testing.md`, "Event streams") and the ephemeral-progress
-/// definition it names (`docs/events.md:1333`).
-const IGNORE_JOB_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; docs/events.md:1333: Ephemeral. Progress for clients, paced as `tool_call_delta` is.";
+/// definition it names (`docs/events.md`, "`job_delta`").
+const IGNORE_JOB_DELTA_DOC: &str = r#"docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; `docs/events.md`, "`job_delta`": Ephemeral. Progress for clients, paced as `tool_call_delta` is."#;
 
 /// The verbatim source promise the delegate-start assertions cite
 /// (`docs/events.md`, "Jobs").
-const DELEGATE_START_DOC: &str =
-    "docs/events.md:1319: Durable. Written after `job_started`, for each run.";
+const DELEGATE_START_DOC: &str = r#"`docs/events.md`, "`delegate_started`": Durable. Written after `job_started`, for each run."#;
 
 /// The verbatim source promise the delegate-end assertions cite
 /// (`docs/events.md`, "Jobs").
-const DELEGATE_END_DOC: &str = "docs/events.md:1354: Durable. Written just before `job_completed`.";
+const DELEGATE_END_DOC: &str =
+    r#"`docs/events.md`, "`delegate_finished`": Durable. Written just before `job_completed`."#;
 
 /// Verbatim lifecycle sources for the session-boundary assertions below.
 const SESSION_FIRST_DOC: &str =
-    "docs/events.md:339: Durable. The first line of every session's log.";
-const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+    r#"`docs/events.md`, "`session_started`": Durable. The first line of every session's log."#;
+const PROCESS_START_DOC: &str = r#"`docs/events.md`, "`fiber_started`": Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line."#;
 const PROCESS_END_DOC: &str =
-    "docs/events.md:296: Durable. The last line a process writes for a session.";
+    r#"`docs/events.md`, "`fiber_exited`": Durable. The last line a process writes for a session."#;
 
 #[test]
 fn multiset_passes_reordered_and_catches_duplicate_missing_extra() {
@@ -740,8 +740,9 @@ fn session_line(kind: &str, session: &str) -> Value {
 
 #[test]
 fn promised_order_checks_every_run_with_the_cited_line() {
-    let start_doc = "docs/events.md:1319: Durable. Written after `job_started`, for each run.";
-    let end_doc = "docs/events.md:1354: Durable. Written just before `job_completed`.";
+    let start_doc = r#"`docs/events.md`, "`delegate_started`": Durable. Written after `job_started`, for each run."#;
+    let end_doc =
+        r#"`docs/events.md`, "`delegate_finished`": Durable. Written just before `job_completed`."#;
     let run = |job: &str| {
         vec![
             job_line("job_started", job),
@@ -917,9 +918,10 @@ fn promised_order_checks_every_run_with_the_cited_line() {
 
 #[test]
 fn lifecycle_edges_accept_complete_logs_and_reject_broken_ones() {
-    let first_doc = "docs/events.md:339: Durable. The first line of every session's log.";
-    let start_doc = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
-    let end_doc = "docs/events.md:296: Durable. The last line a process writes for a session.";
+    let first_doc =
+        r#"`docs/events.md`, "`session_started`": Durable. The first line of every session's log."#;
+    let start_doc = r#"`docs/events.md`, "`fiber_started`": Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line."#;
+    let end_doc = r#"`docs/events.md`, "`fiber_exited`": Durable. The last line a process writes for a session."#;
     let complete: Vec<Value> = ["s1", "s2"]
         .iter()
         .flat_map(|session| {
@@ -2089,7 +2091,7 @@ fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
             Running::spawn_stdin_in(&setup, &parent_args, Stdio::null(), &workspace);
         let mut turns = 0;
         // docs/events.md, `jobs_pending_notified`: the ending notice starts a
-        // turn; docs/delegates.md, "Lifetime": the wake turn waits on the
+        // turn; `docs/delegates.md`, "Lifetime": the wake turn waits on the
         // delegate's finish. While the child is held, exactly two turns end:
         // the spawn turn, then the ending-notice turn.
         running.wait_line("parent ending notice while child is held", |line| {
@@ -2147,7 +2149,7 @@ fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
         // The scripted providers fix the replies, so the spawn turn, the
         // ending-notice turn and the wake turn hold exactly these durable
         // kinds as a set; the delegate pair keeps its cited order below
-        // (docs/events.md, "Jobs").
+        // (`docs/events.md`, "Jobs").
         support::assert_kinds_multiset(
             &durable_lines(&without_copies(&lines)),
             ROLE_PARENT_DURABLE,
@@ -2172,7 +2174,7 @@ fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
             DELEGATE_END_DOC,
         );
         let child_lines = read_lines(&child_log);
-        // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening
+        // `docs/events.md`, "Process boundary"/"extensions_loaded"/"Opening
         // message": the startup prefix precedes the first turn; the held
         // child answers once, so its run holds exactly these durable kinds
         // as a set.
@@ -2252,7 +2254,7 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     assert_eq!(completed["payload"]["status"], "completed");
     let receipt = completed["payload"]["content"][0]["text"].as_str().unwrap();
     // One job, one delegate: the start follows its job's start, and the
-    // finish sits just before its completion (docs/events.md, "Jobs").
+    // finish sits just before its completion (`docs/events.md`, "Jobs").
     let started = one(&ask.lines, "job_started");
     let job_id = started["job_id"].as_str().unwrap();
     support::assert_promised_order(
@@ -2846,7 +2848,7 @@ const CRASH_TURN_PAIR: &[&str] = &["turn_completed", "turn_started"];
 
 /// The crashed delegate's end: the notice joins at a step boundary, and its
 /// `delegate_finished` is written just before its `job_completed`
-/// (`docs/events.md:1354`). Its position against the rest is open:
+/// (`docs/events.md`, "`delegate_finished`"). Its position against the rest is open:
 /// the sibling's completion has no promised order against the parent's turn
 /// edges, so the helper compares the end with the rest as a set.
 const CRASH_END: &[&str] = &["step_started", "delegate_finished", "job_completed"];
@@ -2937,7 +2939,7 @@ fn assert_crash_ordered(lines: &[Value]) {
     support::assert_kinds_multiset(lines, &expected, &[], None, COUNT_DOC);
     // The stream logs one session: its first line opens the session, each
     // process run closes, and its last line exits it
-    // (docs/events.md, "Process boundary").
+    // (`docs/events.md`, "Process boundary").
     let session = lines
         .iter()
         .find(|line| line["kind"] == "session_started")
@@ -2991,7 +2993,7 @@ fn assert_crash_ordered(lines: &[Value]) {
     }
     // An end pair without a start holds no run: the finish still sits
     // immediately before its completion, and vice versa, with nothing
-    // between (docs/events.md, "Jobs").
+    // between (`docs/events.md`, "Jobs").
     let started = |id: &str| {
         lines
             .iter()
@@ -3471,9 +3473,8 @@ const ESC_CHILD_ORDERED: &[&str] = &[
 ];
 
 fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
-    // docs/events.md, "Process boundary": start/exit bound the process.
-    // "usage_recorded": one per fixture model call; docs/delegates.md,
-    // "Streams": each child usage is copied, with no order against turn end.
+    // `docs/events.md`, "Process boundary": start/exit bound the process.
+    // "usage_recorded": one per fixture model call; `docs/delegates.md`, "Streams": each child usage is copied, with no order against turn end.
     // "Permissions": a child's escalation is a block, not a person request.
     let lo = lines
         .iter()
@@ -3495,7 +3496,7 @@ fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
     // The window pins every interior kind exactly; the rest is a set: no
     // doc promises the turn's kind order. `usage_recorded` is ignored on
     // both sides: one per fixture model call, with no order against turn
-    // end. The delegate pair keeps its cited order (docs/events.md,
+    // end. The delegate pair keeps its cited order (`docs/events.md`,
     // "Jobs"); a stream without a delegate start holds no pair to check.
     let ours: Vec<Value> = lines
         .iter()
@@ -3556,7 +3557,7 @@ fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
                     && line["action_id"] == *action
             })
             .collect();
-        // docs/events.md, "usage_recorded": one per model call;
+        // `docs/events.md`, "`usage_recorded`": one per model call;
         // "Actions": the assistant message encloses the streamed reply.
         assert_eq!(usage.len(), 1, "one model call for {action}");
         assert!(
@@ -3583,7 +3584,7 @@ fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
         })
         .collect();
     review.sort_unstable();
-    // docs/events.md, "usage_recorded": reviewer purpose and action_id
+    // `docs/events.md`, "`usage_recorded`": reviewer purpose and action_id
     // identify each fixture review call, outside assistant-message actions.
     assert_eq!(review, purposes);
 }
@@ -3953,10 +3954,10 @@ fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
             .cloned(),
     );
     window.push(lines[hi].clone());
-    // docs/delegates.md, "Streams"/"Events": one copied usage and one
+    // `docs/delegates.md`, "Streams"/"Events": one copied usage and one
     // finish/completion per run. The spend's arrival holds no promised
     // order against the turn end; the finish keeps its cited order below
-    // (docs/events.md, "Jobs"). The window is a turn-scoped slice, so
+    // (`docs/events.md`, "Jobs"). The window is a turn-scoped slice, so
     // the relation runs over the whole log, where the pair's run is
     // complete.
     support::assert_set_between(&window, 0, window.len() - 1, expected);
@@ -4297,7 +4298,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         grandchild_exit_tx.send(lines).unwrap();
     });
     // Pump the child's socket through the stop, as with the grandchild
-    // above: a client that stops reading is cut (docs/invocation.md,
+    // above: a client that stops reading is cut (`docs/invocation.md`,
     // "What the hub speaks").
     let (child_exit_tx, child_exit_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -4318,7 +4319,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let completed = first.last().unwrap();
     assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
     // The grandchild's spend lands in the root log once, naming the
-    // grandchild: one line per generation id (docs/delegates.md:168-171,
+    // grandchild: one line per generation id (`docs/delegates.md`, "Streams",
     // "Streams"). The spawn lines arrived before the wait the root parked
     // in.
     let before: Vec<Value> = parked.into_iter().chain(first.iter().cloned()).collect();
@@ -4351,7 +4352,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let grandchild_id = child_started["delegate_session_id"].as_str().unwrap();
     assert_eq!(copies[0]["payload"]["origin_session_id"], grandchild_id);
     // The child's own copy names the grandchild too: the relay preserves
-    // the originator (docs/delegates.md:168-171, "Streams": the copy keeps
+    // the originator (`docs/delegates.md`, "Streams", "Streams": the copy keeps
     // one line per generation_id at each level).
     let relayed: Vec<Value> = child_lines
         .iter()
@@ -4363,7 +4364,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(relayed.len(), 1);
     assert_eq!(relayed[0]["payload"]["origin_session_id"], grandchild_id);
     // The child ends cancelled by the trip, exactly once
-    // (docs/delegates.md:123, "Identity and resume": one job_completed per
+    // (`docs/delegates.md`, "Identity and resume", "Identity and resume": one job_completed per
     // run); the grandchild completed on its own before the stop reached it.
     let mut batch: Vec<Value> = first
         .iter()
@@ -5037,7 +5038,7 @@ fn delegate_models_omits_logged_out_provider_references() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    // docs/delegates.md, "Choosing a model": one listing and two refused
+    // `docs/delegates.md`, "Choosing a model": one listing and two refused
     // spawns, each with its own tool completion; no delegate starts.
     let mut expected = REFUSED_MODEL_DURABLE.to_vec();
     expected.extend([
@@ -6227,7 +6228,7 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
     let folded = for_session(&parent_lines, &parent);
     // The parent's stream holds one delegate run: the start follows its
     // job's start, and the finish sits just before its completion
-    // (docs/events.md, "Jobs").
+    // (`docs/events.md`, "Jobs").
     let fold_started = one(&folded, "delegate_started");
     let job = fold_started["job_id"].as_str().unwrap();
     support::assert_promised_order(
@@ -6540,7 +6541,7 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     // The finish is written just before the end, with nothing of the same
     // run between: `session_status` lines are ephemeral observer output
     // holding no position, and both lines name the job
-    // (docs/events.md, "Jobs").
+    // (`docs/events.md`, "Jobs").
     support::assert_promised_order(
         &lines,
         job.as_str(),
@@ -6816,8 +6817,8 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
             .iter()
             .map(|request| String::from_utf8_lossy(&request.body).into_owned())
             .collect();
-        // docs/delegates.md, "Talking to a delegate": steering joins the next step;
-        // docs/loop.md, "One step": each fixture tool reply takes one further request.
+        // `docs/delegates.md`, "Talking to a delegate": steering joins the next step;
+        // `docs/loop.md`, "One step": each fixture tool reply takes one further request.
         assert_eq!(bodies.len(), 2, "{bodies:?}");
         assert!(
             !bodies[0].contains(MARK),
@@ -6837,7 +6838,7 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
             ask_sessions(&setup)
         };
         let child_lines = read_lines(&sessions.join(&delegate_id).join("events.jsonl"));
-        // docs/events.md, "Kinds", defines these lines; cross-trigger order
+        // `docs/events.md`, "Kinds", defines these lines; cross-trigger order
         // is open, so the durable lines are asserted as a multiset.
         support::assert_kinds_multiset(
             &durable_lines(&child_lines),
@@ -6882,13 +6883,13 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
         assert_eq!(resolved["payload"]["decided_by"], "reviewer");
         for kind in ["job_started", "job_completed"] {
             let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
-            // docs/delegates.md, "Identity and resume": one start/completion per run.
+            // `docs/delegates.md`, "Identity and resume": one start/completion per run.
             assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
             assert_eq!(found[0]["payload"]["job_id"], job.as_str());
         }
         let finished = one(&lines, "delegate_finished");
         assert_eq!(finished["text"], "after-steer");
-        // docs/events.md, "Kinds", defines these lines; cross-trigger order
+        // `docs/events.md`, "Kinds", defines these lines; cross-trigger order
         // is open, so the durable lines are asserted as a multiset.
         support::assert_kinds_multiset(
             &durable_lines(&without_copies(&lines)),
@@ -7136,8 +7137,8 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                         .contains(repository.join(".git").to_str().unwrap())
                 );
             }
-            // docs/delegates.md, "Worktrees": missing workspace fails before launch;
-            // docs/events.md, "fiber_started": one line per process, not per message.
+            // `docs/delegates.md`, "Worktrees": missing workspace fails before launch;
+            // `docs/events.md`, "`fiber_started`": one line per process, not per message.
             assert_eq!(child.requests().len(), 1);
             assert_eq!(
                 child_lines
@@ -7151,15 +7152,15 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 completed["payload"]["status"], "completed",
                 "{mode}: {completed}"
             );
-            // docs/delegates.md, "Identity and resume": resume continues the session;
-            // docs/loop.md, "One step": each text-only fixture reply ends its run.
+            // `docs/delegates.md`, "Identity and resume": resume continues the session;
+            // `docs/loop.md`, "One step": each text-only fixture reply ends its run.
             assert_eq!(child.requests().len(), 2);
             let process_starts: Vec<_> = child_lines
                 .iter()
                 .filter(|line| line["kind"] == "fiber_started")
                 .collect();
-            // docs/events.md, "fiber_started": one per process; resume starts a new run
-            // (docs/delegates.md, "Identity and resume" and "Lifetime").
+            // `docs/events.md`, "`fiber_started`": one per process; resume starts a new run
+            // (`docs/delegates.md`, "Identity and resume" and "Lifetime").
             assert_eq!(process_starts.len(), 2, "{mode}");
             assert_eq!(
                 one(&child_lines, "session_started")["workspace"],
@@ -7169,7 +7170,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 .iter()
                 .map(|line| line["seq"].as_u64().unwrap())
                 .collect();
-            // docs/events.md, "The envelope": seq is contiguous, never reset or reused.
+            // `docs/events.md`, "The envelope": seq is contiguous, never reset or reused.
             assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
             for kind in [
                 "job_started",
@@ -7178,7 +7179,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 "delegate_finished",
             ] {
                 let records: Vec<_> = lines.iter().filter(|line| line["kind"] == kind).collect();
-                // docs/delegates.md, "Identity and resume" and "Events": one pair
+                // `docs/delegates.md`, "Identity and resume" and "Events": one pair
                 // of job/delegate start and finish lines per run.
                 assert_eq!(records.len(), 2, "{mode}: {kind}");
                 assert!(
@@ -8491,7 +8492,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // The test owns both release senders: dropping one releases every
     // holder on its gate at once, and a failure before a release drops
     // them too, so the servers can always shut down instead of hanging a
-    // responder (docs/testing.md, "Waits and timeouts").
+    // responder (`docs/testing.md`, "Waits and timeouts").
     let (release_early, release_early_rx) = mpsc::channel::<()>();
     let release_early_rx = Arc::new(Mutex::new(release_early_rx));
     let early_gate = Arc::clone(&release_early_rx);
@@ -8502,7 +8503,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // after one late child request reaches its server, while that server's
     // gate stays shut. Arrival plus a shut gate proves the late pair
     // cannot finish before the early pair does; no signal claims a parked
-    // state (docs/code-quality.md, "What a reviewer checks").
+    // state (`docs/code-quality.md`, "What a reviewer checks").
     let (arrived_tx, arrived_rx) = mpsc::channel::<()>();
     // The parent spawns four delegates from one reply, exactly once: a
     // later request echoing the calls answers over, never respawns.
@@ -8643,9 +8644,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         "{}",
         grid.contents
     );
-    // Two rows per delegate (docs/tui.md, "The panel"): six Downs reach
+    // Two rows per delegate (`docs/tui.md`, "The panel"): six Downs reach
     // the fourth delegate's first row, scrolling the first delegate's
-    // first row out (docs/tui.md, "Swapped views").
+    // first row out (`docs/tui.md`, "Swapped views").
     run.write(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     let grid = run.wait_screen("the fourth delegate scrolled in", |grid| {
         delegates_list_header(grid)
@@ -8680,7 +8681,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // four still run.
     drop(release_early);
     // The reopened view lists the running scan first: running delegates
-    // precede finished ones in start order (docs/tui.md,
+    // precede finished ones in start order (`docs/tui.md`,
     // "Swapped views"). The old wait stopped here and pressed Enter, opening
     // the running scan's live view instead of a replay (#3490). The
     // small viewport shows three delegates, so this wait pins only a
@@ -9165,7 +9166,7 @@ fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspac
     assert_eq!(status.code(), Some(0), "{stderr}");
     let parent_id = lines[0]["session_id"].as_str().unwrap();
     let fork_lines = read_lines(&fork_log);
-    // docs/events.md, "Kinds", defines these lines; cross-trigger order
+    // `docs/events.md`, "Kinds", defines these lines; cross-trigger order
     // is open, so the durable lines are asserted as a multiset.
     support::assert_kinds_multiset(
         &durable_lines(&fork_lines),
@@ -9379,7 +9380,7 @@ const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
 /// pair of job notices needs (`docs/loop.md`, "One step").
 fn assert_wake_schedule(lines: &[Value]) {
     let lines = without_copies(lines);
-    // docs/delegates.md, "Results"/"Events": ask_user ends the first run;
+    // `docs/delegates.md`, "Results"/"Events": ask_user ends the first run;
     // delegate_message resumes it; each of the fixture's two runs ends once.
     for kind in ["delegate_finished", "job_completed"] {
         assert_eq!(
@@ -9389,7 +9390,7 @@ fn assert_wake_schedule(lines: &[Value]) {
         );
     }
     // The delegate pair keeps its cited order in every run
-    // (docs/events.md, "Jobs").
+    // (`docs/events.md`, "Jobs").
     let job = lines
         .iter()
         .find(|line| line["kind"] == "delegate_started")
@@ -9415,7 +9416,7 @@ fn assert_wake_schedule(lines: &[Value]) {
         .iter()
         .position(|line| line["kind"] == "turn_started")
         .unwrap();
-    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening
+    // `docs/events.md`, "Process boundary"/"extensions_loaded"/"Opening
     // message": the startup prefix holds these kinds as a set; no doc
     // promises their order against each other beyond the process edges.
     support::assert_kinds_multiset(
@@ -9431,7 +9432,7 @@ fn assert_wake_schedule(lines: &[Value]) {
         None,
         COUNT_DOC,
     );
-    // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": each turn encloses its
+    // `docs/loop.md`, "Starting a turn"/"One step"/"Ending a turn": each turn encloses its
     // steps; notices can join an existing step, so the turn count is open.
     for turn in lines[first..].split_inclusive(|line| line["kind"] == "turn_completed") {
         assert_eq!(turn.first().unwrap()["kind"], "turn_started");
@@ -9495,7 +9496,7 @@ fn assert_wake_schedule(lines: &[Value]) {
                 ]);
             }
             // The step's interior holds these kinds as a set: no doc
-            // promises their order, and docs/events.md, "usage_recorded"
+            // promises their order, and `docs/events.md`, "`usage_recorded`"
             // promises one per fixture call. The delegate pair keeps its
             // cited order in the whole-log check above.
             support::assert_kinds_multiset(&step[assistant..], &expected, &[], None, COUNT_DOC);
@@ -10126,11 +10127,11 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
 /// The subscribe and reload bound startup; command acceptance can race
 /// replay, while startup and job start retain their own promised order.
 fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
-    // docs/events.md, "Process boundary"/"extensions_loaded": session start,
+    // `docs/events.md`, "Process boundary"/"extensions_loaded": session start,
     // process start, then extension load. "Command acknowledgements": one
     // acceptance per command, with no order against the replayed prefix.
-    // docs/delegates.md, "Events": one job/delegate start per fixture run.
-    // docs/events.md, "extension_ui": ephemeral latest-state, sent to a
+    // `docs/delegates.md`, "Events": one job/delegate start per fixture run.
+    // `docs/events.md`, "`extension_ui`": ephemeral latest-state, sent to a
     // client that attaches, so its count is open and the set check sets it
     // aside.
     let window = &lines[lo + 1..hi];
@@ -10157,7 +10158,7 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
     );
     assert_eq!(answered(window, "c_go")["kind"], "command_accepted");
     // The startup prefix holds these kinds as a set; the delegate pair
-    // keeps its cited order (docs/events.md, "Jobs").
+    // keeps its cited order (`docs/events.md`, "Jobs").
     let startup: Vec<Value> = window
         .iter()
         .filter(|line| line["kind"] != "command_accepted" && line["kind"] != "extension_ui")
@@ -10190,9 +10191,9 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
         support::Relation::After,
         DELEGATE_START_DOC,
     );
-    // docs/events.md, "fiber_started": session_started is always the
+    // `docs/events.md`, "`fiber_started`": session_started is always the
     // log's first line, so each observed extension_ui follows it; zero or
-    // more may appear (docs/events.md, "extension_ui": ephemeral
+    // more may appear (`docs/events.md`, "`extension_ui`": ephemeral
     // latest-state, sent to a client that attaches, with no promised
     // count).
     let session = support::kinds(window)
@@ -10397,7 +10398,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // cancelled delegate's unfinished call still settles its
     // `usage_recorded`, copied with the delegate as origin
     // (`docs/events.md`, "Usage and notices"); the finish keeps its cited
-    // order (docs/events.md, "Jobs").
+    // order (`docs/events.md`, "Jobs").
     let job = cancellation_kinds(
         &logged,
         lo,
@@ -10471,7 +10472,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // The whole socket stream as a set, from the command's send to the
     // session's exit: the replayed startup, the command's delegate start,
     // the reload, and the cancelled end. The finish keeps its cited order
-    // (docs/events.md, "Jobs"); unpromised orders pass as sets.
+    // (`docs/events.md`, "Jobs"); unpromised orders pass as sets.
     // The multiset scopes to the post-reload slice, whose composition
     // the array pins; the cited pair runs over the whole stream, where
     // the cancelled job's run is complete.
@@ -10559,7 +10560,7 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // The whole stream as a set, with the independently triggered
     // `session_status` lines set aside: they carry no position relative
     // to the session's other lines (`docs/testing.md`, "Event streams").
-    // The finish keeps its cited order (docs/events.md, "Jobs").
+    // The finish keeps its cited order (`docs/events.md`, "Jobs").
     let job = cancellation_kinds(
         &lines,
         turn_end,

@@ -352,7 +352,7 @@ fn hooks_that_do_not_register_or_fail_softly_leave_the_output_with_a_notice() {
         .collect();
     // The two `extension_failed` notices group by code: the count and
     // the first item up front, both items with their extension listed
-    // (`docs/errors.md`, "Notices": one notice per code;
+    // (`docs/tui.md`, "Notices": one notice per code;
     // `docs/extensions.md`, "Hooks declared in configuration": an entry
     // missing `timeout` or `on_failure` is not registered, and a `notice`
     // names the entry and the missing field). The notice lands in the
@@ -2010,7 +2010,7 @@ fn a_compaction_runs_session_start_with_reason_compaction() {
     let users = user_messages(&requests[2].body);
     assert_eq!(users.len(), 4);
     assert!(users[0].starts_with("This message is from Fiber"));
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), carried input in a new-message block (item 5), then the note (item 6).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — session_start context (item 3), carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         &users[1..],
         [

@@ -184,8 +184,7 @@ fn a_live_codex_turn_replies() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     // A live stream varies in its deltas and reasoning events, so this pins
-    // only the order of the kinds it relies on (docs/testing.md, "Live calls
-    // and evals"). Lines written on their own trigger are set aside.
+    // only the order of the kinds it relies on (`docs/testing.md`, "Live calls and evals"). Lines written on their own trigger are set aside.
     let kinds: Vec<&str> = lines
         .iter()
         .filter_map(|line| line["kind"].as_str())

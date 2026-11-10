@@ -142,9 +142,9 @@ fn a_declared_command_is_listed_with_no_vm_and_starts_on_its_first_run() {
             "argument_hint": "[path]", "tag": "fiber.test/lazy", "extension": true
         })]
     );
-    // docs/extensions.md:1356-57: listing starts no VM.
+    // `docs/extensions.md`, "Commands and screens": listing starts no VM.
     assert_eq!(count(&started), 0, "listing started the VM");
-    // docs/extensions.md:1375-79: the first run starts the extension.
+    // `docs/extensions.md`, "Commands and screens": the first run starts the extension.
     let accepted = session.run("c_run", "export", "a.md");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     assert_eq!(count(&started), 1, "the run did not start the extension");
@@ -152,7 +152,7 @@ fn a_declared_command_is_listed_with_no_vm_and_starts_on_its_first_run() {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/lazy"
     });
     assert_eq!(ui.last().unwrap()["payload"]["status"], "ran a.md");
-    // docs/extensions.md:1381-83: one `init.lua` run.
+    // `docs/extensions.md`, "Commands and screens": one `init.lua` run.
     assert_eq!(count(&started), 1);
     session.finish();
 }
@@ -193,7 +193,7 @@ fn the_first_run_is_accepted_only_after_the_start() {
     let lines = until_session(&session.client, "c_run", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
     });
-    // docs/extensions.md:1375-79: the start comes first. The entry script
+    // `docs/extensions.md`, "Commands and screens": the start comes first. The entry script
     // cannot finish before the release, so `command_accepted` before its
     // closing status would mean the command was answered while it was held.
     assert!(
@@ -225,7 +225,7 @@ fn an_undeclared_registration_fails_with_extension_failed() {
         );
         assert!(message.contains("the tool `t`"), "{message}");
     }
-    // docs/extensions.md:1377-80: a failed start stays failed for the session.
+    // `docs/extensions.md`, "Commands and screens": a failed start stays failed for the session.
     assert_eq!(count(&started), 1);
     session.finish();
 }
@@ -256,14 +256,14 @@ fn after_a_failed_start_the_extension_stays_failed_until_reload_starts_it_again(
     assert_eq!(still["payload"]["code"], "extension_failed", "{still}");
     let reloaded = session.ask("c_reload", "reload", &json!({}));
     assert_eq!(reloaded.last().unwrap()["kind"], "command_accepted");
-    // docs/extensions.md:1379 and 1520-22: the reload starts it again.
+    // `docs/extensions.md`, "Commands and screens": the reload starts it again.
     assert_eq!(
         session.listed("fiber.test/lazy").len(),
         1,
         "the reloaded session lists the command"
     );
     assert_eq!(count(&fixed), 1, "the reload did not start the extension");
-    // docs/extensions.md:1381-83: the run shares that start.
+    // `docs/extensions.md`, "Commands and screens": the run shares that start.
     let accepted = session.run("c_run3", "export", "b.md");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     assert_eq!(count(&fixed), 1);
@@ -280,7 +280,7 @@ fn an_empty_commands_key_is_lazy_and_never_starts() {
     let started = setup.workspace().join("started");
     let session = Session::start(setup, server);
     assert!(session.listed("fiber.test/lazy").is_empty());
-    // docs/extensions.md:70-71: a `commands` key, `{}` included, is lazy.
+    // `docs/extensions.md`, "What a package holds": a `commands` key, `{}` included, is lazy.
     assert_eq!(count(&started), 0);
     session.finish();
 }
@@ -293,7 +293,7 @@ fn an_extension_without_a_commands_key_still_starts_at_session_start() {
     let started = setup.workspace().join("started");
     setup.lua("plain", &format!("{}{EXPORT}", bump(&started)));
     let session = Session::start(setup, server);
-    // docs/extensions.md:313-16: an extension without `commands` runs at session start.
+    // `docs/extensions.md`, "Loading, and cost when nothing is loaded": an extension without `commands` runs at session start.
     assert_eq!(count(&started), 1);
     assert_eq!(session.listed("fiber.test/plain").len(), 1);
     session.finish();
