@@ -201,6 +201,7 @@ fn hint_back(spans: &mut Vec<Span<'static>>, esc: Option<&str>) {
 fn home_foot(
     open: Option<String>,
     delete: Option<String>,
+    archive: Option<String>,
     key_map: Option<String>,
     back: bool,
     esc: Option<String>,
@@ -223,6 +224,9 @@ fn home_foot(
             &label,
             "stops a live one, deletes an exited one",
         );
+    }
+    if let Some(label) = archive {
+        hint_key(&mut spans, &label, "archives an exited one");
     }
     if let Some(label) = key_map {
         hint_key(&mut spans, &label, "the key map");
@@ -556,6 +560,7 @@ impl App {
             home_foot(
                 self.keys().first_label("open_focused"),
                 self.keys().first_label("delete_session"),
+                self.keys().first_label("archive_session"),
                 self.keys().first_label("key_map"),
                 self.came_from_live(),
                 self.keys().first_label("close_or_interrupt"),
@@ -1251,7 +1256,7 @@ impl App {
         }
         if !matches!(key, Key::Char('j')) {
             if matches!(key, Key::Backspace) {
-                return self.delete_key();
+                return self.archive_key();
             }
             if matches!(key, Key::Char(ch) if !matches!(ch, 'k' | 'y'))
                 && matches!(
@@ -1295,7 +1300,7 @@ impl App {
     }
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
-    /// live session or asks to delete an exited one, a `More` row reveals
+    /// live session or archives an exited one, a `More` row reveals
     /// its project's loaded exited rows, the workspace chip opens the
     /// picker, the worktree switch toggles it, the model chip opens the model picker, the
     /// thinking chip opens it at the model's thinking chips, a picker

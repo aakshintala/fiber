@@ -1,5 +1,5 @@
-//! Home's foot question: deleting a session through the hub, and the
-//! stops and deletes waiting for their answers.
+//! Home's foot question: deleting or archiving a session through the
+//! hub, and the stops, deletes and archives waiting for their answers.
 
 use std::collections::HashMap;
 
@@ -30,15 +30,18 @@ mod hooks_offer;
 
 use delete::DeleteCommand;
 
-/// A stop, delete or import waiting for its answer: a refusal becomes
-/// the row's note and a notice, an accepted delete drops the row, an
-/// accepted import closes the first-run offer.
+/// A stop, delete, archive or import waiting for its answer: a
+/// refusal becomes the row's note and a notice, an accepted delete or
+/// archive drops the row, an accepted import closes the first-run offer.
 pub(super) enum Ask {
     /// A `close` with `now` for a live row: stopping one session.
     Stop(SessionId),
     /// A `delete` for an exited row, cascading when the question named
     /// the sessions it would remove.
     Delete(SessionId),
+    /// An `archive` for an exited row that is not archived: archiving
+    /// asks nothing first.
+    Archive(SessionId),
     /// An `import` from the first-run offer, carrying its source: a hub command answered
     /// once, never resent, never on a session line.
     Import { source: String },
@@ -261,9 +264,10 @@ impl App {
 
     /// A row's ✕: `close` with `now` for a live session, stopping it,
     /// with a `summary` subscribe first when this connection holds
-    /// nothing for it; the delete question for an exited row. With the
-    /// link down nothing goes out. A refusal of the close becomes the
-    /// row's note and a notice.
+    /// nothing for it; one `archive` line for an exited row, asking
+    /// nothing. An archived row has no ✕, so a Stop click there sends
+    /// nothing. With the link down nothing goes out. A refusal of the
+    /// close becomes the row's note and a notice.
     pub(super) fn stop_or_ask(&mut self, key: u64) -> Effect {
         if !self.on_home() || !self.outbox.is_up() {
             return Effect::None;
@@ -278,8 +282,10 @@ impl App {
             return Effect::None;
         }
         if row.left.is_some() {
-            self.ask_delete(key);
-            return Effect::None;
+            if self.home.sessions.is_archived(&row.id) {
+                return Effect::None;
+            }
+            return self.send_archive(row.id);
         }
         let session = row.id.clone();
         let mut lines = Vec::new();
@@ -375,10 +381,12 @@ impl App {
         }
     }
 
-    /// Backspace, or Delete through `home_edit`, on a focused row: the
-    /// delete question when it exited. On a focused live or unreadable
-    /// row it does nothing, and on any other focused stop it is
-    /// swallowed; with the box focused the draft keeps the key.
+    /// Delete through `home_edit`, on a focused row: the delete
+    /// question when it exited, archived rows included, since an
+    /// archived row has no ✕ and deleting is its only removal. On a
+    /// focused live or unreadable row it does nothing, and on any
+    /// other focused stop it is swallowed; with the box focused the
+    /// draft keeps the key.
     pub(super) fn delete_key(&mut self) -> Option<Effect> {
         let key = match self.focus {
             None => return None,
@@ -394,6 +402,48 @@ impl App {
             self.ask_delete(key);
         }
         Some(Effect::None)
+    }
+
+    /// Sends one `archive` hub line for the exited row `id`, asking
+    /// nothing. The answer settles as `Ask::Archive`, beside the
+    /// delete asks. The wait tag routes the answer to the same
+    /// take-ask fold as a delete, which dispatches on the ask.
+    fn send_archive(&mut self, id: SessionId) -> Effect {
+        let (command, line) = archive_line(&id);
+        self.home
+            .questions
+            .asks
+            .insert(command.clone(), Ask::Archive(id));
+        self.outbox.wait(&command, super::super::Waiting::Delete);
+        Effect::Send(vec![line])
+    }
+
+    /// Backspace on a focused row: one `archive` hub line for an
+    /// exited row that is not archived, asking nothing, since opening
+    /// it undoes the archive. Backspace on a live, unreadable or
+    /// archived row does nothing, and on any other focused stop it is
+    /// swallowed; with the box focused the draft keeps the key. With
+    /// the link down nothing goes out.
+    pub(super) fn archive_key(&mut self) -> Option<Effect> {
+        let key = match self.focus {
+            None => return None,
+            Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => key,
+            Some(_) => return Some(Effect::None),
+        };
+        if !self.outbox.is_up() {
+            return Some(Effect::None);
+        }
+        let row = self.home.sessions.by_key(key).cloned();
+        let Some(row) = row else {
+            return Some(Effect::None);
+        };
+        if row.left.is_none() || row.state == State::Unreadable {
+            return Some(Effect::None);
+        }
+        if self.home.sessions.is_archived(&row.id) {
+            return Some(Effect::None);
+        }
+        Some(self.send_archive(row.id))
     }
 
     /// Enter in the delete question: `delete` for its session, cascading
@@ -590,6 +640,21 @@ impl App {
                 }
                 Vec::new()
             }
+            Ask::Archive(id) => {
+                if accepted {
+                    self.clear_prompt(&id);
+                    // The row's project goes with the refresh: the
+                    // removal below erases where to re-ask.
+                    let project = self.home.sessions.row(&id).map(|row| row.project.clone());
+                    self.home.sessions.remove(&id);
+                    return self.ask_recent_first(project.as_deref());
+                }
+                let (code, message) = refusal_parts(payload);
+                self.note(&id, message.clone());
+                self.notices.push(code, message);
+                self.clear_prompt(&id);
+                Vec::new()
+            }
             Ask::Delete(id) => {
                 if accepted {
                     self.clear_prompt(&id);
@@ -643,6 +708,13 @@ impl App {
             self.home.questions.prompt = None;
         }
     }
+}
+
+/// Builds the row archive command line and its correlation id.
+fn archive_line(id: &SessionId) -> (String, String) {
+    let command = support::mint("c_");
+    let line = json!({"id": command, "command": "archive", "args": {"session": id.0}}).to_string();
+    (command, line)
 }
 
 /// Builds the existing delete command line and its correlation id.

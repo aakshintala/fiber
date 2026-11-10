@@ -3481,7 +3481,7 @@ fn the_foot_names_the_key_maps_bound_key() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3493,7 +3493,7 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -3505,7 +3505,7 @@ fn x_with_the_link_down_sends_nothing() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3538,10 +3538,38 @@ fn a_refused_close_notes_the_row() {
 }
 
 #[test]
-fn x_on_an_exited_row_asks_to_delete() {
+fn stop_click_on_an_exited_row_archives_without_a_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    assert_eq!(click_stop(&mut app), Effect::None);
+    let Effect::Send(lines) = click_stop(&mut app) else {
+        panic!("the ✕ archives");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "archive");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
+fn delete_or_shift_backspace_on_an_exited_row_asks() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    // The Delete key arrives as the delete edit.
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(
+        question(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
+    );
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    // With the kitty protocol Shift+Backspace arrives shifted, and the
+    // key map reads it as the same delete edit.
+    let stroke =
+        crate::stroke::Stroke::parse("shift+backspace").unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(app.on_press(stroke, now), Effect::None);
     assert_eq!(
         question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
@@ -3549,17 +3577,44 @@ fn x_on_an_exited_row_asks_to_delete() {
 }
 
 #[test]
-fn backspace_on_a_focused_exited_row_asks() {
+fn delete_on_an_archived_row_asks() {
+    let mut app = home_with_archived_row();
+    drawn(&mut app);
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(
+        question(&app),
+        "Delete filed work (s_bbbbbbbbbbbbbbbb)? It cannot be undone · Enter delete · Esc keep"
+    );
+}
+
+#[test]
+fn backspace_on_an_archived_row_does_nothing() {
+    let mut app = home_with_archived_row();
+    drawn(&mut app);
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
+fn backspace_on_a_focused_exited_row_archives_without_a_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
-    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
-    assert_eq!(
-        question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
-    );
+    let Effect::Send(lines) = app.on_key(Key::Backspace, now) else {
+        panic!("Backspace archives");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "archive");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(app.home.questions.prompt().is_none());
 }
 
 #[test]
@@ -3591,7 +3646,7 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3607,7 +3662,7 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     assert!(!app.quit_open());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     assert!(app.input().expand().is_empty());
 }
@@ -3616,7 +3671,7 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
 fn enter_sends_delete_without_cascade() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -3632,12 +3687,12 @@ fn enter_sends_delete_without_cascade() {
 fn esc_sends_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3653,7 +3708,7 @@ fn drawn_frame(app: &App) -> (String, Vec<crate::mouse::Target>) {
 fn clicking_the_drawn_cross_keeps_the_session() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     // The draw holds exactly one ✕ target, ending the title row.
     let (text, targets) = drawn_frame(&app);
     let title = text
@@ -3700,7 +3755,7 @@ fn clicking_the_drawn_cross_keeps_the_session() {
 fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -3776,7 +3831,7 @@ fn a_keep_click_leaves_the_quit_question_open() {
 fn clicks_on_the_delete_frame_do_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let asked = question(&app);
     assert!(!asked.is_empty(), "the question is open");
     let (text, targets) = drawn_frame(&app);
@@ -3835,7 +3890,7 @@ fn clicks_on_the_delete_frame_do_nothing() {
 fn hovering_the_delete_slab_tints_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     let mut plain = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut plain, None);
@@ -3868,7 +3923,7 @@ fn hovering_the_delete_slab_tints_nothing() {
 fn other_keys_do_nothing_in_the_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
     assert!(app.input().expand().is_empty());
@@ -3882,7 +3937,7 @@ fn other_keys_do_nothing_in_the_question() {
 fn ctrl_c_passes_through_the_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
     assert!(app.hint());
@@ -3895,7 +3950,7 @@ fn up_and_down_scroll_the_delete_question() {
     // offset scrolls by one row.
     app.set_size(60, 12);
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -3939,7 +3994,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -3955,7 +4010,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3963,7 +4018,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
 fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4007,7 +4062,7 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
 fn a_stale_cascade_asks_again_with_the_new_set() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4067,7 +4122,7 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
 fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4086,7 +4141,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     // The notice carries the refusal's own code, not a default.
     assert!(app.notices().iter().any(|line| matches!(
@@ -4118,7 +4173,7 @@ fn a_refusal_code_is_the_payload_code_or_malformed() {
 fn a_refused_cascade_delete_notes_the_row() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4152,7 +4207,7 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4230,7 +4285,7 @@ fn x_on_an_unreadable_row_says_so() {
 fn enter_with_the_link_down_keeps_the_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     app.disconnected();
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
@@ -4267,7 +4322,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4275,7 +4330,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
 fn delete_edit_in_the_question_does_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         question(&app),
@@ -4290,7 +4345,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4527,7 +4582,7 @@ fn an_accepted_delete_closes_its_question() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4558,7 +4613,7 @@ fn an_answer_for_another_delete_keeps_the_newer_question() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4567,10 +4622,13 @@ fn an_answer_for_another_delete_keeps_the_newer_question() {
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
         .to_owned();
-    // A newer question asks about the second row; the first row's answer
-    // leaves it open.
+    // Esc closes the question without settling its ask: the hub still
+    // answers the sent delete. A newer question asks about the second
+    // row; the first row's answer leaves it open.
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     let second = keys(&app)[1];
-    app.home_click(Spot::Stop(second));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(second)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     app.on_line(accepted(&delete, json!({})));
     assert_eq!(rows(&app), ["○  older work"]);
     assert!(
@@ -4590,7 +4648,7 @@ fn an_accepted_delete_asks_the_first_page_unscoped() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -4936,6 +4994,14 @@ fn click_stop(app: &mut App) -> Effect {
     app.home_click(Spot::Stop(key))
 }
 
+/// Opens the delete question for the first row with the Delete key,
+/// the path the key map gives it now that Backspace archives.
+fn delete_first_row(app: &mut App) {
+    let key = keys(app)[0];
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+}
+
 /// One crashed `recent` row for `session`.
 fn crashed(session: &str, name: &str) -> Value {
     json!({
@@ -4962,7 +5028,7 @@ fn the_foot_names_the_default_keys() {
     let app = home_with(80, 24, launch());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4981,7 +5047,7 @@ fn the_foot_bolds_each_key_and_dims_the_rest() {
         })
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(bold, ["Enter", "↑↓", "Delete", "F1", "Ctrl+C"]);
+    assert_eq!(bold, ["Enter", "↑↓", "Delete", "Backspace", "F1", "Ctrl+C"]);
     for span in &screen.foot.spans {
         if bold.contains(&span.content.to_string()) {
             assert!(
@@ -5023,7 +5089,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x stops a live one, deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
     let screen = app.home_screen().expect("home draws");
     let bold: Vec<String> = screen
@@ -5037,7 +5103,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
         })
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(bold, ["Ctrl+O", "↑↓", "x", "F2", "Ctrl+C"]);
+    assert_eq!(bold, ["Ctrl+O", "↑↓", "x", "Backspace", "F2", "Ctrl+C"]);
 }
 
 #[test]
@@ -5048,7 +5114,7 @@ fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5060,7 +5126,7 @@ fn the_foot_leaves_open_focused_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5072,7 +5138,19 @@ fn the_foot_leaves_delete_session_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_archive_session_out_when_unbound() {
+    let mut app = home_with(80, 24, launch());
+    let mut user = serde_json::Map::new();
+    user.insert("archive_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5085,7 +5163,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
+        "↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
@@ -5093,7 +5171,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Backspace archives an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("open_focused".to_owned(), json!([]));
@@ -5101,7 +5179,15 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+    let mut user = serde_json::Map::new();
+    user.insert("delete_session".to_owned(), json!([]));
+    user.insert("archive_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5112,6 +5198,7 @@ fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
     user.insert("key_map".to_owned(), json!([]));
     user.insert("open_focused".to_owned(), json!([]));
     user.insert("delete_session".to_owned(), json!([]));
+    user.insert("archive_session".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(foot(&app), "↑↓ move · Ctrl+C twice to quit");
 }
@@ -5161,7 +5248,7 @@ fn the_foot_names_the_back_key_after_home_from_a_live_session() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5175,7 +5262,7 @@ fn the_foot_names_the_rebound_back_key() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5189,7 +5276,7 @@ fn the_foot_leaves_the_back_key_out_when_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5204,7 +5291,7 @@ fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -5240,7 +5327,7 @@ fn opening_a_row_then_closing_names_no_back_key() {
     assert!(app.on_home());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5636,7 +5723,7 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
         app.on_line(accepted(&own_id, json!({"sessions": [], "total": 1})))
             .is_empty()
     );
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
@@ -5693,7 +5780,7 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
         .map(line_id)
         .unwrap_or_else(|| panic!("the launch project's scoped ask"))
         .to_owned();
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
