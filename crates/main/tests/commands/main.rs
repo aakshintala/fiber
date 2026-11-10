@@ -9,9 +9,12 @@
 
 #[path = "../extension_harness/mod.rs"]
 mod extension_harness;
+#[path = "../support/hub_start.rs"]
+mod hub_start;
 #[path = "../support/mod.rs"]
 mod support;
 
+mod archive;
 mod change_workspace;
 mod changed_files_editor;
 mod clear;
