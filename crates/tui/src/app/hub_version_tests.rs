@@ -348,8 +348,7 @@ fn waits(app: &App) -> Vec<(String, Option<String>)> {
 
 /// The waits in id order: the doc pins each row's reason but leaves the
 /// relative order of rows with no documented tie-break open, so the test
-/// asserts the rows as a set (`docs/testing.md`, "A test asserts an order
-/// or a count only where a doc promises it").
+/// asserts the rows as a set (`docs/testing.md`, "What a test asserts").
 fn waits_by_id(app: &App) -> Vec<(String, Option<String>)> {
     let mut waits = waits(app);
     waits.sort();

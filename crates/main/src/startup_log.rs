@@ -1,5 +1,5 @@
 //! The diagnostic line a `fiber ask` or internal `fiber session`
-//! startup failure leaves in `logs/<kind>-<pid>.log` (`docs/state.md`, "Diagnostic logs"). The line's
+//! startup failure leaves in `logs/<kind>-<pid>.log` (`docs/state.md`, "What each part holds"). The line's
 //! message is fixed text: the failure's own sentence can name a path or
 //! echo a configuration value, and nothing in `logs/` holds either.
 
@@ -14,8 +14,7 @@ use log::diag::{Diag, Level, Process, Severity};
 static PROCESS: OnceLock<Process> = OnceLock::new();
 
 /// Marks this process as an internal `fiber session`, so its startup
-/// failures go to `logs/session-<pid>.log` (`docs/state.md`, "Diagnostic
-/// logs"). Called once, before anything can fail.
+/// failures go to `logs/session-<pid>.log` (`docs/state.md`, "What each part holds"). Called once, before anything can fail.
 pub(crate) fn as_session() {
     PROCESS.set(Process::Session).unwrap_or(());
 }

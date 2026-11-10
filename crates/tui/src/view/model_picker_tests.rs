@@ -733,7 +733,7 @@ fn page_steps_cover_the_window_less_one() {
 
 #[test]
 fn failed_install_error_rows_take_space_in_the_focus_window() {
-    // A failed install keeps its error row below the provider (`docs/tui.md:740-742`).
+    // A failed install keeps its error row below the provider (`docs/tui.md`, "The model picker").
     let view = PickerView {
         filter: String::new(),
         count: String::new(),
@@ -770,7 +770,7 @@ fn failed_install_error_rows_take_space_in_the_focus_window() {
 
 #[test]
 fn logged_out_separator_takes_space_after_a_model_section() {
-    // A blank separates logged-out rows from model sections (`docs/tui.md:706-709`).
+    // A blank separates logged-out rows from model sections (`docs/tui.md`, "The model picker").
     let mut view = PickerView {
         filter: String::new(),
         count: String::new(),
@@ -1080,7 +1080,7 @@ fn a_session_only_model_takes_three_rows_in_the_window() {
     assert_eq!(window(&view, 6), (0, 2));
 }
 
-/// The wheel moves the picker top by three body rows, as `docs/tui.md:589` states.
+/// The wheel moves the picker top by three body rows, as `docs/tui.md`, "Swapped views" states.
 #[test]
 fn wheel_moves_the_picker_top_by_three_body_rows() {
     let mut app = attached(100, 18);
@@ -1372,7 +1372,7 @@ fn body_lines(text: &str) -> Vec<String> {
 
 #[test]
 fn a_short_overlay_keeps_the_focused_model_row() {
-    // `docs/tui.md:669-714` specifies the filter/count/provider/model order
+    // `docs/tui.md`, "The model picker" specifies the filter/count/provider/model order
     // and requires the model with its provider heading to outlast the footer.
     // A Choose open and the checklist open, each with the first model
     // focused over `catalogue()`: ten rows hold the filter, the
@@ -1430,7 +1430,7 @@ fn a_short_overlay_keeps_the_focused_model_row() {
 
 #[test]
 fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() {
-    // `docs/tui.md:710-714`: the session model and provider heading stay
+    // `docs/tui.md`, "The model picker": the session model and provider heading stay
     // visible on open, with the footer yielding first.
     let mut app = attached(80, 8);
     current_model(&mut app, "acme/m1");
@@ -1453,7 +1453,7 @@ fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() 
 
 #[test]
 fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
-    // `docs/tui.md:710-714`: after scrolling, focus stays on a model with
+    // `docs/tui.md`, "The model picker": after scrolling, focus stays on a model with
     // its provider heading in the compact window.
     let mut app = attached(120, 14);
     current_model(&mut app, "acme/m1");
@@ -1474,7 +1474,7 @@ fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
     });
 
     let view = app.model_picker_view().expect("still open");
-    // `docs/tui.md:589`: "The mouse wheel over a view moves its visible rows 3
+    // `docs/tui.md`, "Swapped views": "The mouse wheel over a view moves its visible rows 3
     // a step and never the conversation under it."
     assert_eq!(
         view.top,
@@ -1502,7 +1502,7 @@ fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
 
 #[test]
 fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() {
-    // `docs/tui.md:710-714`: the focused model and provider heading stay
+    // `docs/tui.md`, "The model picker": the focused model and provider heading stay
     // visible after Down, with the footer yielding first.
     let mut app = attached(80, 8);
     current_model(&mut app, "acme/m1");
@@ -1531,7 +1531,7 @@ fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() 
 
 #[test]
 fn a_one_footerless_row_yields_controls_for_the_provider_heading() {
-    // `docs/tui.md:710-714`: when the ordinary list and footer cannot hold
+    // `docs/tui.md`, "The model picker": when the ordinary list and footer cannot hold
     // the heading and session model, both stay visible in the compact view.
     let mut app = attached(80, 7);
     current_model(&mut app, "acme/m1");
@@ -1699,7 +1699,7 @@ fn a_non_heading_row_cannot_stand_in_for_the_provider_heading() {
     view.focused = None;
     view.top = 2; // m1's detail row; m2 is the first model at or after it.
 
-    // `docs/tui.md:710-714`: the compact view keeps the selected model
+    // `docs/tui.md`, "The model picker": the compact view keeps the selected model
     // with its actual provider heading, not a preceding detail row.
     assert_eq!(model_fit(&view, 14), 6);
     assert_eq!(short_model_fit(&view, 14), Some(8));
@@ -1722,7 +1722,7 @@ fn compact_model_rows_keep_the_whole_row_for_both_focus_states() {
 
 #[test]
 fn the_wheel_uses_the_short_window_only_below_two_rows() {
-    // The wheel shares the displayed-row movement contract (`docs/tui.md:589`).
+    // The wheel shares the displayed-row movement contract (`docs/tui.md`, "Swapped views").
     let mut view = choosing_current("acme/m2");
     let m2 = view.sections[0].models[1].at;
     let display = display_rows(&view, false);
@@ -1837,7 +1837,7 @@ fn choosing_left_out(width: u16, height: u16) -> App {
 
 #[test]
 fn count_rows_draw_dim_with_a_four_column_indent_and_no_targets() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let app = choosing_left_out(160, 48);
     let view = app.model_picker_view().expect("open");
     let body = body(&view, 160, 48);
@@ -1864,7 +1864,7 @@ fn count_rows_draw_dim_with_a_four_column_indent_and_no_targets() {
 
 #[test]
 fn count_rows_name_the_supplied_files() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let app = choosing_left_out(160, 48);
     let text = screen(&app, 160, 48);
     let (_, api) = find_row(&text, "api_key");
@@ -1883,7 +1883,7 @@ fn count_rows_name_the_supplied_files() {
 
 #[test]
 fn count_rows_scroll_with_their_sections_window() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let app = choosing_left_out(160, 48);
     let view = app.model_picker_view().expect("open");
     // Items in draw order: the `acme` count, its two models, the
@@ -1940,7 +1940,7 @@ fn a_wheel_with_no_focus_keeps_focus_absent() {
 
 #[test]
 fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let catalogue = Catalogue {
         left_out: vec![LeftOutGroup {
             provider: "opencode".to_owned(),
@@ -1994,7 +1994,7 @@ fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
 
 #[test]
 fn paging_moves_across_count_rows_and_sections() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let mut app = choosing_left_out(160, 10);
     // Six windowed items, two of them count rows: four focusable stops
     // make the page step four, not six.
@@ -2028,7 +2028,7 @@ fn paging_moves_across_count_rows_and_sections() {
 
 #[test]
 fn page_keys_jump_over_count_rows() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let mut app = choosing_left_out(160, 48);
     let catalogue = left_out_catalogue();
     assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
@@ -2062,7 +2062,7 @@ fn page_keys_jump_over_count_rows() {
 
 #[test]
 fn a_first_count_row_needs_two_body_rows() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let catalogue = Catalogue {
         left_out: vec![LeftOutGroup {
             provider: "opencode".to_owned(),
@@ -2113,7 +2113,7 @@ fn a_first_count_row_needs_two_body_rows() {
 
 #[test]
 fn a_first_party_file_row_names_its_config_file() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let catalogue = Catalogue {
         models: Vec::new(),
         installable: Vec::new(),
@@ -2145,9 +2145,9 @@ fn a_first_party_file_row_names_its_config_file() {
 
 #[test]
 fn a_filtered_count_row_renders_through_the_screen() {
-    // The filtered count shows only the matched count (`docs/tui.md:642-644`),
+    // The filtered count shows only the matched count (`docs/tui.md`, "The model picker"),
     // one count row per group after its heading, before its models
-    // (`docs/tui.md:661-668`).
+    // (`docs/tui.md`, "The model picker").
     let mut app = choosing_left_out(160, 48);
     let now = fakes::clock::FakeClock::new().now();
     for ch in ['m', '9'] {
@@ -2167,11 +2167,11 @@ fn a_filtered_count_row_renders_through_the_screen() {
 
 #[test]
 fn a_query_matching_no_count_row_renders_no_match_through_the_screen() {
-    // No row shows when none matches (`docs/tui.md:642-644`); a query
+    // No row shows when none matches (`docs/tui.md`, "The model picker"); a query
     // matching no model, no count row and no not-installed row shows one
     // "No models match" line and no provider sections
-    // (`docs/tui.md:691-693`), with the count row placed after its heading
-    // (`docs/tui.md:661-668`).
+    // (`docs/tui.md`, "The model picker"), with the count row placed after its heading
+    // (`docs/tui.md`, "The model picker").
     let catalogue = Catalogue {
         left_out: vec![LeftOutGroup {
             provider: "opencode".to_owned(),
@@ -2291,7 +2291,7 @@ fn a_list_under_two_rows_with_no_model_draws_a_count_and_its_heading_together_or
     insta::assert_snapshot!("trim-cut", screen(&app, 80, 15));
 }
 
-/// A far focus resets to a nonzero window offset (`docs/tui.md:710-714`).
+/// A far focus resets to a nonzero window offset (`docs/tui.md`, "The model picker").
 #[test]
 fn focus_window_top_is_nonzero_for_a_far_focus() {
     let mut app = choosing(160, 10);

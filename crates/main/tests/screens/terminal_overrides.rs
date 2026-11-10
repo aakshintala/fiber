@@ -1,6 +1,6 @@
 //! Binary-level tests that bare `fiber --model`/`-c` open the terminal
 //! and ride each hub `start` in `overrides`, while any subcommand keeps
-//! them a usage error (`docs/invocation.md`, "Sessions").
+//! them a usage error (`docs/invocation.md`, "Commands and flags").
 
 #![allow(
     clippy::unwrap_used,

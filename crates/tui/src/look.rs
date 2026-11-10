@@ -477,7 +477,7 @@ impl Look {
     /// `colour` with a lifted marker or a role marker resolved, and a
     /// literal `Rgb` resolved by depth: unchanged in truecolour, the
     /// nearest text entry at 256 colours, and the default with no colour
-    /// (docs/tui.md, "Look").
+    /// (`docs/tui.md`, "Look").
     fn resolved(&self, colour: Color) -> Color {
         if let Color::Rgb(red, green, blue) = colour {
             return match self.depth {

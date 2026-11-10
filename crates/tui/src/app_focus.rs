@@ -59,7 +59,7 @@ impl App {
     /// whether one was pushed. A repeated failure of a cached input
     /// finds its pair in the set and adds nothing. The surviving batch
     /// is grouped by code, so one frame raises one notice per code
-    /// (`docs/errors.md`, "Notices").
+    /// (`docs/tui.md`, "Notices").
     fn drain_renderer_failures(&mut self) -> bool {
         let cache = &self.screen.pages().ext.cache;
         let mut failures = cache.take_failures();

@@ -220,7 +220,7 @@ pub struct Launch {
     pub model: Option<String>,
     /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run
     /// layer: each `start` carries them in `overrides`
-    /// (`docs/invocation.md`, "Sessions"). Empty in the jigs, which
+    /// (`docs/invocation.md`, "Commands and flags"). Empty in the jigs, which
     /// launch with no flags.
     pub overrides: Vec<String>,
     /// `thinking`: the chip's level, unset for the default.

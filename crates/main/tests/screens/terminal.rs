@@ -773,7 +773,7 @@ fn continue_with_no_session_is_a_usage_error() {
 /// Serves `a`'s hub on a test port and returns the live hub: the asks
 /// seed through it, and the client pairs to it. The test holds the
 /// handle and reaps it at its end; an installed hub never exits for
-/// being idle (docs/configuration.md:119), so no stop, socket wait or
+/// being idle (`docs/configuration.md`, "Keys"), so no stop, socket wait or
 /// timer is involved.
 fn installed_hub(a: &support::Setup) -> hub_start::Served {
     hub_start::serve_installed(
@@ -874,7 +874,7 @@ fn continue_hub_opens_the_latest_session_across_projects() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The second seed is the latest across projects
-    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // (`docs/invocation.md`, "Commands and flags": `continue --hub` opens the entry with the
     // greatest (`active`, `id`) across every project).
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
@@ -889,7 +889,7 @@ fn continue_hub_opens_the_latest_session_across_projects() {
 #[test]
 fn continue_hub_without_a_session_is_a_usage_error() {
     // The same owned hub fixture, with no sessions seeded on it: no
-    // eligible entry is the empty-hub usage error (docs/invocation.md:115:
+    // eligible entry is the empty-hub usage error (`docs/invocation.md`, "Commands and flags":
     // with no eligible entry it is the same usage error as an empty hub).
     let a = support::Setup::new();
     let served = installed_hub(&a);
@@ -908,8 +908,8 @@ fn continue_without_a_flag_uses_the_configured_hub() {
     let (a, served) = seeded_hub();
     let b = paired_client(&a, &served, true);
     // No `--hub`: `hub.default=box` selects the listed hub
-    // (docs/invocation.md:1268-1270: `hub.default` names the one used
-    // without `--hub`; docs/invocation.md:291: `--default` makes it the hub
+    // (`docs/invocation.md`, "Several hubs": `hub.default` names the one used
+    // without `--hub`; `docs/invocation.md`, "Commands and flags": `--default` makes it the hub
     // this client uses without `--hub`); the resumed session lives in
     // `other`, so guard it like the explicit-flag test.
     let _resumed = guard_other(&a);
@@ -917,7 +917,7 @@ fn continue_without_a_flag_uses_the_configured_hub() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The second seed is the latest across projects
-    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // (`docs/invocation.md`, "Commands and flags": `continue --hub` opens the entry with the
     // greatest (`active`, `id`) across every project).
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
@@ -934,7 +934,7 @@ fn continue_explicit_hub_overrides_the_configured_default() {
     let (a, served) = seeded_hub();
     let b = paired_client(&a, &served, true);
     // `hub.default=box` is configured, but the explicit flag wins
-    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // (`docs/invocation.md`, "Several hubs": `hub.default` names the one used
     // without `--hub`): the unknown hub fails instead of opening the
     // default hub's session.
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "nope"], &[]);
@@ -2501,8 +2501,7 @@ fn sighup_takes_the_normal_exit_path_with_129() {
 /// Sends `signal` to a terminal with one live session: the terminal
 /// takes its normal exit path, restoring the screen and printing one
 /// resume line for the live session, then exits with `code`
-/// (`docs/tui.md`, "On exit"; `docs/invocation.md`, "Three signals, one
-/// path"). The terminal's guard exits at once today, skipping the
+/// (`docs/tui.md`, "On exit"; `docs/invocation.md`, "Shutdown"). The terminal's guard exits at once today, skipping the
 /// restore and the lines, so the byte assertions fail until the fix.
 #[track_caller]
 fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {

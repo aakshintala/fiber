@@ -163,20 +163,20 @@ fn loaded_names(run: &Run) -> Vec<String> {
 }
 
 /// The count rule each kind-multiset assertion cites.
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
 
 /// The exclusion each kind-multiset assertion cites for the fake
 /// stream's text deltas.
-const IGNORE_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta` (`docs/events.md`, \"Jobs\"), may be excluded from the multiset only when its count is not under test.; docs/events.md:116: - **Ephemeral** means a later durable line makes it obsolete: text deltas,";
+const IGNORE_DELTA_DOC: &str = r#"docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta` (`docs/events.md`, "Jobs"), may be excluded from the multiset only when its count is not under test.; `docs/events.md`, "Durable and ephemeral": - **Ephemeral** means a later durable line makes it obsolete: text deltas,"#;
 
 /// The reply order each promised-order assertion cites.
-const REPLY_DOC: &str = "docs/events.md:582-586: A reply's items are logged in the order the model produced them: its `text_completed`, `reasoning_completed` and `tool_call_requested` lines follow its `assistant_message_started` in that order, and its `assistant_message_completed` closes it. Replay rebuilds the reply from them in that order.";
+const REPLY_DOC: &str = r#"`docs/events.md`, "`text_completed`": A reply's items are logged in the order the model produced them: its `text_completed`, `reasoning_completed` and `tool_call_requested` lines follow its `assistant_message_started` in that order, and its `assistant_message_completed` closes it. Replay rebuilds the reply from them in that order."#;
 
 /// The reload order the reload test's first promised-order assertion cites.
-const RELOAD_PREAMBLE_DOC: &str = "docs/events.md:1154-1155: `reloaded` is written once the new tool set is declared, and `preamble_built` follows it. The next model request misses the prompt cache.";
+const RELOAD_PREAMBLE_DOC: &str = r#"`docs/events.md`, "`reloaded`": `reloaded` is written once the new tool set is declared, and `preamble_built` follows it. The next model request misses the prompt cache."#;
 
 /// The reload order the reload test's second promised-order assertion cites.
-const RELOAD_EXTENSIONS_DOC: &str = "docs/events.md:1163-1168: Durable. The full set of extensions the session loaded. Written at each process start, a resume included, before the first model request; again before the process's first `preamble_built` when its offer approved an extension, which then loads in that process, with no `reloaded` (`docs/extensions.md`, \"Code a repository ships\"); and again after every `reload`, following `reloaded`. It always carries the whole set, never a";
+const RELOAD_EXTENSIONS_DOC: &str = r#"`docs/events.md`, "`job_delta`": Durable. The full set of extensions the session loaded. Written at each process start, a resume included, before the first model request; again before the process's first `preamble_built` when its offer approved an extension, which then loads in that process, with no `reloaded` (`docs/extensions.md`, "Code a repository ships"); and again after every `reload`, following `reloaded`. It always carries the whole set, never a"#;
 
 /// Asserts `actual` holds exactly `expected` as a multiset: the sorted
 /// kinds must match, so a duplicated or missing event fails. The fake
@@ -1079,7 +1079,7 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     // Both bad entries left one grouped notice and never ran; the good
-    // one ran (`docs/errors.md`, "Notices": one notice per code;
+    // one ran (`docs/tui.md`, "Notices": one notice per code;
     // `docs/extensions.md`, "Hooks declared in configuration": a hook
     // entry names its `command`, and a `notice` names the entry that
     // cannot register).
@@ -1232,7 +1232,7 @@ fn a_non_object_entry_is_config_invalid() {
             );
             // One line only, so no turn starts: a failure before
             // `fiber_started` prints one `fiber_exited` line
-            // (`docs/errors.md:85-91`).
+            // (`docs/errors.md`, "Before a session exists").
             assert_kinds_without_deltas(
                 &run.kinds(),
                 &["fiber_exited"],
@@ -1268,7 +1268,7 @@ fn a_non_object_hooks_value_is_config_invalid_naming_hooks() {
             "installed: {installed}, stderr: {}",
             run.stderr
         );
-        // One line only, so no turn starts (`docs/errors.md:85-91`); the
+        // One line only, so no turn starts (`docs/errors.md`, "Before a session exists"); the
         // message names the `hooks` key (`docs/extensions.md`, "Hooks
         // declared in configuration").
         assert_kinds_without_deltas(&run.kinds(), &["fiber_exited"], IGNORE_DELTA_DOC, COUNT_DOC);

@@ -895,7 +895,7 @@ fn slash_close_all_on_home_opens_the_question_and_sends_nothing() {
     ));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
 }
 
@@ -929,7 +929,7 @@ fn quit_question_is_none_while_close_all_is_open() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(app.quit_open());
     assert_eq!(app.quit_question(), None);
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     // Under the quit prompt the close-all question is none.
     let mut app = home_with(80, 24, launch());
@@ -975,7 +975,7 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
     // `/close all` replaces the delete question; the delete ask survives.
     assert_eq!(app.ask_close_all(), Effect::None);
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     // The hub accepts the delete: the row drops and recent is asked again.
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
@@ -1019,7 +1019,7 @@ pub(super) fn closes(lines: Vec<Value>) -> Vec<Value> {
 
 /// Every close carries `now` and names one of `sessions`, once each.
 fn assert_closes(lines: &[Value], sessions: &[&str]) {
-    // docs/tui.md, "Quit": "Enter sends each live top-level session
+    // `docs/tui.md`, "Quit": "Enter sends each live top-level session
     // `close` with `now`".
     assert_eq!(lines.len(), sessions.len());
     let mut seen: Vec<&str> = Vec::new();
@@ -1050,7 +1050,7 @@ fn enter_closes_every_live_session_now_and_stays_home() {
         0,
     ));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": "2 sessions, 1 working, 0 open elsewhere"
+    // `docs/tui.md`, "Quit": "2 sessions, 1 working, 0 open elsewhere"
     // dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
@@ -1100,7 +1100,7 @@ fn other_keys_and_ctrl_c_do_nothing_while_close_all_is_open() {
         assert_eq!(app.on_key(key, clock.now()), Effect::None);
     }
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     assert_eq!(app.draft(), "/close all");
 }
@@ -1137,7 +1137,7 @@ fn a_session_that_leaves_while_close_all_shows_gets_no_close() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
     // The overlay never live-updates: it still names both sessions.
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
@@ -1155,7 +1155,7 @@ fn a_session_that_goes_live_while_close_all_shows_gets_no_close() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     // The overlay never live-updates: the new session is not counted.
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
@@ -1173,7 +1173,7 @@ fn a_session_attached_then_left_after_attach_gets_no_close() {
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
@@ -1220,7 +1220,7 @@ fn a_session_that_is_idle_still_gets_a_close() {
         0,
     ));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
@@ -1241,7 +1241,7 @@ fn an_unreadable_row_is_counted_and_closed() {
     }
     app.on_line(envelope);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": the count names live top-level sessions;
+    // `docs/tui.md`, "Quit": the count names live top-level sessions;
     // an unreadable row is still a live session (see #2962).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
@@ -1262,7 +1262,7 @@ fn the_attached_session_with_no_row_counts_and_gets_a_close_and_the_terminal_goe
         busy: true,
     };
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
@@ -1342,7 +1342,7 @@ fn the_close_all_count_reads_sessions_working_and_elsewhere() {
         .subs
         .accept(held, contract::commands::SubscribeLevel::Full);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((3, 1, 1)));
     assert_eq!(
         crate::home::close_all_count(3, 1, 1),
@@ -1352,7 +1352,7 @@ fn the_close_all_count_reads_sessions_working_and_elsewhere() {
 
 #[test]
 fn the_close_all_count_holds_singular_below_and_plural_above_one() {
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere);
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere);
     // "Stopping every session" pins the same count line on the close-all question.
     assert_eq!(
         crate::home::close_all_count(0, 0, 0),
@@ -1397,7 +1397,7 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
         .subs
         .accept(held, contract::commands::SubscribeLevel::Full);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
-    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
+    // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 1)));
 }
 

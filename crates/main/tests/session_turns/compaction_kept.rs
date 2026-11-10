@@ -92,7 +92,7 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
         .iter()
         .find(|line| line["kind"] == "reviewer_kept")
         .expect("the reviewer selected messages");
-    // docs/permissions.md, "At a compaction": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
+    // `docs/permissions.md`, "At a compaction": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
     assert_eq!(
         kept["payload"]["kept"],
         json!([
@@ -114,7 +114,7 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
         .iter()
         .find(|line| line["kind"] == "skills_resent")
         .expect("the loaded skill was resent after compaction");
-    // docs/compaction.md, "What the model sees after a compaction", item 8: "once each" — one loaded skill, resent once.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "once each" — one loaded skill, resent once.
     assert_eq!(resent["payload"]["skills"].as_array().unwrap().len(), 1);
     let completed = lines
         .iter()
@@ -164,15 +164,15 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
         .iter()
         .filter(|text| text.contains("The person's earlier message:"))
         .collect();
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "each in its own labelled block" — two kept answers, two blocks.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "each in its own labelled block" — two kept answers, two blocks.
     assert_eq!(earlier.len(), 2, "each kept answer has its own block");
     let pair_one =
         "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
     let pair_two =
         "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "oldest first".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "oldest first".
     assert_eq!(earlier[0].as_str(), pair_one);
-    // docs/compaction.md, "What the model sees after a compaction", item 4: "oldest first".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "oldest first".
     assert_eq!(earlier[1].as_str(), pair_two);
     let current = "The person's new message:\nPlease compact now.";
     let note = "The compaction note.";

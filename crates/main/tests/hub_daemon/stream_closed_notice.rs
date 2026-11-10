@@ -262,7 +262,7 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     );
 
     // The summary subscriber is promised the latest count, not every
-    // change (`docs/events.md`, "session_status": the latest wins): the
+    // change (`docs/events.md`, "`session_status`": the latest wins): the
     // session reads the settled count when it folds a line, so an attach
     // and a close that finish before it folds send no `clients: 1` and no
     // second `clients: 0` (`crates/loop/src/status.rs`, `Fold::observe`).

@@ -108,7 +108,7 @@ fn marker_state(marker: &std::path::Path) -> String {
 }
 
 /// The tail of this test's sole session `events.jsonl`
-/// (`docs/extensions.md:1651-1657`, "When a session ends"): the isolated
+/// (`docs/extensions.md`, "When a session ends", "When a session ends"): the isolated
 /// `FIBER_HOME` holds one project and one session. A watcher timeout notice
 /// lands in this log, which tells a timed-out parked run apart from a queued
 /// delivery that never arrived; a missing directory or log is itself the
@@ -248,7 +248,7 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
             diagnose(&setup, &marker, held.requests().len(), &model)
         );
     }
-    // `docs/extensions.md:1651-1657` ("When a session ends"): the drain replays
+    // `docs/extensions.md`, "When a session ends" ("When a session ends"): the drain replays
     // each watcher's `(cursor, end]` range, one run per line, so one parked
     // run means one marker line. The read fails with the same diagnostic
     // payload the assertion carries, so a missing marker names the state.
@@ -335,7 +335,7 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
         "the drain printed nothing: {stderr:?}"
     );
     // Every live run executed; the drain replayed none
-    // (`docs/extensions.md:1651-1657`, "When a session ends": one run per
+    // (`docs/extensions.md`, "When a session ends", "When a session ends": one run per
     // watcher per line in `(cursor, end]`, so the two queued offers plus the
     // parked run mean three marker lines and no drain replay).
     let drained = match fs::read_to_string(&marker) {
