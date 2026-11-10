@@ -287,8 +287,7 @@ fn a_missing_git_ref_path_is_fresh() {
     let binary = stand_in(&dir, binary_mtime());
     // A packed ref has no loose file, so the dep-info lists a path that
     // stays missing on a fresh build; it names the watched ref, not a
-    // source, so the binary is fresh. Fails at the freshness refusal
-    // until the check skips inputs under the git dir.
+    // source, so the binary is fresh.
     let missing_ref = dir.path().join(".git/refs/heads/topic");
     write_dep_info(&binary, &[escaped(&missing_ref)]);
     assert_jig_fresh(&binary);
@@ -300,8 +299,7 @@ fn a_newer_git_ref_path_is_fresh() {
     let binary = stand_in(&dir, binary_mtime());
     // A commit after the build leaves the loose ref newer than the
     // binary; it still names the watched ref, not a source, so the
-    // binary is fresh. Fails at the freshness refusal until the check
-    // skips inputs under the git dir.
+    // binary is fresh.
     let git_dir = dir.path().join(".git/refs/heads");
     fs::create_dir_all(&git_dir).unwrap();
     let newer_ref = git_dir.join("topic");
