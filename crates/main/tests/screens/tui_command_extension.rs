@@ -107,23 +107,20 @@ fn tui_command_lists_and_runs() {
     // Frame-locked on the drawn list: the panel draws bare names, so the
     // TUI row draws after the session row, never matched off the `/`
     // input echo, which holds neither full name.
-    let grid = run.wait_screen("the TUI row after the session row", |grid| {
+    run.wait_screen("the TUI row after the session row", |grid| {
         let session = grid
             .rows
             .iter()
             .position(|row| row.contains("ledger-session"));
         let tui = grid.rows.iter().position(|row| row.contains("ledger-diff"));
-        matches!((session, tui), (Some(first), Some(second)) if first < second)
+        if !matches!((session, tui), (Some(first), Some(second)) if first < second) {
+            return false;
+        }
+        grid.rows
+            .iter()
+            .find(|row| row.contains("ledger-diff"))
+            .is_some_and(|row| row.contains("Diffs the ledger row.") && row.contains("cmds"))
     });
-    let row = grid
-        .rows
-        .iter()
-        .find(|row| row.contains("ledger-diff"))
-        .unwrap();
-    assert!(
-        row.contains("Diffs the ledger row.") && row.contains("cmds"),
-        "the TUI row carries its description and tag: {row}"
-    );
     run.write(b"diff hello");
     // The full draft echoes first: once it draws, every earlier byte was
     // read, so the Enter below acts on the whole command, and the clear
