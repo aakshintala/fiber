@@ -1125,8 +1125,9 @@ impl<B: Backend> Loop<B> {
         }
         // The attached-session history has landed in the drawn frame:
         // the tail read completed and installed its preview before this
-        // draw. A frame before that install leaves the guard open;
-        // run_with discards it if no such frame arrives.
+        // draw, or it ended and kept the previous transcript. A frame
+        // before that install leaves the guard open; run_with discards
+        // it if no such frame arrives.
         if attached_history {
             // The completed draw ends the draw span and writes all five
             // retained spans, before the parent frame line.
@@ -1628,13 +1629,17 @@ impl<B: Backend> Loop<B> {
         // empty preview. The install holds its own guard: it installs
         // the newest candidate without another fold (`docs/tui.md`,
         // "History and paging"); when no answer folded one, it folds
-        // the leftover candidate first, under the same guard.
+        // the leftover candidate first, under the same guard. An ended
+        // read installs nothing: the previous transcript stays, with a
+        // notice when the read was rejected (`docs/tui.md`,
+        // "History and paging").
         let install = self.timing.tail_install();
         self.app.install_tail();
         drop(install);
         // The install the attempt reached ends the tail span and opens
-        // the prepare span: reopened and rejected-history installs count,
-        // as the read completed through them.
+        // the prepare span: a completed read installs its preview, an
+        // ended one keeps the previous transcript, and the pass opens
+        // from the shown overlay either way.
         self.timing.stop_attach_tail();
         self.timing.start_attach_prepare();
         true
@@ -1668,7 +1673,8 @@ impl<B: Backend> Loop<B> {
         }
         // The completed count's fold always runs: the count still runs
         // here (only a lost connection drops it, and that returns
-        // above).
+        // above). An ended count folds nothing: the installed preview
+        // stays (`docs/tui.md`, "History and paging").
         self.app.finish_count();
     }
 

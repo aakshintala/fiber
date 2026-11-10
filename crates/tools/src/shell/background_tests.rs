@@ -105,6 +105,8 @@ fn a_job_completion_keeps_changed_path_reports_and_omits_empty_ones() {
             Some(Limit {
                 ms: 60_000,
                 monitor: false,
+                // No test command at this site holds a `|`.
+                has_pipe: false,
             }),
             report,
         );
@@ -298,6 +300,8 @@ fn members_listing_moves_at_once_and_names_the_receipt() {
         Some(Limit {
             ms: 5_000,
             monitor: false,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
         false,
     );
@@ -322,6 +326,8 @@ fn unavailable_listing_moves_with_unnamed_receipt() {
         Some(Limit {
             ms: 5_000,
             monitor: false,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
         false,
     );
@@ -419,6 +425,8 @@ fn moved_receipt_names_the_stop_time_and_timeout() {
         Some(Limit {
             ms: 60_000,
             monitor: false,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
         false,
     );
@@ -444,6 +452,8 @@ fn moved_timeout_error_carries_the_hint() {
         Some(Limit {
             ms: 5_000,
             monitor: false,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
     );
     assert_eq!(end.status, Outcome::Failed);
@@ -467,6 +477,8 @@ fn monitor_timeout_names_no_hint() {
         Some(Limit {
             ms: 5_000,
             monitor: true,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
     );
     assert_eq!(end.status, Outcome::Failed);
@@ -499,6 +511,8 @@ fn terminal_receipt_with_a_timeout_names_the_stop_time() {
         Some(Limit {
             ms: 60_000,
             monitor: false,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
         true,
     );
@@ -529,6 +543,8 @@ fn moved_receipt_with_no_timeout_names_no_deadline() {
         Some(Limit {
             ms: 5_000,
             monitor: false,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
         false,
     );
@@ -714,7 +730,12 @@ fn the_end_maps_like_a_foreground_result_and_tails_every_outcome() {
             id.clone(),
             &path,
             finished,
-            Some(Limit { ms, monitor: false }),
+            Some(Limit {
+                ms,
+                monitor: false,
+                // No test command at this site holds a `|`.
+                has_pipe: false,
+            }),
         )
     };
 
@@ -818,6 +839,8 @@ fn completed_and_failed_ends_cut_a_large_tail_identically() {
             Some(Limit {
                 ms: 1,
                 monitor: false,
+                // No test command at this site holds a `|`.
+                has_pipe: false,
             }),
         )
     };
@@ -924,6 +947,8 @@ fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
             Some(Limit {
                 ms: 5_000,
                 monitor: false,
+                // No test command at this site holds a `|`.
+                has_pipe: false,
             }),
         )
     };
@@ -965,6 +990,8 @@ fn a_flooded_monitor_ends_flooded_unless_the_cap_fired() {
     let deadline = Limit {
         ms: 5_000,
         monitor: true,
+        // A monitor's deadline names itself either way.
+        has_pipe: false,
     };
     let flooded = |mut finished: Finished| {
         finished.flooded = true;
@@ -1002,6 +1029,8 @@ fn a_monitor_at_its_deadline_says_it_expired() {
         Some(Limit {
             ms: 5_000,
             monitor: true,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
     );
     assert_eq!(end.status, Outcome::Failed);
@@ -1020,6 +1049,8 @@ fn a_monitor_at_its_deadline_says_it_expired() {
         Some(Limit {
             ms: 5_000,
             monitor: true,
+            // No test command at this site holds a `|`.
+            has_pipe: false,
         }),
     );
     assert_eq!(held.error.unwrap().code, ErrorCode::Indeterminate);

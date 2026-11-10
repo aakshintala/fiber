@@ -11,7 +11,8 @@ use super::{App, history_args};
 use crate::window::Pages;
 
 /// What the screen holds while an open is in flight: nothing once the
-/// open ends or fails, the preview while its raise is out, the preview
+/// open ends or fails, the previous transcript while an ended read's
+/// raise is out, the preview while its raise is out, the preview
 /// with the pass folding into a second `Pages`, and the preview alone
 /// when the pass ended abnormally, skipping the replay up to `last`.
 #[derive(Debug, Default)]
@@ -19,7 +20,9 @@ pub(super) enum Overlay {
     /// No open holds the screen.
     #[default]
     None,
-    /// The raise is in flight and the screen holds the preview.
+    /// The raise is in flight and the screen holds the shown pages:
+    /// the preview after a completed read, the previous transcript
+    /// after an ended one.
     Shown {
         session: SessionId,
         busy: Option<bool>,
@@ -306,9 +309,9 @@ impl Tail {
         self.ended = true;
     }
 
-    /// Whether the read ended. Tests only: production reads it through
-    /// `chain_done`.
-    #[cfg(test)]
+    /// Whether the read ended: failed, abandoned, or lost. The install
+    /// skips an ended tail's swap and the count finish drops an ended
+    /// count's fold, so the previous transcript stays.
     pub(super) fn ended(&self) -> bool {
         self.ended
     }
