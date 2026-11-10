@@ -423,6 +423,57 @@ fn stop_keeper_leaves_an_overlong_read_unconfirmed_without_waiting() {
     assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
+/// A reset after the stop still confirms: the keeper leg answers at
+/// once without the bound moving, because a keeper never writes. Note:
+/// on a Unix socket the reset surfaces as EOF, so this pins the close
+/// path, not the closed-socket guard: `ConnectionReset`, `BrokenPipe`
+/// and `ConnectionAborted` cannot be staged from a Unix peer (a broken
+/// pipe arises on write, never on this read, and Linux delivers a
+/// linger-zero close as EOF even mid-read — probed directly, including
+/// a blocked read woken by the reset). A mutant that drops the guard
+/// survives this test; its disposition needs a ruling.
+#[test]
+fn stop_keeper_confirms_a_reset_read_without_waiting() {
+    let temp = Temp::new("ss-keeper-reset");
+    let id = SessionId(testkit::id(25));
+    let listener = UnixListener::bind(temp.run(&id)).unwrap();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        // One handle only: a clone would close clean beside the reset
+        // and the stop could read EOF instead of the reset.
+        {
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line, FROZEN_STOP);
+        }
+        // Linger-zero close resets the connection: the stop's next read
+        // fails with `ConnectionReset` instead of reading a close. A
+        // hangup or error is itself readiness, so the leg never parks
+        // past the reset, whenever it lands.
+        net::sockopt::set_socket_linger(&stream, Some(Duration::ZERO)).unwrap();
+        drop(stream);
+        // Hold the thread past the reset: closing nothing further, but
+        // the join must not race the assertion below.
+        loop {
+            thread::park();
+        }
+    });
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(stop_keeper(&hub, &id, end)).unwrap_or(());
+    });
+    // No clock move: the reset confirms at once. A mutant that drops
+    // the closed-socket guard instead answers unconfirmed here and fails.
+    assert!(matches!(
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "the reset stop"),
+        SessionOutcome::KeeperConfirmed
+    ));
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
 #[test]
 fn keeper_gone_before_the_stop_write_is_gone_not_confirmed() {
     let temp = Temp::new("ss-keeper-vanish");
