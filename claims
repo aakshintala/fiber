@@ -318,3 +318,4 @@ crates/tui/src/import_report_tests.rs	fiber-4557	plan	2026-11-10T17:40:38Z	Amogh
 crates/tui/src/app/commands_tests.rs	fiber-4557	plan	2026-11-10T17:40:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/items_tests.rs	fiber-4557	plan	2026-11-10T17:40:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/outbox_tests.rs	fiber-4557	plan	2026-11-10T17:40:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4522	plan	2026-11-10T17:42:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
