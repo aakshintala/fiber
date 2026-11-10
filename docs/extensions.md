@@ -699,7 +699,7 @@ tools or hooks.
 
 A provider may have five pieces of Lua:
 
-- `models()`, which receives `{ key, placeholders }` (`docs/model-routing.md`, "Model discovery") and discovers its models
+- `models()`, which receives `{ key, placeholders }` (`docs/model-routing.md`, "Model discovery") and discovers its models; an entry it deliberately leaves out keeps its place in the list and carries `omit_reason` with the provider's reason
 - `quota()`, which receives `{ label, credential, key, token, headers }`,
   where `key` is the label's key (absent when the provider's token comes
   from `credential()`), and `token` and `headers` are what `credential()`

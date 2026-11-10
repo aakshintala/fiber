@@ -846,22 +846,73 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
         include_str!("../../../../providers/databricks/thinking.lua"),
     );
 
-    let run = run(
+    let ask = run(
         &setup,
         &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
         &credentials(&host),
     );
 
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let without_extension_log: Vec<Value> = run
+    assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
+    let stream: Vec<Value> = ask
         .lines
         .iter()
         .filter(|line| line["kind"] != "extension_log")
         .cloned()
         .collect();
-    support::assert_kinds_multiset(&without_extension_log, &HELLO_KINDS, &[], None, COUNT_DOC);
-    assert_eq!(run.text_completed(), "Hello.");
+    // The omission is a client-facing notice on the ask stream, the way
+    // `model_invalid` is: one `notice` event naming the model and the
+    // provider's reason, with the remaining kinds equal to `HELLO_KINDS`.
+    let notices: Vec<&Value> = stream
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "model_omitted");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The model `databricks/databricks-glm-5.3` was left out of the model \
+         list: no serving endpoint with a matching name."
+    );
+    assert_eq!(
+        notices[0]["payload"]["extension"],
+        "github.com/aakshintala/fiber/providers/databricks"
+    );
+    let rest: Vec<Value> = stream
+        .into_iter()
+        .filter(|line| line["kind"] != "notice")
+        .collect();
+    support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
+    assert_eq!(ask.text_completed(), "Hello.");
     assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
+    // The same discovery behind `fiber models` prints the singleton
+    // notice unchanged and lists only the backed models.
+    let models = run(&setup, &["models", "--json"], &credentials(&host));
+    assert_eq!(models.code, Some(0), "stderr: {}", models.stderr);
+    assert!(
+        models.stderr.contains(
+            "The model `databricks/databricks-glm-5.3` was left out of the model \
+             list: no serving endpoint with a matching name.\n"
+        ),
+        "stderr: {}",
+        models.stderr
+    );
+    // The home also holds the harness's fake provider, so the comparison
+    // scopes to the provider under test.
+    let mut listed: Vec<&str> = models
+        .lines
+        .iter()
+        .map(|line| line["model"].as_str().unwrap())
+        .filter(|model| model.starts_with("databricks/"))
+        .collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [
+            "databricks/databricks-claude-opus-5",
+            "databricks/databricks-gpt-6-sol",
+        ],
+        "{listed:?}"
+    );
     let lines = log_lines(&setup);
     let omissions: Vec<&Value> = lines
         .iter()
@@ -881,6 +932,70 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
     );
     assert!(!message.contains("dapi-test"), "{message}");
     assert!(!message.contains("authorization"), "{message}");
+}
+
+/// Two services without endpoints group into one `model_omitted` notice on
+/// `fiber models` stderr: the grouped count names both omitted models with
+/// their per-item extension attribution, and stdout lists only the backed
+/// model. No order across omissions is promised, so the test asserts the
+/// set, not which omission leads.
+#[test]
+fn two_services_without_endpoints_group_into_one_notice() {
+    // No harness fake provider, so the list holds only what discovery
+    // found, like `models_lists_exactly_the_three_discovered_references`.
+    let setup = Setup::without_provider();
+    let server = ProviderServer::start([
+        Response::status(200, services_body().to_string()),
+        Response::status(200, catalog_body().to_string()),
+        Response::status(
+            200,
+            json!({"endpoints": [{"name": "gpt-6-sol"}]}).to_string(),
+        ),
+    ])
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    let models = run(&setup, &["models", "--json"], &credentials(&host));
+    assert_eq!(models.code, Some(0), "stderr: {}", models.stderr);
+    assert!(
+        models.stderr.contains("2 `model_omitted` notices:"),
+        "stderr: {}",
+        models.stderr
+    );
+    for omitted in [
+        "databricks/databricks-claude-opus-5",
+        "databricks/databricks-glm-5.3",
+    ] {
+        assert!(
+            models.stderr.contains(&format!(
+                "- The model `{omitted}` was left out of the model list: \
+                 no serving endpoint with a matching name. \
+                 (extension `github.com/aakshintala/fiber/providers/databricks`)"
+            )),
+            "stderr: {}",
+            models.stderr
+        );
+    }
+    assert_eq!(
+        models
+            .stderr
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
+        2,
+        "stderr: {}",
+        models.stderr
+    );
+    let listed: Vec<&str> = models
+        .lines
+        .iter()
+        .map(|line| line["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, ["databricks/databricks-gpt-6-sol"], "{listed:?}");
 }
 
 /// Every service backed by an endpoint turns with no omission line in the
