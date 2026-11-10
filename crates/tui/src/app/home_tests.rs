@@ -7537,3 +7537,120 @@ fn set_home_replaces_the_seeded_home() {
     app.settle();
     assert_eq!(app.chrome().layout().expect("a layout").rail, None);
 }
+
+/// A hub `session_deleted` or `session_archived` wire line, as the hub
+/// sends it: before the fix it parses as `Unknown` and is ignored, so
+/// the stale row stays and no line goes out.
+fn forgot(kind: &str, session: &str, project: &str) -> Line {
+    crate::link::parse_line(&format!(
+        r#"{{"kind":"{kind}","ts":0,"schema_version":1,"payload":{{"session_id":"{session}","project":"{project}"}}}}"#
+    ))
+    .unwrap_or_else(|| panic!("the forgot line parses"))
+}
+
+/// The home view's drawn text, one string per row.
+fn rendered(app: &App) -> Vec<String> {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    (0..24)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// Loads one exited row for `session`: the status-triggered and the
+/// exit-triggered scoped asks are asked and settled, so the next
+/// trigger queues exactly one line.
+fn load_exited(app: &mut App, session: &str, name: &str) {
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    let asked: Vec<Value> = commands(app.on_line(status(session)))
+        .into_iter()
+        .filter(|line| line["command"] == "recent")
+        .collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0]["args"]["project"], "-w");
+    let scoped = asked[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("scoped id"));
+    app.on_line(accepted(scoped, json!({"sessions": [], "total": 0})));
+    let reasked: Vec<Value> = commands(app.on_line(left(session, "exited")));
+    assert_eq!(reasked.len(), 1, "{reasked:?}");
+    let scoped = reasked[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("scoped id"));
+    app.on_line(accepted(
+        scoped,
+        json!({"sessions": [exited(session, name)], "total": 1}),
+    ));
+}
+
+/// The forgot line drops the loaded exited row and re-asks that
+/// project's counts: one scoped `recent` first page, no unscoped
+/// refill. The view renders without the forgotten row.
+fn forgot_drops_the_loaded_exited_row(kind: &str) {
+    let mut app = home_with(80, 24, launch());
+    load_exited(&mut app, "s_aaaaaaaaaaaaaaaa", "fix the parser");
+    assert_eq!(rows(&app), ["○  fix the parser"]);
+    let sent = commands(app.on_line(forgot(kind, "s_aaaaaaaaaaaaaaaa", "-w")));
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["command"], "recent");
+    assert_eq!(sent[0]["args"]["project"], "-w");
+    assert!(sent[0]["args"].get("before").is_none());
+    assert!(rows(&app).is_empty(), "{:?}", rows(&app));
+    let drawn = rendered(&app);
+    assert!(
+        drawn.iter().all(|row| !row.contains("fix the parser")),
+        "{drawn:?}"
+    );
+}
+
+#[test]
+fn forgot_deleted_drops_the_exited_row_and_reasks_its_project() {
+    forgot_drops_the_loaded_exited_row("session_deleted");
+}
+
+#[test]
+fn forgot_archived_drops_the_exited_row_and_reasks_its_project() {
+    forgot_drops_the_loaded_exited_row("session_archived");
+}
+
+#[test]
+fn forgot_for_an_unknown_session_still_reasks_its_project() {
+    let mut app = home_with(80, 24, launch());
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    // No row is loaded, and no scoped ask is in flight: the unknown id
+    // drops nothing but still re-asks its project's counts.
+    let sent = commands(app.on_line(forgot("session_deleted", "s_dddddddddddddddd", "-w")));
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["command"], "recent");
+    assert_eq!(sent[0]["args"]["project"], "-w");
+    assert!(rows(&app).is_empty());
+}
+
+#[test]
+fn forgot_without_a_project_changes_nothing_and_sends_nothing() {
+    let mut app = home_with(80, 24, launch());
+    load_exited(&mut app, "s_aaaaaaaaaaaaaaaa", "fix the parser");
+    assert_eq!(rows(&app), ["○  fix the parser"]);
+    for text in [
+        r#"{"kind":"session_deleted","ts":0,"schema_version":1,"payload":{"session_id":"s_aaaaaaaaaaaaaaaa"}}"#,
+        r#"{"kind":"session_archived","ts":0,"schema_version":1,"payload":{"session_id":"s_aaaaaaaaaaaaaaaa","project":""}}"#,
+    ] {
+        let line = crate::link::parse_line(text).unwrap_or_else(|| panic!("parses"));
+        assert!(app.on_line(line).is_empty());
+    }
+    assert_eq!(rows(&app), ["○  fix the parser"]);
+    let drawn = rendered(&app);
+    assert!(
+        drawn.iter().any(|row| row.contains("fix the parser")),
+        "{drawn:?}"
+    );
+}

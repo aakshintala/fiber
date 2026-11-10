@@ -30,6 +30,40 @@ fn rows(home: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// Every session id the `sessions` command lists, live and exited.
+#[track_caller]
+fn listed(client: &Socket) -> Vec<String> {
+    client.send(r#"{"id":"c_sessions","command":"sessions","args":{}}"#);
+    let ack = recv_answer(client, "c_sessions", "the sessions answer");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let mut ids: Vec<String> = ack["payload"]["result"]["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["session_id"].as_str().unwrap().to_owned())
+        .chain(
+            ack["payload"]["result"]["exited"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["session_id"].as_str().unwrap().to_owned()),
+        )
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The scoped `recent` total for `project`.
+#[track_caller]
+fn recent_total(client: &Socket, project: &str) -> u64 {
+    client.send(
+        &json!({"id": "c_total", "command": "recent", "args": {"project": project}}).to_string(),
+    );
+    let ack = recv_answer(client, "c_total", "the scoped recent answer");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    ack["payload"]["result"]["total"].as_u64().unwrap()
+}
+
 /// The project key of `workspace`: the name of its `projects/<key>`
 /// directory.
 fn project_key(home: &Path, workspace: &Path) -> String {
@@ -552,4 +586,125 @@ fn attention_reaches_a_client_without_a_feed_for_a_standing_ask_and_a_finished_t
     hub.wait();
     assert!(until_close(&watch).is_empty());
     drop(control);
+}
+
+/// Starts one session on `control`, closes it, and returns its id and
+/// project key once the exited row is listed: the shared setup for the
+/// consumer delete and archive tests.
+fn start_and_close(
+    setup: &Setup,
+    control: &Socket,
+    watch: &Socket,
+    workspace: &Path,
+) -> (String, String) {
+    let text = workspace.to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &text);
+    let key = project_key(&setup.home(), workspace);
+    let id = start_session(control, &text, "first");
+    // The session runs once the hub follows it: only then can `close`
+    // end it.
+    until(watch, "the session's status", |line| {
+        line["kind"] == "session_status" && line["session_id"] == id.as_str()
+    });
+    // The turn completes before the close: closing mid-turn would end
+    // the session without its exited row.
+    control.send(&format!(
+        r#"{{"id":"c_full","session_id":"{id}","command":"subscribe","args":{{"level":"full"}}}}"#
+    ));
+    until(control, "the full subscribe acknowledgement", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_full"
+    });
+    until(control, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == id.as_str()
+    });
+    // `close` ends the session: it leaves the feed exited.
+    control.send(&format!(
+        r#"{{"id":"c_sub","session_id":"{id}","command":"subscribe","args":{{"level":"summary"}}}}"#
+    ));
+    until(control, "the subscribe acknowledgement", |line| {
+        line["kind"] == "command_accepted"
+    });
+    control.send(&format!(
+        r#"{{"id":"c_close","session_id":"{id}","command":"close"}}"#
+    ));
+    until(control, "the close acknowledgement", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close"
+    });
+    let left = until(watch, "the session's session_left", |line| {
+        line["kind"] == "session_left" && line["payload"]["session_id"] == id.as_str()
+    });
+    assert_eq!(left.last().unwrap()["payload"]["how"], "exited");
+    guard.wait_gone();
+    assert_eq!(recent(watch, &json!({"project": key})), [id.as_str()]);
+    assert!(listed(watch).contains(&id));
+    (id, key)
+}
+
+#[test]
+fn two_clients_see_a_delete_line_and_the_row_leaves() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    feed(&watch);
+    let control = client(&setup);
+    feed(&control);
+    let workspace = setup.root.path().join("wa");
+    fs::create_dir_all(&workspace).unwrap();
+    let (id, key) = start_and_close(&setup, &control, &watch, &workspace);
+    // The delete broadcasts to every subscriber, carrying the session's
+    // own project; the row leaves the listing and the scoped total drops.
+    control.send(&format!(
+        r#"{{"id":"c_delete","command":"delete","args":{{"session":"{id}"}}}}"#
+    ));
+    until(&control, "the delete acknowledgement", |line| {
+        line["payload"]["command_id"] == "c_delete"
+    });
+    let deleted = until(&watch, "the session's session_deleted", |line| {
+        line["kind"] == "session_deleted" && line["payload"]["session_id"] == id.as_str()
+    });
+    assert_eq!(deleted.last().unwrap()["payload"]["project"], key.as_str());
+    assert!(!listed(&watch).contains(&id));
+    assert!(recent(&watch, &json!({"project": key})).is_empty());
+    assert_eq!(recent_total(&watch, &key), 0);
+    drop((watch, control));
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
+fn two_clients_see_an_archive_line_and_the_row_leaves() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    feed(&watch);
+    let control = client(&setup);
+    feed(&control);
+    let workspace = setup.root.path().join("wa");
+    fs::create_dir_all(&workspace).unwrap();
+    let (id, key) = start_and_close(&setup, &control, &watch, &workspace);
+    // The archive broadcasts to every subscriber, carrying the
+    // session's own project; the row leaves the default listing and the
+    // scoped total drops.
+    control.send(&format!(
+        r#"{{"id":"c_archive","command":"archive","args":{{"session":"{id}"}}}}"#
+    ));
+    until(&control, "the archive acknowledgement", |line| {
+        line["payload"]["command_id"] == "c_archive"
+    });
+    let archived = until(&watch, "the session's session_archived", |line| {
+        line["kind"] == "session_archived" && line["payload"]["session_id"] == id.as_str()
+    });
+    assert_eq!(archived.last().unwrap()["payload"]["project"], key.as_str());
+    assert!(!listed(&watch).contains(&id));
+    assert!(recent(&watch, &json!({"project": key})).is_empty());
+    assert_eq!(recent_total(&watch, &key), 0);
+    drop((watch, control));
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
 }
