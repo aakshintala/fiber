@@ -663,6 +663,74 @@ fn an_archive_naming_an_unknown_first_party_extension_installs_it() {
     }
 }
 
+/// A member whose manifest names no first-party address still refuses,
+/// naming the member, and changes nothing.
+#[test]
+fn an_archive_whose_manifest_name_does_not_match_stops_before_any_rename() {
+    let acme = json!({
+        "name": "github.com/acme/widget",
+        "version": "0.0.0",
+        "fiber": "0.0.0",
+        "api": 1,
+    });
+    refused(
+        &Files::with_extensions(&[file("futuristic/extension.json", acme.to_string())]),
+        |err| matches!(err, Error::BadArchive { .. }) && err.to_string().contains("`futuristic`"),
+    );
+}
+
+/// A member whose directory name cannot be a short name still refuses,
+/// and a top-level `..` still fails in the unpacker before the layout.
+#[test]
+fn a_hidden_or_dotted_directory_name_stops_before_any_rename() {
+    refused(
+        &Files::with_extensions(&[file(
+            ".hidden/extension.json",
+            first_party(".hidden", "extensions").to_string(),
+        )]),
+        bad_archive(
+            "fiber-extensions.tar.gz",
+            "`.hidden` is not a first-party extension's short name",
+        ),
+    );
+    refused(
+        &Files::with_extensions(&[file(
+            "a..b/extension.json",
+            first_party("a..b", "extensions").to_string(),
+        )]),
+        bad_archive(
+            "fiber-extensions.tar.gz",
+            "`a..b` is not a first-party extension's short name",
+        ),
+    );
+    refused(
+        &Files::with_extensions(&[
+            file(
+                "memory/extension.json",
+                first_party("memory", "extensions").to_string(),
+            ),
+            file("../escape", "x"),
+        ]),
+        bad_archive("fiber-extensions.tar.gz", "has a `..` component"),
+    );
+}
+
+/// A known short whose manifest names another address with a newer Fiber
+/// floor still fails the manifest check first, naming the manifest.
+#[test]
+fn a_known_short_with_a_mismatched_manifest_and_newer_floor_returns_needs_newer_fiber() {
+    let mut manifest = first_party("anthropic", "providers");
+    manifest["name"] = "github.com/acme/widget".into();
+    manifest["fiber"] = "99.0.0".into();
+    refused(
+        &Files::with_extensions(&extension_members(&manifest)),
+        |err| {
+            matches!(err, Error::NeedsNewerFiber { .. })
+                && err.to_string().contains("github.com/acme/widget")
+        },
+    );
+}
+
 /// Every `http_request` line the observed release install writes, in order.
 /// the docs and extensions archives and their checksum files, each with
 /// the server's host, the download's path, status 200, and the served

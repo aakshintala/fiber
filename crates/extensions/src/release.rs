@@ -16,7 +16,8 @@ use contract::clock::Clock;
 
 use crate::Error;
 use crate::install::{
-    Provenance, Record, Scratch, check, commit_all, copy, io, remove, stage, unique_name,
+    Provenance, Record, Scratch, check, commit_all, copy, io, remove, remove_stale_dirs,
+    stage_under_short, unique_name,
 };
 use crate::installed::lock;
 use crate::prepare::{Observe, download_observed};
@@ -274,15 +275,14 @@ pub(crate) fn install_release_with(
         return Err(bad(DOCS, "holds no entries".into()));
     }
     let extensions_dir = unpack_into(&scratch, &extensions.bytes, EXTENSIONS, "extensions")?;
-    let shorts = layout(&extensions_dir, &release.version)?;
+    let members = layout(&extensions_dir, &release.version)?;
 
     config::create_fiber_home(home)?;
     let _lock = lock(home, clock)?;
     let mut staging = Staging(Vec::new());
     let mut staged = Vec::new();
     let mut names = Vec::new();
-    for short in &shorts {
-        let name = config::full_name(short);
+    for (short, name) in &members {
         let record = Record {
             name: name.clone(),
             provenance: Provenance::Git {
@@ -293,10 +293,10 @@ pub(crate) fn install_release_with(
             floor: None,
         };
         let source = extensions_dir.join(short);
-        let (_, _, paths) = stage(home, &source, &release.version, &record)?;
+        let (_, _, paths) = stage_under_short(home, &source, short, &record)?;
         staging.0.push(paths.fresh.clone());
         staged.push(paths);
-        names.push(name);
+        names.push(name.clone());
     }
     let stem = unique_name(".docs");
     let fresh = home.join(format!("{stem}.new"));
@@ -306,6 +306,9 @@ pub(crate) fn install_release_with(
     copy(&docs_dir, &fresh)?;
     commit_all(&staged, rename, |_, _| Ok(()))?;
     swap_docs(&fresh, &home.join("docs"), &old, rename)?;
+    // A newly named member commits under its short, so the slugged
+    // directory an older install used is stale.
+    remove_stale_dirs(home, &members);
     names.sort();
     Ok(names)
 }
@@ -380,12 +383,37 @@ fn bad(archive: &str, why: String) -> Error {
     }
 }
 
+/// The first-party address the archive member `short` must name exactly
+/// (`docs/extensions.md`, "Names"): every package under `providers/` or
+/// `extensions/` in Fiber's own repository has one.
+fn first_party_name(kind: &str, short: &str) -> String {
+    format!("github.com/aakshintala/fiber/{kind}/{short}")
+}
+
+/// Whether `short` can name an archive member: the characters the short
+/// names this binary knows use, with no path separator, leading dot or
+/// parent.
+fn is_valid_short(short: &str) -> bool {
+    !short.is_empty()
+        && short != ".."
+        && !short.starts_with('.')
+        && !short.contains('/')
+        && !short.contains('\\')
+        && short
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
 /// Checks the extensions archive's top level: only directories, each a
-/// first-party short name whose manifest names that extension, declares no
+/// first-party member whose manifest names that member, declares no
 /// binaries and no install step, and passes every check staging makes.
-/// Returns the short names, sorted.
-pub(crate) fn layout(dir: &Path, fiber_version: &str) -> Result<Vec<String>, Error> {
-    let mut shorts = Vec::new();
+/// Returns each member's short directory name with its manifest's full
+/// name, sorted by directory name. A member the running binary does not
+/// know counts as first-party when its name is valid and its manifest
+/// names exactly the first-party address of its directory, so a release
+/// can add one without the binary knowing its name.
+pub(crate) fn layout(dir: &Path, fiber_version: &str) -> Result<Vec<(String, String)>, Error> {
+    let mut members = Vec::new();
     for entry in fs::read_dir(dir).map_err(io(dir))? {
         let entry = entry.map_err(io(dir))?;
         let path = entry.path();
@@ -395,26 +423,44 @@ pub(crate) fn layout(dir: &Path, fiber_version: &str) -> Result<Vec<String>, Err
             return Err(refuse("at the top level is not a directory"));
         }
         let name = config::full_name(&short);
-        if name == short {
+        if name != short {
+            let (manifest, _) = check(&path, fiber_version)?;
+            if manifest.name != name {
+                return Err(refuse(&format!(
+                    "holds a manifest that names `{}`",
+                    manifest.name
+                )));
+            }
+            if !manifest.binaries.is_empty() || manifest.install.is_some() {
+                return Err(refuse("declares binaries or an install step"));
+            }
+            members.push((short, name));
+            continue;
+        }
+        if !is_valid_short(&short) {
+            return Err(refuse("is not a first-party extension's short name"));
+        }
+        // Only the archive's own manifest can say an unknown member is
+        // first-party, and a manifest that cannot be read says nothing.
+        if config::read_manifest(&path).is_err() {
             return Err(refuse("is not a first-party extension's short name"));
         }
         let (manifest, _) = check(&path, fiber_version)?;
-        if manifest.name != name {
-            return Err(refuse(&format!(
-                "holds a manifest that names `{}`",
-                manifest.name
-            )));
+        if manifest.name != first_party_name("extensions", &short)
+            && manifest.name != first_party_name("providers", &short)
+        {
+            return Err(refuse("is not a first-party extension's short name"));
         }
         if !manifest.binaries.is_empty() || manifest.install.is_some() {
             return Err(refuse("declares binaries or an install step"));
         }
-        shorts.push(short);
+        members.push((short, manifest.name.clone()));
     }
-    if shorts.is_empty() {
+    if members.is_empty() {
         return Err(bad(EXTENSIONS, "holds no extension".into()));
     }
-    shorts.sort();
-    Ok(shorts)
+    members.sort();
+    Ok(members)
 }
 
 /// Moves `fresh` to `target`. A previous `target` is moved to `old` first,

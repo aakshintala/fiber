@@ -1444,3 +1444,49 @@ fn an_update_that_would_replace_a_third_party_extension_refuses_before_any_renam
     );
     assert_eq!(setup.installed_state(), before);
 }
+
+/// One later update leaves a single directory for a layout-accepted
+/// unknown: the slugged directory an older install used is stale once the
+/// member commits under its short.
+#[test]
+fn a_later_update_leaves_a_single_directory_for_a_layout_accepted_unknown() {
+    let mut setup = Setup::new();
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    let slugged = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-extensions-futuristic");
+    assert!(slugged.is_dir(), "the older install used the slugged name");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root = setup.home().join("extensions");
+    let mut dirs: Vec<String> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    dirs.sort();
+    assert_eq!(dirs, ["futuristic"]);
+    assert_eq!(
+        fs::read_to_string(root.join("futuristic/extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert_eq!(setup.record("futuristic")["name"], FUTURISTIC);
+}
