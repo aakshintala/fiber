@@ -935,11 +935,25 @@ fn handover_end_releases_client_maps() {
         None,
     )
     .unwrap();
+    let actual = std::fs::read(&output_path).unwrap();
     assert_eq!(
-        std::fs::read(&output_path).unwrap(),
-        expected,
-        "the file holds exactly the sent bytes"
+        actual.len(),
+        expected.len(),
+        "the file holds exactly the sent bytes: actual len {} expected len {}",
+        actual.len(),
+        expected.len()
     );
+    if let Some(offset) = actual.iter().zip(expected.iter()).position(|(a, b)| a != b) {
+        let start = offset.saturating_sub(16);
+        let end = (offset + 16).min(actual.len());
+        panic!(
+            "the file holds exactly the sent bytes: first difference at offset {} (len {}): actual[{start}..{end}] = {:02x?}, expected[{start}..{end}] = {:02x?}",
+            offset,
+            actual.len(),
+            &actual[start..end],
+            &expected[start..end]
+        );
+    }
     assert!(
         lock(&attached.client.waiters).get("call_0").is_none(),
         "waiters held after End: {:?}",
