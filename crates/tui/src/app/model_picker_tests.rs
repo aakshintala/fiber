@@ -134,6 +134,27 @@ fn first_run_one_credential_among_logged_out_opens_no_login_overlay() {
 }
 
 #[test]
+fn first_run_single_logged_out_provider_opens_login_overlay() {
+    // `docs/tui.md`, "First run": with the only installed provider
+    // logged out, the terminal opens on home with `/login` up. A lone
+    // logged-out row must match by provider: flipping the match would
+    // read the row as a credential and open nothing.
+    use crate::catalogue::LoggedOutProvider;
+
+    let mut app = home();
+    app.defer_first_run();
+    let mut listed = catalogue();
+    listed.logged_out.push(LoggedOutProvider {
+        provider: "acme".to_owned(),
+        login: true,
+        hint: String::new(),
+    });
+    app.on_models(Ok(listed));
+    assert!(app.config_view_open());
+    assert!(!app.model_picker_open());
+}
+
+#[test]
 fn first_run_all_providers_logged_out_opens_login_overlay() {
     // `docs/tui.md`, "First run": with no usable credential on any
     // installed provider, the terminal opens on home with `/login` up.
