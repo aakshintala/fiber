@@ -1,4 +1,4 @@
-//! Part 8 tool phase timers (`docs/state.md`, "Diagnostic logs"): one
+//! Part 8 tool phase timers (`docs/state.md`, "What each part holds"): one
 //! `op_timing` line per entered tool phase through the one installed timer.
 //!
 //! Time comes from the injected clock: synchronous fake work inside the
@@ -6467,7 +6467,7 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
 }
 
 // A reply's hook notices come first in request order, then its
-// `permission_resolved` lines (`docs/permissions.md`, "What is recorded"):
+// `permission_resolved` lines (`docs/permissions.md`, "What the log records"):
 // preparing every call runs its `before_tool` hooks before the first
 // stage fans out, so no fanned-out usage can slip ahead of a notice.
 #[test]

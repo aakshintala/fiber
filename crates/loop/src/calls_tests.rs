@@ -2199,7 +2199,7 @@ fn a_completed_call_preserves_its_protected_paths_report() {
     );
     assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
 
-    // docs/loop.md, "One step": one call, then a reply without calls ends
+    // `docs/loop.md`, "One step": one call, then a reply without calls ends
     // the turn. Compare kinds with counts, without imposing an order.
     let mut actual = kinds(&ran.lines);
     let mut expected: Vec<EventKind> = [
@@ -2229,7 +2229,7 @@ fn a_completed_call_preserves_its_protected_paths_report() {
     expected.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(actual, expected);
 
-    // docs/events.md, "tool_call_completed": the report survives into
+    // `docs/events.md`, "`tool_call_completed`": the report survives into
     // the durable completion, including a restore that failed.
     let completed = searched_completed(&ran);
     assert_eq!(completed.payload["status"], "completed");

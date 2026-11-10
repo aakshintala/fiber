@@ -1,5 +1,5 @@
 //! The session's diagnostic log at `logs/session-<id>.log`
-//! (`docs/state.md`, "Diagnostic logs"): one JSON object per line for each
+//! (`docs/state.md`, "What each part holds"): one JSON object per line for each
 //! `host.log` line. A session with nothing to record writes no file.
 
 use std::path::Path;

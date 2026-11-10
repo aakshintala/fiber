@@ -530,7 +530,7 @@ fn failed_preamble_append_ends_after_the_reload_ack_is_accepted() {
 fn a_reload_groups_the_prepared_notices_by_code() {
     // One reload pass's prepared notices reach the log as one notice per
     // code: the two `extension_shadowed` notices become one naming both
-    // installs, in complete event order (`docs/errors.md`, "Notices":
+    // installs, in complete event order (`docs/errors.md`, "Registry":
     // one per code).
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
@@ -790,7 +790,7 @@ fn reconnects_in_one_idle_batch_start_one_failing_process() {
                             .is_none()
                     );
                 }
-                // docs/mcp.md, "Servers, their state and the per-server
+                // `docs/mcp.md`, "Servers, their state and the per-server
                 // commands": quick reconnects start the server once, failed too.
                 assert_eq!(std::fs::read_to_string(&spawns).unwrap(), "spawn\n");
                 let failed: Vec<_> = log::read(w.looped.log.dir())

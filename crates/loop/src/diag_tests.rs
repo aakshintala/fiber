@@ -1,4 +1,4 @@
-//! The session's diagnostic writer (`docs/state.md`, "Diagnostic logs"):
+//! The session's diagnostic writer (`docs/state.md`, "What each part holds"):
 //! `host.log` lines append one JSON line each to
 //! `logs/session-<id>.log`, creating `logs/` mode 0700 on the first
 //! write. A write failure is ignored.
