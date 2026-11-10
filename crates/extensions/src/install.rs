@@ -235,12 +235,42 @@ pub(crate) fn stage(
 ) -> Result<(Manifest, Vec<ProviderData>, Paths), Error> {
     let (manifest, _) = check(source, fiber_version)?;
     let slug = slug(&manifest.name)?;
+    let (providers, paths) = place(home, source, &slug, record)?;
+    Ok((manifest, providers, paths))
+}
+
+/// Stages the release member at `source` under the layout-checked `short`,
+/// with `record`: `layout` already ran every check staging makes on this
+/// member, so this reads its manifest and copies it without checking
+/// again. The providers returned are read from the copy, as in [`stage`].
+pub(crate) fn stage_under_short(
+    home: &Path,
+    source: &Path,
+    short: &str,
+    record: &Record,
+) -> Result<(Manifest, Vec<ProviderData>, Paths), Error> {
+    let manifest = config::read_manifest(source)?;
+    let (providers, paths) = place(home, source, short, record)?;
+    Ok((manifest, providers, paths))
+}
+
+/// Copies `source`, with its `record`, to a fresh directory beside where
+/// it will live under `dir`; nothing installed changes. Each call stages
+/// under its own name, so two calls never share a directory. The
+/// providers returned are read from the copy, which keeps symbolic links
+/// as links, so a link that leaves the extension is refused there.
+fn place(
+    home: &Path,
+    source: &Path,
+    dir: &str,
+    record: &Record,
+) -> Result<(Vec<ProviderData>, Paths), Error> {
     let root = config::extensions_dir(home);
     fs::create_dir_all(&root).map_err(io(&root))?;
     overlap(source, &root)?;
-    let stem = unique_name(&format!(".{slug}"));
+    let stem = unique_name(&format!(".{dir}"));
     let paths = Paths {
-        target: root.join(&slug),
+        target: root.join(dir),
         fresh: root.join(format!("{stem}.new")),
         old: root.join(format!("{stem}.old")),
     };
@@ -250,12 +280,55 @@ pub(crate) fn stage(
         .and_then(|()| write_record(&paths.fresh, record))
         .and_then(|()| config::read_providers(&paths.fresh).map_err(Error::from));
     match copied {
-        Ok(providers) => Ok((manifest, providers, paths)),
+        Ok(providers) => Ok((providers, paths)),
         Err(e) => {
             remove(&paths.fresh)?;
             Err(e)
         }
     }
+}
+
+/// Removes every `extensions/<dir>/` that is not a committed member's own
+/// directory but whose manifest names a committed member: a member the
+/// release newly names commits under its short, so the slugged directory
+/// an older install used is stale (`docs/releasing.md`, "Updating"). A
+/// directory whose manifest cannot be read is left alone. Each directory
+/// is removed on its own, so a failure removes nothing else. A removal
+/// failure is returned, so a successful install or update never leaves
+/// the duplicate behind.
+pub(crate) fn remove_stale_dirs(home: &Path, members: &[(String, String)]) -> Result<(), Error> {
+    if members.is_empty() {
+        return Ok(());
+    }
+    let root = config::extensions_dir(home);
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Ok(());
+    };
+    let dirs: Vec<(String, PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                return None;
+            }
+            let dir = entry.path();
+            dir.is_dir().then_some((name, dir))
+        })
+        .collect();
+    for (short, name) in members {
+        for (dir_name, dir) in &dirs {
+            if dir_name == short {
+                continue;
+            }
+            let names = config::read_manifest(dir)
+                .map(|manifest| manifest.name)
+                .ok();
+            if names.as_deref() == Some(name.as_str()) {
+                remove(dir)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One directory a commit moves. `had_old` is whether `target` existed
