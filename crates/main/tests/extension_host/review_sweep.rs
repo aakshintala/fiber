@@ -1997,7 +1997,7 @@ fn sweep_and_session_reviewer_requests_carry_the_same_subscription_headers() {
                 .credentials()
                 .credential_with(session.provider, &label, &run)
                 .map(|read| read.secret)
-                .map_err(&failed)
+                .map_err(failed)
         },
     )
     .unwrap();
@@ -2021,7 +2021,7 @@ fn sweep_and_session_reviewer_requests_carry_the_same_subscription_headers() {
                             .credentials()
                             .credential_with(provider, &label, &run)
                             .map(|read| read.secret)
-                            .map_err(&failed)
+                            .map_err(failed)
                     },
                 )?;
                 credentials.insert(provider.name.clone(), (label.clone(), read.clone()));
