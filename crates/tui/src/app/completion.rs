@@ -159,15 +159,10 @@ impl App {
         }
     }
 
-    /// Refreshes the TUI commands from the installed renderer against
-    /// the session on screen and its halves, then re-merges the `/`
-    /// list. Runs on install, attach, `extensions_loaded` and reload:
-    /// never from `ask_commands`, and never cleared by `reset_session`.
-    pub(super) fn refresh_tui_commands(&mut self) {
-        let Some(renderer) = self.handle.get() else {
-            return;
-        };
-        let ctx = match self.session().cloned() {
+    /// The TUI command context: the session on screen with its halves,
+    /// or neither on home, which has no session.
+    pub(super) fn command_ctx(&self) -> SessionCtx {
+        match self.session().cloned() {
             Some(session) => SessionCtx {
                 halves: self.pages().halves_for(&session),
                 session_id: Some(session),
@@ -176,7 +171,18 @@ impl App {
                 session_id: None,
                 halves: None,
             },
+        }
+    }
+
+    /// Refreshes the TUI commands from the installed renderer against
+    /// the session on screen and its halves, then re-merges the `/`
+    /// list. Runs on install, attach, `extensions_loaded` and reload:
+    /// never from `ask_commands`, and never cleared by `reset_session`.
+    pub(super) fn refresh_tui_commands(&mut self) {
+        let Some(renderer) = self.handle.get() else {
+            return;
         };
+        let ctx = self.command_ctx();
         self.completion.tui_commands = renderer.tui_commands(&ctx);
         self.merge_slash_rows();
         for (code, text) in renderer.take_pending() {

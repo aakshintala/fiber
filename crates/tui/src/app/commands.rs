@@ -16,6 +16,7 @@ use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, Surface, session_line};
 use crate::editor::{OpenFile, Target};
+use crate::ext::KeyOutcome;
 use crate::import_report::ImportSource;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
@@ -853,6 +854,26 @@ impl App {
         self.completion.generation
     }
 
+    /// Runs the TUI winner for `name` with `rest`: a handled command
+    /// clears the draft and sends nothing; anything else is consumed
+    /// silently with the draft preserved — the failure already has its
+    /// notice, and a conflict's merge notice stands. A TUI name never
+    /// reaches the driver command path.
+    fn run_tui_command(&mut self, name: &str, rest: &str) -> Effect {
+        let ctx = self.command_ctx();
+        let outcome = self.handle.get().map(|renderer| {
+            let outcome = renderer.run_tui_command(&ctx, name, rest.trim());
+            for (code, text) in renderer.take_pending() {
+                self.push_notice(ErrorCode::from_name(&code), text);
+            }
+            outcome
+        });
+        if outcome == Some(KeyOutcome::Handled) {
+            self.draft.clear();
+        }
+        Effect::None
+    }
+
     /// Runs the draft when its first word is an extension command or a
     /// built-in command; `None` when it is neither, and the draft goes out
     /// as typed. A draft holding an image is never a command: Enter sends
@@ -865,6 +886,19 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
+        if self.completion.tui_conflicts.contains(name) {
+            // A conflicted name runs nowhere: consumed, nothing sent,
+            // no second notice, draft preserved.
+            return Some(Effect::None);
+        }
+        if self
+            .completion
+            .tui_commands
+            .iter()
+            .any(|command| command.name == name)
+        {
+            return Some(self.run_tui_command(name, rest));
+        }
         let extension = self
             .completion
             .extensions
@@ -1096,6 +1130,11 @@ impl App {
             .iter()
             .any(|row| row.name == name || row.aliases.iter().any(|alias| alias == name))
         {
+            return false;
+        }
+        // A conflicted name has no row: without this `on_enter` refuses
+        // it as unknown before `built_in` consumes it.
+        if self.completion.tui_conflicts.contains(name) {
             return false;
         }
         self.push_notice(
