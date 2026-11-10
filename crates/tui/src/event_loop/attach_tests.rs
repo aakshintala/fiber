@@ -2400,7 +2400,10 @@ fn reopened_history(older_ending: bool) {
         held_zero.iter().any(|row| row.contains("read")),
         "page zero keeps the first turn's tool steps: {held_zero:?}"
     );
-    let second = wait.recv_or_fail(&histories, "history after the reopened fold");
+    // Its own bound, made when this wait starts: the replay drain above
+    // is a slow step of its own, and must not use up this step's time.
+    let second =
+        Deadline::after(DEADLINE).recv_or_fail(&histories, "history after the reopened fold");
     tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
