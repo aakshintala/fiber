@@ -20,8 +20,8 @@ use std::path::Path;
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::journey::{
-    dismiss_cache_rebuild, grid_text, install_picker_provider, only_session, provider_full,
-    provider_heading, reply, shows, shows_row, stalled, tui_off, working_elapsed,
+    ctx_size_drawn, dismiss_cache_rebuild, grid_text, install_picker_provider, only_session,
+    provider_full, provider_heading, reply, shows, shows_row, stalled, tui_off, working_elapsed,
 };
 use support::pty::{Grid, KITTY_PUSH, MOTION, Run, WAITING_TITLE, drag_bytes, until_hub_exits};
 use support::{PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
@@ -817,10 +817,14 @@ fn journey_interrupt_then_retried_answer() {
     run.write(b"again\r");
     run.wait_screen("the recovered answer", |screen| shows(screen, "Recovered."));
     run.turn_finished(from);
+    // The context figure folds in after the completed attention, so the
+    // snapshot waits for the drawn size: until it lands the status row
+    // shows the unset segment where the snapshot pins the figure.
     let answered = run.wait_screen("the closed turn", |screen| {
         shows(screen, "Recovered.")
             && shows(screen, "▣ completed")
             && !shows(screen, "Esc to interrupt")
+            && ctx_size_drawn(screen)
     });
     insta::assert_snapshot!(
         "interrupt_retry_answered",
