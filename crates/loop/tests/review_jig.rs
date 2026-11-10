@@ -2146,6 +2146,12 @@ const CONSENT_FIXTURES: &[(&str, &str, &str, &str)] = &[
         "start-run --run nightly",
     ),
     (
+        "field-7-tkt-build-from-gate",
+        "",
+        "mark the draft PR ready",
+        "tkt-build --from gate",
+    ),
+    (
         "field-2-picked-run-label",
         "Which pipeline should run?",
         "1. starts the nightly run",
@@ -2219,6 +2225,9 @@ fn consent_fixture_content(name: &str) -> &'static str {
         "field-1-typed-restart-and-run" => {
             include_str!("fixtures/reviewer_consent/field-1-typed-restart-and-run/events.jsonl")
         }
+        "field-7-tkt-build-from-gate" => {
+            include_str!("fixtures/reviewer_consent/field-7-tkt-build-from-gate/events.jsonl")
+        }
         "field-2-picked-run-label" => {
             include_str!("fixtures/reviewer_consent/field-2-picked-run-label/events.jsonl")
         }
@@ -2278,19 +2287,44 @@ fn consent_fixtures_replay_answer_adjacency() {
         // reviewed call contributes its first and second reviewer stages.
         assert!(stages.len() >= 2, "{name} replays no review");
         let first_texts = texts(stages[stages.len() - 2]);
-        let reply_at = first_texts
-            .iter()
-            .position(|text| text.starts_with("The agent: ") && text.contains(reply))
-            .unwrap_or_else(|| panic!("{reply:?} replays in {name}: {first_texts:?}"));
-        let answer_at = first_texts
-            .iter()
-            .position(|text| text.starts_with("The person: ") && text.contains(answer))
-            .unwrap_or_else(|| panic!("{answer:?} replays in {name}: {first_texts:?}"));
-        assert_eq!(
-            reply_at + 1,
-            answer_at,
-            "{reply:?} answers {answer:?} in {name}: {first_texts:?}"
-        );
+        if reply.is_empty() {
+            // `docs/permissions.md`, "What it is shown": with no agent
+            // text before the message, no `The agent:` item renders. The
+            // person's own words carry the direct-request naming, so the
+            // initial driver message renders before the call it names.
+            assert!(
+                first_texts
+                    .iter()
+                    .all(|text| !text.starts_with("The agent: ")),
+                "no invented reply in {name}: {first_texts:?}"
+            );
+            let answer_at = first_texts
+                .iter()
+                .position(|text| text.starts_with("The person: ") && text.contains(answer))
+                .unwrap_or_else(|| panic!("{answer:?} replays in {name}: {first_texts:?}"));
+            let call_at = first_texts
+                .iter()
+                .position(|text| text.starts_with("Tool call: ") && text.contains(call))
+                .unwrap_or_else(|| panic!("{call:?} renders in {name}: {first_texts:?}"));
+            assert!(
+                answer_at < call_at,
+                "the person names {answer:?} before {call:?} in {name}: {first_texts:?}"
+            );
+        } else {
+            let reply_at = first_texts
+                .iter()
+                .position(|text| text.starts_with("The agent: ") && text.contains(reply))
+                .unwrap_or_else(|| panic!("{reply:?} replays in {name}: {first_texts:?}"));
+            let answer_at = first_texts
+                .iter()
+                .position(|text| text.starts_with("The person: ") && text.contains(answer))
+                .unwrap_or_else(|| panic!("{answer:?} replays in {name}: {first_texts:?}"));
+            assert_eq!(
+                reply_at + 1,
+                answer_at,
+                "{reply:?} answers {answer:?} in {name}: {first_texts:?}"
+            );
+        }
         // `docs/permissions.md`, "What it is shown": the reviewer gets
         // the call under review and its declared effects — existence,
         // never a last-position pin (`crates/loop/src/reviewer.rs`,
@@ -2332,7 +2366,19 @@ fn consent_fixtures_binary_prints_answer() {
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         for marker in [*reply, *answer, *call] {
+            if marker.is_empty() {
+                continue;
+            }
             assert!(stdout.contains(marker), "{marker:?} prints for {name}");
+        }
+        if reply.is_empty() {
+            // A reply item opens its JSON text with `"The agent: `; the
+            // system prompt only names the marker in backticks, so a quoted
+            // match means an invented reply.
+            assert!(
+                !stdout.contains("\"The agent: "),
+                "no invented reply prints for {name}"
+            );
         }
         if *name == "shape-6-reason-names-different-call" {
             assert!(
