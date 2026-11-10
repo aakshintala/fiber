@@ -20,6 +20,7 @@ use std::sync::{
     mpsc,
 };
 use std::thread;
+use std::time::Duration;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
@@ -654,16 +655,25 @@ fn alive(pid: u32) -> bool {
     fakes::pid_alive(pid)
 }
 
-fn parent_of(pid: u32) -> u32 {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    String::from_utf8(out.stdout)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap()
+fn parent_of(pid: u32, deadline: Deadline) -> u32 {
+    support::bounded(deadline, "ps to read the parent pid", move || {
+        use std::os::unix::process::CommandExt as _;
+        use std::process::Stdio;
+        let child = std::process::Command::new("ps")
+            .args(["-o", "ppid=", "-p", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("ps spawns");
+        let output = fakes::wait_output(child, "ps to read the parent pid");
+        String::from_utf8(output.stdout)
+            .expect("ps prints its parent pid")
+            .trim()
+            .parse()
+            .expect("the parent pid parses")
+    })
 }
 
 /// The `job_stop` command line for `job`, answered as `c_stop_<job>`.
@@ -785,8 +795,8 @@ fn a_new_command_after_a_handover_runs_under_a_fresh_keeper_and_each_stop_reache
     let setup = &two.fixture.setup;
     // The fresh keeper is the resumed process's child; the old job stays
     // under the keeper that was already running it.
-    assert_eq!(parent_of(two.new_keeper), two.serving.pid());
-    assert_ne!(parent_of(two.old_keeper), two.serving.pid());
+    assert_eq!(parent_of(two.new_keeper, setup.deadline), two.serving.pid());
+    assert_ne!(parent_of(two.old_keeper, setup.deadline), two.serving.pid());
     assert!(alive(two.old_keeper));
     // Both keepers named their command `call_0`: each stop must reach the
     // job it names, on its own keeper.
@@ -1091,19 +1101,28 @@ struct RelayShared {
     shutdown: Arc<AtomicBool>,
 }
 
+/// The test ends of a relay pause: the worker signals `accepted` after
+/// accept and parks on `proceed` before registering its sockets, so the
+/// test forces a shutdown into the registration window on every run.
+struct WorkerPause {
+    accepted: mpsc::Sender<()>,
+    proceed: mpsc::Receiver<()>,
+}
+
 /// A transparent handover relay: it moves the keeper's socket pathname
 /// aside, listens at the original path, and forwards every JSON line both
 /// directions byte for byte, holding the session's Adopted until the test
 /// releases it. Both relay readers run concurrently, so output cannot
 /// block the acknowledgement path. A session disconnect or a dead peer
 /// ends forwarding quietly; only a lost release fails loudly, so a
-/// missing release fails the test instead of hanging it. Dropping sets the
-/// shutdown flag, drops the release sender and shuts its sockets down,
-/// which ends even a still-waiting accept loop, then collects its worker
-/// without panicking.
+/// missing release fails the test instead of hanging it. Shutdown only
+/// signals: flag, release and pause senders dropped, registered sockets
+/// shut. The test collects the worker with `finish` through a deadline;
+/// dropping joins only an already-finished worker, without panicking.
 struct Relay {
     events: mpsc::Receiver<RelayEvent>,
     release: Option<mpsc::Sender<()>>,
+    proceed: Option<mpsc::Sender<()>>,
     shared: RelayShared,
     finished: mpsc::Receiver<Result<(), String>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -1131,6 +1150,32 @@ impl Relay {
     /// before the resume starts; every channel exists before either
     /// forwarding thread starts.
     fn start(original: PathBuf) -> Self {
+        Self::launch(original, None, None)
+    }
+
+    /// A relay whose worker parks after accept, before registering its
+    /// sockets: the test learns the park through the returned receiver and
+    /// releases it by shutting the relay down, which drops the pause
+    /// sender. Used to force the registration race on every run.
+    fn start_paused(original: PathBuf) -> (Self, mpsc::Receiver<()>) {
+        let (accepted_send, accepted) = mpsc::channel();
+        let (proceed_send, proceed) = mpsc::channel();
+        let relay = Self::launch(
+            original,
+            Some(WorkerPause {
+                accepted: accepted_send,
+                proceed,
+            }),
+            Some(proceed_send),
+        );
+        (relay, accepted)
+    }
+
+    fn launch(
+        original: PathBuf,
+        pause: Option<WorkerPause>,
+        proceed: Option<mpsc::Sender<()>>,
+    ) -> Self {
         let upstream = original.with_file_name("keeper-upstream");
         fs::rename(&original, &upstream).expect("the keeper socket moves aside");
         let listener = UnixListener::bind(&original).expect("the relay binds the original path");
@@ -1155,6 +1200,7 @@ impl Relay {
                 events_send,
                 release,
                 worker_shared,
+                pause,
             );
             match finished_send.send(outcome) {
                 Ok(()) | Err(_) => {}
@@ -1163,6 +1209,7 @@ impl Relay {
         Self {
             events,
             release: Some(release_send),
+            proceed,
             shared,
             finished,
             worker: Some(worker),
@@ -1178,41 +1225,65 @@ impl Relay {
         }
     }
 
-    /// Ends the worker and collects it: the shutdown flag ends a
-    /// still-waiting accept loop, dropping the release sender ends the
-    /// held-Adopted wait, and shutting every socket down ends reads blocked
-    /// on either side, so the join is prompt. Never panics.
+    /// Signals the worker to end: the shutdown flag ends a still-waiting
+    /// accept loop, dropping the release sender ends the held-Adopted wait,
+    /// dropping the pause sender releases a parked worker, and shutting
+    /// every registered socket down ends reads blocked on either side. A
+    /// worker that registers after this point sees the flag and shuts its
+    /// own clones instead of blocking, so every path ends. Never waits:
+    /// collect the worker with `finish`. Never panics.
     fn shutdown(&mut self) {
         // No wake connection: one would look exactly like the session's
         // dial to a worker still waiting in accept.
         self.shared.shutdown.store(true, Ordering::SeqCst);
         drop(self.release.take());
-        if let Ok(mut locked) = self.shared.sockets.lock()
+        drop(self.proceed.take());
+        Self::shut_registered(&self.shared);
+    }
+
+    /// Shuts the sockets registered so far, if any.
+    fn shut_registered(shared: &RelayShared) {
+        if let Ok(mut locked) = shared.sockets.lock()
             && let Some(sockets) = locked.take()
         {
-            match sockets.session.shutdown(std::net::Shutdown::Both) {
-                Ok(()) | Err(_) => {}
-            }
-            match sockets.upstream.shutdown(std::net::Shutdown::Both) {
-                Ok(()) | Err(_) => {}
+            for socket in [&sockets.session, &sockets.upstream] {
+                match socket.shutdown(std::net::Shutdown::Both) {
+                    Ok(()) | Err(_) => {}
+                }
             }
         }
+    }
+
+    /// Collects the worker through `deadline`, then joins it: the outcome
+    /// arrives first, so the join is prompt. Fails naming `what` when the
+    /// worker never finishes, instead of hanging the suite.
+    fn finish(&mut self, deadline: Deadline, what: &str) -> Result<(), String> {
+        let outcome = deadline.recv_or_fail(&self.finished, what);
         if let Some(worker) = self.worker.take() {
             match worker.join() {
                 Ok(()) | Err(_) => {}
             }
         }
-    }
-
-    /// The worker's outcome, collected with a deadline.
-    fn finished(&self, deadline: Deadline, what: &str) -> Result<(), String> {
-        deadline.recv_or_fail(&self.finished, what)
+        outcome
     }
 }
 
 impl Drop for Relay {
     fn drop(&mut self) {
         self.shutdown();
+        // Best effort only: a worker still running after the signal exits on
+        // its own once its sockets are shut, and a drop cannot fail the
+        // test naming the wait, so only an already-finished worker joins.
+        if self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished())
+            && let Some(worker) = self.worker.take()
+        {
+            match worker.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 }
 
@@ -1227,6 +1298,7 @@ fn relay_worker(
     events: mpsc::Sender<RelayEvent>,
     release: mpsc::Receiver<()>,
     shared: RelayShared,
+    pause: Option<WorkerPause>,
 ) -> Result<(), String> {
     let session = loop {
         match listener.accept() {
@@ -1250,6 +1322,29 @@ fn relay_worker(
     let upstream_write = upstream
         .try_clone()
         .map_err(|error| format!("the relay clones upstream: {error}"))?;
+    // A pause-point cancellation seam for the teardown test: the worker
+    // reports accept, then parks until the test shuts the relay down,
+    // which drops the pause sender and releases this wait.
+    if let Some(pause) = pause.as_ref() {
+        match pause.accepted.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        match pause.proceed.recv() {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    // Serialize cancellation with registration: a shutdown between accept
+    // and this point found no sockets to shut, so a set flag means these
+    // fresh clones are already cancelled: shut them at once and exit
+    // instead of registering live sockets that then block.
+    if shared.shutdown.load(Ordering::SeqCst) {
+        for socket in [&session, &upstream] {
+            match socket.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        return Ok(());
+    }
     *shared.sockets.lock().unwrap() = Some(RelaySockets {
         session: session
             .try_clone()
@@ -1414,6 +1509,41 @@ fn forward_session(
     Ok(())
 }
 
+#[test]
+fn relay_shutdown_before_registration_still_ends_the_worker() {
+    // Pause-point cancellation: the worker parks after accept, before
+    // registering its sockets, and the test shuts the relay down while it
+    // is parked, forcing the registration race on every run. The worker
+    // must see the shutdown flag, shut its fresh clones and exit without
+    // blocking; collection through the cleanup deadline then joins it. A
+    // worker that registers without checking the flag blocks reading the
+    // held-open session, and the finish names that wait.
+    let setup = Setup::new();
+    let original = setup.workspace().join("relay.sock");
+    // Something must own `original` for the relay to move aside: a fake
+    // keeper listener stands in for the keeper's socket.
+    let _keeper = UnixListener::bind(&original).expect("the fake keeper binds");
+    let (mut relay, accepted) = Relay::start_paused(original.clone());
+    let _session = UnixStream::connect(&original).expect("the fake session dials");
+    setup
+        .deadline
+        .start_wait()
+        .recv_or_fail(&accepted, "the worker to park after accept");
+    // Shutdown runs while the worker is parked before registration: it
+    // finds no sockets, sets the flag, and releases the park by dropping
+    // the pause sender.
+    relay.shutdown();
+    assert!(
+        relay
+            .finish(
+                setup.deadline.cleanup_phase(),
+                "the cancelled worker to finish"
+            )
+            .is_ok(),
+        "shutdown before registration still ends the worker"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn keeper_handover_flood_exact_output_and_rss() {
@@ -1518,14 +1648,17 @@ fn keeper_handover_flood_exact_output_and_rss() {
     assert_eq!(handover.len(), 17, "the Handover line's length");
     assert_eq!(adopted, r#"{"adopted":true}"#);
     assert_eq!(adopted.len(), 16, "the Adopted line's length");
+    // One shared 2 s guard covers progress through release: a stalled
+    // rendezvous fails here, inside the keeper's 5 s ready bound, naming
+    // the stalled step instead of outlasting the handshake. A failed wait
+    // panics, and the relay's drop then cancels the held Adopted.
+    let progress = setup.deadline.within(Duration::from_secs(2));
     // At the signal capture completed chunk N: the receipt counts whole
     // chunks the producer finished.
     let receipt = fixture.receipt.clone();
-    fakes::wait_until(
-        "the producer to publish a receipt",
-        setup.deadline.start_wait(),
-        move || published(&receipt).is_some(),
-    );
+    fakes::wait_until("the producer to publish a receipt", progress, move || {
+        published(&receipt).is_some()
+    });
     let held_chunks = published(&fixture.receipt).expect("the receipt at the signal");
     // A later complete chunk reaches the output file while the request
     // remains held and the keeper still owns its writer: the handover
@@ -1533,7 +1666,7 @@ fn keeper_handover_flood_exact_output_and_rss() {
     let watched = output.clone();
     fakes::wait_until(
         "a later complete chunk in the file while Adopted is held",
-        setup.deadline.start_wait(),
+        progress,
         move || len_of(&watched) >= (held_chunks + 1) * MIB,
     );
     assert!(
@@ -1686,7 +1819,9 @@ fn keeper_handover_flood_exact_output_and_rss() {
     drop(counts);
     relay.shutdown();
     assert!(
-        relay.finished(deadline, "the relay to finish").is_ok(),
+        relay
+            .finish(deadline.cleanup_phase(), "the relay to finish")
+            .is_ok(),
         "the relay forwards to its end"
     );
     event(&session_lines, "fiber_started", setup.deadline);

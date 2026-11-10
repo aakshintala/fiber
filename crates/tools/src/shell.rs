@@ -32,7 +32,7 @@ mod process_group;
 pub(crate) mod sandbox;
 mod spawn;
 
-pub(crate) mod monitor;
+mod monitor;
 
 mod output;
 

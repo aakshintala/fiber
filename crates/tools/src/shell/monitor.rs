@@ -180,7 +180,7 @@ impl Budget {
 /// the lines the reader appended and sends them as one batch under the
 /// budget. Only the drive thread holds one, and it finishes the feed before
 /// the job's end, so every batch reaches the inbox before the end.
-pub struct Feed {
+pub(super) struct Feed {
     job_id: JobId,
     lines: Lines,
     /// The monitor's own stop, which a flood sends.
@@ -192,7 +192,7 @@ pub struct Feed {
 
 impl Feed {
     /// A feed whose budget is full at `now`.
-    pub fn new(job_id: JobId, lines: Lines, stop: Stop, now: Instant) -> Self {
+    pub(super) fn new(job_id: JobId, lines: Lines, stop: Stop, now: Instant) -> Self {
         Self {
             job_id,
             lines,
@@ -218,7 +218,7 @@ impl Feed {
     /// Delivers the complete lines `fresh` finishes as one batch, or drops
     /// it. A job whose output arrives as frames, not in a shared buffer,
     /// feeds each burst of them here, as `pass` feeds the drive thread's.
-    pub fn deliver(&mut self, fresh: &[u8], now: Instant, running: bool) {
+    pub(super) fn deliver(&mut self, fresh: &[u8], now: Instant, running: bool) {
         let lines = self.splitter.take(fresh);
         if lines.is_empty() {
             return;
@@ -239,7 +239,7 @@ impl Feed {
 
     /// The monitor ended and its last bytes were delivered: the incomplete
     /// last line goes out under the budget, then any suppressed count.
-    pub fn end(&mut self, now: Instant) {
+    pub(super) fn end(&mut self, now: Instant) {
         if let Some(rest) = self.splitter.flush() {
             self.offer(batch(&[rest]), now);
         }
@@ -249,7 +249,7 @@ impl Feed {
     }
 
     /// Whether a flood stopped the monitor.
-    pub fn flooded(&self) -> bool {
+    pub(super) fn flooded(&self) -> bool {
         self.flooded
     }
 
