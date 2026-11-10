@@ -1,4 +1,4 @@
-//! `fiber approve` (`docs/extensions.md`, "Approving outside a session"):
+//! `fiber approve` (`docs/extensions.md`, "Code a repository ships"):
 //! shows what the repository declares and has no approval for, as one offer
 //! would, and records an approval for each item once the person says so.
 

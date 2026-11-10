@@ -201,7 +201,7 @@ fn prune_cannot_enter_the_add_to_child_share_gap_or_a_new_share_after_listing() 
                 let parent = doors::share(&path).unwrap();
                 let path = setup.worktree("s_0123456789abcdef");
                 // Forced pause: add is complete, but no child share or session
-                // row exists yet (docs/invocation.md, "Isolation").
+                // row exists yet (`docs/invocation.md`, "Isolation").
                 let plan = select(&setup, force, false);
                 assert!(plan.removals.is_empty());
                 assert!(line(&plan.rows[0]).contains("in use"));

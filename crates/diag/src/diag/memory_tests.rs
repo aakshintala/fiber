@@ -1,4 +1,4 @@
-//! The resources reader (`docs/state.md`, "Diagnostic logs"): the real
+//! The resources reader (`docs/state.md`, "What each part holds"): the real
 //! read on this process, and every case of the status and I/O parsers.
 
 #![allow(clippy::unwrap_used, reason = "test code")]

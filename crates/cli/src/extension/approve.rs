@@ -160,7 +160,7 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
 
 /// Whether `fiber extension remove` goes ahead: in a terminal it lists what it will
 /// delete, the extensions and their data and settings, and asks; without a
-/// terminal it goes ahead (`docs/state.md`, "Extension data").
+/// terminal it goes ahead (`docs/state.md`, "What each part holds").
 pub(crate) fn remove_approved(
     names: &[String],
     data: &[PathBuf],

@@ -988,22 +988,28 @@ impl Drop for RemoteCopy {
     }
 }
 /// The seam installed on the app, the remote-only operations if applicable,
-/// and the model lists the picker reads.
+/// the model lists the picker reads, and the startup blocker reader home
+/// restores after an Esc-closed login.
 pub(crate) struct Seams {
     pub(crate) seam: Option<Arc<dyn Configure>>,
     pub(crate) remote: Option<Arc<Remote>>,
     pub(crate) models: Option<crate::ReadModels>,
+    pub(crate) doctor_blocker: Option<contract::feedback::ReadDoctorBlocker>,
 }
 /// Wraps only a remote terminal's seam; local launches retain the original.
 /// On a remote terminal the picker's reader is the hub's catalogue, and the
-/// client's reader is dropped unread, with or without a seam.
+/// client's readers are dropped unread, with or without a seam. The hub
+/// sends no blocker on the wire, so a remote Esc restores none: the blocker
+/// reader is dropped the same way as `models`.
 pub(crate) fn seams(
     location: &crate::LaunchLocation,
     seam: Option<Arc<dyn Configure>>,
     models: Option<crate::ReadModels>,
+    doctor_blocker: Option<contract::feedback::ReadDoctorBlocker>,
     router: &Arc<Router>,
 ) -> Seams {
     if matches!(location, crate::LaunchLocation::Remote { .. }) {
+        drop(doctor_blocker);
         if let Some(local) = seam {
             let client_dir = std::env::current_dir().unwrap_or_else(|_| {
                 local
@@ -1018,6 +1024,7 @@ pub(crate) fn seams(
                 seam: Some(Arc::clone(&remote) as Arc<dyn Configure>),
                 remote: Some(remote),
                 models,
+                doctor_blocker: None,
             };
         }
         drop(models);
@@ -1025,12 +1032,14 @@ pub(crate) fn seams(
             seam: None,
             remote: None,
             models: None,
+            doctor_blocker: None,
         };
     }
     Seams {
         seam,
         remote: None,
         models,
+        doctor_blocker,
     }
 }
 

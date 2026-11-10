@@ -428,6 +428,32 @@ fn a_stored_key_queues_a_reviewer_read_on_a_fresh_ticket() {
 }
 
 #[test]
+fn first_run_secret_save_opens_unselected_picker_on_connected_home() {
+    // `docs/tui.md`, "First run": once the login's last step saves, the
+    // overlay closes and the model picker opens with no row chosen.
+    let seam = seam();
+    *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
+        name: "acme.api_key".to_owned(),
+        kind: LoginKind::Secret,
+    }]);
+    let mut app = home(Arc::clone(&seam));
+    app.outbox.link = crate::app::Link::Up;
+    app.first_run_no_credential = true;
+    app.on_edit(Edit::Paste("retained draft".to_owned()));
+    app.open_first_run_login();
+    app.on_key(Key::Enter, now());
+    app.on_edit(Edit::Paste("test-secret".to_owned()));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("acme.api_key".to_owned(), None)]);
+    assert!(!app.config_view_open());
+    assert!(!app.first_run_no_credential);
+    assert_eq!(app.draft(), "retained draft");
+    assert!(app.model_picker_open());
+    assert!(app.model_picker.open.as_ref().unwrap().unselected);
+    assert!(app.model_picker.choice(false).is_none());
+}
+
+#[test]
 fn a_declared_secret_ends_without_a_reviewer_read() {
     let fake = Fake::new(Vec::new());
     if let Ok(mut targets) = fake.targets.lock() {

@@ -1,4 +1,4 @@
-/* The docs pages' prose rules (docs/ci.md, "The user docs site"). Every rule
+/* The docs pages' prose rules (`docs/ci.md`, "The user docs site"). Every rule
    reuses the front page's palette and faces and nothing else: each colour
    is a front-page custom property and each stack is one of its two stacks.
    Content rules scope under .fiber-docs so the front page's element

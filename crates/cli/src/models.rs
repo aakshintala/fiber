@@ -201,7 +201,7 @@ fn run(
     // extensions', then discovery and placeholders'. The session load
     // merges the same repository set, so it repeats the providers load's
     // shadow notices; the batch groups by code, so one pass prints one
-    // notice per code (`docs/errors.md`, "Notices").
+    // notice per code (`docs/errors.md`, "Registry").
     let (mut providers, config, set, loading) =
         providers_config_and_set(home, workspace, Arc::clone(&clock))?;
     let mut notices: Vec<Notice> = config.notices().to_vec();

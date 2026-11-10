@@ -277,8 +277,7 @@ impl Context<'_> {
     }
 
     /// Whether a session recorded in `workspace` is in the calling
-    /// session's project, as resume checks it (`docs/state.md`, "A slug
-    /// can collide"). Each workspace's identity is found once per call: the
+    /// session's project, as resume checks it (`docs/state.md`, "Projects"). Each workspace's identity is found once per call: the
     /// lock is held while it is found, so a worker asking about the same
     /// workspace waits for that answer.
     fn ours(&self, workspace: &str) -> bool {

@@ -737,7 +737,7 @@ fn picked(result: Value) -> Option<String> {
 #[test]
 fn latest_requests_activity_without_a_project() {
     let (_, sent) = latest(empty());
-    // Hub-bound continue asks for activity (docs/invocation.md:115: with
+    // Hub-bound continue asks for activity (`docs/invocation.md`, "Commands and flags": with
     // `--hub`, it asks for `active: true`).
     assert_eq!(
         sent,
@@ -749,7 +749,7 @@ fn latest_requests_activity_without_a_project() {
 fn latest_prefers_the_greatest_activity_live_or_exited() {
     // The exited row wrote last, so it wins over the live one: the pick
     // follows the last line, never the row's `ts` or `since`
-    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // (`docs/invocation.md`, "Commands and flags": `continue --hub` opens the entry with the
     // greatest (`active`, `id`)).
     let result = json!({
         "live": [live_active("s_live", "a", json!(100))],
@@ -766,7 +766,7 @@ fn latest_prefers_the_greatest_activity_live_or_exited() {
 #[test]
 fn latest_breaks_activity_ties_by_greater_id() {
     // Just above wins, just below loses, and an exact tie falls back to
-    // the greater id (docs/invocation.md:115: `continue --hub` opens the
+    // the greater id (`docs/invocation.md`, "Commands and flags": `continue --hub` opens the
     // entry with the greatest (`active`, `id`)).
     let tied = |first: &str, second: &str| {
         json!({
@@ -791,7 +791,7 @@ fn latest_breaks_activity_ties_by_greater_id() {
 #[test]
 fn latest_without_an_eligible_entry_is_none() {
     // No entry, or no entry with non-null activity, is none
-    // (docs/invocation.md:115: among entries whose `active` is not `null`;
+    // (`docs/invocation.md`, "Commands and flags": among entries whose `active` is not `null`;
     // with no eligible entry it is the same usage error as an empty hub).
     assert_eq!(picked(empty()), None);
     let result = json!({
@@ -803,7 +803,7 @@ fn latest_without_an_eligible_entry_is_none() {
 
 #[test]
 fn latest_skips_null_activity() {
-    // Null activity is skipped (docs/invocation.md:115: among entries whose
+    // Null activity is skipped (`docs/invocation.md`, "Commands and flags": among entries whose
     // `active` is not `null`).
     let result = json!({
         "live": [live_active("s_live", "a", Value::Null)],

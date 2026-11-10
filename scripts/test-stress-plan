@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The self-test for the stress plan step (.github/workflows/ci.yml, stress
-# job; docs/ci.md, "On every pull request that changes code"). It runs the
+# job; `docs/ci.md`, "On every pull request that changes code"). It runs the
 # "Find the touched tests" step cut from the workflow file, with a stub `gh`
 # answering the issue lookup and a stub `cargo` recording the stress-plan
 # dispatch and answering canned per-group outputs. Cases: the two-call split

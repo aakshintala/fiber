@@ -68,6 +68,52 @@ fn catalogue() -> Catalogue {
 }
 
 #[test]
+fn first_run_catalogue_opens_unselected_picker_with_connected_local_outbox() {
+    // `docs/tui.md`, "First run": with a credential and no configured
+    // model, the picker opens with no row chosen and chooses nothing on
+    // Enter until the person navigates.
+    let mut app = home();
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    app.set_configure(seam.clone());
+    app.outbox.link = crate::app::Link::Up;
+    app.defer_first_run();
+    assert!(!app.model_picker_open());
+    app.on_models(Ok(catalogue()));
+    assert!(app.model_picker_open());
+    assert_eq!(
+        app.model_picker.open.as_ref().unwrap().mode,
+        crate::model_picker::Mode::Choose
+    );
+    assert!(app.model_picker.open.as_ref().unwrap().unselected);
+    assert!(app.model_picker.choice(false).is_none());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.model_picker.choice(false).is_none());
+    assert!(seam.writes().is_empty());
+    app.on_key(Key::Esc, now());
+    app.start_model_pick();
+    app.on_models(Ok(catalogue()));
+    assert!(
+        !app.model_picker_open(),
+        "later hello/catalogue must not reopen"
+    );
+}
+
+#[test]
+fn first_run_configured_model_with_credential_opens_neither_overlay() {
+    // `docs/tui.md`, "First run": the overlays open only until a
+    // credential exists and only without a configured model, so a
+    // finished setup sees neither.
+    let mut app = home();
+    app.home.launch.model = Some("acme/m1".to_owned());
+    app.defer_first_run();
+    app.on_models(Ok(catalogue()));
+    assert_eq!(app.home_model().unwrap().0, "acme/m1");
+    assert!(!app.model_picker_open());
+    assert!(!app.config_view_open());
+}
+
+#[test]
 fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
     let mut app = home();
     app.on_models(Ok(catalogue()));
