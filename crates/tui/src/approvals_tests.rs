@@ -1940,6 +1940,59 @@ fn an_approval_rewrite_refolds_identically_live_and_on_replay() {
 }
 
 #[test]
+fn an_approval_reraise_rebuilds_request_fields_and_resets_a_gone_choice() {
+    let first = review(
+        S_A,
+        "r_1",
+        serde_json::json!({"rule": {"subject": "npm test --watch", "prefix": "npm test"},
+            "paths": ["a/b"], "effects": ["reads"]}),
+    );
+    let mut queue = folded(&[first]);
+    assert_eq!(
+        row(&queue, 1),
+        "reads files · a/b · no rule allows this call"
+    );
+    for ch in "note".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    // From deny back to the session remember choice; feedback stays.
+    press(&mut queue, Key::Up, 2);
+    assert!(
+        row(&queue, 4).starts_with("▸"),
+        "on session, in {}",
+        row(&queue, 4)
+    );
+    queue.fold(&review(
+        S_A,
+        "r_1",
+        serde_json::json!({"paths": ["c/d"], "effects": ["writes"], "reversible": false}),
+    ));
+    let shown = rendered(&queue);
+    assert_eq!(
+        shown.lines[1], "writes files · c/d · no rule allows this call",
+        "the re-raise's effects and paths win"
+    );
+    assert!(
+        shown.lines.iter().all(|line| !line.contains("npm test")),
+        "the gone rule offers no remembering rows, in {:?}",
+        shown.lines
+    );
+    assert_eq!(
+        shown.lines.len(),
+        7,
+        "two choices after the rule goes, in {:?}",
+        shown.lines
+    );
+    assert_eq!(shown.lines[3], "▸ 1 Allow once", "reset to the default");
+    assert_eq!(shown.lines[4], "  2 Deny  note", "typed feedback stays");
+    assert!(
+        shown.lines[0].contains("irreversible"),
+        "the re-raise's reversibility wins, in {}",
+        shown.lines[0]
+    );
+}
+
+#[test]
 fn an_approval_rewrite_keeps_the_dim_mark_after_a_long_summary() {
     let long = "a/very/long/path/that/keeps/going/on/and/on/file.txt";
     let queue = folded(&rewritten_read(

@@ -130,9 +130,10 @@ fn marked(line: usize, bytes: Range<usize>, style: Style) -> Option<Mark> {
 }
 
 impl Approval {
-    /// The same request raised again: the latest raise's rewrite wins,
-    /// and a raise without one restores the kept requested summary. What
-    /// the person typed stays.
+    /// The same request raised again: every request-derived field comes
+    /// from the latest raise, and a raise without a rewrite restores the
+    /// kept requested summary. What the person typed stays; a selected
+    /// choice the latest raise no longer offers resets to the default.
     pub(super) fn reraise(&mut self, call: Option<(String, String)>, asked: &PermissionRequested) {
         if self.requested.is_none() {
             self.requested = call;
@@ -140,6 +141,20 @@ impl Approval {
         let (display, changed_by) = super::retargeted(&self.requested, asked);
         self.call = display;
         self.changed_by = changed_by;
+        self.reversible = asked.declared.reversible;
+        self.effects = asked.declared.effects.clone();
+        self.paths = asked
+            .declared
+            .paths
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|path| crate::text::controls_to_space(path))
+            .collect();
+        self.step = asked.step.clone();
+        if !self.choices().contains(&self.cursor) {
+            self.cursor = Choice::Once;
+        }
     }
 
     /// The rule an allow can remember, offered only at review.

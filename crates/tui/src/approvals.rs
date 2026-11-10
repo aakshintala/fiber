@@ -452,9 +452,10 @@ impl Queue {
                     .find(|request| request.key() == key)
                     && let Ask::Approval(approval) = &mut request.ask
                 {
-                    // A re-raise: the latest raise's rewrite wins, and a
-                    // raise without one restores the kept requested
-                    // summary. What the person typed stays.
+                    // A re-raise: every request-derived field comes from the
+                    // latest raise, and a raise without a rewrite restores
+                    // the kept requested summary. What the person typed
+                    // stays.
                     approval.reraise(call, &asked);
                     return;
                 }
