@@ -29,7 +29,7 @@ fn key(item: &OfferedItem) -> Key {
 
 /// What the session loads once its offer step has run, before its first
 /// preamble: the repository code approved since the process started
-/// (`docs/extensions.md`, "Offering").
+/// (`docs/extensions.md`, "Code a repository ships").
 pub type LoadApproved = Arc<dyn Fn(&OfferOutcome) -> Result<Approved, Failure> + Send + Sync>;
 
 /// What the post-offer step loaded: each tool with who registered it,
@@ -189,7 +189,7 @@ impl Loop {
     }
 
     /// Whether a person can answer an offer now: the loop is answerable and
-    /// a `full` client is connected (`docs/extensions.md`, "Offering").
+    /// a `full` client is connected (`docs/extensions.md`, "Code a repository ships").
     fn can_answer(&self) -> bool {
         self.answerable && crate::status::clients_of(&Arc::downgrade(&self.log)) > 0
     }
