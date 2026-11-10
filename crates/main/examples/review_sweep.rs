@@ -1,11 +1,11 @@
 //! Person-run sweep runner (`docs/testing/fakes.md`, "Live calls and
-//! evals"): runs the committed labelled set `--runs` times per `--models`
-//! reviewer model (3 by default, back to back for cache reuse) through the
-//! public `routing::reviewer` seam and prints the per-entry and per-model
-//! miss/false-block tables. A sweep planning more than the 170-call cap is
-//! rejected before it drives anything. `--check` only parses and counts a
-//! file. Live calls are opt-in by running this example; no test can enable
-//! one.
+//! evals"): runs the committed labelled set and the committed session
+//! directories `--runs` times per `--models` reviewer model (3 by default,
+//! back to back for cache reuse) through the public `routing::reviewer`
+//! seam and prints the per-entry, per-run and per-model tables. A sweep
+//! planning more than the 170-request budget is rejected before it drives
+//! anything. `--check` only parses and counts a file. Live calls are opt-in
+//! by running this example with `--live`; no test can enable one.
 
 #![allow(
     clippy::print_stdout,
@@ -62,15 +62,22 @@ fn run(argv: &[String]) -> Result<(), String> {
             live,
         } => {
             let mut entries = Vec::new();
+            let mut srcs = Vec::new();
             if let Some(set) = set {
-                entries.extend(sweep::read_set_file(&set)?);
+                for entry in sweep::read_set_file(&set)? {
+                    srcs.push("set");
+                    entries.push(entry);
+                }
             }
             let (consent, person_input) = fixture_roots();
             let mut dropped = 0usize;
             for dir in &dirs {
                 let folded = sweep::fold_session_dir(dir, &consent, &person_input)?;
                 dropped = dropped.saturating_add(folded.unreplayable);
-                entries.extend(folded.entries);
+                for entry in folded.entries {
+                    srcs.push("dir");
+                    entries.push(entry);
+                }
             }
             if dropped > 0 {
                 eprintln!("review_sweep: dropped {dropped} unreplayable calls");
@@ -84,7 +91,7 @@ fn run(argv: &[String]) -> Result<(), String> {
             let budget = Arc::new(sweep::RequestBudget::new());
             for model in &models {
                 let (provider, sweep_model) = reviewer_provider(&home, &workspace, model, &clock)?;
-                let (tallies, outcomes, _) =
+                let (tallies, outcomes, truncated) =
                     sweep::sweep(&entries, runs, live, &budget, |entry| {
                         sweep::drive(entry, &provider, &clock, &sweep_model, &budget)
                     })?;
@@ -96,7 +103,20 @@ fn run(argv: &[String]) -> Result<(), String> {
                         );
                     }
                 }
+                let rows: Vec<sweep::Sourced> = entries
+                    .iter()
+                    .zip(srcs.iter())
+                    .map(|(entry, src)| sweep::Sourced { src, entry })
+                    .collect();
                 print!("{}", sweep::render_entry_table(&tallies, runs));
+                print!("{}", sweep::render_run_table(&rows, &outcomes, runs));
+                print!("{}", sweep::render_run_detail(&rows, &outcomes, runs));
+                if truncated {
+                    eprintln!(
+                        "review_sweep: truncated at the {}-request budget: later runs stay unrun",
+                        budget.limit
+                    );
+                }
                 reports.push(sweep::score(model, &outcomes));
             }
             print!("{}", sweep::render_table(&reports));

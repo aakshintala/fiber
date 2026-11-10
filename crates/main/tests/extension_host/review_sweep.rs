@@ -461,6 +461,26 @@ fn over_budget_with_live_exits_before_any_call() {
 }
 
 #[test]
+fn dirs_without_live_exits_before_any_read() {
+    let dir = fakes::TempDir::new("fiber-sweep-dirs-no-live");
+    let staged = dir.path().join("control-1-credentialed-probe");
+    let output = run_sweep(&[
+        "--models",
+        "m",
+        "--dirs",
+        &staged.display().to_string(),
+        "--runs",
+        "1",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--live"),
+        "the refusal names the flag: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn parses_a_lone_check() {
     let mode = parse_args(&[
         "review_sweep".to_owned(),
