@@ -279,7 +279,6 @@ providers/openai/providers/openai.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amog
 xtask/tests/models_dev.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/models.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/hub/src/archive_tests.rs	fiber-4562	plan	2026-11-10T16:02:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4522	plan	2026-11-10T16:07:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-flake-report	fiber-4522	plan	2026-11-10T16:07:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-flake-report-gh	fiber-4522	plan	2026-11-10T16:07:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
