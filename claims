@@ -279,3 +279,13 @@ crates/tui/src/app/home.rs	fiber-4494	plan	2026-11-10T13:17:07Z	roundhouse-7010-
 crates/tui/src/app/home_tests.rs	fiber-4494	plan	2026-11-10T13:17:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/events.md	fiber-4494	plan	2026-11-10T13:17:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/builtin_tests.rs	fiber-4420	plan	2026-11-10T13:20:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/outbox.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/home.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/chips.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/home.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/scoped_page_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/chips_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/home_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/home_view_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/snapshots	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
