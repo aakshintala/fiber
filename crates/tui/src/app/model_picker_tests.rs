@@ -114,6 +114,50 @@ fn first_run_configured_model_with_credential_opens_neither_overlay() {
 }
 
 #[test]
+fn first_run_one_credential_among_logged_out_opens_no_login_overlay() {
+    // `docs/tui.md`, "First run": the `/login` overlay opens only when
+    // no installed provider has a usable credential, so one logged-in
+    // provider beside a logged-out one opens the picker instead.
+    use crate::catalogue::LoggedOutProvider;
+
+    let mut app = home();
+    app.defer_first_run();
+    let mut listed = three();
+    listed.logged_out.push(LoggedOutProvider {
+        provider: "zeta".to_owned(),
+        login: true,
+        hint: String::new(),
+    });
+    app.on_models(Ok(listed));
+    assert!(!app.config_view_open());
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn first_run_all_providers_logged_out_opens_login_overlay() {
+    // `docs/tui.md`, "First run": with no usable credential on any
+    // installed provider, the terminal opens on home with `/login` up.
+    use crate::catalogue::LoggedOutProvider;
+
+    let mut app = home();
+    app.defer_first_run();
+    let mut listed = three();
+    listed.logged_out.push(LoggedOutProvider {
+        provider: "acme".to_owned(),
+        login: true,
+        hint: String::new(),
+    });
+    listed.logged_out.push(LoggedOutProvider {
+        provider: "zeta".to_owned(),
+        login: true,
+        hint: String::new(),
+    });
+    app.on_models(Ok(listed));
+    assert!(app.config_view_open());
+    assert!(!app.model_picker_open());
+}
+
+#[test]
 fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
     let mut app = home();
     app.on_models(Ok(catalogue()));
