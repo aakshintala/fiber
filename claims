@@ -416,3 +416,7 @@ crates/loop/src/calls.rs	fiber-4400	plan	2026-11-10T06:26:07Z	Amoghs-MacBook-Pro
 docs/events.md	fiber-4400	plan	2026-11-10T06:26:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/databricks/providers/databricks.lua	fiber-4257	plan	2026-11-10T06:28:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4257	plan	2026-11-10T06:28:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/reload.rs	fiber-4315	plan	2026-11-10T06:33:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/events/host.rs	fiber-4315	plan	2026-11-10T06:33:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/routing/src/lua_providers.rs	fiber-4315	plan	2026-11-10T06:33:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/events.md	fiber-4315	plan	2026-11-10T06:33:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
