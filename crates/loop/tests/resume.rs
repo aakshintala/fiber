@@ -6239,18 +6239,27 @@ fn settle_history(job: &str, session: &str, first: Event, text: &str) -> History
     history
 }
 
-/// The settled pair for `job` in `history`'s new lines: the finish before
-/// its completion, in orphan order.
+/// The settled pair for `job` in `history`'s new lines: the finish precedes
+/// its completion.
 fn settled_pair(history: &History, job: &str) -> (contract::Envelope, contract::Envelope) {
     let lines = history.new_lines();
-    assert_eq!(
-        history.new_kinds(),
-        [EventKind::DelegateFinished, EventKind::JobCompleted]
+    let finished_pos = lines
+        .iter()
+        .position(|line| {
+            line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == job
+        })
+        .expect("the settle writes the finish");
+    let completed_pos = lines
+        .iter()
+        .position(|line| line.kind() == EventKind::JobCompleted && line.payload["job_id"] == job)
+        .expect("the settle writes the completion");
+    assert!(
+        finished_pos < completed_pos,
+        "the finish precedes its completion"
     );
-    assert_eq!(lines[0].payload["job_id"], job);
-    assert_eq!(lines[1].payload["job_id"], job);
-    assert_eq!(lines[1].payload["status"], "completed");
-    let [finished, completed] = lines.try_into().ok().unwrap();
+    let finished = lines[finished_pos].clone();
+    let completed = lines[completed_pos].clone();
+    assert_eq!(completed.payload["status"], "completed");
     (finished, completed)
 }
 

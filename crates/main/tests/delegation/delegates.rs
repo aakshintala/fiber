@@ -19,7 +19,6 @@
 use crate::extension_harness;
 use crate::support;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -36,7 +35,7 @@ use contract::events::{
     DelegateStarted, Event, EventKind, FiberExited, FiberStarted, FinalMessage, JobStarted, Parent,
     SessionStarted, Variables, VariablesSource,
 };
-use contract::shapes::{Tokens, Usage, Worktree};
+use contract::shapes::{Usage, Worktree};
 use contract::{ActionId, JobId, SessionId};
 use extension_harness::{send, until_session, until_session_close};
 use fakes::{ProviderServer, Request, Response, Watchdog};
@@ -11392,16 +11391,7 @@ fn seeded_child_started(
 fn seeded_child_exit() -> Event {
     Event::FiberExited(FiberExited {
         exit_code: 0,
-        usage: Usage {
-            tokens: Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: BTreeMap::new(),
-                output: 0,
-            },
-            cost: Some(0.0),
-            subscription_cost: 0.0,
-        },
+        usage: Usage::default(),
         final_message: Some(FinalMessage {
             final_action_id: ActionId("a_1".into()),
             text: "seeded finish".into(),
