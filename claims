@@ -289,3 +289,4 @@ crates/tui/src/app/home/chips_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amog
 crates/tui/src/home_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/home_view_tests.rs	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/snapshots	fiber-4490	plan	2026-11-10T13:24:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4490	plan	2026-11-10T13:28:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
