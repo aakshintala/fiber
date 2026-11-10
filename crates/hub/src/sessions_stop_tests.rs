@@ -347,7 +347,12 @@ fn stop_keeper_waits_out_a_silent_keeper_to_the_bound() {
             .read_line(&mut line)
             .unwrap();
         assert_eq!(line, FROZEN_STOP);
-        thread::park();
+        // Hold the socket open: closing it would read as EOF and
+        // confirm a silent keeper. Loop the park so a spurious
+        // wakeup cannot close it either.
+        loop {
+            thread::park();
+        }
     });
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;
@@ -393,6 +398,12 @@ fn stop_keeper_confirms_an_overlong_read_without_waiting() {
         // closing mid-write: it answers as soon as it has read past the cap.
         let payload = vec![b'x'; support::framing::MAX_LINE + 8];
         stream.write_all(&payload).unwrap_or(());
+        // Hold the socket open past the write: closing it would read
+        // as EOF and confirm, hiding a wait. Loop the park so a
+        // spurious wakeup cannot close it either.
+        loop {
+            thread::park();
+        }
     });
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;

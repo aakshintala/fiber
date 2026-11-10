@@ -1672,7 +1672,12 @@ fn probe_marks_an_overlong_line_keeper_or_gone_without_waiting() {
         // answers as soon as it has read past the cap.
         let payload = vec![b'x'; MAX_LINE + 8];
         stream.write_all(&payload).unwrap_or(());
-        thread::park();
+        // Hold the socket open past the write: closing it would read
+        // as EOF instead of the cap error. Loop the park so a
+        // spurious wakeup cannot close it either.
+        loop {
+            thread::park();
+        }
     });
     let wall = Deadline::after(fakes::deadline::WAIT);
     let (done_tx, done_rx) = mpsc::channel();
