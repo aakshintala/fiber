@@ -15,6 +15,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::RawSpan;
+use super::cache::ClickKey;
 use crate::theme::Role;
 
 /// One fitted line: the cells, each valid link's cells, and how many
@@ -30,6 +31,13 @@ pub(crate) struct FittedLine {
     /// The animated item that drew the line, if any: what the paint pass
     /// marks as visible (`docs/tui.md`, "Animation").
     pub(crate) anim: Option<super::anim::AnimKey>,
+    /// Each span's click id cells in the line, with the span's id: the
+    /// cache replaces the ids with interned keys when it stores the
+    /// line. No range for dropped or zero-width cells, never padding.
+    pub(crate) click_raw: Vec<(Range<u16>, String)>,
+    /// Each click id's cells in the line with its interned key, after
+    /// cache association: empty until the cache stores the line.
+    pub(crate) clicks: Vec<(Range<u16>, ClickKey)>,
 }
 
 /// What a renderer's spans got wrong: the field that names it.
@@ -80,6 +88,9 @@ fn fit_line(spans: &[RawSpan], max: usize, flat: bool) -> Result<FittedLine, Sha
     }
     let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 1);
     let mut links: Vec<(Range<u16>, String)> = Vec::new();
+    // A span's click id takes the click over a link in the same cells,
+    // so its range rides beside the link's.
+    let mut click_raw: Vec<(Range<u16>, String)> = Vec::new();
     let mut taken = 0usize;
     for (span, (style, link)) in spans.iter().zip(styled) {
         let room = max.saturating_sub(taken);
@@ -92,16 +103,27 @@ fn fit_line(spans: &[RawSpan], max: usize, flat: bool) -> Result<FittedLine, Sha
             if let Some(to) = link {
                 links.push((cell_range(taken, end), to));
             }
+            // A zero-width span draws nothing, so it lends no range.
+            if let Some(id) = &span.click
+                && end > taken
+            {
+                click_raw.push((cell_range(taken, end), id.clone()));
+            }
             out.push(Span::styled(span.text.clone(), style));
             taken = end;
             continue;
         }
+        // A cut keeps graphemes whole: a cut span gives what is drawn,
+        // and a span cut to nothing lends no range.
         let kept = crate::format::cut(&span.text, room);
         let kept_cells = crate::format::width(&kept);
         if !kept.is_empty() {
             let end = taken.saturating_add(kept_cells);
             if let Some(to) = link {
                 links.push((cell_range(taken, end), to));
+            }
+            if let Some(id) = &span.click {
+                click_raw.push((cell_range(taken, end), id.clone()));
             }
             out.push(Span::styled(kept, style));
             taken = end;
@@ -119,6 +141,10 @@ fn fit_line(spans: &[RawSpan], max: usize, flat: bool) -> Result<FittedLine, Sha
         // The cache tags the animated item that stored the line; a
         // fitted line is still until then.
         anim: None,
+        click_raw,
+        // The cache interns the ids against the selected extension and
+        // slot when it stores the line.
+        clicks: Vec::new(),
     })
 }
 
@@ -180,9 +206,9 @@ fn style_span(span: &RawSpan, flat: bool) -> Result<(Style, Option<String>), Sha
 }
 
 /// The raw spans a built-in row's spans convert to: role markers to
-/// names, the four modifiers to flags. Built-in ledger rows carry no
-/// links, and clicks need the handlers a later ticket builds, so both
-/// stay none; any other colour is not a role and stays out too.
+/// names, the four modifiers to flags. Built-in rows draw no links
+/// and no click spans: both come only from extension renderers, so
+/// both stay none; any other colour is not a role and stays out too.
 pub(crate) fn from_ratatui(spans: &[Span<'_>]) -> Vec<RawSpan> {
     spans
         .iter()

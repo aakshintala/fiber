@@ -347,6 +347,7 @@ pub(crate) fn classify_output(kind: &EventKind) -> OutputKind {
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded

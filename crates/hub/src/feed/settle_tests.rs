@@ -345,6 +345,7 @@ fn live_is_every_running_session_in_id_order_and_no_left_one() {
         name: "n".to_owned(),
         how: Left::Crashed,
         status: Some(serde_json::from_value(status("n", "/w", "idle", None)).unwrap()),
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let second = FakeSession::bind(&temp.dir, &id(9));

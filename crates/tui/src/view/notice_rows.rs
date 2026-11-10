@@ -205,6 +205,18 @@ fn paint_replacement(
         id: TargetId::DismissNotice(id),
         rect: Rect::new(area.right().saturating_sub(1), *bottom, 1, to_u16(count)),
     });
+    // The replacement's clipped click ranges draw over the notice and
+    // dismiss targets: the extension owns its painted rows whole, ✕
+    // cell included.
+    for (dy, line) in fitted.iter().take(count).enumerate() {
+        let row = bottom.saturating_add(to_u16(dy));
+        super::marks::paint_fitted_clicks(
+            &bound.cache,
+            line,
+            Rect::new(area.x, row, area.width, 1),
+            targets,
+        );
+    }
     Some(
         fitted
             .iter()
@@ -239,6 +251,7 @@ pub(super) fn overlay(
                 | TargetId::NewBelow
                 | TargetId::Turn(_)
                 | TargetId::Offer(_)
+                | TargetId::Extension(_)
         )
     });
     // The text wraps at the preferred width first and the overlay

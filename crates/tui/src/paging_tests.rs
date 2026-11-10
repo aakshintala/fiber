@@ -6789,3 +6789,27 @@ fn a_reload_merge_renumbers_a_carried_run_past_a_dropped_row() {
     assert_eq!(running, vec![0, 1]);
     assert_eq!(fold.shells.len(), 2);
 }
+
+/// `shown` keeps one row text per shown line: replacement metadata
+/// travels with the cells, and a page not loaded lends plain rows.
+#[test]
+fn click_shown_keeps_row_texts_aligned_with_lines() {
+    let lines = session(6, false);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let shown = app.shown(0, 20);
+    assert_eq!(shown.texts.len(), shown.lines.len());
+    // Turn rows carry built-in metadata with no click ranges.
+    assert!(shown.texts.iter().all(|text| text.clicks.is_empty()));
+    // A page not loaded draws one blank line with plain metadata.
+    app.jump(0);
+    let Some((session, range)) = app.needs().first().cloned() else {
+        return;
+    };
+    app.load_failed(&session, &range, "gone");
+    let shown = app.shown(0, 1);
+    assert_eq!(shown.texts.len(), shown.lines.len());
+    let text = shown.texts.first().expect("one shown line");
+    assert_eq!(text.clicks, Vec::new());
+    assert!(!text.decoration);
+}

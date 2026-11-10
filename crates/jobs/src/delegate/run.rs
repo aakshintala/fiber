@@ -54,6 +54,7 @@ fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
         | Kind::ShellCommandDelta
         | Kind::DirectoryAdded
         | Kind::SessionNamed
+        | Kind::Archived
         | Kind::Clients
         | Kind::SessionStatus
         | Kind::ContextAdded

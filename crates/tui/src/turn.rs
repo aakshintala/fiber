@@ -888,6 +888,7 @@ pub(crate) fn fold_line(
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded
@@ -1021,6 +1022,7 @@ fn fold_action(
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded
@@ -1113,6 +1115,7 @@ fn fold_action(
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
