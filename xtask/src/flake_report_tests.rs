@@ -661,7 +661,7 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
     let second = "main::t\tthread other panicked at crates/other.rs:3";
     let text = format!("{first}\n{second}\n");
     let out = classified(&[("linux", &text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "detail"), Some(PANIC));
@@ -676,7 +676,7 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
             pr_files: "",
         },
     );
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "runner"), Some("zeta"));
@@ -694,9 +694,9 @@ fn two_tests_of_one_binary_make_one_record() {
     let second = "main::probe other_test\tthread other panicked at crates/other.rs:3";
     let text = format!("{first}\n{second}\n");
     let out = classified(&[("linux", &text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
-    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // `docs/testing/running.md`, "Flaky tests": "a repeated title takes its
     // runner and detail from its first occurrence in file-name byte order".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::probe");
@@ -710,7 +710,7 @@ fn two_tests_of_one_binary_make_one_record() {
 fn two_binaries_make_two_records() {
     let text = "main::a t1\tfirst detail\nmain::b t1\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 2);
     let a = titled(&out, "main::a");
@@ -728,9 +728,9 @@ fn a_unit_test_binary_id_without_colons() {
     // A root-level test uses the binary key, and a bare id gives the same title.
     let text = "fiber-core tests::foo\tfirst detail\nfiber-core\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
-    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // `docs/testing/running.md`, "Flaky tests": "a repeated title takes its
     // runner and detail from its first occurrence in file-name byte order".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "fiber-core");
@@ -746,11 +746,11 @@ fn two_modules_of_main_make_two_records() {
     let text = "main::extension_host reviewer_setup::the_setup_saves\tfirst detail\n\
                 main::session_turns reload_tests::some_test\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "an area binary names its first
+    // `docs/testing/running.md`, "Flaky tests": "an area binary names its first
     // test-module segment, the file".
     assert_eq!(out.len(), 2);
     let reviewer = titled(&out, "main::reviewer_setup");
@@ -782,13 +782,13 @@ fn a_root_level_area_test_falls_back_to_its_binary() {
     let text =
         "main::extension_host root_level_test\tfirst detail\nmain::extension_host\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
-    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // `docs/testing/running.md`, "Flaky tests": "a repeated title takes its
     // runner and detail from its first occurrence in file-name byte order".
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "A root-level test in an area
+    // `docs/testing/running.md`, "Flaky tests": "A root-level test in an area
     // binary falls back to its binary title".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::extension_host");
@@ -808,9 +808,9 @@ fn a_single_file_integration_binary_keeps_its_title() {
     // A single-file integration binary whose id contains `::` keeps its title.
     let text = "main::hub_service helper_tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "A single-file integration
+    // `docs/testing/running.md`, "Flaky tests": "A single-file integration
     // binary such as `main::hub_service` keeps its binary title".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::hub_service");
@@ -831,9 +831,9 @@ fn only_the_first_module_segment_names_the_main_key() {
     // file.
     let text = "main::extension_host reviewer_setup::inner::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "an area binary names its first
+    // `docs/testing/running.md`, "Flaky tests": "an area binary names its first
     // test-module segment, the file".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::reviewer_setup");
@@ -849,9 +849,9 @@ fn an_empty_first_segment_falls_back_to_the_binary() {
     // its binary title.
     let text = "main::extension_host ::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "A root-level test in an area
+    // `docs/testing/running.md`, "Flaky tests": "A root-level test in an area
     // binary falls back to its binary title".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::extension_host");
@@ -924,9 +924,9 @@ fn a_unit_test_with_a_tests_module_uses_its_file_key() {
     // A unit-test module named `process_group_tests` remains in the file key.
     let text = "fakes process_group_tests::reaps_children\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "A unit-test id is its module
+    // `docs/testing/running.md`, "Flaky tests": "A unit-test id is its module
     // path without the test name or a trailing `tests` module".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "fakes::process_group_tests");
@@ -943,7 +943,7 @@ fn a_unit_test_with_a_tests_module_uses_its_file_key() {
 #[test]
 fn a_name_with_no_space_is_the_whole_id() {
     let out = classified(&[("linux", "main::t\tsome detail")], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::t");
@@ -958,7 +958,7 @@ fn a_leading_space_gives_the_empty_id() {
     // gives the empty id. Nextest test names cannot start with a space, so
     // this line is unreachable from the report; the test pins the split.
     let out = classified(&[("linux", " x\tsome detail")], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "");
@@ -972,7 +972,7 @@ fn a_tabless_line_with_spaces_gives_the_binary_id() {
     // No TAB: the whole line is the name, the detail is empty, and the
     // title still cuts at the first space.
     let out = classified(&[("linux", "main::a x")], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::a");
@@ -983,7 +983,7 @@ fn a_tabless_line_with_spaces_gives_the_binary_id() {
 
 #[test]
 fn list_files_are_read_in_name_byte_order() {
-    // docs/testing/running.md, "Flaky tests", promises this order: "a
+    // `docs/testing/running.md`, "Flaky tests", promises this order: "a
     // repeated title takes its runner and detail from its first
     // occurrence in file-name byte order". `-` (0x2d) sorts
     // before `.` (0x2e), so the arm file is read first and its
@@ -1161,7 +1161,7 @@ fn unreadable_entry_type_is_an_error() {
 
 #[test]
 fn flake_title_keys_area_binaries_by_file_and_leaves_the_rest() {
-    // docs/ci.md, "The one-week trial": "An area binary in
+    // `docs/ci.md`, "The one-week trial": "An area binary in
     // `crates/main/tests/<area>/` is keyed by its first test-module segment".
     for (binary, test, title) in [
         (

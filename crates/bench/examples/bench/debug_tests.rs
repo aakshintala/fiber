@@ -423,7 +423,7 @@ fn debug_pass_is_skipped_unless_only_all() {
 /// The attach workload's entry carries its per-sample, per-fixture spans
 /// in no promised order, separate from the tallied totals, with no error
 /// when spans exist. The one-line-per-process attach spans are documented
-/// in `docs/state.md:423-453`.
+/// in `docs/state.md`, "What each part holds".
 #[test]
 fn debug_pass_attach_entry_carries_per_sample_spans() {
     let mut head = Pass::new(Side::Head, args(&["--paging", "j"]));
@@ -457,7 +457,7 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
         .get("spans")
         .and_then(|spans| spans.as_array())
         .expect("attach entry carries a spans array");
-    // `docs/state.md:423-453` promises counts and scopes, not sample
+    // `docs/state.md`, "What each part holds" promises counts and scopes, not sample
     // order, so compare fixture/sample/op identities in any order and
     // leave elapsed values unasserted.
     let mut got: Vec<Value> = spans
@@ -479,7 +479,7 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
     want.sort_by_key(|span| key(span));
     assert_eq!(got, want, "{attach}");
     assert!(attach.get("error").is_none(), "{attach}");
-    // docs/state.md:432-435 promises one attached-frame line per process.
+    // `docs/state.md`, "What each part holds" promises one attached-frame line per process.
     // The tallied operation name remains beside its spans.
     assert_eq!(
         attach

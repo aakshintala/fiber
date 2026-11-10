@@ -1956,7 +1956,7 @@ fn a_debug_path_install_omits_the_manifest_binary_path() {
             line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
         })
         .collect();
-    // docs/state.md, "Diagnostic logs": one line per actual request;
+    // `docs/state.md`, "What each part holds": one line per actual request;
     // manifest-binary paths are omitted.
     assert_eq!(requests.len(), 1, "one line per binary: {requests:?}");
     let data = &requests[0]["data"];

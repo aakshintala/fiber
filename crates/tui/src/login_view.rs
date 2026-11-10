@@ -597,6 +597,17 @@ impl Login {
         (framed, joins)
     }
 
+    /// Whether the login's final step stored successfully.
+    pub(crate) fn ended_successfully(&self) -> bool {
+        matches!(
+            &self.mode,
+            Mode::Ended(Ended {
+                outcome: Outcome::Done,
+                ..
+            })
+        )
+    }
+
     /// The target rows' indices in display order.
     fn target_rows(&self) -> Vec<usize> {
         self.items

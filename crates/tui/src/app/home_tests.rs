@@ -3254,6 +3254,46 @@ fn start_rejected(app: &mut App, id: &str, message: &str) {
 }
 
 #[test]
+fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
+    // `docs/tui.md`, "First run": Esc leaves home with the blocker lines;
+    // clicking a credential blocker line opens `/login`, and a keyless
+    // one never reopens.
+    let mut app = home_with(80, 24, launch());
+    app.set_doctor_blocker(Some(Arc::new(|| {
+        Some((
+            "No provider key. Run `fiber login` to fix it.".to_owned(),
+            true,
+        ))
+    })));
+    app.open_first_run_login();
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    assert_eq!(
+        blockers(&app),
+        ["No provider key. Run `fiber login` to fix it."]
+    );
+    assert_eq!(app.home.blocker_keys, vec![true]);
+    app.home_click(crate::home::Spot::Blocker(0));
+    assert!(app.config_view_open());
+
+    let mut no_model = home_with(80, 24, launch());
+    no_model.set_doctor_blocker(Some(Arc::new(|| {
+        Some((
+            "No model was chosen. Set `model` in configuration.".to_owned(),
+            false,
+        ))
+    })));
+    no_model.open_first_run_login();
+    no_model.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    assert_eq!(
+        blockers(&no_model),
+        ["No model was chosen. Set `model` in configuration."]
+    );
+    assert!(!no_model.home.blocker_keys[0]);
+    no_model.home_click(crate::home::Spot::Blocker(0));
+    assert!(!no_model.config_view_open());
+}
+
+#[test]
 fn a_rejected_start_sets_the_blocker_lines() {
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);

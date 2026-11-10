@@ -2745,6 +2745,23 @@ fn first_block_notice_session_with_no_row_shows_nothing() {
     assert_eq!(app.notice(), None);
 }
 
+#[test]
+fn first_run_import_offer_waits_until_login_and_model_picker_close() {
+    // `docs/tui.md`, "First run": the import offer shows on home once, and
+    // only after the login overlay and the model picker have closed.
+    let mut app = home_app();
+    app.set_import_offer(true);
+    app.open_first_run_login();
+    assert!(shell_screen(&app).contains("Log in"));
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(app.model_picker_open());
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    assert!(!app.model_picker_open());
+    let screen = shell_screen(&app);
+    assert!(screen.contains("Import"), "{screen}");
+}
+
 /// A `!` run of `seq 1 N` as its `shell_command` line.
 fn shell_run(app: &mut App, lines: usize) {
     let output = (1..=lines)

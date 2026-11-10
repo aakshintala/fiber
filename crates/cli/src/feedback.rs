@@ -188,8 +188,7 @@ struct Entry {
 }
 
 /// `line` as an entry, when it is a diagnostic line of `process` with every
-/// documented field in its documented shape (`docs/state.md`, "Diagnostic
-/// logs"), including object `data` on debug lines. Anything else is left out,
+/// documented field in its documented shape (`docs/state.md`, "What each part holds"), including object `data` on debug lines. Anything else is left out,
 /// as is an `extension_log` line: it is the extension's own text, which Fiber
 /// cannot vouch for.
 fn entry(line: &str, process: &str) -> Option<Entry> {

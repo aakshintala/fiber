@@ -743,7 +743,7 @@ fn a_debug_update_logs_one_extension_release_line_per_request() {
             line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
         })
         .collect();
-    // docs/state.md, "Diagnostic logs": one line per actual request, including each redirect hop.
+    // `docs/state.md`, "What each part holds": one line per actual request, including each redirect hop.
     assert_eq!(
         requests.len(),
         8,

@@ -1,12 +1,13 @@
 use super::*;
 use std::collections::BTreeMap;
 
-// Rule sources: `docs/testing/screens.md:84` ("Screens") requires each kept
-// read to name its signal in a `// settled:` comment, and `docs/testing/screens.md:86` defines the
+// Rule sources: `docs/testing/screens.md`, "Screens" requires each kept
+// read to name its signal in a `// settled:` comment, and `docs/testing/screens.md`, "Screens" defines the
 // ratchet's line rule (grid-read text, full-line `//` exclusion, literal
 // marker on the read or previous line, wait-span exclusion) as a
-// conservative upper bound; every count asserted below cites line 86,
-// and the `screen_ratchet` module doc enforces the same rule.
+// conservative upper bound; every count asserted below follows
+// `docs/testing/screens.md`, "Screens", and the `screen_ratchet`
+// module doc enforces the same rule.
 
 fn file(path: &str, source: &str) -> RustFile {
     RustFile {

@@ -1,6 +1,6 @@
 //! A provider's discovered model list, cached at `cache/models/<name>.json`
 //! in Fiber home (`docs/configuration.md`, "A provider's data", and
-//! `docs/state.md`, "Cache"). The cache is always safe to delete, so a copy
+//! `docs/state.md`, "What each part holds"). The cache is always safe to delete, so a copy
 //! that is missing or no longer reads as a model list is no copy at all.
 
 use std::fs;

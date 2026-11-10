@@ -1,7 +1,6 @@
 //! `scripts/release-size` run as a program against a small git repository,
 //! with the checked-in stubs under `release_size_fixture/bin/` standing in
-//! for cargo, rustup, strip and sha256sum (`docs/ci.md`, "Release build and
-//! size"). A stub cargo fails in the directory the test names and otherwise
+//! for cargo, rustup, strip and sha256sum (`docs/dependencies.md`, "Admitting a crate"). A stub cargo fails in the directory the test names and otherwise
 //! writes a binary that says which commit built it, so each test reads which
 //! commit the script compared against.
 

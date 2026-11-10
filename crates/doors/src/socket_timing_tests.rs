@@ -1,5 +1,5 @@
 //! Tests for the doors socket-preparation timer (`docs/state.md`,
-//! "Diagnostic logs"): the `startup.socket` scope from entering the
+//! "What each part holds"): the `startup.socket` scope from entering the
 //! shared opening routine through listener readiness, on both the new
 //! and the resumed constructor, and the quiet untimed paths.
 

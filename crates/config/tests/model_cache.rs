@@ -1,5 +1,5 @@
 //! `docs/configuration.md`, "A provider's data", and `docs/state.md`,
-//! "Cache": a `models()` list is cached at `cache/models/<name>.json`,
+//! "What each part holds": a `models()` list is cached at `cache/models/<name>.json`,
 //! replaced whole, and a copy that does not read is no copy.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]

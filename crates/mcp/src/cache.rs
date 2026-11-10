@@ -1,6 +1,6 @@
 //! One server's last tool and prompt lists (`docs/mcp.md`, "Starting
 //! servers" and "Prompts and resources"): the cache file at
-//! `cache/mcp/<server>.json` (`docs/state.md`, "Cache"), keyed by a hash
+//! `cache/mcp/<server>.json` (`docs/state.md`, "What each part holds"), keyed by a hash
 //! of the server's declaration. A missing, unreadable or unparsable file,
 //! one whose key or version differs, or one with no prompt list is a miss;
 //! a file without the resources record reads as offering none, healing

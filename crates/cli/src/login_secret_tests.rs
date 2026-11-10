@@ -1,6 +1,5 @@
 //! `fiber login <name>` for a secret an installed extension declares
-//! (`docs/configuration.md`, "Secrets"; `docs/invocation.md`, "Fiber
-//! itself"), through the helpers of the parent test module.
+//! (`docs/configuration.md`, "Secrets"; `docs/invocation.md`, "Commands and flags"), through the helpers of the parent test module.
 
 use std::process::ExitStatus;
 

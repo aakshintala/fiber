@@ -1,4 +1,4 @@
-//! `fiber login` and `fiber logout` (`docs/invocation.md`, "Fiber itself";
+//! `fiber login` and `fiber logout` (`docs/invocation.md`, "Commands and flags";
 //! `docs/configuration.md`, "Secrets"; `docs/model-routing.md`, "Logging
 //! in"): a provider's key is stored in `credentials/<stored>/<label>`, where
 //! `<stored>` is the credential the provider reads and `<label>` is the

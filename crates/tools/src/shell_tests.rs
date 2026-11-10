@@ -1735,7 +1735,7 @@ fn with_no_timeout_parks_without_a_deadline() {
     let (parked_tx, parked_rx) = std::sync::mpsc::channel();
     // One wait for one park signal: the observer receives on this wait's
     // behalf, so observer and receive share the one deadline made here
-    // (docs/testing.md, "Waits and timeouts").
+    // (`docs/testing.md`, "Waits and timeouts").
     let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     std::thread::Builder::new()
         .name("fiber-shell-no-timeout-parked".to_owned())

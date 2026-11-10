@@ -218,14 +218,14 @@ fn a_before_call_hook_observes_each_request_before_the_script_pop() {
         assert!(end.is_ok(), "{end:?}");
     }
     // The hook sees each request in order, before the script pop
-    // (docs/testing/fakes.md, "Fakes").
+    // (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(*seen.lock().unwrap(), ["r0", "r1"]);
     let prompts: Vec<String> = provider
         .requests()
         .into_iter()
         .map(|r| r.system_prompt)
         .collect();
-    // Requests are recorded in call order (docs/testing/fakes.md, "Fakes").
+    // Requests are recorded in call order (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(prompts, ["r0", "r1"]);
 }
 
@@ -249,7 +249,7 @@ fn a_before_call_hook_at_the_second_call_fires_only_there() {
             .run(&mut |d| deltas.push(d));
         assert!(end.is_ok(), "{end:?}");
     }
-    // The hook fires only on the numbered call (docs/testing/fakes.md, "Fakes").
+    // The hook fires only on the numbered call (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(*seen.lock().unwrap(), ["r1"]);
 }
 
@@ -271,7 +271,7 @@ fn an_after_reply_hook_observes_each_end_and_returns_it_unchanged() {
         assert_eq!(got, reply(expected));
     }
     // The hook sees each end in call order, once per call
-    // (docs/testing/fakes.md, "Fakes").
+    // (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(ends.lock().unwrap().len(), 2);
     assert_eq!(
         ends.lock().unwrap()[0],
@@ -304,7 +304,7 @@ fn an_after_reply_hook_at_the_second_call_fires_only_there() {
             .unwrap();
         assert_eq!(got, reply(expected));
     }
-    // The hook fires only on the numbered call (docs/testing/fakes.md, "Fakes").
+    // The hook fires only on the numbered call (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(fired.lock().unwrap().len(), 1);
 }
 
@@ -336,7 +336,7 @@ fn an_after_reply_hook_observes_script_exhausted_and_the_call_still_fails() {
     assert_eq!(failure.code, ErrorCode::Other("script_exhausted".into()));
     assert!(end.is_err());
     // The hook sees each end in order, exhausted script included
-    // (docs/testing/fakes.md, "Fakes").
+    // (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(
         *seen.lock().unwrap(),
         [
@@ -365,7 +365,7 @@ fn an_after_reply_hook_passes_a_cancelled_end_through_unchanged() {
         })
     );
     // The hook sees the cancelled end once, passing it through unchanged
-    // (docs/testing/fakes.md, "Fakes").
+    // (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert!(seen.lock().unwrap()[0].contains("Cancelled"));
 }

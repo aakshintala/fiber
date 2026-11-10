@@ -626,7 +626,7 @@ pub(crate) fn failed_line(failure: &contract::hook::HookFailure) -> String {
 }
 
 /// The spilled file as the completion's artifact: its path relative to
-/// the session directory (`docs/events.md`, "Conventions"), or absolute
+/// the session directory (`docs/events.md`, "Payload types"), or absolute
 /// when it is not under it.
 fn spill_artifact(log: &Log, path: &std::path::Path) -> String {
     match path.strip_prefix(log.dir()) {

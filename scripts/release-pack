@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Packs the release archives and drives the draft-publish-last release flow
-# (docs/releasing.md, "What a release publishes" and "Cutting a release").
+# (`docs/releasing.md`, "What a release publishes" and "Cutting a release").
 # Every archive is plain ustar (`tar --format=ustar`), holding only files,
 # directories and relative symlinks that stay inside their directory, with
 # owner `rw` files and owner `rwx` directories. Each archive carries a
