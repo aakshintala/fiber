@@ -1420,32 +1420,22 @@ fn driver_shell_has_no_foreground_default() {
     let cancel = fakes::CancelToken::new();
     let run_cancel = cancel.clone();
     // A recording emitter for this call only: `Quiet` drops every event,
-    // so a missed stop below could name only the wait. It is created
+    // so a missed stop below could name only the wait. `fakes::EventLog`
+    // records every event unfiltered, in arrival order. It is created
     // before the driver thread spawns, so its registration precedes the
     // emitter's start (`docs/testing.md`, "Waits and timeouts"). The
     // record is read only in the failure path; a passing run drops it
     // unread. The other `Quiet` call sites in this file stay as they are.
-    struct Recording {
-        events: std::sync::Mutex<Vec<String>>,
-    }
-    impl Emit for Recording {
-        fn emit(&self, event: &Event) {
-            self.events
-                .lock()
-                .unwrap()
-                .push(format!("{} {event:?}", event.kind()));
-        }
-    }
-    let recorded = Arc::new(Recording {
-        events: std::sync::Mutex::new(Vec::new()),
-    });
-    let emitted = Arc::clone(&recorded);
+    let recorded = Arc::new(fakes::EventLog::default());
     let (done, finished) = std::sync::mpsc::channel();
     let driver_thread = match std::thread::Builder::new()
         .name("fiber-driver-no-timeout".to_owned())
-        .spawn(move || {
-            let output = driver.run(&arguments, &run_cancel, emitted.as_ref());
-            done.send(output).unwrap_or(());
+        .spawn({
+            let recorded = Arc::clone(&recorded);
+            move || {
+                let output = driver.run(&arguments, &run_cancel, recorded.as_ref());
+                done.send(output).unwrap_or(());
+            }
         }) {
         Ok(handle) => handle.thread().id(),
         Err(err) => panic!("could not start a thread for the driver call: {err}"),
@@ -1514,32 +1504,24 @@ fn driver_shell_has_no_foreground_default() {
     })) {
         Ok(output) => output,
         Err(payload) => {
-            let summary = recorded
-                .events
-                .lock()
-                .ok()
-                .map(|seen| {
-                    format!(
-                        "{count} driver events seen, last: {last}\nevents in order:\n{events}",
-                        count = seen.len(),
-                        last = seen.last().cloned().unwrap_or_else(|| "none".to_owned()),
-                        events = if seen.is_empty() {
-                            "none".to_owned()
-                        } else {
-                            seen.join("\n")
-                        },
-                    )
-                })
-                .unwrap_or_else(|| "the driver event record is unavailable".to_owned());
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_owned())
-                })
-                .unwrap_or_else(|| "a non-string panic".to_owned());
+            let seen = recorded.events();
+            let summary = format!(
+                "{count} driver events seen, last: {last}\nevents in order:\n{events}",
+                count = seen.len(),
+                last = seen
+                    .last()
+                    .map(|event| format!("{} {event:?}", event.kind()))
+                    .unwrap_or_else(|| "none".to_owned()),
+                events = if seen.is_empty() {
+                    "none".to_owned()
+                } else {
+                    seen.iter()
+                        .map(|event| format!("{} {event:?}", event.kind()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            );
+            let message = payload.downcast_ref::<String>().unwrap().clone();
             panic!("{message}\n{summary}");
         }
     };
