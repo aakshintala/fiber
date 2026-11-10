@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/item_tests.rs
+assertion_line: 553
 expression: "rows.join(\"\\n\")"
 ---
   Delegate  ◆ review the parser                                      Esc returns
@@ -22,7 +23,7 @@ expression: "rows.join(\"\\n\")"
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █                                      steering goes to ◆ review the parser
  ▌─────────────────────────────────────────────────────────────────────────────
- ▌/w  │  auto                                 test/model  │  ctx ▆▆▆▆▆▆▆▆ — · —
- ▌0 waiting  │  $0.00  │  cache 0%
+ ▌/w  │  auto                                                ctx ▆▆▆▆▆▆▆▆ — · —
+ ▌0 waiting
  ▌◆ 1 delegate running
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
