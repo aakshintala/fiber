@@ -307,8 +307,10 @@ pub(crate) fn install_release_with(
     commit_all(&staged, rename, |_, _| Ok(()))?;
     swap_docs(&fresh, &home.join("docs"), &old, rename)?;
     // A newly named member commits under its short, so the slugged
-    // directory an older install used is stale.
-    remove_stale_dirs(home, &members);
+    // directory an older install used is stale. A stale directory that
+    // cannot be removed fails the install, so success leaves one
+    // directory.
+    remove_stale_dirs(home, &members)?;
     names.sort();
     Ok(names)
 }
@@ -395,10 +397,6 @@ fn first_party_name(kind: &str, short: &str) -> String {
 /// parent.
 fn is_valid_short(short: &str) -> bool {
     !short.is_empty()
-        && short != ".."
-        && !short.starts_with('.')
-        && !short.contains('/')
-        && !short.contains('\\')
         && short
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-')

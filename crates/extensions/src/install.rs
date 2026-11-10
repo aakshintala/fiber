@@ -293,14 +293,16 @@ fn place(
 /// release newly names commits under its short, so the slugged directory
 /// an older install used is stale (`docs/releasing.md`, "Updating"). A
 /// directory whose manifest cannot be read is left alone. Each directory
-/// is removed on its own, so a failure removes nothing else.
-pub(crate) fn remove_stale_dirs(home: &Path, members: &[(String, String)]) {
+/// is removed on its own, so a failure removes nothing else. A removal
+/// failure is returned, so a successful install or update never leaves
+/// the duplicate behind.
+pub(crate) fn remove_stale_dirs(home: &Path, members: &[(String, String)]) -> Result<(), Error> {
     if members.is_empty() {
-        return;
+        return Ok(());
     }
     let root = config::extensions_dir(home);
     let Ok(entries) = fs::read_dir(&root) else {
-        return;
+        return Ok(());
     };
     let dirs: Vec<(String, PathBuf)> = entries
         .filter_map(|entry| {
@@ -322,10 +324,11 @@ pub(crate) fn remove_stale_dirs(home: &Path, members: &[(String, String)]) {
                 .map(|manifest| manifest.name)
                 .ok();
             if names.as_deref() == Some(name.as_str()) {
-                remove(dir).unwrap_or(());
+                remove(dir)?;
             }
         }
     }
+    Ok(())
 }
 
 /// One directory a commit moves. `had_old` is whether `target` existed

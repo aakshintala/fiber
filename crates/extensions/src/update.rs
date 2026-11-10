@@ -111,8 +111,10 @@ impl<'c> StagedUpdate<'c> {
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         self.plan.commit_prepared()?;
         // A newly named member commits under its short, so the slugged
-        // directory an older install used is stale.
-        remove_stale_dirs(&self.home, &self.adopted);
+        // directory an older install used is stale. A stale directory
+        // that cannot be removed fails the commit, so success leaves one
+        // directory.
+        remove_stale_dirs(&self.home, &self.adopted)?;
         self.plan.unlock();
         if let Some(fresh) = &self.docs_fresh {
             swap_docs_in(&self.home, fresh)?;

@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
@@ -1489,4 +1490,134 @@ fn a_later_update_leaves_a_single_directory_for_a_layout_accepted_unknown() {
         manifest(FUTURISTIC, "0.2.0")
     );
     assert_eq!(setup.record("futuristic")["name"], FUTURISTIC);
+}
+
+/// Adopting an archive member while an unrelated member is staged succeeds:
+/// the occupied-short refusal only fires when another staged member's slug
+/// is the adopted short, so an unrelated staged member never blocks the
+/// adopt.
+#[test]
+fn stage_update_adopts_while_an_unrelated_member_is_staged() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/futuristic/extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert_eq!(
+        fs::read_to_string(
+            setup
+                .home()
+                .join("extensions/github.com-acme-widget/extension.json")
+        )
+        .unwrap(),
+        manifest("github.com/acme/widget", "1.0.0")
+    );
+}
+
+/// A file mode restored on drop, so a failure still leaves the tree
+/// removable.
+struct RestoreMode {
+    path: PathBuf,
+    mode: u32,
+}
+
+impl RestoreMode {
+    fn set(path: &Path, mode: u32) -> Self {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        Self {
+            path: path.to_owned(),
+            mode: 0o755,
+        }
+    }
+}
+
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode)).unwrap_or(());
+    }
+}
+
+/// A stale directory that cannot be removed fails the commit with its path,
+/// instead of reporting success with the duplicate left behind.
+#[test]
+fn a_commit_that_cannot_remove_its_stale_directory_reports_it() {
+    let mut setup = Setup::new();
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    let slugged = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-extensions-futuristic");
+    assert!(slugged.is_dir(), "the older install used the slugged name");
+    // A subdirectory holding files, made unwriteable, so removing the
+    // stale directory fails with `PermissionDenied`.
+    let sub = slugged.join("sub");
+    fs::create_dir(&sub).unwrap();
+    fs::write(sub.join("v"), "x").unwrap();
+    fs::write(sub.join("probe"), "x").unwrap();
+    let restore = RestoreMode::set(&sub, 0o500);
+    // Precondition: without write permission the probe cannot go, so a
+    // root runner fails here loudly instead of passing vacuously.
+    let probe_err = fs::remove_file(sub.join("probe")).unwrap_err();
+    assert_eq!(
+        probe_err.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{probe_err}"
+    );
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let err = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap()
+    .commit()
+    .unwrap_err();
+    let Error::Io { path, .. } = &err else {
+        panic!("an unremovable stale directory names its path: {err}");
+    };
+    assert_eq!(path, &slugged, "{err}");
+    // The new member committed under its short; only the stale duplicate
+    // is left, reported by the error above rather than kept silently.
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/futuristic/extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert!(
+        slugged.is_dir(),
+        "the stale directory is still reported, not silently kept"
+    );
+    drop(restore);
 }
