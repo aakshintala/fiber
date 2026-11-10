@@ -349,9 +349,7 @@ fn command_winner(
     ctx: &SessionCtx,
     final_name: &str,
 ) -> Option<CommandContender> {
-    let Some(contenders) = composite.commands.get(final_name) else {
-        return None;
-    };
+    let contenders = composite.commands.get(final_name)?;
     let mut eligible = Vec::new();
     for contender in contenders {
         let Some(candidate) = composite.candidates.get(&contender.extension) else {

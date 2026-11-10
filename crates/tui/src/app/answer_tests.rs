@@ -809,15 +809,15 @@ impl Renderer for Halved {
             .halves
             .as_ref()
             .is_some_and(|halves| halves.get("acme").is_some_and(|half| half == "1.0.0"));
-        eligible
-            .then(|| {
-                vec![TuiCommand {
-                    name: "ledger-diff".to_owned(),
-                    description: "Diffs.".to_owned(),
-                    extension: "acme".to_owned(),
-                }]
-            })
-            .unwrap_or_default()
+        if eligible {
+            vec![TuiCommand {
+                name: "ledger-diff".to_owned(),
+                description: "Diffs.".to_owned(),
+                extension: "acme".to_owned(),
+            }]
+        } else {
+            Vec::new()
+        }
     }
 }
 
