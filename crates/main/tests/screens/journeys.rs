@@ -820,7 +820,7 @@ fn journey_interrupt_then_retried_answer() {
     // The context figure folds in after the completed attention, so the
     // snapshot waits for the drawn size: until it lands the status row
     // shows the unset segment where the snapshot pins the figure.
-    let answered = run.wait_screen("the closed turn", |screen| {
+    let answered = run.wait_screen("the closed turn with its folded context figure", |screen| {
         shows(screen, "Recovered.")
             && shows(screen, "▣ completed")
             && !shows(screen, "Esc to interrupt")
