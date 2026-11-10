@@ -131,6 +131,16 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
         .collect()
 }
 
+/// Whether `line` is an archived scoped `recent` ask, riding beside
+/// the exited scoped asks.
+fn is_archived(line: &Value) -> bool {
+    line["command"] == "recent"
+        && line["args"]
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
 /// The keys of the rows home draws.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
@@ -207,11 +217,15 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
         .find(|line| line["command"] == "recent" && line.get("args").is_none())
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
-    // The unscoped answer fans out the project's scoped ask.
-    let fanout = commands(app.on_line(accepted(
+    // The unscoped answer fans out the project's scoped asks, one of
+    // each kind; this test follows the exited ask.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-    )));
+    )))
+    .into_iter()
+    .filter(|line| !is_archived(line))
+    .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
@@ -255,7 +269,12 @@ fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
         .find(|line| line["command"] == "recent" && line.get("args").is_none())
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
-    let scoped = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    // A newly appearing project earns one scoped ask of each kind;
+    // this test follows the exited ask.
+    let scoped: Vec<Value> = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (a newly appearing project earns one scoped ask).
     assert_eq!(scoped.len(), 1);
     assert_eq!(scoped[0]["command"], "recent");
@@ -302,11 +321,15 @@ fn a_home_launch_never_focuses_the_list() {
         .find(|line| line["command"] == "recent" && line.get("args").is_none())
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
-    // The unscoped answer fans out the project's scoped ask.
-    let fanout = commands(app.on_line(accepted(
+    // The unscoped answer fans out the project's scoped asks, one of
+    // each kind; this test follows the exited ask.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-    )));
+    )))
+    .into_iter()
+    .filter(|line| !is_archived(line))
+    .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
@@ -813,11 +836,15 @@ fn home_with_row() -> App {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent id"));
     assert!(app.on_line(accepted(feed, json!({}))).is_empty());
-    // The unscoped answer fans out the project's scoped ask.
-    let fanout = commands(app.on_line(accepted(
+    // The unscoped answer fans out the project's scoped asks, one of
+    // each kind; this helper's callers follow the exited ask.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-    )));
+    )))
+    .into_iter()
+    .filter(|line| !is_archived(line))
+    .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).

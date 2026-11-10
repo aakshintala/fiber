@@ -695,16 +695,12 @@ impl App {
                         )
                     };
                     if open && held.is_some_and(|held| loaded < held) {
-                        lines.extend(
-                            home.recent
-                                .archived_page(
-                                    &project,
-                                    before.as_ref().map(|id| id.0.as_str()),
-                                    connected,
-                                    &mut self.outbox,
-                                )
-                                .into_iter(),
-                        );
+                        lines.extend(home.recent.archived_page(
+                            &project,
+                            before.as_ref().map(|id| id.0.as_str()),
+                            connected,
+                            &mut self.outbox,
+                        ));
                     }
                     Some(lines)
                 }

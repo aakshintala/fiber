@@ -1,6 +1,6 @@
 //! Home's data: the session rows, the subscriptions and what home draws (`docs/tui.md`, "Home").
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use contract::commands::SubscribeLevel;
@@ -560,7 +560,7 @@ pub(crate) struct Sessions {
     /// Archived rows per project, newest first, from the archived scoped
     /// `recent`: an archived session is on neither the exited rows nor
     /// the rail (`docs/tui.md`, "The session list").
-    archived: HashMap<String, Vec<Row>>,
+    archived: BTreeMap<String, Vec<Row>>,
     /// The hub's archived scoped `recent` total per project: the only
     /// source of a project's archived count.
     archived_totals: HashMap<String, usize>,
@@ -665,11 +665,11 @@ impl Sessions {
                 .get(row.project.as_str())
                 .map(|rows| rows.iter().collect())
                 .unwrap_or_default();
-            let shown_archived = self
-                .archived_open
-                .contains(&row.project)
-                .then_some(archived.len())
-                .unwrap_or(0);
+            let shown_archived = if self.archived_open.contains(&row.project) {
+                archived.len()
+            } else {
+                0
+            };
             let archived_total = self.archived_totals.get(&row.project).copied();
             sections.push(Section {
                 project: &row.project,

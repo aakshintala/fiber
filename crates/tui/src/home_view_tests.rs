@@ -563,7 +563,11 @@ fn opening_the_archived_fold_pages_until_every_row_is_loaded() {
                 .into_iter()
                 .filter_map(|line| match line {
                     ListLine::Exited { name, .. } => Some(name),
-                    _ => None,
+                    ListLine::Head { .. }
+                    | ListLine::Live { .. }
+                    | ListLine::ExitedHead { .. }
+                    | ListLine::More { .. }
+                    | ListLine::ArchivedHead { .. } => None,
                 })
                 .filter(|name| name.starts_with("filed "))
                 .collect()
@@ -1024,7 +1028,11 @@ fn archived_head_key(app: &App) -> u64 {
         .and_then(|screen| {
             screen.list.into_iter().find_map(|line| match line {
                 ListLine::ArchivedHead { key, .. } => Some(key),
-                _ => None,
+                ListLine::Head { .. }
+                | ListLine::Live { .. }
+                | ListLine::ExitedHead { .. }
+                | ListLine::Exited { .. }
+                | ListLine::More { .. } => None,
             })
         })
         .unwrap_or_else(|| panic!("an archived head"))

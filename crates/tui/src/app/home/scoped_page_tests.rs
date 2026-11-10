@@ -966,18 +966,61 @@ fn an_archived_answer_with_the_link_down_queues_no_follow_up() {
 }
 
 #[test]
-fn ask_recent_first_refetches_the_archived_count_with_the_project() {
+fn delete_fold_re_asks_both_the_scoped_and_the_archived_count() {
     let mut app = home_with(80, 24, launch());
-    app.on_line(hello());
-    // An accepted delete refills the unscoped gap and refetches both
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    // Settle both fanout asks so the delete refetch sends fresh ones.
+    let scoped = fanout
+        .iter()
+        .filter(|line| !is_archived(line))
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("a scoped ask"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    let archived = archived_id(&fanout);
+    assert!(
+        app.on_line(accepted(&archived, json!({"sessions": [], "total": 0})))
+            .is_empty()
+    );
+    // Delete the exited row through the foot question; the accepted
+    // delete removes it and refills the unscoped page, re-asking both
     // counts for the deleted row's project (`docs/tui.md`, "The session
     // list": one ask of each in flight per project).
-    let lines = commands(app.ask_recent_first(Some("-w")));
-    assert_eq!(lines.len(), 3);
-    assert_eq!(lines[0]["command"], "recent");
-    assert!(lines[0].get("args").is_none());
-    assert_eq!(fanout_projects(&lines[1..]), ["-w"]);
-    assert_eq!(archived_projects(&lines), ["-w"]);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+        &app,
+        "s_aaaaaaaaaaaaaaaa",
+    ))));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    let Effect::Send(delete) = app.on_key(Key::Enter, now) else {
+        panic!("Enter confirms the delete");
+    };
+    assert_eq!(delete.len(), 1);
+    let command: Value = serde_json::from_str(&delete[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(command["command"], "delete");
+    let refill = answer_value(
+        &mut app,
+        command["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("delete id")),
+        json!({}),
+    );
+    // The refill is one unscoped page plus both counts for the project:
+    // dropping the archived leg of the delete refetch fails this.
+    assert_eq!(refill.len(), 3);
+    assert_eq!(refill[0]["command"], "recent");
+    assert!(refill[0].get("args").is_none());
+    assert_eq!(fanout_projects(&refill[1..]), ["-w"]);
+    assert_eq!(archived_projects(&refill), ["-w"]);
 }
 
 #[test]
