@@ -473,3 +473,5 @@ crates/loop/tests/support/review.rs	fiber-4234	plan	2026-11-10T00:14:27Z	Amoghs-
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-4234	plan	2026-11-10T00:14:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-4234	plan	2026-11-10T00:14:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/fixtures/reviewer_consent/field-7-tkt-build-from-gate/events.jsonl	fiber-4234	plan	2026-11-10T00:15:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/screen.rs	fiber-4444	plan	2026-11-10T00:20:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/screen_tests.rs	fiber-4444	plan	2026-11-10T00:20:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
