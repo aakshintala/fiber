@@ -210,10 +210,11 @@ pub(crate) fn run_with(
     // writer, for the same reason.
     app.set_doctor(std::mem::take(&mut launch.doctor));
     app.set_doctor_blocker(doctor_blocker);
-    // With no model configured the picker opens on home, before the
-    // first frame: saving the choice writes the config default. It stays
-    // shut when attaching to a session.
-    let pick_at_start = launch.model.is_none() && launch.open_at == crate::OpenAt::Home;
+    // Every home launch defers the first-run flow until the catalogue
+    // reports credential state: with no usable credential the login
+    // opens on home, and Enter there opens it too (`docs/tui.md`,
+    // "First run"). It stays shut when attaching to a session.
+    let first_run_at_start = launch.open_at == crate::OpenAt::Home;
     // The viewer's copies live under Fiber home, taken before home
     // keeps the launch description.
     let images_dir = launch.images.clone();
@@ -239,7 +240,7 @@ pub(crate) fn run_with(
     let pending = app.configure_seam().import_pending();
     app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
-    if pick_at_start {
+    if first_run_at_start {
         app.defer_first_run();
     }
     // One cell's pixels, for the placeholder grid, from the tty the

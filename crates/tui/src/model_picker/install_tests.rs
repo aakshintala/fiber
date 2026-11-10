@@ -628,6 +628,8 @@ fn a_page_walks_the_same_stops() {
 
 #[test]
 fn first_run_model_focus_waits_for_explicit_navigation() {
+    // docs/tui.md, "The model picker": no row is focused until ↓ or a
+    // click puts it there, so moving onto the row selects it.
     let mut picker = picker(Mode::Choose, &["acme/m1"], &[]);
     picker.unselect_for_first_run();
     assert_eq!(picker.focus(), None);

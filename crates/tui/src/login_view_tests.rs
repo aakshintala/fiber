@@ -2619,6 +2619,8 @@ fn a_secret_still_ends_the_login_at_once() {
 
 #[test]
 fn first_run_secret_and_reviewer_saves_signal_success_only_at_last_save() {
+    // docs/tui.md, "First run": the login closes when its last step
+    // saves, so success is signaled only at that last save.
     let fake = fake_with(targets());
     let mut secret = Login::open(&ctx(&fake));
     open_secret_panel(&mut secret, &fake);

@@ -2747,6 +2747,8 @@ fn first_block_notice_session_with_no_row_shows_nothing() {
 
 #[test]
 fn first_run_import_offer_waits_until_login_and_model_picker_close() {
+    // docs/tui.md, "First run": the import offer shows on home once, and
+    // only after the login overlay and the model picker have closed.
     let mut app = home_app();
     app.set_import_offer(true);
     app.open_first_run_login();

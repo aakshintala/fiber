@@ -45,7 +45,7 @@ fn provider_with_images(setup: &support::Setup, server: &ProviderServer) {
 }
 
 fn provider_with(setup: &support::Setup, model_extra: &Value, server: &ProviderServer) {
-    provider_full(setup, model_extra, server, None);
+    provider_full(setup, model_extra, server, None, "FIBER_TEST_FAKE_KEY");
 }
 
 /// [`provider_with`], with the fake model declaring thinking levels and
@@ -57,34 +57,7 @@ fn provider_with_panel(setup: &support::Setup, server: &ProviderServer, panel_wi
         &json!({"thinking_levels": ["low", "high"], "thinking_default": "high"}),
         server,
         Some(panel_width),
-    );
-}
-
-fn provider_with_env_key(setup: &support::Setup, server: &ProviderServer, env: &str) {
-    let source = setup.root.path().join("src");
-    write_json(
-        &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
-    );
-    write_json(
-        &source.join("providers/fake.json"),
-        &json!({"name": "fake", "credential": {"env": env}, "models": [{
-            "id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000
-        }]}),
-    );
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::Path(source),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+        "FIBER_TEST_FAKE_KEY",
     );
 }
 
@@ -93,6 +66,7 @@ fn provider_full(
     model_extra: &Value,
     server: &ProviderServer,
     panel_width: Option<f64>,
+    credential_env: &str,
 ) {
     let source = setup.root.path().join("src");
     write_json(
@@ -108,7 +82,7 @@ fn provider_full(
         &source.join("providers/fake.json"),
         &json!({
             "name": "fake",
-            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "credential": {"env": credential_env},
             "models": [model]
         }),
     );
@@ -3731,9 +3705,38 @@ fn first_run_completed_setup_skips_login_and_model_picker() {
     assert!(!grid.contents.contains("Log in"), "{grid:?}");
     // settled: `grid` is the grid the wait above returned.
     assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    run.ready();
     run.write(b"\x03\x03\r");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn first_run_local_without_credential_opens_login_on_home() {
+    // docs/tui.md, "First run": with no usable credential a home launch
+    // opens on home with the `/login` overlay up, even with a model
+    // configured; Esc leaves home without it.
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
+    run.ready();
+    let grid = run.wait_screen("home with the first-run login", |grid| {
+        grid.contents.contains("Log in")
+    });
+    // settled: `grid` is the grid the login wait above returned.
+    assert!(grid.contents.contains("Log in"), "{grid:?}");
+    // settled: `grid` is the grid the login wait above returned.
+    assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    assert!(server.requests().is_empty(), "no billed call");
+    run.write(b"\x1b[27u");
+    let grid = run.wait_screen("home after closing the first-run login", |grid| {
+        grid.contents.contains("›") && !grid.contents.contains("Log in")
+    });
+    // settled: `grid` is the grid the close wait above returned.
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.write(b"/quit\r");
+    assert_eq!(run.wait().status.code(), Some(0));
 }
 
 #[test]
@@ -3754,6 +3757,7 @@ fn first_run_remote_uses_hub_credential_without_client_key() {
         grid.contents.contains("›")
     });
     assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.ready();
     run.write(b"\x03\x03\r");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
@@ -3764,7 +3768,7 @@ fn first_run_remote_uses_hub_credential_without_client_key() {
 fn first_run_remote_ignores_client_environment_key() {
     let hub = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
-    provider_with_env_key(&hub, &server, "OPENCODE_API_KEY");
+    provider_full(&hub, &json!({}), &server, None, "OPENCODE_API_KEY");
     let served = installed_hub(&hub);
     let client = paired_client(&hub, &served, false);
     let mut run = terminal(
@@ -3778,6 +3782,7 @@ fn first_run_remote_ignores_client_environment_key() {
         grid.contents.contains("Log in")
     });
     assert!(grid.contents.contains("Log in"), "{grid:?}");
+    run.ready();
     run.write(b"\x03\x03\r");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
@@ -3804,6 +3809,7 @@ fn first_run_remote_esc_on_login_draws_no_client_blocker() {
     run.wait_screen("the first-run import offer", |grid| {
         grid.contents.contains("Import settings")
     });
+    run.ready();
     run.write(b"\x1b[27u");
     // The hub holds the credential, so the keyless client opens no
     // overlay of its own: the remote terminal never reads the client's
@@ -3869,23 +3875,17 @@ fn pty_launch_uses_default_test_credential_before_caller_env() {
     quit_live(run);
 
     let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
-    run.wait_screen("the caller-overridden keyless home", |grid| {
-        grid.contents.contains("Enter starts a session")
-    });
     run.ready();
-    run.write(b"say hi\r");
-    let grid = run.wait_screen("the keyless credential notice", |grid| {
-        grid.contents.contains("no key for fake")
-            && grid.contents.contains("FIBER_TEST_FAKE_KEY is empty")
+    run.wait_screen("the caller-overridden keyless login", |grid| {
+        grid.contents.contains("Log in")
     });
-    assert!(
-        grid.contents.contains("FIBER_TEST_FAKE_KEY is empty"),
-        "{grid:?}"
-    );
-    run.write(b"\x03");
-    run.wait_screen("the cleared keyless draft", |grid| {
-        !grid.contents.contains("say hi")
+    run.write(b"\x1b[27u");
+    let grid = run.wait_screen("home with the keyless blocker", |grid| {
+        grid.contents.contains("Enter starts a session")
+            && grid.contents.contains("no key for fake")
     });
+    // settled: `grid` is the grid the Esc wait above returned.
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
     run.write(b"/quit\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }

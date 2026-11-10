@@ -42,14 +42,12 @@ impl App {
                 self.push_notice(ErrorCode::IoFailed, error.clone());
             }
         }
-        let first_run = self.first_run_pending && result.is_ok();
-        if first_run {
-            self.first_run_pending = false;
-        }
         let has_credential = result
             .as_ref()
             .is_ok_and(|catalogue| catalogue.logged_out.is_empty());
+        let first_run = self.first_run_pending && result.is_ok();
         if first_run {
+            self.first_run_pending = false;
             self.first_run_no_credential = !has_credential;
         }
         self.model_picker.store(result);

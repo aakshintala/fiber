@@ -130,6 +130,9 @@ fn await_opened(path: &str, url: &str) {
 
 #[test]
 fn first_run_waits_for_catalogue_credentials_and_repeats_without_a_marker() {
+    // docs/tui.md, "First run": nothing opens before the catalogue
+    // answers; a logged-out catalogue opens the login, a credentialed
+    // one opens the picker instead, on every launch with no marker.
     let seam = seam();
     let (mut lp, _rx, _dir, _out) = loop_with(&seam, None);
     lp.app.defer_first_run();

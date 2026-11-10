@@ -3321,6 +3321,9 @@ fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>, wait: &Deadline) {
 
 #[test]
 fn with_no_model_the_picker_opens_at_start() {
+    // docs/tui.md, "First run": with no configured model, home draws
+    // before the catalogue resolves, then the picker opens with no row
+    // chosen and no implicit save.
     let mut pair = open();
     // The watcher drains the terminal past its markers, so later frames
     // never fill the pty: home before the held catalogue resolves, its

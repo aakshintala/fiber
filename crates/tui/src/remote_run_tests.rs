@@ -250,9 +250,10 @@ fn the_start_pick_lists_the_hubs_models() {
         "the first chunk starts with the start bytes: {first:?}"
     );
     // The start pick has no initial selection: the first Down selects
-    // the first row, the second selects the hub's second model. The loop
-    // parks after what it already drew; navigation redraws without
-    // touching the rows.
+    // the first row, the second selects the hub's second model
+    // (docs/tui.md, "The model picker": no row is focused until ↓ or a
+    // click puts it there). The loop parks after what it already drew;
+    // navigation redraws without touching the rows.
     pair.main
         .write_all(b"\x1b[B\x1b[B")
         .unwrap_or_else(|err| panic!("write: {err}"));
