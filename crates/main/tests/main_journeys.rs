@@ -1011,11 +1011,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
                 &json!({"model": "test/m1", "diagnostics": {"level": "debug"}, "hub": {"idle_exit_ms": 200}}),
             );
             let bin = journey_bin();
-            let env: Vec<(&str, &str)> = support::TRUECOLOUR
-                .iter()
-                .copied()
-                .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
-                .collect();
+            let env = spawn_env_with_fake_key();
             let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &env);
             run.ready();
             dismiss_first_run_offer(&mut run);
@@ -2221,15 +2217,22 @@ fn byte_form_drawn(grid: &Grid) -> bool {
     ) && shows(grid, "Which crates should the change touch?")
 }
 
+/// The spawn environment for journeys answered by the fake provider:
+/// truecolour flags plus its `FIBER_TEST_FAKE_KEY` credential, so the
+/// first-run login stays shut.
+fn spawn_env_with_fake_key() -> Vec<(&'static str, &'static str)> {
+    TRUECOLOUR
+        .iter()
+        .copied()
+        .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
+        .collect()
+}
+
 /// A TUI journey's terminal: ready, kitty flags pushed, the unseeded
 /// home's first-run import offer declined, so regression bytes go out
 /// only once the binary is ready for input.
 fn start_byte_journey(setup: &Setup, bin: &Path) -> Run {
-    let env: Vec<(&str, &str)> = support::TRUECOLOUR
-        .iter()
-        .copied()
-        .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
-        .collect();
+    let env = spawn_env_with_fake_key();
     let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &env);
     run.ready();
     run.wait_bytes(0, support::pty::KITTY_PUSH, "kitty keyboard flags pushed");
