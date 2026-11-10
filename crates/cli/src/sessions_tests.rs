@@ -1014,7 +1014,7 @@ fn an_accepted_answer_never_runs_the_fallback() {
 fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // Per `docs/events.md`, "The envelope" a consumer skips any kind it does not
     // recognise, so the unknown line is skipped and the real answer is read.
     let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "result": {"token": "wrong"},
@@ -1042,7 +1042,7 @@ fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
 fn an_unknown_line_before_a_rejection_reads_the_refusal() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // Per `docs/events.md`, "The envelope" a consumer skips any kind it does not
     // recognise, so the unknown line is skipped and the refusal is read.
     let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "session_held", "message": "held",
@@ -1239,9 +1239,9 @@ fn hub_delete_without_yes_confirms_the_dry_run_set_exactly() {
         format!("{HUB_ROOT}\n{HUB_FORK}\n{HUB_ROOT}\n{HUB_FORK}\n")
     );
     assert_eq!(err, "delete? [y/N] ");
-    // Order and count per docs/invocation.md:1421-1426: the id resolves
+    // Order and count per `docs/invocation.md`, "Deleting and pruning": the id resolves
     // against the hub's `sessions` answer, then a dry run prints and asks,
-    // then `delete` carries that exact set as `expect` (docs/invocation.md:1415).
+    // then `delete` carries that exact set as `expect` (`docs/invocation.md`, "Deleting and pruning").
     assert_eq!(
         sent,
         vec![
@@ -1427,7 +1427,7 @@ fn hub_delete_yes_sends_one_delete_without_expect() {
     );
     got.unwrap();
     // One `delete` with no `expect` and no dry run: the exact line
-    // proves both keys are absent (docs/invocation.md:1424-1426: with
+    // proves both keys are absent (`docs/invocation.md`, "Deleting and pruning": with
     // `--yes` one `delete` with no `expect` follows the `sessions` resolve).
     assert_eq!(
         sent,
@@ -1457,7 +1457,7 @@ fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
     );
     assert_eq!(error.code(), ErrorCode::SessionNotFound);
     // The resolve connected; no dry run follows a failed resolve
-    // (docs/invocation.md:1421-1424: the dry run comes only after a resolve).
+    // (`docs/invocation.md`, "Deleting and pruning": the dry run comes only after a resolve).
     assert_eq!(sent.len(), 1);
 
     let (_, _, got, _, sent) = run_delete_listed(
@@ -1475,7 +1475,7 @@ fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
     );
     assert_eq!(error.code(), ErrorCode::Usage);
     // One `sessions` resolve and nothing after the ambiguous match
-    // (docs/invocation.md:1421-1424: the dry run comes only after a resolve).
+    // (`docs/invocation.md`, "Deleting and pruning": the dry run comes only after a resolve).
     assert_eq!(sent.len(), 1);
 }
 
@@ -1493,7 +1493,7 @@ fn hub_delete_without_a_terminal_never_connects() {
     assert!(matches!(&error, CliError::DeleteNobody), "{error:?}");
     assert_eq!(error.code(), ErrorCode::Usage);
     assert_eq!(out, "");
-    // Nobody to ask fails before connecting (docs/invocation.md:1418-1420:
+    // Nobody to ask fails before connecting (`docs/invocation.md`, "Deleting and pruning":
     // with no terminal to ask on, asking is a usage error), so no request.
     assert_eq!(connects, 0);
     assert!(sent.is_empty());

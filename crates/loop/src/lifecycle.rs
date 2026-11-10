@@ -511,7 +511,7 @@ impl Loop {
     /// the next successful step. The `turn_end` messages are guarded
     /// together, so a shutdown landing after `step_started` applies none
     /// of them: a refused commit drops them unwritten
-    /// (`docs/invocation.md`, "What is written").
+    /// (`docs/invocation.md`, "Shutdown").
     pub(crate) fn write_held(&mut self, turn: &TurnId) -> Result<(), Error> {
         // Oldest first: the next successful step writes what a refused
         // one kept, after the results the resumed turn just wrote, never

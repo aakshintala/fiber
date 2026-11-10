@@ -1,5 +1,4 @@
-//! The `http_request` line's `data` shape (`docs/state.md`, "Diagnostic
-//! logs"): fields in declared order, absent options left out.
+//! The `http_request` line's `data` shape (`docs/state.md`, "What each part holds"): fields in declared order, absent options left out.
 
 #![allow(clippy::unwrap_used, reason = "test code")]
 

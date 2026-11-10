@@ -1222,7 +1222,7 @@ fn an_observed_stage_writes_one_extension_release_line_per_archive() {
         "/download/v0.2.0/fiber-docs.tar.gz",
         "/download/v0.2.0/fiber-docs.tar.gz.sha256",
     ];
-    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    // `docs/state.md`, "What each part holds": one line per actual release HTTP request, including redirect hops.
     assert_eq!(
         lines.len(),
         paths.len(),

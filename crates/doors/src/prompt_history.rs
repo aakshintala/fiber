@@ -1,4 +1,4 @@
-//! The project's prompt history (`docs/state.md`, "Prompt history"): one
+//! The project's prompt history (`docs/state.md`, "What each part holds"): one
 //! JSON line per prompt a person sends a hub-started session, appended to
 //! `history.jsonl` beside the project's `sessions/`.
 

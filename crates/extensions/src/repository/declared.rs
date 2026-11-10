@@ -1,5 +1,5 @@
 //! Turns what a repository declares into items: each with the files its
-//! content hash covers (`docs/extensions.md`, "Pinning").
+//! content hash covers (`docs/extensions.md`, "Code a repository ships").
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -43,8 +43,32 @@ impl App {
                 self.push_notice(ErrorCode::IoFailed, error.clone());
             }
         }
+        let has_credential = result
+            .as_ref()
+            .is_ok_and(|catalogue| catalogue.logged_out.is_empty());
+        let first_run = self.first_run_pending && result.is_ok();
+        if first_run {
+            self.first_run_pending = false;
+            self.first_run_no_credential = !has_credential;
+        }
         self.model_picker.store(result);
         self.keep_model_picker_top(false);
+        if first_run {
+            if has_credential {
+                if self.home_model().is_none() {
+                    self.open_model_picker(Mode::Choose);
+                    self.model_picker.unselect_for_first_run();
+                }
+            } else {
+                self.open_first_run_login();
+            }
+        }
+    }
+
+    /// Defers the fresh-install flow until the catalogue reports credential
+    /// state, which is authoritative for both local and remote terminals.
+    pub(crate) fn defer_first_run(&mut self) {
+        self.first_run_pending = true;
     }
 
     /// Counts the startup catalogue read as owed, so its answer never

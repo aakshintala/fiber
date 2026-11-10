@@ -894,7 +894,7 @@ fn setup_error_maps_each_case_to_its_code() {
 /// Walks `denied` under `root` with `clock` and returns the grant count and
 /// the walk time. Fixtures pass their own root, so the count depends only
 /// on the fixture; production passes `/`. Reports the time to the caller
-/// but never asserts it (`docs/testing.md`, "No time-based assertions").
+/// but never asserts it (`docs/testing.md`, "Testing").
 #[cfg(target_os = "linux")]
 fn measure_read_walk(
     root: &Path,
@@ -941,8 +941,7 @@ fn the_owner_home_walk_reports_its_count_and_time() {
         panic!("HOME names the owner's home");
     };
     // The system clock reports the real walk time for the pull-request
-    // body; nothing asserts on it (`docs/testing.md`, "No time-based
-    // assertions").
+    // body; nothing asserts on it (`docs/testing.md`, "Testing").
     let clock = fakes::clock::SystemClock;
     let (count, elapsed) =
         measure_read_walk(&PathBuf::from("/"), &[home.join("credentials")], &clock);
@@ -2839,7 +2838,7 @@ mod linux_signal {
             .find(|(syscall, _)| *syscall == libc::SYS_kill)
             .expect("kill is filtered");
         // Five distinct targets: the two processes, the two groups as
-        // negative pids, and -1 for every process (`docs/sandbox.md:94-100`,
+        // negative pids, and -1 for every process (`docs/sandbox.md`, "Protected paths",
         // the below-ABI-6 target set).
         assert_eq!(kill.1.len(), 5, "kill names five targets, got {kill:?}");
         let debug = format!("{kill:?}");
@@ -2889,7 +2888,7 @@ mod linux_signal {
             .iter()
             .find(|(syscall, _)| *syscall == libc::SYS_tgkill)
             .expect("tgkill is filtered");
-        // `docs/sandbox.md:94-100`: tgkill covers both args, pidfd_open covers
+        // `docs/sandbox.md`, "Protected paths": tgkill covers both args, pidfd_open covers
         // only pids, tkill covers tids.
         assert_eq!(tgkill.1.len(), 4, "tgkill names both args, got {tgkill:?}");
         let pidfd = rules
@@ -2917,7 +2916,7 @@ mod linux_signal {
             .iter()
             .find(|(syscall, _)| *syscall == libc::SYS_kill)
             .expect("kill is filtered");
-        // `docs/sandbox.md:94-100`: one process collapses the hub slot, so
+        // `docs/sandbox.md`, "Protected paths": one process collapses the hub slot, so
         // kill names three targets.
         assert_eq!(
             kill.1.len(),
@@ -3050,7 +3049,7 @@ mod linux_signal {
             let super::super::protected::LinuxPolicy::SupervisorSeccomp(rules) = policy else {
                 panic!("below ABI 6 uses the supervisor seccomp policy");
             };
-            // `docs/sandbox.md:94-100`: below ABI 6 the policy denies kill,
+            // `docs/sandbox.md`, "Protected paths": below ABI 6 the policy denies kill,
             // tkill, tgkill and pidfd_open.
             assert_eq!(syscalls(&rules).len(), 4);
         }

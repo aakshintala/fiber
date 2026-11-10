@@ -1,6 +1,6 @@
 //! A repository's hooks whose current content is approved: what runs is
 //! the pinned copy in Fiber home, never the repository's files
-//! (`docs/extensions.md`, "Pinning"). Gathering hashes only the paths the
+//! (`docs/extensions.md`, "Code a repository ships"). Gathering hashes only the
 //! declarations name, never the rest of the tree.
 
 use std::collections::{BTreeMap, BTreeSet};

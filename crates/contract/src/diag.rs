@@ -1,4 +1,4 @@
-//! The debug level's seam (`docs/state.md`, "Diagnostic logs"): what one
+//! The debug level's seam (`docs/state.md`, "What each part holds"): what one
 //! `http_request` line records, the operations an `op_timing` line may
 //! name, and the sinks a caller hands them to. Like
 //! [`crate::clock::Clock`], it defines the seam and contains no behaviour;
@@ -272,7 +272,7 @@ pub trait DebugLog: Send + Sync {
 pub type Observe = Arc<dyn Fn(&ModelRequest, NonZeroU32) -> Box<dyn ModelCall> + Send + Sync>;
 
 /// One operation an `op_timing` line may name (`docs/state.md`,
-/// "Diagnostic logs"): the `op` in its `data`. The list is closed: a new
+/// "What each part holds"): the `op` in its `data`. The list is closed: a new
 /// module or top-level operation adds its variant in the pull request that
 /// needs it, a one-line change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

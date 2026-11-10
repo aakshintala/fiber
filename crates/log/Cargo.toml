@@ -24,7 +24,7 @@ thiserror.workspace = true
 fakes = { path = "../fakes" }
 proptest.workspace = true
 
-# The jigs (docs/testing.md, "Jigs"): binary jigs tested by
+# The jigs (`docs/testing.md`, "Jigs"): binary jigs tested by
 # `tests/dump_jig.rs` and `tests/check_jig.rs`, which run the built binaries.
 [[example]]
 name = "dump"

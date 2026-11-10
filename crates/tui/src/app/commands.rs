@@ -1110,6 +1110,9 @@ impl App {
         if let Some(effect) = self.built_in() {
             return effect;
         }
+        if self.first_run_no_credential && self.on_home() {
+            return self.open_first_run_login();
+        }
         // In an item view Enter steers the open delegate; a `/`
         // built-in already ran above, and anything it leaves (such as
         // `/close`) falls through to the attached session.
@@ -1180,11 +1183,25 @@ impl App {
             };
         }
         let draft = std::mem::take(&mut self.draft);
+        // A `!!` run has no line on the session stream: its row starts
+        // here, where the terminal sends it, and its answer ends it.
+        let show_only = match (&self.phase, shell) {
+            (Phase::Attached { session, .. }, Some((command, false))) => {
+                Some((session.clone(), shell::live_head(command, false)))
+            }
+            (Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. }, _) => None,
+        };
+        let run = id.clone();
         if kind == Kind::Shell {
             self.outbox.wait(&id, super::outbox::Waiting::Shell);
         }
         match self.outbox.send(id, kind, draft, line) {
-            Some(line) => Effect::Send(vec![line]),
+            Some(line) => {
+                if let Some((session, head)) = show_only {
+                    self.fold_pages(&session).start_shell(&run, head);
+                }
+                Effect::Send(vec![line])
+            }
             None => Effect::None,
         }
     }

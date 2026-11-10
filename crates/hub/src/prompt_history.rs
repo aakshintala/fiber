@@ -1,6 +1,5 @@
 //! The hub's `prompt_history` command (`docs/invocation.md`, "What the hub
-//! speaks"): a page of a project's `history.jsonl` (`docs/state.md`, "Prompt
-//! history"), newest first, read from the tail without a lock.
+//! speaks"): a page of a project's `history.jsonl` (`docs/state.md`, "What each part holds"), newest first, read from the tail without a lock.
 //!
 //! `before` is a byte offset into the file. A page holds the newest whole
 //! lines that end at or before it; the answer's `before` is where the

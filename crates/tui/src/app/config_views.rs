@@ -131,6 +131,10 @@ pub(in crate::app) struct ConfigViews {
     /// The doctor report reader `main` injected: the `/doctor` view
     /// shows its snapshot, and none opens the Unavailable shape.
     doctor: Option<contract::feedback::ReadDoctor>,
+    /// Reads only the first startup blocker and whether its fix is a key.
+    doctor_blocker: Option<contract::feedback::ReadDoctorBlocker>,
+    /// The login opened automatically while completing first-run setup.
+    automatic_login: bool,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -158,6 +162,8 @@ impl Default for ConfigViews {
             models: None,
             feedback: None,
             doctor: None,
+            doctor_blocker: None,
+            automatic_login: false,
             copy: None,
             open: None,
             theme: None,
@@ -170,6 +176,15 @@ impl Default for ConfigViews {
 }
 
 impl App {
+    /// Opens the login for first-run without changing the home draft.
+    pub(crate) fn open_first_run_login(&mut self) -> Effect {
+        let draft = std::mem::take(&mut self.draft);
+        let effect = self.open_config_view(ConfigView::Login);
+        self.draft = draft;
+        self.config_views.automatic_login = true;
+        effect
+    }
+
     /// Sets the seam the views read and write through.
     pub(crate) fn set_configure(&mut self, seam: Arc<dyn Configure>) {
         self.config_views.seam = seam;
@@ -188,6 +203,14 @@ impl App {
     /// Sets the doctor report reader the `/doctor` view shows.
     pub(crate) fn set_doctor(&mut self, reader: Option<contract::feedback::ReadDoctor>) {
         self.config_views.doctor = reader;
+    }
+
+    /// Sets the narrow reader for home startup blockers.
+    pub(crate) fn set_doctor_blocker(
+        &mut self,
+        reader: Option<contract::feedback::ReadDoctorBlocker>,
+    ) {
+        self.config_views.doctor_blocker = reader;
     }
 
     /// The feedback report writer, absent with nothing to write through.
@@ -564,6 +587,14 @@ impl App {
         };
         self.settle_settings_picker();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let restore_blockers =
+            *key == Key::Esc && matches!(self.config_views.open, Some(Open::Login(_)));
+        let blocker = restore_blockers.then(|| {
+            self.config_views
+                .doctor_blocker
+                .as_ref()
+                .and_then(|read| read())
+        });
         let act = match &mut self.config_views.open {
             Some(Open::Settings(settings)) => settings.key(key, &ctx),
             Some(Open::Tools(tools)) => tools.key(key, &ctx),
@@ -577,6 +608,16 @@ impl App {
             Some(Open::Doctor(..)) => esc(key),
             Some(Open::Credential(_)) | None => esc(key),
         };
+        if restore_blockers && matches!(act, Act::Close) {
+            let mut lines = Vec::new();
+            let mut keys = Vec::new();
+            if let Some(Some((line, key))) = blocker {
+                lines.push(line);
+                keys.push(key);
+            }
+            self.set_home_blockers(lines, keys);
+            self.config_views.automatic_login = false;
+        }
         Some(self.config_act_then_requests(act))
     }
 
@@ -805,7 +846,20 @@ impl App {
     /// Carries out what the view asked.
     fn config_act(&mut self, act: Act) -> Effect {
         match act {
-            Act::Stay => Effect::None,
+            Act::Stay => {
+                let finished = self.config_views.automatic_login
+                    && self.login_view().is_some_and(Login::ended_successfully);
+                if finished {
+                    self.config_views.automatic_login = false;
+                    self.first_run_no_credential = false;
+                    self.config_views.open = None;
+                    if self.home.launch.model.is_none() {
+                        self.open_model_picker(crate::model_picker::Mode::Choose);
+                        self.model_picker.unselect_for_first_run();
+                    }
+                }
+                Effect::None
+            }
             Act::Close => {
                 self.config_views.open = None;
                 Effect::None
@@ -1261,6 +1315,8 @@ impl App {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients

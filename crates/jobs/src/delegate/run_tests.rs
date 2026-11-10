@@ -418,7 +418,7 @@ impl Rig {
 
 /// The runner's park when it lies ahead of `now()`, otherwise `None`.
 /// Never blocks and never moves the clock: the caller advances only from
-/// the returned `until` (docs/testing.md, "Waits and timeouts": a test
+/// the returned `until` (`docs/testing.md`, "Waits and timeouts": a test
 /// advances a fake clock only after a signal that the code under test is
 /// waiting on that clock). Panics naming `parked()` when more than one
 /// thread is parked or a park has no deadline: the runner is the only
@@ -439,13 +439,13 @@ fn park_ahead(clock: &FakeClock) -> Option<std::time::Instant> {
 }
 
 /// The first notice the runner sends. A scoped driver thread advances the
-/// fake clock only from the runner's own park (docs/testing.md, "Waits
+/// fake clock only from the runner's own park (`docs/testing.md`, "Waits
 /// and timeouts"): a park at most one poll ahead moves time to its
 /// `until`; a park further ahead is the drain wait and is never advanced,
 /// because the drain's end wakes the runner itself; with no park ahead
 /// the driver yields. The test thread's single `Deadline` receive
 /// is the wall-clock deadline for the whole wait, driver included
-/// (docs/testing.md, "Waits and timeouts": every wait has a deadline on
+/// (`docs/testing.md`, "Waits and timeouts": every wait has a deadline on
 /// the wall clock). The stop flag is set on every outcome of that
 /// receive, before the result is inspected, so the driver always ends
 /// within `fakes::MUST_SUCCEED_WITHIN` and the scope never outlives the wait.
@@ -548,7 +548,7 @@ fn take_report(
 }
 
 /// Advances the fake clock only from the runner's own park, until `stop`
-/// is set or `deadline` runs out (docs/testing.md, "Waits and timeouts":
+/// is set or `deadline` runs out (`docs/testing.md`, "Waits and timeouts":
 /// a test advances a fake clock only after a signal that the code under
 /// test is waiting on that clock). A park at or past `horizon` wakes the
 /// runner with a zero advance, which moves no time but wakes every
@@ -622,7 +622,7 @@ fn drive_runner_clock(
 /// `reported` with a horizon: fake time never reaches `horizon`. A park
 /// at or past it wakes the runner with a zero advance, which moves no
 /// time but wakes every subscriber, so a leader whose stdout EOF beat its
-/// zombie state is still reaped on a later pass (docs/testing.md,
+/// zombie state is still reaped on a later pass (`docs/testing.md`,
 /// "Waits and timeouts": deadlines are hang guards, never timing
 /// assertions; no timing is asserted here).
 #[track_caller]
@@ -1029,7 +1029,7 @@ fn the_receive_and_deliver_traces_fire_in_order_for_one_exit() {
 
 /// Wakes the runner through one refused-watch backoff: the runner parks
 /// at `at`, the test advances `gap`, and the watch runs again
-/// (docs/testing.md, "Waits and timeouts": a test advances a fake clock
+/// (`docs/testing.md`, "Waits and timeouts": a test advances a fake clock
 /// only after a signal that the code under test is waiting on that
 /// clock). The caller counts `at` cumulatively from the first call, with
 /// backoff 50, 100, 200, 400, 800 ms, then 1 s.
@@ -1100,9 +1100,9 @@ fn wait_sleeper(pgid: u32) {
 
 /// Waits, driving the fake clock, until `pgid` leaves the jobs list:
 /// retirement runs on wakes. One wall-clock deadline covers the whole
-/// wait (docs/testing.md, "Waits and timeouts"): the wait fails naming
+/// wait (`docs/testing.md`, "Waits and timeouts"): the wait fails naming
 /// the pgid instead of hanging. Each advance goes only to the retire
-/// park's own `until` (docs/testing.md, "Waits and timeouts": a test
+/// park's own `until` (`docs/testing.md`, "Waits and timeouts": a test
 /// advances a fake clock only after a signal that the code under test is
 /// waiting on that clock); with no park ahead the wait yields.
 fn wait_retired(clock: &Arc<FakeClock>, pgid: u32) {
@@ -1196,7 +1196,7 @@ fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
                     }),
                 });
                 // The child cannot exit until stopped: the runner holds its
-                // stdin lifeline open (docs/delegates.md, "Lifetime").
+                // stdin lifeline open (`docs/delegates.md`, "Lifetime").
                 let shell = format!("# {}\nread line", rig._dir.path().display());
                 let done = rig.start(&shell, BOUND, u64::MAX);
                 wait_folded(&rig, 1);
@@ -1330,7 +1330,7 @@ fn a_second_guard_release_waits_until_the_first_has_closed_the_share() {
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
         // Drop the release sender before joining either releaser, including
-        // on panic (docs/testing.md, "Waits and timeouts").
+        // on panic (`docs/testing.md`, "Waits and timeouts").
         let release_tx = release_tx;
         scope.spawn(move || watcher.release());
         Deadline::after(MUST_SUCCEED_WITHIN)
@@ -1883,7 +1883,7 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     // test that needs fake time past the drain wait. A scoped driver
     // walks it there, then makes one advance to the drain park's own
     // `until`; the single receive below is the one wall-clock deadline
-    // for the drain wait and the report together (docs/testing.md,
+    // for the drain wait and the report together (`docs/testing.md`,
     // "Waits and timeouts": one deadline for the whole wait). The stop
     // flag is set on every outcome of that receive, before the result
     // is inspected, so the driver always ends within `fakes::MUST_SUCCEED_WITHIN` and the
@@ -2402,7 +2402,7 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
     // Fake time never reaches the stop bound, so the trap's own exit
-    // cannot race the timer's SIGKILL (docs/testing.md, "Waits and
+    // cannot race the timer's SIGKILL (`docs/testing.md`, "Waits and
     // timeouts": deadlines are hang guards, never timing assertions).
     let kill_at = rig.clock.now() + BOUND;
     assert_eq!(rig.registry.stop_delegates(), 1);
@@ -2470,7 +2470,7 @@ fn a_stop_reaches_a_live_grandchild_without_sigkill() {
     // stop waits for the sleeper itself.
     wait_sleeper(pgid);
     // Fake time never reaches the stop bound, so the traps' own exits
-    // cannot race the timer's SIGKILL (docs/testing.md, "Waits and
+    // cannot race the timer's SIGKILL (`docs/testing.md`, "Waits and
     // timeouts": deadlines are hang guards, never timing assertions).
     let kill_at = rig.clock.now() + BOUND;
     assert_eq!(rig.registry.stop_delegates(), 1);
@@ -2551,7 +2551,7 @@ fn a_stop_on_a_term_ignorer_kills_past_the_bound() {
     assert_eq!(rig.registry.stop_delegates(), 1);
     // No stepped advance: the driver inside `reported` walks the runner
     // through its retry parks to the park at the stop bound, whose
-    // advance sends SIGKILL (docs/testing.md, "Waits and timeouts": a
+    // advance sends SIGKILL (`docs/testing.md`, "Waits and timeouts": a
     // test advances a fake clock only after a signal that the code under
     // test is waiting on that clock).
     let notice = reported(&rig);
@@ -2588,7 +2588,7 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     // neither a backoff wake nor a replay may stop the delegate for
     // that. Each receive below must time out: a report here means the
     // cap tripped at the boundary, and swallowing it would hang the fifo
-    // write below on a dead child (docs/testing.md, "Waits and timeouts":
+    // write below on a dead child (`docs/testing.md`, "Waits and timeouts":
     // a receive with a bound, not a sleep).
     std::fs::write(&rig.events, "0123456789").unwrap();
     // Backstop: kills the group if the test fails before the child exits.
@@ -2719,7 +2719,7 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
     // Fake time never reaches the stop bound, so the quick exit cannot
-    // race the timer's SIGKILL (docs/testing.md, "Waits and timeouts":
+    // race the timer's SIGKILL (`docs/testing.md`, "Waits and timeouts":
     // deadlines are hang guards, never timing assertions).
     let kill_at = rig.clock.now() + BOUND;
     assert_eq!(rig.registry.stop_delegates(), 1);
@@ -2933,7 +2933,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     assert_eq!(rig.registry.stop_delegates(), 1);
     // The watch is blocked, so `outstanding` keeps the retry out of the
     // deadline: the runner parks at each poll horizon, then at the stop
-    // bound (docs/testing.md, "Waits and timeouts": a test advances a
+    // bound (`docs/testing.md`, "Waits and timeouts": a test advances a
     // fake clock only after a signal that the code under test is waiting
     // on that clock). Nothing moves the clock before the stop, so the
     // bound is five polls on from the origin.
@@ -3595,7 +3595,7 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     assert_eq!(usages[0].1, "g_1");
     assert_eq!(notice.completed.status, Outcome::Completed);
     // After `fiber_exited` the runner starts no further watch
-    // (docs/delegates.md, "Lifetime"): the started watcher is the only
+    // (`docs/delegates.md`, "Lifetime"): the started watcher is the only
     // call.
     assert_eq!(
         rig.script.calls().len(),
@@ -3746,7 +3746,7 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
 /// barrier until the test has run the loser to completion and released
 /// it. Later forwards pass through, so the barrier sees exactly two
 /// parties on old and new code alike. The `entered` receive is the
-/// signal the winner is waiting (docs/testing.md, "Waits and timeouts");
+/// signal the winner is waiting (`docs/testing.md`, "Waits and timeouts");
 /// the barrier release is the loser's completion. Returns the forwarded
 /// generations in forward order.
 fn raced_replays() -> Vec<String> {
@@ -3911,7 +3911,7 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
         let _released = go_rx.recv();
     }));
     // Wakes the parked runner into the pause: the clock moves only to
-    // the runner's own park (docs/testing.md, "Waits and timeouts": a
+    // the runner's own park (`docs/testing.md`, "Waits and timeouts": a
     // test advances a fake clock only after a signal that the code under
     // test is waiting on that clock).
     let at = rig.script.calls()[0];

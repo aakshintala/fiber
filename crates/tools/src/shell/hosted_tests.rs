@@ -482,3 +482,315 @@ fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     events.send(HostEvent::Exit(end())).expect("exit");
     drop(events);
 }
+
+/// What a hosted run's emitter and host saw, in order: `starting` from the
+/// emitter, `start` from the host.
+type Order = Arc<Mutex<Vec<&'static str>>>;
+
+/// An emitter that answers the start hook, notes it in `order` and records
+/// every delta.
+struct Probe {
+    order: Order,
+    answer: bool,
+    paced: bool,
+    recorder: Recorder,
+}
+
+impl contract::emit::Emit for Probe {
+    fn emit(&self, event: &contract::events::Event) {
+        self.recorder.emit(event);
+    }
+
+    fn starting(&self) -> bool {
+        self.order.lock().expect("order").push("starting");
+        self.answer
+    }
+
+    fn paced(&self) -> bool {
+        self.paced
+    }
+}
+
+/// A host that notes `start` in `order`, then refuses it with `refusal` or
+/// hands the test the run's event sender.
+struct Noting {
+    order: Order,
+    refusal: Option<String>,
+    calls: mpsc::Sender<mpsc::Sender<HostEvent>>,
+}
+
+impl CommandHost for Noting {
+    fn start(&self, _: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
+        self.order.lock().expect("order").push("start");
+        if let Some(io) = &self.refusal {
+            return Err(HostError {
+                id: "call_refused".into(),
+                io: io.clone(),
+            });
+        }
+        self.calls.send(events).expect("start observed");
+        Ok(Started { pgid: u32::MAX })
+    }
+    fn stop(&self, _: &str) -> bool {
+        true
+    }
+    fn write(&self, _: &str, _: &str) -> Result<(), HostError> {
+        Ok(())
+    }
+    fn adopt(&self, _: &str, _: &JobId, _: &Path, _: Option<&Path>) -> Result<(), HostError> {
+        Ok(())
+    }
+}
+
+/// A hosted run in flight on its own thread: what its emitter and host
+/// saw, the host's event sender once it started the run, and the result.
+struct Noted {
+    order: Order,
+    probe: Arc<Probe>,
+    started: mpsc::Receiver<mpsc::Sender<HostEvent>>,
+    result: mpsc::Receiver<std::io::Result<super::Ran>>,
+    _dir: fakes::TempDir,
+}
+
+/// Runs `super::execute` on its own thread against a host that notes its
+/// start.
+fn execute_noting(answer: bool, paced: bool, refusal: Option<&str>) -> Noted {
+    let dir = fakes::TempDir::new("fiber-hosted-noting");
+    let order: Order = Arc::new(Mutex::new(Vec::new()));
+    let (calls, started) = mpsc::channel();
+    let host = Arc::new(Noting {
+        order: Arc::clone(&order),
+        refusal: refusal.map(str::to_owned),
+        calls,
+    });
+    let probe = Arc::new(Probe {
+        order: Arc::clone(&order),
+        answer,
+        paced,
+        recorder: Recorder::default(),
+    });
+    let workdir = dir.path().to_path_buf();
+    let emit = Arc::clone(&probe);
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let settings = super::super::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: workdir.clone(),
+        };
+        let ran = super::execute(
+            host,
+            Path::new("/bin/sh"),
+            "held",
+            &workdir,
+            None,
+            &fakes::clock::SystemClock,
+            &CancelToken::default(),
+            &*emit,
+            super::command::MovePolicy::Stay,
+            None,
+            None,
+            None,
+            &settings,
+            &workdir,
+            None,
+        );
+        let _sent = done.send(ran);
+    });
+    Noted {
+        order,
+        probe,
+        started,
+        result,
+        _dir: dir,
+    }
+}
+
+/// A hosted run as `execute_noting` does, on the test-controlled `clock`:
+/// time moves only when the test advances it (`docs/testing.md`, "Values
+/// that change every run", "Waits and timeouts").
+fn execute_noting_on(
+    answer: bool,
+    paced: bool,
+    clock: Arc<fakes::clock::FakeClock>,
+) -> (Noted, Arc<fakes::clock::FakeClock>) {
+    let dir = fakes::TempDir::new("fiber-hosted-noting");
+    let order: Order = Arc::new(Mutex::new(Vec::new()));
+    let (calls, started) = mpsc::channel();
+    let host = Arc::new(Noting {
+        order: Arc::clone(&order),
+        refusal: None,
+        calls,
+    });
+    let probe = Arc::new(Probe {
+        order: Arc::clone(&order),
+        answer,
+        paced,
+        recorder: Recorder::default(),
+    });
+    let workdir = dir.path().to_path_buf();
+    let emit = Arc::clone(&probe);
+    let moved = Arc::clone(&clock);
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let settings = super::super::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: workdir.clone(),
+        };
+        let ran = super::execute(
+            host,
+            Path::new("/bin/sh"),
+            "held",
+            &workdir,
+            None,
+            moved.as_ref(),
+            &CancelToken::default(),
+            &*emit,
+            super::command::MovePolicy::Stay,
+            None,
+            None,
+            None,
+            &settings,
+            &workdir,
+            None,
+        );
+        let _sent = done.send(ran);
+    });
+    (
+        Noted {
+            order,
+            probe,
+            started,
+            result,
+            _dir: dir,
+        },
+        clock,
+    )
+}
+
+#[test]
+fn a_hosted_call_asks_to_start_once_before_the_host_starts_it() {
+    let Noted {
+        order,
+        started,
+        result,
+        ..
+    } = execute_noting(true, false, None);
+    let wait = Deadline::after(Duration::from_secs(10));
+    let events = wait.recv_or_fail(&started, "host start");
+    assert_eq!(*order.lock().expect("order"), ["starting", "start"]);
+    events.send(HostEvent::Exit(end())).expect("exit");
+    drop(events);
+    let ran = wait.recv_or_fail(&result, "hosted end");
+    assert!(matches!(ran, Ok(super::Ran::Finished(..))));
+}
+
+#[test]
+fn a_declined_hosted_start_never_reaches_the_host() {
+    let Noted {
+        order,
+        probe,
+        started,
+        result,
+        ..
+    } = execute_noting(false, false, None);
+    let wait = Deadline::after(Duration::from_secs(10));
+    let ran = wait.recv_or_fail(&result, "hosted decline");
+    assert!(matches!(ran, Ok(super::Ran::Declined)));
+    assert_eq!(*order.lock().expect("order"), ["starting"]);
+    assert!(
+        started.try_recv().is_err(),
+        "the host was never asked to start"
+    );
+    assert!(probe.recorder.events().is_empty());
+}
+
+#[test]
+fn a_refused_host_start_after_starting_reports_the_error() {
+    let Noted {
+        order,
+        probe,
+        result,
+        ..
+    } = execute_noting(true, false, Some("the keeper refused to start it"));
+    let wait = Deadline::after(Duration::from_secs(10));
+    let ran = wait.recv_or_fail(&result, "hosted refusal");
+    let Err(error) = ran else {
+        panic!("a refused start is an error");
+    };
+    assert!(
+        error.to_string().contains("the keeper refused to start it"),
+        "the error holds the host's text: {error}"
+    );
+    assert_eq!(
+        *order.lock().expect("order"),
+        ["starting", "start"],
+        "asked once, before the one start"
+    );
+    assert!(
+        probe.recorder.events().is_empty(),
+        "a refused start streamed nothing"
+    );
+}
+
+/// A hosted call whose emitter asks for pacing: a held change goes out on
+/// the park deadline, with the host quiet.
+#[test]
+fn a_paced_hosted_call_flushes_a_held_change_on_the_park_deadline() {
+    // Time moves only when the test advances it (`docs/testing.md`, "Values
+    // that change every run"): the held change goes out on the park the test
+    // drives, not on the process clock.
+    let clock = fakes::clock::FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(100);
+    let (
+        Noted {
+            probe,
+            started,
+            result,
+            ..
+        },
+        clock,
+    ) = execute_noting_on(true, true, Arc::clone(&clock));
+    let wait = Deadline::after(Duration::from_secs(40));
+    let events = wait.recv_or_fail(&started, "host start");
+    events
+        .send(HostEvent::Output {
+            stream: Stream::Out,
+            bytes: b"a".to_vec(),
+        })
+        .expect("first output");
+    assert!(
+        probe.recorder.wait_for_text("a", wait),
+        "a goes out at once"
+    );
+    events
+        .send(HostEvent::Output {
+            stream: Stream::Out,
+            bytes: b"b".to_vec(),
+        })
+        .expect("second output");
+    assert!(
+        clock.await_parked(due, Deadline::after(Duration::from_secs(40))),
+        "the drive parks for the held delta"
+    );
+    assert_eq!(probe.recorder.text(), "a", "held inside the interval");
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(Duration::from_secs(40)),
+    );
+    assert!(
+        probe.recorder.wait_for_text("ab", wait),
+        "the held b goes out on the park deadline: {:?}",
+        probe.recorder.text()
+    );
+    events.send(HostEvent::Exit(end())).expect("exit");
+    drop(events);
+    let ran = wait.recv_or_fail(&result, "hosted end");
+    assert!(matches!(ran, Ok(super::Ran::Finished(..))));
+    assert_eq!(probe.recorder.text(), "ab");
+}

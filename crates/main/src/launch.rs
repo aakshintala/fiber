@@ -131,6 +131,7 @@ pub(crate) fn launch(
         doctor: None,
         // `main` gives the seam once it holds Fiber home.
         configure: None,
+        doctor_blocker: None,
         extensions: None,
     }
 }

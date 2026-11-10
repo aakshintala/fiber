@@ -239,7 +239,9 @@ test creates the sender in the scope's closure or moves it in, as
 thread on drop owns the release sender itself or drops it first. The test's own deadline on
 the fake's signal names the failure. A wait that contains another wait gets at least twice
 the inner wait's budget, so the inner one expires first and the failure names the step that
-stalled. nextest's per-test timeout is the outermost case: at least twice the test's longest
+stalled. A wait that bounds a whole subsystem operation, or that contains another
+floor-bound wait, reads `fakes::WHOLE_SUBSYSTEM_WITHIN`, twice the floor; a thread start,
+a socket or a TLS handshake reads the floor. nextest's per-test timeout is the outermost case: at least twice the test's longest
 single deadline plus its normal run time, so a hang reports its wait, not a harness kill.
 
 A wait that takes several lines has one deadline for the whole wait, never one

@@ -1,5 +1,5 @@
 //! Tests for the hub start, resume and replay operation timers
-//! (`docs/state.md`, "Diagnostic logs"): the `hub.session_start` scope
+//! (`docs/state.md`, "What each part holds"): the `hub.session_start` scope
 //! from `start::run` entry through socket bind, the `hub.resume` scope
 //! around the whole common reach, and the `hub.subscribe_replay` scope
 //! from a replay write through its acknowledgement. Each test pins one

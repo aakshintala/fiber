@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The negate-check for scripts/leak-scan (docs/testing.md, "Running tests"):
+# The negate-check for scripts/leak-scan (`docs/testing.md`, "Running tests"):
 # a thrown-away nonce proves the scan names a leaked process, ignores a
 # sibling run's processes, refuses an empty nonce, and stays silent once the
 # leakers have stopped.

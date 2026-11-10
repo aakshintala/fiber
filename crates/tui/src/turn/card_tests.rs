@@ -176,6 +176,45 @@ fn turn() -> Option<ratatui::style::Color> {
 }
 
 #[test]
+fn a_prompt_renders_markdown_in_its_bubble() {
+    let mut cards = fresh();
+    start(&mut cards, "**bold**\n\n1. one\n2. two\n\n# comment");
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("1. one")), "{shown:?}");
+    assert!(shown.iter().any(|row| row.contains("2. two")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("# comment")),
+        "{shown:?}"
+    );
+    let bold = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("bold"))
+        .expect("bold");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "bold"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
+
+    let mut code = fresh();
+    start(&mut code, "```rust\nlet x = 1;\n```");
+    let (rows, _, _) = draw(&code.turns[0], WIDTH, Edges::BOTH);
+    assert!(
+        rows.iter().any(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.style.bg == Some(Role::Code.color()))
+                && line.to_string().contains("let x = 1;")
+        }),
+        "{:?}",
+        shown_rows(&rows)
+    );
+}
+
+#[test]
 fn the_card_is_a_turn_surface_below_the_bubble() {
     // The bubble and its time row float above the card after a blank
     // row; the card's body sits on the turn tint between half-block
@@ -1220,7 +1259,8 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
         None,
         json!({"input": [
             {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
-            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: quota notice"}]}
+            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: **quota notice**"}]},
+            {"type":"message", "source":"session", "from_session_id":"s_bbbbbbbbbbbbbbbb", "content":[{"type":"text","text":"1. first\n2. second"}]}
         ]}),
     );
     text(&mut cards, "a_1", "Hello.");
@@ -1239,6 +1279,25 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
         !shown.iter().any(|row| row.contains("Fiber: quota notice")),
         "{shown:?}"
     );
+    assert!(
+        shown.iter().any(|row| row.contains("1. first")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("2. second")),
+        "{shown:?}"
+    );
+    let bold = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("quota notice"))
+        .expect("formatted Fiber message");
+    assert!(bold.0.spans.iter().any(|span| {
+        span.content == "quota notice"
+            && span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+    }));
     assert_eq!(
         shown.iter().filter(|row| row.starts_with("you ")).count(),
         1,

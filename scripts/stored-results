@@ -2,7 +2,7 @@
 # Looks up the backstop's stored benchmark results for a pull request's base:
 # the nearest first-parent ancestor of the base commit, the base itself
 # first, with a `benchmarks-<sha>` artifact from a `main` run in this
-# repository (docs/ci.md, "On every pull request that changes code").
+# repository (`docs/ci.md`, "On every pull request that changes code").
 # `cargo xtask bench-report` judges memory and exact rows against them.
 #
 # Usage: scripts/stored-results BASE_COMMIT

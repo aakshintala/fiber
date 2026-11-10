@@ -12,7 +12,7 @@ use contract::tool::Cancel;
 use super::command::{Finished, MovePolicy, MoveReason};
 use super::drive::{LoopEnd, Run, finish, pump, view};
 use super::monitor::Feed;
-use super::output::{JobStream, Shared, check_start, lock};
+use super::output::{PacedStream, Shared, check_start, lock};
 use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::spill::Config as SpillConfig;
 
@@ -103,7 +103,7 @@ impl Moved {
         mut self,
         clock: &dyn Clock,
         cancel: &dyn Cancel,
-        stream: JobStream,
+        stream: PacedStream,
         feed: Option<Feed>,
     ) -> (Finished, Option<ProtectedReport>) {
         self.progress.job = Some(stream);

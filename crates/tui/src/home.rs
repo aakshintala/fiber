@@ -40,6 +40,8 @@ pub(crate) enum Spot {
     /// The thinking chip: clicking it, or Enter on it while focused,
     /// opens the model picker at the model's thinking chips.
     Thinking,
+    /// A first-run blocker line with a credential fix.
+    Blocker(usize),
     /// A picker row, by its index in the current picker list.
     Pick(usize),
     /// A quit choice while the quit question is open: clicking it does
@@ -72,6 +74,7 @@ impl Spot {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::Blocker(_)
             | Spot::Quit(_)
             | Spot::Clear(_)
             | Spot::HooksOffer(_)
@@ -90,6 +93,7 @@ impl Spot {
             | Spot::Start(_)
             | Spot::More(_)
             | Spot::Pick(_)
+            | Spot::Blocker(_)
             | Spot::Keep
             | Spot::Question
             | Spot::Quit(_)
@@ -267,6 +271,8 @@ pub struct Launch {
     /// reader `main` supplies (`docs/invocation.md`, "Commands and
     /// flags"). `None` in the jigs, which read nothing.
     pub doctor: Option<contract::feedback::ReadDoctor>,
+    /// Reads only the first startup blocker and its key classification.
+    pub doctor_blocker: Option<contract::feedback::ReadDoctorBlocker>,
     /// `scoped_models`: the references the model picker shows; empty
     /// means every installed model (`docs/configuration.md`, "Keys").
     pub scoped_models: Vec<String>,
@@ -309,6 +315,8 @@ pub(crate) struct HomeScreen {
     /// The rejected `start`'s message, above the box until the next
     /// `start` goes out.
     pub(crate) blockers: Vec<String>,
+    /// Whether each blocker line has a credential fix that opens `/login`.
+    pub(crate) blocker_keys: Vec<bool>,
     /// The workspace picker above the box: its current recents,
     /// the focused row, and the typed path once a key opens its row.
     pub(crate) picker: Option<PickerScreen>,

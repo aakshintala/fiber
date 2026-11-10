@@ -424,7 +424,7 @@ fn tool_choice(choice: &str) -> Value {
 
 /// `{"type": "ephemeral"}`, with `ttl` added for a 1-hour cache
 /// (`docs/prompt-cache.md`, "Cache lifetime"; no beta header is needed,
-/// `research/provider-harvest/anthropic-messages.md`, "TTL values").
+/// `research/provider-harvest/anthropic-messages.md`, "5. Prompt-cache markers").
 pub(crate) fn cache_control(lifetime: &CacheLifetime) -> Value {
     match lifetime {
         CacheLifetime::FiveMinutes => json!({"type": "ephemeral"}),
@@ -450,8 +450,7 @@ fn mark(block: &mut Value, lifetime: &CacheLifetime) {
 /// where the previous request ended (`request.previous_end`, when this is
 /// not the first request), and the new end, the last block of all. Fiber's
 /// own design has no marker on the last tool definition, unlike pi and rig
-/// (`research/provider-harvest/anthropic-messages.md`, "Prompt-cache
-/// markers").
+/// (`research/provider-harvest/anthropic-messages.md`, "5. Prompt-cache markers").
 fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let reference = endpoint.reference();
     // A call's `id` is the provider's id for it, or its action id when the

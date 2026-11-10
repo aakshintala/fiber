@@ -484,7 +484,7 @@ fn a_dry_run_with_an_unreadable_lock_reads_not_held_and_writes_nothing() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before);
 }
@@ -508,7 +508,7 @@ fn a_dry_run_over_the_wire_answers_the_sessions_and_held_ids() {
         sessions_as_set(&answer["payload"]["result"]),
         BTreeSet::from([id(1), id(2)])
     );
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer["payload"]["result"]["held"], json!([id(1)]));
 }
 
@@ -522,7 +522,7 @@ fn a_dry_run_reports_a_dead_pid_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -536,7 +536,7 @@ fn a_dry_run_reports_a_dead_keeper_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -551,7 +551,7 @@ fn a_dry_run_reports_an_oversized_pid_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -565,7 +565,7 @@ fn a_dry_run_reports_a_negative_pid_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -587,7 +587,7 @@ fn a_dry_run_reports_a_pid_with_trailing_words_as_not_held() {
         json!({"session": id(1), "cascade": true, "dry_run": true}),
     );
     assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer["held"], json!([]));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -612,7 +612,7 @@ fn a_dry_run_reports_garbage_labels_as_not_held() {
         sessions_as_set(&answer),
         BTreeSet::from([id(1), id(2), id(3)])
     );
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer["held"], json!([]));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
     for dir in [&root, &fork, &deep] {
@@ -661,7 +661,7 @@ fn a_dry_run_takes_no_lock_while_a_concurrent_open_races_it() {
         Ok(answer) => answer,
         Err(_) => panic!("the dry run thread ended"),
     };
-    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
+    // (`docs/invocation.md`, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, Ok(Some(json!({"sessions": [id(1)], "held": []}))));
     assert!(
         open_ok,

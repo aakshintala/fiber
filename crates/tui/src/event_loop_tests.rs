@@ -3321,11 +3321,14 @@ fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>, wait: &Deadline) {
 
 #[test]
 fn with_no_model_the_picker_opens_at_start() {
+    // `docs/tui.md`, "First run": with no configured model, home draws
+    // before the catalogue resolves, then the picker opens with no row
+    // chosen and no implicit save.
     let mut pair = open();
     // The watcher drains the terminal past its markers, so later frames
-    // never fill the pty: the picker at start, its answered row, then
-    // the home chips naming the chosen model.
-    let frames = watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
+    // never fill the pty: home before the held catalogue resolves, its
+    // unselected picker row, then the home chips naming the chosen model.
+    let frames = watch(&pair.main, vec![b"shortcuts", b"qq", b"[zz/qq]"]);
     let slave = pair
         .slave
         .try_clone()
@@ -3372,21 +3375,27 @@ fn with_no_model_the_picker_opens_at_start() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The first frame shows the picker, which opened with no keypress.
-    watched(&frames, "the picker at start", &Deadline::after(DEADLINE));
-    // Opening saves nothing: the choice does, once Enter chooses it.
+    // The catalogue is still held: home, not the picker, draws first.
+    watched(
+        &frames,
+        "home before the catalogue resolves",
+        &Deadline::after(DEADLINE),
+    );
     assert!(seam.writes().is_empty());
     release
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
-    // The cached read answers, and its frame lists the one model: only
-    // then does one Enter choose, as an Enter before the folded answer
-    // keeps the picker open, sending nothing.
+    // The resolved catalogue opens the picker with its one model and no
+    // implicit save. Move onto that row explicitly before choosing it.
     watched(
         &frames,
-        "the answered catalogue",
+        "the answered catalogue and unselected picker",
         &Deadline::after(DEADLINE),
     );
+    assert!(seam.writes().is_empty());
+    pair.main
+        .write_all(b"\x1b[B")
+        .unwrap_or_else(|err| panic!("write: {err}"));
     pair.main
         .write_all(b"\r")
         .unwrap_or_else(|err| panic!("write: {err}"));

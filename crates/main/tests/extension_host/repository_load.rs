@@ -729,7 +729,7 @@ impl Session {
                 .unwrap();
             tx.send(text).unwrap();
         });
-        first_line(setup.deadline, &lines);
+        first_line(setup.deadline, &lines, None);
         let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
         let stdout = lines;
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);

@@ -297,8 +297,7 @@ fn commit_never_writes_a_declined_keep_payload() {
 fn an_optional_replacement_failure_still_writes_the_detected_death() {
     // An optional replacement whose shadow fails still records the death
     // the sync detected: the failure row carries the old deaths, and the
-    // commit writes them before the failure (`docs/mcp.md`, "Each death
-    // is recorded as `mcp_server_failed`").
+    // commit writes them before the failure (`docs/mcp.md`, "When a server dies").
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
     let started = setup.start(vec![setup.spec("fx")]);

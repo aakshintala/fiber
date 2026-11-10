@@ -74,6 +74,119 @@ fn click(app: &mut App, col: u16, row: u16) -> Effect {
 const TWO_BLOCKS: &str = "```rust\nlet a = 1;\n```\n\ntext\n\n```sh\necho b\n```";
 
 #[test]
+fn selecting_a_markdown_prompt_copies_its_rendered_text() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let (width, height) = (60, 12);
+    let mut app = attached(width, height);
+    app.on_line(turn_started("**bold**"));
+    let row = row_of(&app, width, height, "bold").expect("rendered prompt");
+    let col = crate::view::text(&{
+        let area = ratatui::layout::Rect::new(0, 0, width, height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        buf
+    })
+    .lines()
+    .find_map(|line| {
+        line.find("bold")
+            .map(|at| u16::try_from(at).expect("column"))
+    })
+    .expect("bold column");
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut report = |kind, col| {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), col);
+    let _ = report(MouseKind::Drag(Button::Left), col.saturating_add(3));
+    assert_eq!(
+        report(MouseKind::Release, col.saturating_add(3)),
+        Effect::Copy("bold".to_owned())
+    );
+
+    let mut fenced = attached(width, height);
+    fenced.on_line(turn_started("```rust\nlet x = 1;\n```"));
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&fenced, area, &mut buf, None);
+    let code_row = crate::view::text(&buf)
+        .lines()
+        .position(|line| line.contains("let x = 1;"))
+        .expect("rendered code row");
+    assert!(!targets.iter().any(|target| {
+        matches!(target.id, crate::mouse::TargetId::Line(_))
+            && usize::from(target.rect.y) == code_row
+    }));
+    let mut rows = crate::rows::Rows::default();
+    crate::bubble::rows("```rust\nlet x = 1;\n```", width, &mut rows);
+    let (drawn, metadata) = rows.into_parts();
+    assert!(
+        drawn
+            .iter()
+            .any(|(line, _)| line.to_string().contains("let x = 1;"))
+    );
+    assert!(metadata.iter().any(|mark| mark.decoration));
+    let screen = crate::view::text(&buf);
+    let screen_rows: Vec<_> = screen.lines().collect();
+    let top = screen_rows[..code_row]
+        .iter()
+        .rposition(|line| line.contains('▄'))
+        .expect("code slab's top edge");
+    let top_col =
+        u16::try_from(screen_rows[top].find('▄').expect("top edge cell")).expect("top edge column");
+    let bottom = code_row.saturating_add(1).saturating_add(
+        screen_rows[code_row.saturating_add(1)..]
+            .iter()
+            .position(|line| line.contains('▀'))
+            .expect("code slab's bottom edge"),
+    );
+    let bottom_col = u16::try_from(screen_rows[bottom].rfind('▀').expect("bottom edge cell"))
+        .expect("bottom edge column");
+    assert!(top < code_row && code_row < bottom);
+    let mut fenced_pointer = Pointer::default();
+    let mut fenced_report = |kind, col, row| {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&fenced, area, &mut buf, None);
+        fenced.on_mouse(
+            &Mouse { kind, col, row },
+            &targets,
+            &mut fenced_pointer,
+            true,
+            now,
+        )
+    };
+    let top_row = u16::try_from(top).expect("top edge row");
+    let bottom_row = u16::try_from(bottom).expect("bottom edge row");
+    let _ = fenced_report(MouseKind::Press(Button::Left), top_col, top_row);
+    let _ = fenced_report(MouseKind::Drag(Button::Left), bottom_col, bottom_row);
+    assert_eq!(
+        fenced_report(MouseKind::Release, bottom_col, bottom_row),
+        Effect::Copy("let x = 1;".to_owned())
+    );
+
+    let mut linked = attached(width, height);
+    linked.set_opener(true);
+    linked.on_line(turn_started("[site](https://example.com)"));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&linked, area, &mut buf, None);
+    let link = linked
+        .visible_links(linked.conversation_area())
+        .into_iter()
+        .find(|link| link.url == "https://example.com")
+        .expect("prompt Markdown link");
+    let rect = link.rects.first().expect("link cells");
+    let id = crate::mouse::hit(&targets, rect.x, rect.y).expect("link target");
+    assert_eq!(
+        linked.on_click(id),
+        Effect::OpenLink("https://example.com".to_owned())
+    );
+}
+
+#[test]
 fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
     let mut app = with_reply(40, 20, TWO_BLOCKS);
     let first = row_of(&app, 40, 20, "rust").expect("first header");

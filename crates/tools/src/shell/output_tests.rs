@@ -12,7 +12,7 @@ use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
 use super::{
-    Errors, HELD_MAX, JobStream, Pending, Shared, escaped_len, lock, read_errors, read_output,
+    Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, read_errors, read_output,
 };
 
 struct Chunks(Vec<Vec<u8>>);
@@ -98,9 +98,17 @@ fn a_copy_under_the_cap_leaves_it_unfired_and_counts_toward_it() {
     assert!(lock(&shared.inner).cap_fired);
 }
 
-fn stream() -> (Arc<FakeClock>, Arc<JobDeltas>, JobStream, Shared) {
+/// The emitter a job's stream is handed and ignores: a job writes through
+/// the emitter it was built with.
+struct NoEmit;
+
+impl contract::emit::Emit for NoEmit {
+    fn emit(&self, _event: &contract::events::Event) {}
+}
+
+fn stream() -> (Arc<FakeClock>, Arc<JobDeltas>, PacedStream, Shared) {
     let deltas = Arc::new(JobDeltas::default());
-    let stream = JobStream::new(JobId("j_x".to_owned()), Arc::clone(&deltas) as _);
+    let stream = PacedStream::job(JobId("j_x".to_owned()), Arc::clone(&deltas) as _);
     (FakeClock::new(), deltas, stream, Shared::default())
 }
 
@@ -138,34 +146,34 @@ fn assert_same_bytes(actual: &[u8], expected: &[u8]) {
 fn the_first_change_goes_out_at_once_and_later_ones_collapse() {
     let (clock, deltas, mut stream, shared) = stream();
     queue(&shared, b"one");
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["one"]);
     assert_eq!(deltas.deltas()[0].0, JobId("j_x".to_owned()));
     assert_eq!(stream.deadline(), None);
 
     queue(&shared, b"two");
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     queue(&shared, b"three");
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (99 ms before the boundary) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (99 ms before the boundary) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(99));
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["one"]);
     assert_eq!(
         stream.deadline(),
         Some(clock.origin() + Duration::from_millis(100))
     );
 
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (100 ms at the boundary) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (100 ms at the boundary) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(1));
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["one", "twothree"]);
     assert_eq!(stream.deadline(), None);
 }
@@ -175,26 +183,26 @@ fn a_large_delta_pushes_the_next_one_out_by_its_size() {
     let (clock, deltas, mut stream, shared) = stream();
     // About 20 KiB encoded: 200 ms at 100 KiB/s, past the 100 ms floor.
     queue(&shared, &vec![b'a'; 20_480]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     queue(&shared, b"b");
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (190 ms into the large delta) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (190 ms into the large delta) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(190));
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(deltas.deltas().len(), 1);
     let due = stream.deadline().unwrap() - clock.origin();
     assert!(due > Duration::from_millis(190), "{due:?}");
     assert!(due < Duration::from_millis(260), "{due:?}");
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (260 ms past the large delta) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (260 ms past the large delta) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(70));
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(deltas.deltas().len(), 2);
 }
 
@@ -203,16 +211,16 @@ fn an_incomplete_character_waits_for_its_other_half() {
     let (clock, deltas, mut stream, shared) = stream();
     let bytes = "é".as_bytes();
     queue(&shared, &[b'a', bytes[0]]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["a"]);
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the incomplete character's 100 ms wait) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (the incomplete character's 100 ms wait) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(100));
     queue(&shared, &bytes[1..]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["a", "é"]);
 }
 
@@ -220,24 +228,121 @@ fn an_incomplete_character_waits_for_its_other_half() {
 fn the_flush_writes_what_is_held_and_an_incomplete_tail_lossily() {
     let (clock, deltas, mut stream, shared) = stream();
     queue(&shared, b"one");
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     queue(&shared, b"two");
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     queue(&shared, &[b'!', "é".as_bytes()[0]]);
-    stream.flush(&shared);
+    stream.flush(&shared, &NoEmit);
     assert_eq!(texts(&deltas), ["one", "two!\u{fffd}"]);
     assert!(lock(&shared.inner).pending.bytes.is_empty());
-    stream.flush(&shared);
+    stream.flush(&shared, &NoEmit);
     assert_eq!(deltas.deltas().len(), 2);
 }
 
 #[test]
 fn nothing_pending_emits_nothing() {
     let (clock, deltas, mut stream, shared) = stream();
-    stream.pass(&shared, clock.as_ref());
-    stream.flush(&shared);
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
+    stream.flush(&shared, &NoEmit);
     assert!(deltas.deltas().is_empty());
     assert_eq!(stream.deadline(), None);
+}
+
+fn call_stream() -> (Arc<FakeClock>, fakes::Recorder, PacedStream, Shared) {
+    (
+        FakeClock::new(),
+        fakes::Recorder::default(),
+        PacedStream::call(),
+        Shared::default(),
+    )
+}
+
+/// Queues `bytes` for the foreground call's stream, as its reader does.
+fn queue_call(shared: &Shared, bytes: &[u8]) {
+    lock(&shared.inner).stream.push(bytes);
+}
+
+/// The text of each `tool_call_delta` recorded, asserting each is text-only.
+fn call_texts(recorder: &fakes::Recorder) -> Vec<String> {
+    recorder
+        .events()
+        .into_iter()
+        .map(|event| {
+            let contract::events::Event::ToolCallDelta(progress) = event else {
+                panic!("only tool_call_delta streams: {event:?}");
+            };
+            assert_eq!(progress.details, None, "a text-only delta");
+            progress.text.expect("a delta carries text")
+        })
+        .collect()
+}
+
+#[test]
+fn a_call_stream_emits_tool_call_deltas_with_the_first_at_once_and_later_ones_held() {
+    let (clock, recorder, mut stream, shared) = call_stream();
+    queue_call(&shared, b"one");
+    stream.pass(&shared, clock.as_ref(), &recorder);
+    assert_eq!(call_texts(&recorder), ["one"]);
+    assert_eq!(stream.deadline(), None);
+
+    queue_call(&shared, b"two");
+    stream.pass(&shared, clock.as_ref(), &recorder);
+    queue_call(&shared, b"three");
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (99 ms before the boundary) (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_millis(99));
+    stream.pass(&shared, clock.as_ref(), &recorder);
+    assert_eq!(call_texts(&recorder), ["one"], "held inside the interval");
+    assert_eq!(
+        stream.deadline(),
+        Some(clock.origin() + Duration::from_millis(100))
+    );
+
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (100 ms at the boundary) (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_millis(1));
+    stream.pass(&shared, clock.as_ref(), &recorder);
+    assert_eq!(call_texts(&recorder), ["one", "twothree"]);
+    assert_eq!(stream.deadline(), None);
+}
+
+#[test]
+fn a_call_stream_flush_writes_what_is_held_and_an_incomplete_tail_lossily() {
+    let (clock, recorder, mut stream, shared) = call_stream();
+    queue_call(&shared, b"one");
+    stream.pass(&shared, clock.as_ref(), &recorder);
+    queue_call(&shared, b"two");
+    stream.pass(&shared, clock.as_ref(), &recorder);
+    queue_call(&shared, &[b'!', "é".as_bytes()[0]]);
+    stream.flush(&shared, &recorder);
+    assert_eq!(call_texts(&recorder), ["one", "two!\u{fffd}"]);
+    assert!(lock(&shared.inner).stream.bytes.is_empty());
+    stream.flush(&shared, &recorder);
+    assert_eq!(
+        call_texts(&recorder).len(),
+        2,
+        "a second flush adds nothing"
+    );
+}
+
+#[test]
+fn a_call_stream_reads_the_call_queue_and_a_job_stream_the_job_queue() {
+    let (clock, recorder, mut call, shared) = call_stream();
+    // Bytes queued for the job alone never reach a call's stream.
+    queue(&shared, b"job only");
+    call.pass(&shared, clock.as_ref(), &recorder);
+    assert!(call_texts(&recorder).is_empty());
+    // Bytes queued for the call alone never reach a job's stream.
+    let (job_clock, deltas, mut job, job_shared) = stream();
+    queue_call(&job_shared, b"call only");
+    job.pass(&job_shared, job_clock.as_ref(), &NoEmit);
+    assert!(deltas.deltas().is_empty());
 }
 
 #[test]
@@ -358,7 +463,7 @@ fn the_pace_is_the_encoded_event_length() {
     // Mixed escapes, past 10 KiB raw: the pace sits above the 100 ms floor.
     let text = "a\"\n\u{1}é".repeat(2000);
     queue(&shared, text.as_bytes());
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), [text.as_str()]);
     let event = Event::JobDelta(JobDelta {
         job_id: JobId("j_x".to_owned()),
@@ -371,7 +476,7 @@ fn the_pace_is_the_encoded_event_length() {
     let paced = Duration::from_nanos(encoded.saturating_mul(1_000_000_000) / 102_400)
         .max(Duration::from_millis(100));
     queue(&shared, b"b");
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(stream.deadline(), Some(clock.origin() + paced));
 }
 
@@ -419,7 +524,7 @@ proptest! {
 fn a_queue_of_exactly_64_kib_sends_it_all_in_one_delta() {
     let (clock, deltas, mut stream, shared) = stream();
     queue(&shared, &vec![b'a'; 65_536]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     let got = texts(&deltas);
     assert_eq!(got.len(), 1);
     assert_delta_eq(&got[0], &"a".repeat(65_536));
@@ -431,7 +536,7 @@ fn a_queue_of_one_byte_past_64_kib_sends_the_last_64_kib() {
     let mut queued = vec![b'X'];
     queued.extend_from_slice(&vec![b'a'; 65_536]);
     queue(&shared, &queued);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     let got = texts(&deltas);
     assert_eq!(got.len(), 1);
     assert_delta_eq(&got[0], &"a".repeat(65_536));
@@ -444,7 +549,7 @@ fn a_queue_cut_inside_a_two_byte_character_starts_at_the_next_lead_byte() {
     queued.extend_from_slice(&vec![b'a'; 65_535]);
     assert_eq!(queued.len(), 65_537);
     queue(&shared, &queued);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     let got = texts(&deltas);
     assert_eq!(got.len(), 1);
     assert_delta_eq(&got[0], &"a".repeat(65_535));
@@ -455,16 +560,16 @@ fn a_queue_cut_inside_a_two_byte_character_starts_at_the_next_lead_byte() {
 fn a_dropped_queue_discards_the_carried_tail() {
     let (clock, deltas, mut stream, shared) = stream();
     queue(&shared, &[b'a', "é".as_bytes()[0]]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["a"]);
     queue(&shared, &vec![b'b'; 65_537]);
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the dropped queue's 100 ms tail) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (the dropped queue's 100 ms tail) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(100));
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     let got = texts(&deltas);
     assert_eq!(got.len(), 2);
     assert_delta_eq(&got[1], &"b".repeat(65_536));
@@ -475,16 +580,16 @@ fn a_dropped_queue_discards_the_carried_tail() {
 fn a_kept_queue_keeps_the_carried_tail() {
     let (clock, deltas, mut stream, shared) = stream();
     queue(&shared, &[b'a', "é".as_bytes()[0]]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["a"]);
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the kept queue's 100 ms tail) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (the kept queue's 100 ms tail) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(100));
     queue(&shared, &"é".as_bytes()[1..]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["a", "é"]);
 }
 
@@ -492,20 +597,20 @@ fn a_kept_queue_keeps_the_carried_tail() {
 fn held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib() {
     let (clock, deltas, mut stream, shared) = stream();
     queue(&shared, b"one");
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["one"]);
     queue(&shared, &vec![b'a'; 40_000]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     queue(&shared, &vec![b'b'; 40_000]);
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     assert_eq!(texts(&deltas), ["one"], "nothing due yet");
-    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the capped tail's 100 ms wait) (ruling 6179406086).
+    // No code under test waits on the clock here; PacedStream::pass is a direct call that only reads the clock (the capped tail's 100 ms wait) (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_millis(100));
-    stream.pass(&shared, clock.as_ref());
+    stream.pass(&shared, clock.as_ref(), &NoEmit);
     let got = texts(&deltas);
     assert_eq!(got.len(), 2);
     let mut expected = "a".repeat(25_536);

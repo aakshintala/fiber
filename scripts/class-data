@@ -5,7 +5,7 @@
 # xtask/tests/class_data/slow-sessions-list.json from the benchmarks-<sha>
 # artifacts of main runs, through the same Actions artifact listing
 # scripts/stored-results uses. It keeps the artifacts whose CPU model is
-# in the named class (docs/performance.md, "The class columns") and writes
+# in the named class (`docs/performance.md`, "Budgets") and writes
 # the class JSON to stdout: [{"file": "main <short sha>", "cpu": "<raw cpu>",
 # "samples": [...]}], ordered by file, one object per line. Entries whose
 # artifacts have expired, and entries from non-main runs, stay in the
@@ -45,7 +45,7 @@ dir=${4:-}
 # The session_list slow ceiling covers both slow-class models (7763 and
 # 9V74, both SpeedClass::Slow in xtask/src/bench/judge.rs).
 slow_second_model="amd epyc 9v74 80-core processor"
-# The class's CPU model from docs/performance.md, "The class columns",
+# The class's CPU model from `docs/performance.md`, "Budgets",
 # lowercased: the file's cpu strings match case-insensitively.
 case $class in
   fast) model="amd epyc 9v45 96-core processor" ;;

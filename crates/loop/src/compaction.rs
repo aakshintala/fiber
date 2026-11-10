@@ -477,7 +477,7 @@ impl Loop {
         }
         // One pass's notices, grouped by code: the opening's, the
         // refreshed commands', and the resend's, so one pass raises one
-        // notice per code (`docs/errors.md`, "Notices").
+        // notice per code (`docs/errors.md`, "Registry").
         let mut batch = notices;
         batch.extend(command_notices);
         batch.extend(left_out);

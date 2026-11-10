@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 # Contract-free helpers depend only on `support` in the workspace
-# (docs/architecture.md, "The call rules").
+# (`docs/architecture.md`, "The call rules").
 [dependencies]
 support = { path = "../support" }
 rustix.workspace = true
@@ -16,7 +16,7 @@ serde_json.workspace = true
 signal-hook.workspace = true
 libc = "0.2"
 
-# The jig (docs/testing.md, "Jigs"): a binary jig tested by
+# The jig (`docs/testing.md`, "Jigs"): a binary jig tested by
 # `tests/provider_server_jig.rs`, which runs the built binary.
 [[example]]
 name = "provider-server"

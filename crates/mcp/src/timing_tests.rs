@@ -1,5 +1,4 @@
-//! The `mcp.connect` connection timer (`docs/state.md`, "Diagnostic
-//! logs"): one guard per actual connection attempt, from starting or
+//! The `mcp.connect` connection timer (`docs/state.md`, "What each part holds"): one guard per actual connection attempt, from starting or
 //! dialing the server until its tool list is in hand. Time comes from the
 //! injected clock through a recording callable, never a second production
 //! timer; every wait below names the test's one deadline, and the fake

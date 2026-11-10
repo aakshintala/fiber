@@ -396,7 +396,7 @@ impl Providers {
         // the same name: the merged list carries both in slug order, with
         // one notice per shadowed install, grouped by code with the
         // pass's other notices before it is written (`docs/errors.md`,
-        // "Notices").
+        // "Registry").
         // The merged inventory, however each entry is switched: provider
         // data eligibility stays with this loader, never with the
         // candidates' filter, so a disabled package's provider data still
@@ -1166,7 +1166,7 @@ impl Providers {
     /// declaration and source inventory, but its models, addendum,
     /// unconfigured entries and Lua handle leave, so `fiber models` and
     /// the pickers show no models for it without claiming none are
-    /// installed (`docs/model-routing.md`, "Model lists"). Reads only the
+    /// installed (`docs/model-routing.md`, "Model discovery"). Reads only the
     /// installed data, checking the process environment; never a runner,
     /// a VM or a full load. Runs before the placeholder fill, so
     /// providers without a credential never reach it: no per-model group

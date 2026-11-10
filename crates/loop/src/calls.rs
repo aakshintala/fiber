@@ -181,7 +181,7 @@ fn file_seen_of(details: &Option<Value>) -> Option<Value> {
 /// The `details` an `after_tool` hook is shown: the tool's own details
 /// without the reserved `file_seen` record (`docs/tools.md`, "Stale files").
 /// An object left empty by the removal is no `details`
-/// (`docs/extensions.md`, "after_tool").
+/// (`docs/extensions.md`, "The hook points").
 fn without_seen(details: Option<Value>) -> Option<Value> {
     match details {
         Some(Value::Object(mut object)) => {
@@ -201,7 +201,7 @@ fn without_seen(details: Option<Value>) -> Option<Value> {
 /// `after_tool` hook is not given `file_seen` and cannot replace it: the
 /// tool's own record wins over a hook's, as a hook replaces display data,
 /// never what the call saw. A hook may return any `details` value
-/// (`docs/extensions.md`, "after_tool"), but the history fold reads only
+/// (`docs/extensions.md`, "The hook points"), but the history fold reads only
 /// the reserved `details.file_seen` object (`docs/events.md`,
 /// `tool_call_completed`), so a non-object replacement is preserved under
 /// `value` beside the record: `details` stays an object carrying

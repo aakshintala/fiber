@@ -382,6 +382,7 @@ impl Loop {
                 | Delivery::AddDirectory(..)
                 | Delivery::Sandbox(..)
                 | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ExtensionJob(..)

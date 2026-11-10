@@ -1682,6 +1682,569 @@ fn the_status_rows_input_reads_a_waiting_count_only_above_zero() {
     assert_eq!(waiting_seen(true), (Some(1), Some(1)));
 }
 
+/// A delegate session id, distinct from every attached fixture.
+const DELEGATE: &str = "s_dddddddddddddddd";
+
+/// Folds job `job` with `description` as a `harness` delegate on the
+/// attached session.
+fn delegate_job(app: &mut App, job: &str, delegate: &str, harness: &str, description: &str) {
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        serde_json::json!({"job_id": job, "description": description,
+            "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": job, "delegate_session_id": delegate,
+            "harness": harness, "model": "delegate/model",
+            "workspace": "/w/delegate"}),
+    ));
+}
+
+/// Opens `job`'s item view through the panel: its delegate view when
+/// `delegate`, else its job view.
+fn open_item(app: &mut App, job: &str, delegate: bool) {
+    let serial = app
+        .serial_of_job(&contract::JobId(job.to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let spot = if delegate {
+        Spot::Delegate(serial)
+    } else {
+        Spot::Job(serial)
+    };
+    let _ = app.on_click(TargetId::Panel(spot));
+    assert!(app.item_open());
+}
+
+/// Closes the open item view through its header target.
+fn close_item(app: &mut App) {
+    let _ = app.on_click(TargetId::Item(crate::app::items::Spot::Close));
+    assert!(!app.item_open());
+}
+
+/// A `preamble_built` with a budget.
+fn preamble_budget(budget: Option<f64>) -> Line {
+    let mut payload = serde_json::json!({
+        "reason": "start", "model": "test/model", "context_window": 1000,
+        "trigger_at": 800, "thinking": "high",
+        "tool_choice": "auto", "cache_lifetime": "5m",
+        "system_prompt": "", "tools": [],
+    });
+    if let Some(budget) = budget {
+        payload["budget"] = budget.into();
+    }
+    session_line(SESSION, "preamble_built", payload)
+}
+
+/// A `session_status` with billed `cost`, a cache expiry and git.
+fn parent_status(cost: serde_json::Value, expiry: u64) -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 900, "cache_read": 100,
+                "cache_write": {"5m": 50}, "output": 200},
+                "cost": cost, "subscription_cost": 1.10},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0, "git": {"branch": "main"},
+            "context": {"tokens": 500, "window": 1000},
+            "cache_expires": expiry,
+        }),
+    )
+}
+
+/// A delegate `preamble_built` with a budget.
+fn delegate_preamble(budget: Option<f64>) -> Line {
+    let mut payload = serde_json::json!({
+        "reason": "start", "model": "two/model", "context_window": 4000,
+        "trigger_at": 3200, "thinking": "medium",
+        "tool_choice": "auto", "cache_lifetime": "5m",
+        "system_prompt": "", "tools": [],
+    });
+    if let Some(budget) = budget {
+        payload["budget"] = budget.into();
+    }
+    Line::Session(contract::Envelope {
+        kind: EventKind::from_name("preamble_built"),
+        session_id: contract::SessionId(DELEGATE.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A delegate `session_status` with billed `cost` and a cache expiry.
+fn delegate_status(cost: serde_json::Value, expiry: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: EventKind::from_name("session_status"),
+        session_id: contract::SessionId(DELEGATE.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "name": "delegate work", "workspace": "/two", "project": "-w",
+            "state": "streaming", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 10, "cache_read": 4,
+                "cache_write": {}, "output": 5},
+                "cost": cost, "subscription_cost": 0.01},
+            "model": "two/model", "delegates": 0, "jobs": 0, "clients": 0,
+            "context": {"tokens": 1500, "window": 4000},
+            "cache_expires": expiry,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// The status line's rows as text.
+fn line_texts(app: &App, width: u16) -> Vec<String> {
+    super::status(app, width)
+        .iter()
+        .map(|row| row.line.to_string())
+        .collect()
+}
+
+/// While a Fiber delegate's view is open the Session segments show its
+/// cost and cache; branch and tools stay the parent's
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_status_segments_show_the_delegate_cost_and_cache() {
+    use contract::clock::Clock;
+    let mut app = attached(100, 30);
+    app.on_line(preamble_budget(Some(5.0)));
+    app.on_line(parent_status(serde_json::json!(4.12), 600_000));
+    app.on_line(session_line(
+        SESSION,
+        "mcp_server_failed",
+        serde_json::json!({"server": "relay", "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    app.on_line(delegate_preamble(Some(2.5)));
+    app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
+    app.on_line(Line::Session(contract::Envelope {
+        kind: EventKind::from_name("mcp_server_failed"),
+        session_id: contract::SessionId(DELEGATE.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({"server": "down-delegate", "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    let clock = fakes::clock::FakeClock::new();
+    app.set_now(clock.now(), 0);
+    let lines = line_texts(&app, 100);
+    assert!(
+        lines.iter().any(|row| row.contains("$0.02 of $2.50")),
+        "the delegate spend against its budget: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|row| row.contains("$4.12")),
+        "no parent spend: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|row| row.contains("28%") && row.contains("42m")),
+        "the delegate cache share and countdown: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|row| row.contains("main")),
+        "the parent branch stays: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|row| row.contains("✗ relay down")),
+        "the parent tools stay: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|row| row.contains("down-delegate")),
+        "no delegate tools on the line: {lines:?}"
+    );
+}
+
+/// A seeded parent spend with a missing or null delegate cost never
+/// exposes the parent spend on the line.
+#[test]
+fn delegate_status_segments_unknown_cost_never_shows_the_parent_spend() {
+    use contract::clock::Clock;
+    let mut app = attached(100, 30);
+    app.on_line(preamble_budget(Some(5.0)));
+    app.on_line(parent_status(serde_json::json!(4.12), 600_000));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    let clock = fakes::clock::FakeClock::new();
+    app.set_now(clock.now(), 0);
+    // No delegate status at all: no cost and no cache segment, rather
+    // than the parent's.
+    let lines = line_texts(&app, 100);
+    assert!(
+        !lines
+            .iter()
+            .any(|row| row.contains("$4.12") || row.contains("$5.00")),
+        "no parent spend: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|row| row.contains("cache")),
+        "no parent cache: {lines:?}"
+    );
+    // A null delegate cost with a budget reads unknown against it, not
+    // the parent's spend.
+    app.on_line(delegate_preamble(Some(2.5)));
+    app.on_line(delegate_status(serde_json::json!(null), 2_550_000));
+    let lines = line_texts(&app, 100);
+    assert!(
+        lines.iter().any(|row| row.contains("unknown of $2.50")),
+        "the unknown delegate cost: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|row| row.contains("$4.12")),
+        "no parent spend: {lines:?}"
+    );
+}
+
+/// Esc restores the parent's segments; a job's view and another
+/// harness's delegate view keep the parent's everywhere.
+#[test]
+fn delegate_status_segments_restore_the_parent_on_close_and_ignore_other_views() {
+    use contract::clock::Clock;
+    let mut app = attached(100, 30);
+    app.on_line(preamble_budget(Some(5.0)));
+    app.on_line(parent_status(serde_json::json!(4.12), 600_000));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    app.on_line(delegate_preamble(Some(2.5)));
+    app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
+    let clock = fakes::clock::FakeClock::new();
+    app.set_now(clock.now(), 0);
+    assert!(
+        line_texts(&app, 100)
+            .iter()
+            .any(|row| row.contains("$0.02 of $2.50")),
+        "the delegate spend first"
+    );
+    close_item(&mut app);
+    let lines = line_texts(&app, 100);
+    assert!(
+        lines.iter().any(|row| row.contains("$4.12 of $5.00")),
+        "the parent spend is back: {lines:?}"
+    );
+    // A plain job's view keeps the parent's segments.
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        serde_json::json!({"job_id": "j_2", "description": "build",
+            "output_path": "/tmp/out"}),
+    ));
+    open_item(&mut app, "j_2", false);
+    let lines = line_texts(&app, 100);
+    assert!(
+        lines.iter().any(|row| row.contains("$4.12 of $5.00")),
+        "the parent spend under a job view: {lines:?}"
+    );
+    close_item(&mut app);
+    // Another harness's delegate view keeps the parent's segments.
+    delegate_job(
+        &mut app,
+        "j_3",
+        "s_eeeeeeeeeeeeeeee",
+        "claude",
+        "other work",
+    );
+    open_item(&mut app, "j_3", true);
+    let lines = line_texts(&app, 100);
+    assert!(
+        lines.iter().any(|row| row.contains("$4.12 of $5.00")),
+        "the parent spend under another harness: {lines:?}"
+    );
+}
+
+/// A renderer filling the status_rows slot with no lines, recording the
+/// Session card's model each call.
+#[derive(Debug, Default)]
+struct ModelRecorder {
+    seen: std::cell::RefCell<Vec<Option<String>>>,
+}
+
+impl crate::ext::Renderer for ModelRecorder {
+    fn name(&self) -> &str {
+        "model-recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "status_rows"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::StatusRows(rows) = input {
+            self.seen
+                .borrow_mut()
+                .push(rows.session.model.map(str::to_owned));
+        }
+        crate::ext::tests::decide("model-recorder", || Ok(Vec::new()))
+    }
+}
+
+/// Draws `app` at 160 by 30 with a model recorder on the status_rows
+/// slot, returning the Session card's model each call saw. A fresh
+/// install clears the slot cache, so every phase renders anew.
+fn model_seen(app: &mut App) -> Vec<Option<String>> {
+    let fake = std::rc::Rc::new(ModelRecorder::default());
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.use_renderer(renderer);
+    draw(app, 160, 30);
+    fake.seen.take()
+}
+
+/// While a Fiber delegate's view is open the status_rows extension input
+/// carries the delegate's model; after Esc it carries the parent's
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn the_status_rows_session_model_follows_the_open_delegate() {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    let parent = model_seen(&mut app);
+    assert_eq!(
+        parent.last(),
+        Some(&Some("test/model".to_owned())),
+        "the parent model first: {parent:?}"
+    );
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
+    let delegate = model_seen(&mut app);
+    assert_eq!(
+        delegate.last(),
+        Some(&Some("two/model".to_owned())),
+        "the delegate model while its view is open: {delegate:?}"
+    );
+    close_item(&mut app);
+    let back = model_seen(&mut app);
+    assert_eq!(
+        back.last(),
+        Some(&Some("test/model".to_owned())),
+        "the parent model after Esc: {back:?}"
+    );
+}
+
+/// A delegate `preamble_built` naming `window`.
+fn delegate_preamble_window(window: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: EventKind::from_name("preamble_built"),
+        session_id: contract::SessionId(DELEGATE.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "reason": "start", "model": "two/model",
+            "context_window": window, "trigger_at": 3200,
+            "thinking": "medium", "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// A delegate `session_status` like `delegate_status` but on `branch`.
+fn delegate_status_branch(cost: serde_json::Value, expiry: u64, branch: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: EventKind::from_name("session_status"),
+        session_id: contract::SessionId(DELEGATE.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "name": "delegate work", "workspace": "/two", "project": "-w",
+            "state": "streaming", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 10, "cache_read": 4,
+                "cache_write": {}, "output": 5},
+                "cost": cost, "subscription_cost": 0.01},
+            "model": "two/model", "delegates": 0, "jobs": 0, "clients": 0,
+            "git": {"branch": branch},
+            "context": {"tokens": 1500, "window": 4000},
+            "cache_expires": expiry,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// A delegate `mcp_server_failed` for `server`.
+fn delegate_mcp_down(server: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: EventKind::from_name("mcp_server_failed"),
+        session_id: contract::SessionId(DELEGATE.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({"server": server, "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// What the status_rows extension input carries for the Session card:
+/// its branch, model, down servers and context.
+#[derive(Debug, PartialEq)]
+struct SessionSeen {
+    branch: Option<Option<String>>,
+    model: Option<String>,
+    tools_down: Vec<String>,
+    context: Option<(u64, u64, Option<u64>)>,
+}
+
+/// A renderer filling the status_rows slot, recording the Session card
+/// each call.
+#[derive(Debug, Default)]
+struct SessionRecorder {
+    seen: std::cell::RefCell<Vec<SessionSeen>>,
+}
+
+impl crate::ext::Renderer for SessionRecorder {
+    fn name(&self) -> &str {
+        "session-recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "status_rows"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::StatusRows(rows) = input {
+            self.seen.borrow_mut().push(SessionSeen {
+                branch: rows.session.branch.map(|branch| match branch {
+                    crate::ext::BranchName::Named(name) => Some(name.to_owned()),
+                    crate::ext::BranchName::Detached => None,
+                }),
+                model: rows.session.model.map(str::to_owned),
+                tools_down: rows.session.tools_down.iter().cloned().collect(),
+                context: rows
+                    .session
+                    .context
+                    .map(|context| (context.tokens, context.window, context.trigger_at)),
+            });
+        }
+        crate::ext::tests::decide("session-recorder", || Ok(Vec::new()))
+    }
+}
+
+/// Draws `app` at 160 by 30 with a session recorder on the status_rows
+/// slot, returning the Session card each call saw. A fresh install
+/// clears the slot cache, so every phase renders anew.
+fn session_seen(app: &mut App) -> Vec<SessionSeen> {
+    let fake = std::rc::Rc::new(SessionRecorder::default());
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.use_renderer(renderer);
+    draw(app, 160, 30);
+    fake.seen.take()
+}
+
+/// While a Fiber delegate's view is open the status_rows extension input
+/// carries the delegate's branch, down servers and context: its status's
+/// git, its own down set, and its windowed fill (`docs/tui.md`, "Swapped
+/// views").
+#[test]
+fn the_status_rows_session_branch_tools_and_context_follow_the_open_delegate() {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    app.on_line(delegate_preamble(Some(2.5)));
+    app.on_line(delegate_status_branch(
+        serde_json::json!(0.02),
+        2_550_000,
+        "feature",
+    ));
+    app.on_line(delegate_mcp_down("down-delegate"));
+    let seen = session_seen(&mut app);
+    let card = seen.last().expect("a Session card");
+    assert_eq!(
+        card.branch,
+        Some(Some("feature".to_owned())),
+        "the delegate branch while its view is open: {seen:?}"
+    );
+    assert_eq!(
+        card.tools_down,
+        vec!["down-delegate".to_owned()],
+        "the delegate down set while its view is open: {seen:?}"
+    );
+    assert_eq!(
+        card.context,
+        Some((1500, 4000, Some(3200))),
+        "the delegate context while its view is open: {seen:?}"
+    );
+}
+
+/// A zero delegate window hides the Session context: the `> 0` filter
+/// drops it, while `== 0` and `>= 0` would keep it (`docs/tui.md`,
+/// "Swapped views").
+#[test]
+fn the_status_rows_session_context_hides_on_a_zero_delegate_window() {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber", "review the diff");
+    open_item(&mut app, "j_1", true);
+    app.on_line(delegate_preamble_window(0));
+    app.on_line(delegate_status(serde_json::json!(0.02), 2_550_000));
+    let seen = session_seen(&mut app);
+    let card = seen.last().expect("a Session card");
+    assert_eq!(
+        card.model,
+        Some("two/model".to_owned()),
+        "the delegate fold is open: {seen:?}"
+    );
+    assert_eq!(
+        card.context, None,
+        "no context on a zero delegate window: {seen:?}"
+    );
+}
+
 /// A decorating renderer on the status_rows slot is handed the built-in
 /// lines, so the figures the built-in draws reach the screen.
 #[test]

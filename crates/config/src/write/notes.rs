@@ -462,7 +462,7 @@ fn unread_keys(file: &Path) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
 /// layers, global first: a missing file covers nothing, while a present
 /// file with no readable `shell.read_only` is malformed. The read-only
 /// gather reads its suppression keys through this, so only `config` reads
-/// configuration files (docs/architecture.md, "Boundaries between modules").
+/// configuration files (`docs/architecture.md`, "The call rules").
 pub fn read_only_keys(
     home: &Path,
     project: &ProjectKey,

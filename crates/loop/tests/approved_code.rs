@@ -1,5 +1,5 @@
 //! What the session loads once its offer step has run, before its first
-//! preamble (`docs/extensions.md`, "Offering"): the post-offer load runs
+//! preamble (`docs/extensions.md`, "Code a repository ships"): the post-offer load runs
 //! once per process, writes its events before `preamble_built`, and never
 //! runs in a process that started with an inherited preamble.
 

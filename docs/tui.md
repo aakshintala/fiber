@@ -585,6 +585,18 @@ With the rail hidden and sessions waiting, the Session status card ends with "! 
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
+While a Fiber delegate's view is open the Session status card follows
+that delegate's figures: its title reads "◆ <description>", from the
+open job record, and every figure below it reads the delegate's own
+`session_status`, `preamble_built`, `model_changed`, `turn_completed`
+and `usage_recorded` lines. A value the delegate has not sent yet reads
+the unknown form above for it — a blank workspace, model and branch, an
+empty bar, dim dashes — never the attached session's. A finished
+delegate's view keeps its last status, every row dim, with the items
+outcome (`completed`, `failed` or `cancelled`) beside the permission
+mode; without a stored status it shows the delegate's calls and elapsed
+time instead. Esc returns the card to the attached session.
+
 The context bar is drawn against the window `session_status` reports and
 the compaction point the session's own `preamble_built` names. That window is
 the latest own build's `context_window`, or the inherited one when the
@@ -679,6 +691,17 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   shows one dim line under the path line instead: "No transcript for
   <harness> delegates". A finished delegate whose log is missing or
   unreadable shows "No transcript: <reason>", dim.
+
+While a Fiber delegate's view is open, the Session status card, the
+input box's status row and the status line's cost and cache segments
+follow that delegate's figures; changed files, Delegates, Jobs and Quota
+keep the attached session's. A value the delegate has not sent yet reads
+its unknown form there too, never the attached session's: a blank model
+and branch, an empty context bar, dim dashes for the figures, and no
+cost segment until its status lands. A finished delegate's card keeps
+its last status, dim, with the outcome beside the permission mode;
+without a stored status it shows the delegate's calls and elapsed time
+instead.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model
@@ -1257,8 +1280,10 @@ arrived after `sessions` was sent.
 
 ### Turns
 
-- **One card per turn.** Only the person's prompt floats above its card,
-  after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
+- **One card per turn.** Prompts render as Markdown like replies, except
+  headings retain their leading `#` marker. This applies to prompts in the
+  bubble and to labelled start/session messages in the card. Only the
+  person's prompt floats above its card, after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
   of the width: the text padded one column on each side, a ▐ stripe in
   `accent` at its right edge, and "you 14:12" dim and right-aligned under it.
   A blank row separates the bubble from the card. The card is a `turn` slab
@@ -2202,6 +2227,13 @@ through the `input_status` slot ("Extension seams").
   notice. A run's output shows at most 20 lines, then a "N more lines"
   row; clicking it, or Enter on it, opens the rest in place, and again
   closes it.
+  While it runs, the row shows the output so far, then `running`, dim in
+  `attention`, where the ending will go; the ending replaces it. A `!`
+  row appears once the session records the command's start, which comes
+  before the command runs: at once, during a turn's tool calls too, and
+  as a model response ends when one is streaming. A `!!` row appears
+  when it is sent. A run whose session ended before its end was written
+  shows no ending.
 
 ### Bindings
 

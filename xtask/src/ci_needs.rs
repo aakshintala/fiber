@@ -7,7 +7,7 @@
 pub(crate) const WORKFLOW: &str = ".github/workflows/ci.yml";
 /// The doc that names the report jobs, relative to the working directory.
 pub(crate) const CI_DOC: &str = "docs/ci.md";
-/// Jobs that report without gating `ci` directly; named in docs/ci.md,
+/// Jobs that report without gating `ci` directly; named in `docs/ci.md`,
 /// "The merge gate".
 pub(crate) const REPORT_JOBS: [&str; 9] = [
     "backstop_report",
