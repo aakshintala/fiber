@@ -232,10 +232,11 @@ fn a_named_recent_row_seeds_the_sender_label_and_a_statusless_row_keeps_it() {
     let out = app.on_line(accepted(&recent, json!({"sessions": [named_row]})));
     let scoped: Vec<Value> = commands(out)
         .into_iter()
-        .filter(|line| line["command"] == "recent")
+        .filter(|line| line["command"] == "recent" && !is_archived(line))
         .collect();
     // A project that first appears earns one scoped `recent` ask
-    // (`docs/tui.md`, "Home", "The session list").
+    // (`docs/tui.md`, "Home", "The session list"); the archived ask
+    // rides beside it.
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
@@ -328,10 +329,11 @@ fn an_unnamed_home_row_with_a_display_name_still_labels_by_sender_id() {
     let out = app.on_line(accepted(&recent, json!({"sessions": [unnamed_row]})));
     let scoped: Vec<Value> = commands(out)
         .into_iter()
-        .filter(|line| line["command"] == "recent")
+        .filter(|line| line["command"] == "recent" && !is_archived(line))
         .collect();
     // A project that first appears earns one scoped `recent` ask
-    // (`docs/tui.md`, "Home", "The session list").
+    // (`docs/tui.md`, "Home", "The session list"); the archived ask
+    // rides beside it.
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
@@ -665,7 +667,12 @@ fn a_status_after_hello_queues_one_scoped_ask() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask's shape.
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md`, "What the hub speaks" (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -733,9 +740,14 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     // The status folds into the rows, and passes through to the
-    // conversation below, queuing its project's scoped ask beside it.
+    // conversation below, queuing its project's scoped asks beside it.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask.
+    let queued: Vec<Value> = queued
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(queued.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(queued[0]["args"]["project"], "-w");
@@ -2304,8 +2316,12 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
         exited_in("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
         exited_in("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
     ];
-    // The unscoped answer fans out one scoped ask per project.
-    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    // The unscoped answer fans out one scoped ask of each kind per
+    // project; this test pins the exited asks.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 3);
     let (_, targets) = drawn_frame(&app);
@@ -3128,8 +3144,12 @@ fn a_click_on_more_expands_the_same_project_only() {
     .into_iter()
     .map(|(id, name, workspace, project)| exited_in(id, name, workspace, project))
     .collect::<Vec<_>>();
-    // The unscoped answer fans out one scoped ask per project.
-    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    // The unscoped answer fans out one scoped ask of each kind per
+    // project; this test follows the exited asks.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 2);
     let first_hidden = more_key(&app, "-w").expect("first project has more");
@@ -5378,10 +5398,15 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
     app.on_line(hello());
     // An unknown session names no row: no trigger.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // A live session's status queues its scoped ask, drained at once
-    // (`docs/tui.md`, "The session list": one ask in flight per project).
+    // A live session's status queues its scoped asks, drained at once
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project); this test follows the exited ask.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per project).
+    let queued: Vec<Value> = queued
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(queued.len(), 1);
     let first = line_id(&queued[0]).to_owned();
     // While in flight, the left marks dirty and sends nothing, keeping
@@ -5718,9 +5743,14 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
     app.on_line(hello());
     // `home_line` returns `None`, so the status reaches the session.
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
-    // `home_outgoing` drains the queued scoped ask.
+    // `home_outgoing` drains the queued scoped asks, one of each kind.
     let lines = commands(app.home_outgoing());
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask's shape.
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md`, "What the hub speaks" (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -5767,7 +5797,9 @@ fn list_shapes(app: &App) -> Vec<String> {
 
 /// Answers each scoped ask in `lines` with `total` and no rows.
 fn answer_scoped_empty(app: &mut App, lines: &[Value], total: usize) {
-    for line in lines {
+    // Only the exited asks answer: the archived asks stay in flight, so
+    // no archived head draws in these exited-shape tests.
+    for line in lines.iter().filter(|line| !is_archived(line)) {
         assert!(
             app.on_line(accepted(
                 line_id(line),
@@ -6602,8 +6634,9 @@ fn answer_value(app: &mut App, id: &str, result: Value) -> Vec<Value> {
 fn fanout_projects(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
+        .filter(|line| !is_archived(line))
         .map(|line| {
-            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`).
+            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`; the archived asks ride beside these).
             assert_eq!(line["command"], "recent");
             line["args"]["project"]
                 .as_str()
@@ -6659,8 +6692,12 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
         assert!(line["args"].get("before").is_none());
     }
     // `docs/tui.md`, "The session list" (one ask per project): the two new projects'
-    // asks carry distinct ids; request order is open.
-    let mut ids: Vec<&str> = lines.iter().map(line_id).collect();
+    // exited asks carry distinct ids; request order is open.
+    let mut ids: Vec<&str> = lines
+        .iter()
+        .filter(|line| !is_archived(line))
+        .map(line_id)
+        .collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 2);
