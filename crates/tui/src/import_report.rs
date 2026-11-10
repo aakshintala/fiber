@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
+use contract::commands::ImportSource;
 use contract::events::{ImportedNames, LeftBehindEntry};
 
 use crate::app::{App, Effect};
@@ -27,35 +28,16 @@ use crate::view::overlay::{self, Place, Row};
 /// (`docs/tui.md`, "Overlays").
 pub(crate) const PREFER: u16 = 71;
 
-/// Which harness an `/import` copies: the named source, or both for
-/// a bare `/import`. The answer's report is titled from it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ImportSource {
-    ClaudeCode,
-    Codex,
-    Both,
-}
-
-impl ImportSource {
-    /// The source `/import <arg>` names: empty means both, anything
-    /// else the hub refuses. The caller trims.
-    pub(crate) fn parse(arg: &str) -> Option<Self> {
-        match arg {
-            "" => Some(Self::Both),
-            "claude-code" => Some(Self::ClaudeCode),
-            "codex" => Some(Self::Codex),
-            _ => None,
-        }
-    }
-
-    /// The report title's source: the harness name, or `None` for a
-    /// bare `/import` covering both.
-    pub(crate) fn arg(self) -> Option<&'static str> {
-        match self {
-            Self::ClaudeCode => Some("claude-code"),
-            Self::Codex => Some("codex"),
-            Self::Both => None,
-        }
+/// The `/import` argument's source as the pending entry carries it:
+/// `None` for a bare `/import` covering both sources, one contract
+/// source for a named one. The caller trims; anything else parses to
+/// nothing and is refused before anything is sent.
+pub(crate) fn parse_import(arg: &str) -> Option<Option<ImportSource>> {
+    match arg {
+        "" => Some(None),
+        "claude-code" => Some(Some(ImportSource::ClaudeCode)),
+        "codex" => Some(Some(ImportSource::Codex)),
+        _ => None,
     }
 }
 

@@ -12,7 +12,9 @@ use ratatui::style::{Modifier, Style};
 use contract::events::EventKind;
 use contract::events::{ImportedNames, LeftBehindEntry};
 
-use super::{ImportReport, ImportSource, PREFER, title_for};
+use contract::commands::ImportSource;
+
+use super::{ImportReport, PREFER, parse_import, title_for};
 
 use crate::app::commands::commands_testkit::{attached, enter, now, painted, sent, session_line};
 use crate::app::{App, Effect};
@@ -726,16 +728,16 @@ fn text_of(row: &Row) -> String {
 
 #[test]
 fn import_source_parses_the_named_sources() {
-    assert_eq!(ImportSource::parse(""), Some(ImportSource::Both));
+    // A bare `/import` covers both sources, so it parses to no typed
+    // source; a named source parses to its contract variant; anything
+    // else parses to nothing and is refused before anything is sent.
+    assert_eq!(parse_import(""), Some(None));
     assert_eq!(
-        ImportSource::parse("claude-code"),
-        Some(ImportSource::ClaudeCode)
+        parse_import("claude-code"),
+        Some(Some(ImportSource::ClaudeCode))
     );
-    assert_eq!(ImportSource::parse("codex"), Some(ImportSource::Codex));
+    assert_eq!(parse_import("codex"), Some(Some(ImportSource::Codex)));
     for arg in ["vim", "Codex", "both", "codex "] {
-        assert_eq!(ImportSource::parse(arg), None, "{arg}");
+        assert_eq!(parse_import(arg), None, "{arg}");
     }
-    assert_eq!(ImportSource::ClaudeCode.arg(), Some("claude-code"));
-    assert_eq!(ImportSource::Codex.arg(), Some("codex"));
-    assert_eq!(ImportSource::Both.arg(), None);
 }

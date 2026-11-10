@@ -16,7 +16,7 @@ use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, Surface, session_line};
 use crate::editor::{OpenFile, Target};
-use crate::import_report::ImportSource;
+use crate::import_report::parse_import;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
 use crate::keys::{Edit, Key};
@@ -447,18 +447,22 @@ fn run_sandbox(app: &mut App, rest: &str) -> Option<Effect> {
 }
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
-    // A bare `/import` imports both sources; anything else goes out as
-    // `source`, and the session refuses what it does not take. The
-    // source rides beside the pending entry under the command's id, so
-    // the accepted answer's report names it; a bare import reports the
-    // generic title.
+    // A bare `/import` imports both sources; a named source imports
+    // that one; anything else is refused locally naming the two, with
+    // the draft kept and nothing sent — the same outcome as the
+    // session's refusal, without a round trip. The source rides beside
+    // the pending entry under the command's id, so the accepted
+    // answer's report names it; a bare import reports the generic
+    // title.
     let rest = rest.trim();
-    let source = (!rest.is_empty()).then(|| rest.to_owned());
-    // The entry carries the import's source, so the accepted answer's
-    // report names it; an unknown source stays a plain command, and
-    // its accept opens no report.
-    let kind = ImportSource::parse(rest).map_or(Kind::Command, Kind::Import);
-    let (effect, _) = app.send_kind(kind, Command::Import(ImportArgs { source }));
+    let Some(source) = parse_import(rest) else {
+        app.push_notice(
+            ErrorCode::InvalidArguments,
+            "`source` must be `claude-code` or `codex`.".to_owned(),
+        );
+        return Some(Effect::None);
+    };
+    let (effect, _) = app.send_kind(Kind::Import(source), Command::Import(ImportArgs { source }));
     Some(effect)
 }
 
