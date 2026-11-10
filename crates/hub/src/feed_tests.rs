@@ -307,7 +307,7 @@ fn a_delegate_never_reaches_a_subscriber_and_is_not_connected_again() {
 }
 
 /// The snapshot's closing keepers line, empty: no probe is set in
-/// these tests.
+/// these tests (`docs/events.md`, "Hub feed").
 fn assert_keepers_empty(sub: &mut Sub) {
     let line = sub.next("the keepers line");
     assert_eq!(line["kind"], "keepers");
@@ -600,7 +600,7 @@ fn an_oversized_snapshot_arrives_whole_before_later_changes() {
         );
     }
     // The snapshot closes with the keepers line; a later change
-    // follows it.
+    // follows it (`docs/events.md`, "Hub feed").
     {
         let mut text = String::new();
         read.read_line(&mut text)
