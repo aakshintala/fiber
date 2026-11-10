@@ -486,6 +486,7 @@ impl Loop {
                 escalation: Some(escalation),
                 rule: rule_offer(&under.prepared.effects),
             },
+            under.prepared.rewrite(),
         )? {
             Asked::Allow => {
                 self.consecutive = 0;

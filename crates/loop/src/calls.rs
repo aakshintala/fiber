@@ -733,6 +733,7 @@ impl Loop {
                 AskStep::StandingAsk {
                     standing_rule: rule,
                 },
+                prepared.rewrite(),
             )? {
                 Asked::Allow => Ok(Ok(prepared)),
                 Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
@@ -1318,7 +1319,8 @@ impl Loop {
 
     /// Asks a person about a call, then waits for their reply as
     /// [`Loop::await_answer`] does (`docs/permissions.md`, "What the log
-    /// records").
+    /// records"). The request carries the prepared call's rewrite, so the
+    /// person judges the arguments that will run.
     pub(crate) fn ask(
         &mut self,
         id: &ActionId,
@@ -1326,17 +1328,21 @@ impl Loop {
         tool: &str,
         effects: &Effects,
         step: AskStep,
+        rewrite: (Option<Map<String, Value>>, Option<Vec<String>>),
     ) -> Result<Asked, Error> {
         if !self.answerable {
             // Step 7 checks `answerable` before asking; only a standing
             // ask reaches this denial.
             return Ok(Asked::Gone(self.unanswerable(id, turn)?));
         }
+        let (arguments, changed_by) = rewrite;
         let request = PermissionRequested {
             always_reviewed: effects.always_reviewed,
             request_id: RequestId(super::mint("r_")),
             declared: effects.declared.clone(),
             step,
+            arguments,
+            changed_by,
         };
         self.append(&Event::PermissionRequested(request.clone()), turn, Some(id))?;
         self.await_answer(id, turn, tool, &request, effects.hosts.clone())
