@@ -1813,7 +1813,7 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_through_on_mouse() {
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::Exit(_)
-        | Effect::ExitTracked(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::ListFiles
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }

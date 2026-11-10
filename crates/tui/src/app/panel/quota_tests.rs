@@ -289,7 +289,7 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
         | crate::app::Effect::Exit(_)
-        | Effect::ExitTracked(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_) => Vec::new(),

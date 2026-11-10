@@ -1137,7 +1137,7 @@ fn item_opened(app: &mut App) {
             .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
-            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{sent.line}: {err}")))
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
@@ -1146,7 +1146,7 @@ fn item_opened(app: &mut App) {
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
         | crate::app::Effect::Exit(_)
-        | Effect::ExitTracked(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)

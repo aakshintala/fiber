@@ -944,7 +944,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .collect(),
         Effect::SendTracked(sents) => sents
             .iter()
-            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{sent.line}: {err}")))
             .collect(),
         Effect::None
         | Effect::Quit
@@ -4897,7 +4897,7 @@ fn stop(app: &mut App) -> Vec<Value> {
             .collect(),
         Effect::SendTracked(sents) => sents
             .iter()
-            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{sent.line}: {err}")))
             .collect(),
         Effect::None
         | Effect::Quit
