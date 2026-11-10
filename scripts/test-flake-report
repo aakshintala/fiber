@@ -874,6 +874,23 @@ expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
 
+# The partial collate artifact carries only the available titles: with
+# one decision plus one classification for the available title, the
+# writer files exactly once for it and names no missing leg as an
+# error in the summary.
+setup_case partial-available-title
+printf '%s\n' "$decide_new" >"$tmp/partial-available-title/decisions.jsonl"
+code=$(classify_case "$tmp/partial-available-title" push "" "" "")
+expect_exit partial-available-title-classify "$code" 0
+code=$(run_step "$tmp/partial-available-title" push "" "$empty_open" "" decisions.jsonl)
+expect_exit partial-available-title "$code" 0
+expect_writes "$tmp/partial-available-title" 1
+expect_write "$tmp/partial-available-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$plain" "$push_tested")")"
+# The summary holds only the stub's empty-create-output note (the stub
+# prints no issue URL, so no overflow was filed): no line names a
+# missing leg as an error.
+expect_summary "$tmp/partial-available-title" "unknown create output: no overflow filed for $title"
+
 # A missing history input fails the decide step, and the writer then
 # files nothing: a failed rev-parse of the second parent, a failed diff,
 # and a missing origin/main ref each end the classify block non-zero
