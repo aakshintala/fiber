@@ -773,6 +773,20 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "read"},
+            "arguments": {"path": "b.txt"}, "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "read"},
+            "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
             json!({"request_id": "r", "effects": ["executes"],
             "reversible": false, "always_reviewed": true, "step": "review"}),
         ),
@@ -1424,6 +1438,56 @@ fn a_compaction_note_is_the_actions_or_a_hook_text_never_both() {
     let extension_without_hook = json!({"outcome": "completed", "extension": "e",
         "tokens_before": 9});
     assert!(read("compaction_completed", extension_without_hook).is_err());
+}
+
+#[test]
+fn permission_requested_arguments_read_with_and_without_changed_by() {
+    let base = || {
+        json!({"request_id": "r", "effects": ["reads"], "reversible": true,
+        "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "read"}})
+    };
+    let read_request = |payload: Value| match read("permission_requested", payload).unwrap() {
+        Some(Event::PermissionRequested(requested)) => requested,
+        other => panic!("not a permission_requested: {other:?}"),
+    };
+    // Arguments with changed_by: the rewrite and who rewrote it.
+    let mut rewritten = base();
+    rewritten["arguments"] = json!({"path": "b.txt"});
+    rewritten["changed_by"] = json!(["fiber.test/guard"]);
+    let requested = read_request(rewritten.clone());
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("path".to_owned(), json!("b.txt"));
+    assert_eq!(requested.arguments, Some(arguments));
+    assert_eq!(
+        requested.changed_by,
+        Some(vec!["fiber.test/guard".to_owned()])
+    );
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        rewritten
+    );
+    // Changed_by alone: no arguments, and the key stays on the wire.
+    let mut unattributed = base();
+    unattributed["changed_by"] = json!(["fiber.test/guard"]);
+    let requested = read_request(unattributed.clone());
+    assert_eq!(requested.arguments, None);
+    assert_eq!(
+        requested.changed_by,
+        Some(vec!["fiber.test/guard".to_owned()])
+    );
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        unattributed
+    );
+    // Neither key: an old payload reads with both absent and writes back
+    // unchanged.
+    let requested = read_request(base());
+    assert_eq!(requested.arguments, None);
+    assert_eq!(requested.changed_by, None);
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        base()
+    );
 }
 
 #[test]
