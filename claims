@@ -507,3 +507,7 @@ docs/testing/fakes.md	fiber-4504	plan	2026-11-10T01:48:12Z	Amoghs-MacBook-Pro:/U
 crates/tui/src/app/panel.rs	fiber-4496	grant	2026-11-10T02:12:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4496-context-fold-wait	
 crates/cli/src/sessions_tests.rs	fiber-4489	plan	2026-11-10T02:14:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4505
 crates/tui/src/view/input_box.rs	fiber-4496	grant	2026-11-10T02:41:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4496-context-fold-wait	
+crates/main/tests/support/review_sweep.rs	fiber-4504	plan	2026-11-10T02:43:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/examples/review_sweep.rs	fiber-4504	plan	2026-11-10T02:43:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/review_sweep.rs	fiber-4504	plan	2026-11-10T02:43:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/compiled_in.rs	fiber-4504	plan	2026-11-10T02:43:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
