@@ -1,22 +1,25 @@
-//! The cursor cell: the covered character drawn in the slab's colour on
-//! the text colour, or a block in the text colour past the last character
+//! The cursor cell: the covered character drawn reversed, or a block
+//! in the text colour past the last character
 //! (`docs/tui.md`, "The input box").
 
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 
 use crate::theme::Role;
 
 /// The cursor's symbol and style for `covered`, the complete cell symbol
-/// under the caret, or for the past-end position: the covered symbol in
-/// the slab's colour on the text colour, or a block in the text colour.
-/// No modifier either way: the explicit colours carry the cursor on both
-/// themes, and a span naming its own background keeps it over the frame's
-/// tint (`docs/tui.md`, "The input box").
-pub(crate) fn cursor_cell(covered: Option<&str>, slab: Role, text: Role) -> (String, Style) {
+/// under the caret, or for the past-end position: the covered symbol
+/// reversed over its own colours, or a block in the text colour. The
+/// reversal carries the cursor on both themes, where explicit colours
+/// would paint the terminal background in the dark theme, and a span
+/// naming its own background keeps it over the frame's tint
+/// (`docs/tui.md`, "The input box"). The slab role stays for arity so
+/// the call sites compile unchanged; the covered arm inverts the cell's
+/// own colours and reads no role.
+pub(crate) fn cursor_cell(covered: Option<&str>, _slab: Role, text: Role) -> (String, Style) {
     match covered {
         Some(symbol) => (
             symbol.to_owned(),
-            Style::new().fg(slab.color()).bg(text.color()),
+            Style::new().add_modifier(Modifier::REVERSED),
         ),
         None => ("█".to_owned(), Style::new().fg(text.color())),
     }
@@ -45,15 +48,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn covered_keeps_the_symbol_in_the_slab_colour_on_the_text() {
+    fn covered_is_exactly_the_reversal_with_no_explicit_pair() {
         let (symbol, style) = cursor_cell(Some("b"), Role::Surface, Role::Text);
         assert_eq!(symbol, "b");
-        assert_eq!(
-            style,
-            Style::new()
-                .fg(Role::Surface.color())
-                .bg(Role::Text.color())
-        );
+        assert_eq!(style, Style::new().add_modifier(Modifier::REVERSED));
     }
 
     #[test]

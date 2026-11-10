@@ -1910,8 +1910,8 @@ fn needle_start(screen: &Grid, needle: &str) -> Option<(u16, u16)> {
 
 /// One cursor journey at 160x48 in truecolour: "abc" typed, the past-end
 /// block in the text colour on the slab, then two steps left, and the
-/// covered "b" in the slab colour on the text colour while its neighbours
-/// keep theirs (`docs/tui.md`, "The input box").
+/// covered "b" keeping its own colours and inverting them while its
+/// neighbours keep theirs (`docs/tui.md`, "The input box").
 fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour) {
     let setup = Setup::new();
     support::write_json(
@@ -1963,10 +1963,10 @@ fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour
             a.symbol == "a"
                 && a.bg == surface
                 && b.symbol == "b"
-                && b.fg == surface
-                && b.bg == text
+                && b.fg == a.fg
+                && b.bg == a.bg
+                && b.inverse
                 && !b.dim
-                && !b.inverse
                 && c.symbol == "c"
         })
     });
@@ -1982,12 +1982,11 @@ fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour
         (a.symbol.as_str(), b.symbol.as_str(), c.symbol.as_str()),
         ("a", "b", "c")
     );
-    assert_eq!(b.fg, surface, "the covered cell takes the slab colour");
-    assert_eq!(b.bg, text, "the covered cell takes the text colour");
-    assert_eq!(b.fg, a.bg, "the cursor swaps against its neighbours");
+    assert_eq!(b.fg, a.fg, "the covered cell keeps its colours");
+    assert_eq!(b.bg, a.bg, "the covered cell keeps its colours");
     assert_eq!(a.bg, surface, "the neighbours keep the slab");
+    assert!(b.inverse, "the covered cell inverts");
     assert!(!b.dim, "no dim marks the cursor");
-    assert!(!b.inverse, "no reverse marks the cursor");
     // One Ctrl+C clears the draft, and the usual sequence quits from
     // the empty box.
     run.write(b"\x03");
