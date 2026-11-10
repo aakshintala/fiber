@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::{START_BOUND, WarmedJig, stale_evidence, warm_up, warm_up_within};
+use super::{START_BOUND, WarmedJig, assert_jig_fresh, stale_evidence, warm_up, warm_up_within};
 use crate::{MUST_SUCCEED_WITHIN, TempDir, fifo};
 
 #[test]
@@ -279,6 +279,53 @@ fn a_missing_dep_info_skips_the_check() {
         stale_evidence(&binary).is_none(),
         "no dep-info file means unchecked, never stale"
     );
+}
+
+#[test]
+fn a_missing_git_ref_path_is_fresh() {
+    let dir = TempDir::new("fiber-jig-missing-git-ref");
+    let binary = stand_in(&dir, binary_mtime());
+    // A packed ref has no loose file, so the dep-info lists a path that
+    // stays missing on a fresh build; it names the watched ref, not a
+    // source, so the binary is fresh. Fails at the freshness refusal
+    // until the check skips inputs under the git dir.
+    let missing_ref = dir.path().join(".git/refs/heads/topic");
+    write_dep_info(&binary, &[escaped(&missing_ref)]);
+    assert_jig_fresh(&binary);
+}
+
+#[test]
+fn a_newer_git_ref_path_is_fresh() {
+    let dir = TempDir::new("fiber-jig-newer-git-ref");
+    let binary = stand_in(&dir, binary_mtime());
+    // A commit after the build leaves the loose ref newer than the
+    // binary; it still names the watched ref, not a source, so the
+    // binary is fresh. Fails at the freshness refusal until the check
+    // skips inputs under the git dir.
+    let git_dir = dir.path().join(".git/refs/heads");
+    fs::create_dir_all(&git_dir).unwrap();
+    let newer_ref = git_dir.join("topic");
+    fs::write(&newer_ref, "ref").unwrap();
+    set_mtime(&newer_ref, binary_mtime() + Duration::from_secs(60));
+    write_dep_info(&binary, &[escaped(&newer_ref)]);
+    assert_jig_fresh(&binary);
+}
+
+#[test]
+fn a_dot_git_substring_outside_a_component_still_refuses() {
+    let dir = TempDir::new("fiber-jig-git-substring");
+    let binary = stand_in(&dir, binary_mtime());
+    // Only a whole `.git` path component is skipped: a source whose name
+    // merely contains that string is still staleness evidence.
+    let dot_dir = dir.path().join("my.gitignore");
+    fs::create_dir(&dot_dir).unwrap();
+    let source = dot_dir.join("x.rs");
+    fs::write(&source, "source").unwrap();
+    set_mtime(&source, binary_mtime() + Duration::from_secs(60));
+    write_dep_info(&binary, &[escaped(&source)]);
+    let stale =
+        stale_evidence(&binary).expect("a newer source whose name merely contains `.git` is stale");
+    assert_eq!(stale, source, "the refusal names the newer source");
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
