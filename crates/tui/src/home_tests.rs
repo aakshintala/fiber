@@ -454,6 +454,26 @@ fn a_left_for_an_unknown_session_changes_nothing() {
 }
 
 #[test]
+fn a_left_for_an_archived_row_keeps_the_project_s_other_archived_rows() {
+    let mut sessions = Sessions::default();
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![
+            recent_row("s_a", "a", "exited", None),
+            recent_row("s_b", "b", "exited", None),
+        ]))
+        .0,
+    );
+    sessions.note_archived_total(PROJECT, 2);
+    sessions.left(&SessionId("s_a".to_owned()), Left::Exited);
+    // Only the leaving id drops out of the archived map: dropping the
+    // cleanup's `!` keeps just empty rows and fails the assertions below.
+    assert!(!sessions.is_archived(&SessionId("s_a".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_b".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
 fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
     let mut sessions = Sessions::default();
     sessions.status(from_status(&envelope(
