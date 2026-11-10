@@ -103,6 +103,8 @@ fn run(argv: &[String]) -> Result<(), String> {
                         );
                     }
                 }
+                // Each row carries the src column beside its entry, so set
+                // rows and dir rows stay apart under twin ids.
                 let rows: Vec<sweep::Sourced> = entries
                     .iter()
                     .zip(srcs.iter())

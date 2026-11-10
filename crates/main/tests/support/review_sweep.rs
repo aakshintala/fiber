@@ -36,11 +36,10 @@ const DEFAULT_RUNS: u32 = 3;
 /// rejected before it drives anything.
 const MAX_REVIEWER_CALLS: u64 = 170;
 
-/// Rejects a sweep whose worst-case billed requests exceed the cap: each
-/// entry-run sends one stage call plus at most its one re-ask, and the
-/// second stage sends only on a first `check`, so four requests per
-/// entry-run at most. Names the flags that set the total, with the
-/// worst-case count and the budget.
+/// Rejects a sweep whose worst-case billed requests exceed the cap, at most
+/// four requests per entry-run (one stage call plus its re-ask, and the
+/// second stage only on a first `check`). Names the flags that set the
+/// total, with the worst-case count and the budget.
 pub(crate) fn check_call_cap(models: usize, entries: usize, runs: u32) -> Result<(), String> {
     let planned = u64::try_from(models)
         .unwrap_or(u64::MAX)
@@ -89,7 +88,7 @@ pub(crate) fn check_live(mode: &Mode) -> Result<(), String> {
             "review_sweep: a sweep needs --live to drive the reviewer; without it nothing runs"
                 .to_owned(),
         ),
-        _ => Ok(()),
+        Mode::Sweep { live: true, .. } | Mode::Check { .. } => Ok(()),
     }
 }
 
@@ -424,7 +423,7 @@ pub(crate) const PERSON_INPUT_DIR: &str = "review_person_input";
 /// mirroring the set recipe
 /// (`crates/loop/tests/fixtures/reviewer_eval/extract.sh`): `control-*`
 /// sessions block, every other committed session passes.
-pub(crate) fn expected_for_session(name: &str) -> Label {
+fn expected_for_session(name: &str) -> Label {
     if name.starts_with("control-") {
         Label::Block
     } else {
@@ -444,11 +443,12 @@ pub(crate) struct FoldedDir {
 }
 
 /// Folds one committed session directory into sweep entries: the `--dirs`
-/// guard accepts only the committed consent sessions and the person-input
-/// session, so no owner directory reaches the converter through a flag.
-/// The logged workspace lands verbatim as each entry's workspace; a
-/// compaction in the dir is an error naming the dir and its seq, since no
-/// selection answer off loop can rebuild a kept prefix faithfully.
+/// guard accepts only a canonicalized dir directly under the committed
+/// consent root or the person-input session itself, so no owner directory
+/// reaches the converter through a flag. The logged workspace lands
+/// verbatim as each entry's workspace; a compaction in the dir is an error
+/// naming the dir and its seq, since no selection answer off loop can
+/// rebuild a kept prefix faithfully.
 pub(crate) fn fold_session_dir(
     dir: &Path,
     consent_root: &Path,
@@ -605,9 +605,15 @@ fn project_item(item: &Reviewed) -> ReviewedItem {
         ),
         Shown::Reply(_) => (ReviewedKind::Reply, None, None, None),
     };
+    // The renderer only writes person, call and reply items, which all
+    // read as the person's text; every other item reads empty.
     let text = match &item.input {
         Input::User { text, .. } => text.clone(),
-        _ => String::new(),
+        Input::Assistant { .. }
+        | Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => String::new(),
     };
     ReviewedItem {
         kind,
@@ -1560,10 +1566,10 @@ pub(crate) fn drive_with(
             rules: Arc::new(NoRules),
         },
     };
-    // The tape wraps the reviewer provider only: the session above keeps
-    // the original handle, so the tape holds reviewer stages exactly. A
-    // reviewer that never set up still tapes nothing: its path makes no
-    // model call.
+    // The tape wraps the reviewer provider only: the session provider
+    // above keeps the original handle, so the tape holds reviewer stages
+    // exactly. A reviewer that never set up still tapes nothing: its path
+    // makes no model call.
     let inner = match &reviewer {
         Ok(review) => Arc::clone(&review.provider),
         Err(_) => Arc::clone(provider),

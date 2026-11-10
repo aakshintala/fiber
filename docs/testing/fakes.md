@@ -244,3 +244,5 @@ provider.
 An eval measures the model plus Fiber's prompting as a pass rate over many
 runs. It is a development instrument for prompts and tool definitions. No eval
 gates a merge or a release.
+
+Run the reviewer gate as three sweep commands, one per candidate model: `cargo run -p main --example review_sweep -- --models <model> --set crates/loop/tests/fixtures/reviewer_eval/calls.jsonl --dirs <each of the 16 reviewer_consent sessions> --runs 1 --live`. Each command drives the same 42 entries once (the 25 set rows plus the 17 consent-dir folds, with the `review_person_input` dir dropped so the three tables compare), worst case 42 times 4 is 168 billed requests against the 170 budget, and prints one table row per call with a `src` column telling set rows from dir rows, the verdict of each run, and the token and latency totals. The sweep drives the reviewer only behind the explicit `--live` flag and never runs in CI.

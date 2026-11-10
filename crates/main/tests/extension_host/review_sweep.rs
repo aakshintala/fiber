@@ -237,7 +237,7 @@ fn the_call_cap_holds_the_planned_sweep() {
 
 #[test]
 fn the_call_cap_rejects_a_sweep_above_170_naming_runs() {
-    let error = match check_call_cap(2, 24, 4) {
+    let error = match check_call_cap(2, 24, 3) {
         Err(error) => error,
         Ok(()) => panic!("576 worst-case requests refuse"),
     };
@@ -373,11 +373,6 @@ fn check_call_cap_refuses_forty_three_entries_one_run() {
     assert!(error.contains("170"), "{error}");
 }
 
-/// How long the built sweep binary may take once started: a refusal exits
-/// fast, and the nextest timeout stays the outermost case
-/// (`docs/testing.md`, "Waits and timeouts").
-const SWEEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// The example `cargo test` built beside this test binary, so the test
 /// starts no cargo and waits on no build lock.
 fn example_path() -> fakes::WarmedJig {
@@ -388,7 +383,9 @@ fn example_path() -> fakes::WarmedJig {
 }
 
 /// Runs the built `review_sweep` binary with `args`, reaping it on every
-/// path: the refusals below exit fast, and a hang fails naming the wait.
+/// path: the refusals below exit fast, so ten seconds covers the exchange
+/// with the nextest timeout the outermost case (`docs/testing.md`, "Waits
+/// and timeouts"), and a hang fails naming the wait.
 fn run_sweep(args: &[&str]) -> std::process::Output {
     use std::os::unix::process::CommandExt;
     let warmed = example_path();
@@ -404,7 +401,7 @@ fn run_sweep(args: &[&str]) -> std::process::Output {
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match fakes::Deadline::after(SWEEP_DEADLINE).recv(&finished) {
+    let output = match fakes::Deadline::after(std::time::Duration::from_secs(10)).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => {
             fakes::kill_group(group, "KILL").unwrap_or(false);
@@ -1263,6 +1260,8 @@ fn fold_err(roots: &TempRoots, dir: &std::path::Path) -> String {
     }
 }
 
+/// The ported allowlist matches the loop list: the test scans the
+/// committed-list literal for its quoted names on both sides.
 #[test]
 fn committed_dirs_match_loop_allowlist() {
     let marker = "pub(crate) const COMMITTED_SYNTHETIC_SESSIONS";
@@ -1667,8 +1666,8 @@ fn multiline_reasons_render_on_one_line() {
         ran_at.reason.as_deref().unwrap_or_default().contains('\n'),
         "the setup carries a multiline reason"
     );
-    let entries = vec![entry];
-    let rows = vec![Sourced {
+    let entries = [entry];
+    let rows = [Sourced {
         src: "set",
         entry: &entries[0],
     }];
