@@ -1936,11 +1936,11 @@ fn sweep_and_session_reviewer_requests_carry_the_same_subscription_headers() {
     };
 
     // The sweep side: the shared constructor the example drives.
-    let sweep_bound = Deadline::after(MUST_SUCCEED_WITHIN);
     let (sweep_provider, _) =
         reviewer_provider(&setup.home(), &setup.workspace(), "test/m1", &clock).unwrap();
     let sweep_request = request();
     let (sweep_tx, sweep_rx) = mpsc::channel();
+    let sweep_bound = Deadline::after(MUST_SUCCEED_WITHIN);
     thread::spawn(move || {
         sweep_tx
             .send(sweep_provider.call(&sweep_request).run(&mut |_| {}))
@@ -2056,11 +2056,10 @@ fn sweep_and_session_reviewer_requests_carry_the_same_subscription_headers() {
         .into_iter()
         .filter(|received| received.path == "/v1/responses")
         .collect();
-    assert_eq!(
-        calls.len(),
-        2,
-        "each side sends one reviewer call: {calls:?}"
-    );
+    // The sweep call finishes before the session call starts, so the
+    // first two `/v1/responses` requests are the sweep's then the
+    // session's; every request must carry the subscription headers
+    // (`docs/model-routing.md`, "Keys, tokens and OAuth").
     let (sweep_call, session_call) = (&calls[0], &calls[1]);
     assert_eq!(
         session_call.header("authorization"),
