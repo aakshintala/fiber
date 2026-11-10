@@ -87,7 +87,6 @@ pub(crate) struct FragmentThenError {
     data: Vec<u8>,
     error_after: usize,
     pos: usize,
-    errored: bool,
 }
 
 impl FragmentThenError {
@@ -97,7 +96,6 @@ impl FragmentThenError {
             data,
             error_after,
             pos: 0,
-            errored: false,
         }
     }
 }
@@ -107,19 +105,14 @@ impl BufRead for FragmentThenError {
         if self.pos >= self.data.len() {
             return Ok(&[]);
         }
-        if !self.errored && self.pos >= self.error_after {
-            self.errored = true;
+        if self.pos >= self.error_after {
             self.data.truncate(self.pos);
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "the stalled read timed out",
             ));
         }
-        let end = if self.errored {
-            self.data.len()
-        } else {
-            self.error_after.min(self.data.len())
-        };
+        let end = self.error_after.min(self.data.len());
         Ok(match self.data.get(self.pos..end) {
             Some(window) => window,
             None => &[],
@@ -127,11 +120,7 @@ impl BufRead for FragmentThenError {
     }
 
     fn consume(&mut self, amount: usize) {
-        let end = if self.errored {
-            self.data.len()
-        } else {
-            self.error_after.min(self.data.len())
-        };
+        let end = self.error_after.min(self.data.len());
         self.pos = end.min(self.pos.saturating_add(amount));
     }
 }

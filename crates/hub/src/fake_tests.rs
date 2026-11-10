@@ -85,11 +85,11 @@ fn hold_records_the_fragment_it_reads_before_eof() {
     );
 }
 
-/// `serve_step` leaves a complete line unrecorded with its command, records
+/// `read_serve_input` leaves a complete line unrecorded with its command, records
 /// the stalled read's fragment the live way, then ends at end of input: the
 /// torn bytes count before the divert, not after it.
 #[test]
-fn serve_step_records_the_error_partial_before_the_divert() {
+fn read_serve_input_records_the_error_partial_before_the_divert() {
     let received = Received::default();
     let mut read = Script::new(vec![
         Scripted::Bytes(
@@ -99,7 +99,7 @@ fn serve_step_records_the_error_partial_before_the_divert() {
         Scripted::Bytes(b"{\"id\":\"c_2\",\"command\":\"prompt\"}".to_vec()),
         Scripted::Error,
     ]);
-    let Action::Line { text, command } = serve_step(&mut read, &received, 0) else {
+    let ServeOutcome::Line { text, command } = read_serve_input(&mut read, &received, 0) else {
         panic!("the subscribe line reads as a line");
     };
     assert_eq!(
@@ -111,7 +111,7 @@ fn serve_step_records_the_error_partial_before_the_divert() {
         lock(&received.lines).clone().is_empty(),
         "a complete line stays unrecorded until the answer points"
     );
-    let Action::Error = serve_step(&mut read, &received, 0) else {
+    let ServeOutcome::Error = read_serve_input(&mut read, &received, 0) else {
         panic!("the stalled fragment reads as an error");
     };
     assert_eq!(
@@ -119,7 +119,7 @@ fn serve_step_records_the_error_partial_before_the_divert() {
         vec!["{\"id\":\"c_2\",\"command\":\"prompt\"}\n".to_owned()],
         "the error's partial is recorded with its line feed, as live reads are"
     );
-    let Action::EndOfInput = serve_step(&mut read, &received, 0) else {
+    let ServeOutcome::EndOfInput = read_serve_input(&mut read, &received, 0) else {
         panic!("the drained reader ends the input");
     };
     assert_eq!(
@@ -129,20 +129,20 @@ fn serve_step_records_the_error_partial_before_the_divert() {
     );
 }
 
-/// `serve_step` records nothing for an error with an empty partial: there
+/// `read_serve_input` records nothing for an error with an empty partial: there
 /// are no consumed bytes to keep.
 #[test]
-fn serve_step_keeps_nothing_when_the_error_kept_nothing() {
+fn read_serve_input_keeps_nothing_when_the_error_kept_nothing() {
     let received = Received::default();
     let mut read = Script::new(vec![Scripted::Error]);
-    let Action::Error = serve_step(&mut read, &received, 0) else {
+    let ServeOutcome::Error = read_serve_input(&mut read, &received, 0) else {
         panic!("an immediate error reads as an error");
     };
     assert!(
         lock(&received.lines).clone().is_empty(),
         "an empty partial records nothing"
     );
-    let Action::EndOfInput = serve_step(&mut read, &received, 0) else {
+    let ServeOutcome::EndOfInput = read_serve_input(&mut read, &received, 0) else {
         panic!("the drained reader ends the input");
     };
 }

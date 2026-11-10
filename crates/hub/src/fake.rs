@@ -555,10 +555,10 @@ fn serve_one(
     // rejects any other first command, as a session does.
     let mut subscribed = false;
     loop {
-        match serve_step(&mut read, received, index) {
+        match read_serve_input(&mut read, received, index) {
             // The hub's liveness check closed without sending.
-            Action::EndOfInput => return,
-            Action::Line { text, command } => {
+            ServeOutcome::EndOfInput => return,
+            ServeOutcome::Line { text, command } => {
                 if strict && !subscribed && command.as_deref() != Some("subscribe") {
                     // Answered before it is recorded, as the closing
                     // arm below is, so a test that saw it received knows
@@ -626,14 +626,14 @@ fn serve_one(
                 }
             }
             // Nothing sent yet: hold until EOF.
-            Action::Error => hold(Some(received), index, &mut read),
+            ServeOutcome::Error => hold(Some(received), index, &mut read),
         }
     }
 }
 
-/// One serving-loop step's outcome: end of input, an unrecorded line with
+/// One serving-loop read's outcome: end of input, an unrecorded line with
 /// its parsed command, or a read error whose partial is already recorded.
-enum Action {
+enum ServeOutcome {
     EndOfInput,
     Line {
         text: String,
@@ -642,29 +642,29 @@ enum Action {
     Error,
 }
 
-/// One read/record/classify step of the serving loop: reads through the
+/// One read/record/classify pass of the serving loop: reads through the
 /// partial-preserving line reader, records only an error's partial the live
 /// way, and classifies the parsed command. Complete lines stay unrecorded:
 /// the caller records them at its answer points. No socket or timeout effect
 /// lives here, so in-memory readers drive the full new path.
-fn serve_step<R: BufRead>(read: &mut R, received: &Received, index: usize) -> Action {
+fn read_serve_input<R: BufRead>(read: &mut R, received: &Received, index: usize) -> ServeOutcome {
     match support::framing::read_line_partial(read, support::framing::MAX_LINE) {
-        Ok(None) => Action::EndOfInput,
+        Ok(None) => ServeOutcome::EndOfInput,
         Ok(Some(mut buf)) => {
             // Received lines keep their one trailing line feed.
             buf.push(b'\n');
             let text = String::from_utf8_lossy(&buf).into_owned();
-            Action::Line {
+            ServeOutcome::Line {
                 command: command_of(&text),
                 text,
             }
         }
-        Err((_, partial)) if partial.is_empty() => Action::Error,
+        Err((_, partial)) if partial.is_empty() => ServeOutcome::Error,
         Err((_, partial)) => {
             let mut partial = partial;
             partial.push(b'\n');
             received.push(index, String::from_utf8_lossy(&partial).into_owned());
-            Action::Error
+            ServeOutcome::Error
         }
     }
 }
