@@ -238,7 +238,9 @@ fn draw_framed(
 }
 
 /// Drops the click targets of what an overlay covers: the conversation's
-/// lines, links, results, offer and turns.
+/// lines, links, results, offer, turns and extension ranges. Extension
+/// ranges leave with the rows that drew them, so no covered range stays
+/// clickable or focusable.
 fn drop_conversation_targets(targets: &mut Vec<Target>) {
     targets.retain(|target| {
         !matches!(
@@ -249,6 +251,7 @@ fn drop_conversation_targets(targets: &mut Vec<Target>) {
                 | TargetId::NewBelow
                 | TargetId::Turn(_)
                 | TargetId::Offer(_)
+                | TargetId::Extension(_)
         )
     });
 }
@@ -318,9 +321,14 @@ pub(crate) fn render(
         .ext
         .cache
         .begin_anim_frame(app.motion().now_instant(), app.motion().reduced());
+    // The click frame opens before the paint and publishes after it, so
+    // the ledger always names the last frame's surviving stops,
+    // including through the early returns inside the frame.
+    app.pages().ext.cache.begin_click_frame();
     // Every path hands its painted animated keys to this one mark, so a
     // painted item or notice schedules exactly one due per frame.
     let (targets, painted) = render_frame(app, area, buf, pointer);
+    app.pages().ext.cache.finish_click_frame(&targets);
     app.pages().ext.cache.mark_painted(&painted);
     targets
 }
