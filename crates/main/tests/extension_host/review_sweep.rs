@@ -149,9 +149,11 @@ fn parses_sweep_with_repeated_models_and_a_set() {
     ])
     .unwrap();
     match mode {
-        Mode::Sweep { models, set, runs } => {
+        Mode::Sweep {
+            models, set, runs, ..
+        } => {
             assert_eq!(models, vec!["alpha-1".to_owned(), "beta-2".to_owned()]);
-            assert_eq!(set, std::path::PathBuf::from("calls.jsonl"));
+            assert_eq!(set, Some(std::path::PathBuf::from("calls.jsonl")));
             assert_eq!(runs, 3);
         }
         Mode::Check { .. } => panic!("a sweep parses as a sweep"),
@@ -199,17 +201,238 @@ fn rejects_a_bad_runs_count_naming_the_flag() {
 
 #[test]
 fn the_call_cap_holds_the_planned_sweep() {
-    check_call_cap(2, 24, 3).unwrap();
-    check_call_cap(1, 17, 10).unwrap();
+    match check_call_cap(1, 14, 3) {
+        Ok(()) => {}
+        Err(error) => panic!("14 entries times 3 runs hold at 168: {error}"),
+    }
+    match check_call_cap(1, 42, 1) {
+        Ok(()) => {}
+        Err(error) => panic!("42 entries in one run hold at 168: {error}"),
+    }
 }
 
 #[test]
 fn the_call_cap_rejects_a_sweep_above_170_naming_runs() {
-    let error = check_call_cap(2, 24, 4).unwrap_err();
+    let error = match check_call_cap(2, 24, 4) {
+        Err(error) => error,
+        Ok(()) => panic!("576 worst-case requests refuse"),
+    };
     assert!(error.contains("--runs"), "{error}");
     assert!(error.contains("--models"), "{error}");
-    assert!(error.contains("192"), "{error}");
+    assert!(error.contains("576"), "{error}");
     assert!(error.contains("170"), "{error}");
+}
+
+#[test]
+fn sweep_without_live_drives_nothing() {
+    let entries = vec![
+        synthetic_entry("e_1", Some(Label::Pass)),
+        synthetic_entry("e_2", Some(Label::Block)),
+    ];
+    let scripted = Arc::new(ScriptedProvider::new(vec![]));
+    let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
+    let clock = clock();
+    let model = empty_model();
+    let (tallies, outcomes) = match sweep(&entries, 2, false, |entry| {
+        drive(entry, &provider, &clock, &model)
+    }) {
+        Ok(empty) => empty,
+        Err(error) => panic!("a sweep without --live stays empty: {error}"),
+    };
+    assert!(tallies.is_empty());
+    assert!(outcomes.is_empty());
+    assert!(
+        scripted.requests().is_empty(),
+        "no entry drives, so no reviewer request goes out"
+    );
+}
+
+#[test]
+fn check_live_names_the_flag_for_a_sweep() {
+    let mode = parse_args(&[
+        "review_sweep".to_owned(),
+        "--models".to_owned(),
+        "alpha-1".to_owned(),
+        "--set".to_owned(),
+        "calls.jsonl".to_owned(),
+    ])
+    .unwrap();
+    let error = match check_live(&mode) {
+        Err(error) => error,
+        Ok(()) => panic!("a sweep without --live refuses"),
+    };
+    assert!(error.contains("--live"), "{error}");
+}
+
+#[test]
+fn check_live_passes_a_check() {
+    let mode = parse_args(&[
+        "review_sweep".to_owned(),
+        "--check".to_owned(),
+        "seeded.jsonl".to_owned(),
+    ])
+    .unwrap();
+    match check_live(&mode) {
+        Ok(()) => {}
+        Err(error) => panic!("a check reads no network: {error}"),
+    }
+}
+
+#[test]
+fn parses_dirs_with_a_set_and_live() {
+    let mode = parse_args(&[
+        "review_sweep".to_owned(),
+        "--models".to_owned(),
+        "alpha-1".to_owned(),
+        "--set".to_owned(),
+        "calls.jsonl".to_owned(),
+        "--dirs".to_owned(),
+        "control-1-credentialed-probe".to_owned(),
+        "--live".to_owned(),
+    ])
+    .unwrap();
+    match mode {
+        Mode::Sweep {
+            set, dirs, live, ..
+        } => {
+            assert_eq!(set, Some(std::path::PathBuf::from("calls.jsonl")));
+            assert_eq!(
+                dirs,
+                vec![std::path::PathBuf::from("control-1-credentialed-probe")]
+            );
+            assert!(live);
+        }
+        Mode::Check { .. } => panic!("a sweep parses as a sweep"),
+    }
+}
+
+#[test]
+fn parses_set_with_dirs_accepted_within_budget() {
+    let mode = parse_args(&[
+        "review_sweep".to_owned(),
+        "--models".to_owned(),
+        "alpha-1".to_owned(),
+        "--set".to_owned(),
+        "calls.jsonl".to_owned(),
+        "--dirs".to_owned(),
+        "control-1-credentialed-probe".to_owned(),
+        "--runs".to_owned(),
+        "1".to_owned(),
+        "--live".to_owned(),
+    ])
+    .unwrap();
+    match mode {
+        Mode::Sweep { runs, live, .. } => {
+            assert_eq!(runs, 1);
+            assert!(live);
+        }
+        Mode::Check { .. } => panic!("a sweep parses as a sweep"),
+    }
+    match check_call_cap(1, 2, 1) {
+        Ok(()) => {}
+        Err(error) => panic!("one set line plus one dir in one run holds at 8: {error}"),
+    }
+    match check_live(&mode) {
+        Ok(()) => {}
+        Err(error) => panic!("a live sweep passes the gate: {error}"),
+    }
+}
+
+#[test]
+fn check_call_cap_refuses_forty_three_entries_one_run() {
+    let error = match check_call_cap(1, 43, 1) {
+        Err(error) => error,
+        Ok(()) => panic!("172 worst-case requests refuse"),
+    };
+    assert!(error.contains("172"), "{error}");
+    assert!(error.contains("170"), "{error}");
+}
+
+/// How long the built sweep binary may take once started: a refusal exits
+/// fast, and the nextest timeout stays the outermost case
+/// (`docs/testing.md`, "Waits and timeouts").
+const SWEEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The example `cargo test` built beside this test binary, so the test
+/// starts no cargo and waits on no build lock.
+fn example_path() -> fakes::WarmedJig {
+    let mut path = std::env::current_exe().unwrap();
+    path.pop();
+    path.pop();
+    fakes::WarmedJig::warm(path.join("examples").join("review_sweep"), &["--bogus"], 2)
+}
+
+/// Runs the built `review_sweep` binary with `args`, reaping it on every
+/// path: the refusals below exit fast, and a hang fails naming the wait.
+fn run_sweep(args: &[&str]) -> std::process::Output {
+    use std::os::unix::process::CommandExt;
+    let warmed = example_path();
+    let child = std::process::Command::new(warmed.path())
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match fakes::Deadline::after(SWEEP_DEADLINE).recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap_or(false);
+            let output = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&finished)
+                .expect("the sweep binary died after KILL");
+            panic!(
+                "the sweep binary did not finish in time: {}",
+                String::from_utf8_lossy(&output.unwrap().stdout)
+            );
+        }
+    };
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    output
+}
+
+#[test]
+fn a_sweep_without_live_exits_before_any_call() {
+    let dir = fakes::TempDir::new("fiber-sweep-no-live");
+    let set = dir.path().join("set.jsonl");
+    std::fs::write(&set, entry_json("a_01", "\"pass\"")).unwrap();
+    let set_arg = set.display().to_string();
+    let output = run_sweep(&["--models", "m", "--set", &set_arg, "--runs", "1"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--live"),
+        "the refusal names the flag: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn over_budget_with_live_exits_before_any_call() {
+    let dir = fakes::TempDir::new("fiber-sweep-over-budget");
+    let set = dir.path().join("set.jsonl");
+    let mut lines = String::new();
+    for n in 0..25 {
+        lines.push_str(&entry_json(&format!("a_{n:02}"), "\"pass\""));
+        lines.push('\n');
+    }
+    std::fs::write(&set, lines).unwrap();
+    let set_arg = set.display().to_string();
+    let output = run_sweep(&["--models", "m", "--set", &set_arg, "--runs", "3", "--live"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("300"),
+        "the refusal names the count: {stderr}"
+    );
+    assert!(
+        stderr.contains("170"),
+        "the refusal names the budget: {stderr}"
+    );
 }
 
 #[test]
@@ -730,9 +953,12 @@ fn sweep_on(
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let clock = clock();
     let model = empty_model();
-    let (tallies, outcomes) = sweep(entries, runs, |entry| {
+    let (tallies, outcomes) = match sweep(entries, runs, true, |entry| {
         drive(entry, &provider, &clock, &model)
-    });
+    }) {
+        Ok(driven) => driven,
+        Err(error) => panic!("a live sweep drives: {error}"),
+    };
     (tallies, outcomes, scripted.requests())
 }
 

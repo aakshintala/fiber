@@ -17,7 +17,7 @@
 mod sweep;
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,15 +35,46 @@ fn main() -> ExitCode {
     }
 }
 
+/// The committed fixture roots `--dirs` folds against: the loop crate's
+/// fixture directories beside this package.
+fn fixture_roots() -> (PathBuf, PathBuf) {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../loop/tests/fixtures");
+    (
+        base.join("reviewer_consent"),
+        base.join(sweep::PERSON_INPUT_DIR),
+    )
+}
+
 fn run(argv: &[String]) -> Result<(), String> {
-    match sweep::parse_args(argv)? {
+    let mode = sweep::parse_args(argv)?;
+    sweep::check_live(&mode)?;
+    match mode {
         sweep::Mode::Check { file } => {
             let entries = sweep::read_set_file(&file)?;
             println!("{}: {} lines", file.display(), entries.len());
             Ok(())
         }
-        sweep::Mode::Sweep { models, set, runs } => {
-            let entries = sweep::read_set_file(&set)?;
+        sweep::Mode::Sweep {
+            models,
+            set,
+            dirs,
+            runs,
+            live,
+        } => {
+            let mut entries = Vec::new();
+            if let Some(set) = set {
+                entries.extend(sweep::read_set_file(&set)?);
+            }
+            let (consent, person_input) = fixture_roots();
+            let mut dropped = 0usize;
+            for dir in &dirs {
+                let folded = sweep::fold_session_dir(dir, &consent, &person_input)?;
+                dropped = dropped.saturating_add(folded.unreplayable);
+                entries.extend(folded.entries);
+            }
+            if dropped > 0 {
+                eprintln!("review_sweep: dropped {dropped} unreplayable calls");
+            }
             sweep::check_call_cap(models.len(), entries.len(), runs)?;
             let home = config::fiber_home_path_from_env().map_err(|error| error.to_string())?;
             let workspace = std::env::current_dir()
@@ -52,9 +83,9 @@ fn run(argv: &[String]) -> Result<(), String> {
             let mut reports = Vec::with_capacity(models.len());
             for model in &models {
                 let (provider, sweep_model) = reviewer_provider(&home, &workspace, model, &clock)?;
-                let (tallies, outcomes) = sweep::sweep(&entries, runs, |entry| {
+                let (tallies, outcomes) = sweep::sweep(&entries, runs, live, |entry| {
                     sweep::drive(entry, &provider, &clock, &sweep_model)
-                });
+                })?;
                 for outcome in &outcomes {
                     if let sweep::Outcome::Errored(errored) = outcome {
                         eprintln!(

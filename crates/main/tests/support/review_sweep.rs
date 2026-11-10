@@ -33,42 +33,61 @@ const DEFAULT_RUNS: u32 = 3;
 /// rejected before it drives anything.
 const MAX_REVIEWER_CALLS: u64 = 170;
 
-/// Rejects a sweep whose planned reviewer calls exceed the billed cap: one
-/// call per model per entry per run. Names the flags that set the total,
-/// with the planned count and the cap.
+/// Rejects a sweep whose worst-case billed requests exceed the cap: each
+/// entry-run sends one stage call plus at most its one re-ask, and the
+/// second stage sends only on a first `check`, so four requests per
+/// entry-run at most. Names the flags that set the total, with the
+/// worst-case count and the budget.
 pub(crate) fn check_call_cap(models: usize, entries: usize, runs: u32) -> Result<(), String> {
-    let planned = u64::try_from(models).unwrap_or(u64::MAX).saturating_mul(
-        u64::try_from(entries)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(u64::from(runs)),
-    );
+    let planned = u64::try_from(models)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::try_from(entries).unwrap_or(u64::MAX))
+        .saturating_mul(u64::from(runs))
+        .saturating_mul(4);
     if planned > MAX_REVIEWER_CALLS {
         return Err(format!(
-            "review_sweep: {models} --models × {entries} set entries × --runs {runs} plans {planned} reviewer calls, above the {MAX_REVIEWER_CALLS}-call cap: pass fewer --models or lower --runs"
+            "review_sweep: {models} --models × {entries} entries × --runs {runs} plans {planned} worst-case requests, above the {MAX_REVIEWER_CALLS}-request budget: pass fewer --models or lower --runs"
         ));
     }
     Ok(())
 }
 
-/// How the sweep runs: over a set with named reviewer models, or one file
-/// parsed and counted with no providers.
+/// How the sweep runs: over a set, session directories, or both with
+/// named reviewer models, or one file parsed and counted with no providers.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// Run every entry of `set` `runs` times in turn per reviewer model.
+    /// Run every entry `runs` times in turn per reviewer model.
     Sweep {
         /// Bare candidate names, qualified at the runner's `--models`
         /// boundary.
         models: Vec<String>,
-        /// The labelled set.
-        set: PathBuf,
+        /// The labelled set, when `--set` names one.
+        set: Option<PathBuf>,
+        /// The committed session directories, when `--dirs` names any.
+        dirs: Vec<PathBuf>,
         /// How many times each entry runs per model; `--runs`.
         runs: u32,
+        /// Whether the reviewer may be driven: `--live`.
+        live: bool,
     },
     /// Parse `file` and print its line count; no providers, no network.
     Check {
         /// The committed file to parse.
         file: PathBuf,
     },
+}
+
+/// Rejects a sweep without the explicit `--live` flag: the sweep drives
+/// the reviewer, so nothing runs until the person opts in. A check reads
+/// no reviewer and always passes. Called before any file is read.
+pub(crate) fn check_live(mode: &Mode) -> Result<(), String> {
+    match mode {
+        Mode::Sweep { live: false, .. } => Err(
+            "review_sweep: a sweep needs --live to drive the reviewer; without it nothing runs"
+                .to_owned(),
+        ),
+        _ => Ok(()),
+    }
 }
 
 /// Reads a `--runs` count, rejecting a missing, non-numeric or zero value.
@@ -82,14 +101,17 @@ fn runs_count(raw: Option<&String>) -> Result<u32, String> {
 }
 
 /// Parses the runner's argv (skipping argv[0]) into its [`Mode`].
-/// `--check` runs alone; a sweep needs `--set` with at least one
-/// `--models` entry, running each entry `--runs` times (`DEFAULT_RUNS`
-/// without the flag). Every rejection names the flag it tripped on.
+/// `--check` runs alone; a sweep needs at least one of `--set` or repeatable
+/// `--dirs` with at least one `--models` entry, running each entry `--runs`
+/// times (`DEFAULT_RUNS` without the flag), and `--live` to drive the
+/// reviewer. Every rejection names the flag it tripped on.
 pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
     let mut models = Vec::new();
     let mut set = None;
+    let mut dirs = Vec::new();
     let mut check = None;
     let mut runs = None;
+    let mut live = false;
     let mut args = argv.iter().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -105,6 +127,16 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
                         .clone(),
                 );
             }
+            "--dirs" => {
+                dirs.push(
+                    args.next()
+                        .ok_or_else(|| "review_sweep: --dirs needs a value".to_owned())?
+                        .clone(),
+                );
+            }
+            "--live" => {
+                live = true;
+            }
             "--runs" => {
                 runs = Some(runs_count(args.next())?);
             }
@@ -118,24 +150,27 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
             other => return Err(format!("review_sweep: unknown flag {other}")),
         }
     }
-    match (check, set) {
-        (Some(file), None) if models.is_empty() => Ok(Mode::Check {
+    match (check, set, dirs.is_empty()) {
+        (Some(file), None, true) if models.is_empty() => Ok(Mode::Check {
             file: PathBuf::from(file),
         }),
-        (Some(_), _) => {
-            Err("review_sweep: --check runs alone, without --models or --set".to_owned())
+        (Some(_), _, _) => {
+            Err("review_sweep: --check runs alone, without --models, --set or --dirs".to_owned())
         }
-        (None, Some(set)) if !models.is_empty() => Ok(Mode::Sweep {
-            models,
-            set: PathBuf::from(set),
-            runs: runs.unwrap_or(DEFAULT_RUNS),
-        }),
-        (None, Some(_)) => {
+        (None, None, true) => Err(
+            "review_sweep: pass --check FILE or --models NAME with --set FILE or --dirs DIR"
+                .to_owned(),
+        ),
+        (None, _, _) if models.is_empty() => {
             Err("review_sweep: a sweep needs at least one --models entry".to_owned())
         }
-        (None, None) => {
-            Err("review_sweep: pass --check FILE or --models NAME --set FILE".to_owned())
-        }
+        (None, set, _) => Ok(Mode::Sweep {
+            models,
+            set: set.map(PathBuf::from),
+            dirs: dirs.into_iter().map(PathBuf::from).collect(),
+            runs: runs.unwrap_or(DEFAULT_RUNS),
+            live,
+        }),
     }
 }
 
@@ -636,18 +671,14 @@ fn fold_chain(dir: &Path) -> Result<(String, Vec<FoldedLine>), String> {
     }
 }
 
-/// One outer call the pre-index found: its request and the start that
-/// declared its effects, when one logged anywhere in the chain.
+/// One outer call the pre-index found: the start that declared its
+/// effects, when one logged anywhere in the chain. The request itself is
+/// read off the chain line the fold emits, so the index keeps only the
+/// declaration the emission needs.
 struct FoldedCall {
-    /// The requested call.
-    call: ToolCallRequested,
-    /// The turn that requested it.
-    turn: Option<TurnId>,
     /// What the call declared: its start, or its denial when the call
     /// never started.
     started: Option<ToolCallStarted>,
-    /// The turn that started it.
-    start_turn: Option<TurnId>,
 }
 
 /// What the fold indexes before replaying: every declaration and decision
@@ -709,12 +740,10 @@ fn fold_index(dir: &Path, chain: &[FoldedLine]) -> Result<FoldIndex, String> {
                     && call.provider_item.is_none()
                     && let Some(action) = envelope.action_id.clone()
                 {
-                    index.calls.entry(action.0).or_insert(FoldedCall {
-                        call,
-                        turn: envelope.turn_id.clone(),
-                        started: None,
-                        start_turn: None,
-                    });
+                    index
+                        .calls
+                        .entry(action.0)
+                        .or_insert(FoldedCall { started: None });
                 }
             }
             Event::ToolCallStarted(started) => {
@@ -723,7 +752,6 @@ fn fold_index(dir: &Path, chain: &[FoldedLine]) -> Result<FoldIndex, String> {
                     && indexed.started.is_none()
                 {
                     indexed.started = Some(started);
-                    indexed.start_turn = envelope.turn_id.clone();
                 }
             }
             Event::PermissionRequested(requested) => {
@@ -766,7 +794,6 @@ fn fold_index(dir: &Path, chain: &[FoldedLine]) -> Result<FoldIndex, String> {
                     && indexed.started.is_none()
                 {
                     indexed.started = Some(started_from(&call));
-                    indexed.start_turn = envelope.turn_id.clone();
                 }
             }
             Event::UsageRecorded(recorded) => {
@@ -1630,13 +1657,19 @@ pub(crate) struct EntryTally {
 
 /// Drives each entry `runs` times in turn through `drive_entry`, so one
 /// entry's repetitions go out back to back and later runs can reuse the
-/// prompt cache. Returns the per-entry tallies beside every outcome in
-/// drive order, for the entry table and the pooled model row.
+/// prompt cache. With `live` unset the sweep drives nothing and returns
+/// empty, so the no-network proof holds at the core level. Returns the
+/// per-entry tallies beside every outcome in drive order, for the entry
+/// table and the pooled model row.
 pub(crate) fn sweep(
     entries: &[Entry],
     runs: u32,
+    live: bool,
     drive_entry: impl Fn(&Entry) -> Outcome,
-) -> (Vec<EntryTally>, Vec<Outcome>) {
+) -> Result<(Vec<EntryTally>, Vec<Outcome>), String> {
+    if !live {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let mut tallies = Vec::with_capacity(entries.len());
     let mut outcomes = Vec::new();
     for entry in entries {
@@ -1664,7 +1697,7 @@ pub(crate) fn sweep(
             blocks,
         });
     }
-    (tallies, outcomes)
+    Ok((tallies, outcomes))
 }
 
 /// Renders the per-entry table: one `id label verdict count/runs` line per
