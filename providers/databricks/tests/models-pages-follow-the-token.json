@@ -52,6 +52,20 @@
           "status": 200,
           "body": "{\"models\":[{\"model_name\":\"alpha\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":64000,\"max_output\":8000}},{\"model_name\":\"beta\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":32000,\"max_output\":4000}}]}"
         }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://adb-1.azuredatabricks.net/api/2.0/serving-endpoints",
+          "headers": {
+            "authorization": "Bearer dapi-test",
+            "Databricks-Ai-Gateway-Request-Tags": "{\"source\":\"fiber\"}"
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"endpoints\":[{\"name\":\"alpha\"},{\"name\":\"beta\"}]}"
+        }
       }
     ]
   },

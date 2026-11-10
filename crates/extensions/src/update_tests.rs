@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
@@ -1294,4 +1295,329 @@ fn an_unlisted_platform_stage_writes_no_line() {
         "no download ran: {:?}",
         server.requests()
     );
+}
+
+/// The first-party extension the running binary does not know.
+const FUTURISTIC: &str = "github.com/aakshintala/fiber/extensions/futuristic";
+
+/// An installed first-party extension the running binary does not know is
+/// adopted from the archive: the archive's own manifest names the member,
+/// so the running binary trusts it and stages it under its short
+/// directory.
+#[test]
+fn stage_update_adopts_an_installed_extension_the_binary_does_not_know() {
+    let mut setup = Setup::new();
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
+    assert_eq!(names, [FUTURISTIC]);
+    staged.commit().unwrap();
+    let dir = setup.home().join("extensions/futuristic");
+    assert_eq!(
+        fs::read_to_string(dir.join("extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert_eq!(setup.record("futuristic")["name"], FUTURISTIC);
+}
+
+/// An unknown first-party extension that is not installed stays absent:
+/// the update still succeeds and stages only what is installed.
+#[test]
+fn stage_update_leaves_an_unknown_first_party_extension_absent_when_not_installed() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
+    assert_eq!(names, ["github.com/acme/widget"]);
+    staged.commit().unwrap();
+    assert!(
+        !setup.home().join("extensions/futuristic").exists(),
+        "an extension that is not installed is not adopted"
+    );
+}
+
+/// An uninstalled unknown member whose manifest declares an incompatible
+/// API refuses with that manifest's error, not the layout refusal.
+#[test]
+fn stage_update_refuses_an_uninstalled_unknown_extension_with_a_bad_api() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let before = setup.installed_state();
+    let bad = serde_json::json!({
+        "name": FUTURISTIC,
+        "version": "0.2.0",
+        "fiber": "0.0.0",
+        "api": 99,
+    })
+    .to_string();
+    let server = serve(b"marker", b"new", &[("futuristic", &bad)], "[]");
+    let err = setup.stage_err(&server);
+    let Error::ApiVersion { name, .. } = &err else {
+        panic!("a bad API refuses as its own error: {err}");
+    };
+    assert_eq!(name, FUTURISTIC);
+    assert_eq!(setup.installed_state(), before);
+}
+
+/// An archive member that would take the directory of an installed
+/// third-party extension refuses before the first rename, naming that
+/// directory, and leaves both installs in place.
+#[test]
+fn an_update_that_would_replace_a_third_party_extension_refuses_before_any_rename() {
+    let mut setup = Setup::new();
+    // A third-party extension installed from a path, living at
+    // `extensions/futuristic/`.
+    let src = fakes::TempDir::new("fiber-4392-third-party");
+    fs::write(
+        src.path().join("extension.json"),
+        serde_json::json!({
+            "name": "futuristic",
+            "version": "1.0.0",
+            "fiber": "0.0.0",
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    plan(
+        &setup.home(),
+        &Request::Path(src.path().into()),
+        RELEASE,
+        &setup.origin(),
+        clock.as_ref(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The first-party extension of the same short, installed from git
+    // under its slugged directory.
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    setup.tag_release();
+    let before = setup.installed_state();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let err = setup.stage_err(&server);
+    assert!(
+        err.to_string().contains("extensions/futuristic"),
+        "the refusal names the directory: {err}"
+    );
+    assert_eq!(setup.installed_state(), before);
+}
+
+/// One later update leaves a single directory for a layout-accepted
+/// unknown: the slugged directory an older install used is stale once the
+/// member commits under its short.
+#[test]
+fn a_later_update_leaves_a_single_directory_for_a_layout_accepted_unknown() {
+    let mut setup = Setup::new();
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    let slugged = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-extensions-futuristic");
+    assert!(slugged.is_dir(), "the older install used the slugged name");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root = setup.home().join("extensions");
+    let mut dirs: Vec<String> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    dirs.sort();
+    assert_eq!(dirs, ["futuristic"]);
+    assert_eq!(
+        fs::read_to_string(root.join("futuristic/extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert_eq!(setup.record("futuristic")["name"], FUTURISTIC);
+}
+
+/// Adopting an archive member while an unrelated member is staged succeeds:
+/// the occupied-short refusal only fires when another staged member's slug
+/// is the adopted short, so an unrelated staged member never blocks the
+/// adopt.
+#[test]
+fn stage_update_adopts_while_an_unrelated_member_is_staged() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/futuristic/extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert_eq!(
+        fs::read_to_string(
+            setup
+                .home()
+                .join("extensions/github.com-acme-widget/extension.json")
+        )
+        .unwrap(),
+        manifest("github.com/acme/widget", "1.0.0")
+    );
+}
+
+/// A file mode restored on drop, so a failure still leaves the tree
+/// removable.
+struct RestoreMode {
+    path: PathBuf,
+    mode: u32,
+}
+
+impl RestoreMode {
+    fn set(path: &Path, mode: u32) -> Self {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        Self {
+            path: path.to_owned(),
+            mode: 0o755,
+        }
+    }
+}
+
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode)).unwrap_or(());
+    }
+}
+
+/// A stale directory that cannot be removed fails the commit with its path,
+/// instead of reporting success with the duplicate left behind.
+#[test]
+fn a_commit_that_cannot_remove_its_stale_directory_reports_it() {
+    let mut setup = Setup::new();
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    let slugged = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-extensions-futuristic");
+    assert!(slugged.is_dir(), "the older install used the slugged name");
+    // A subdirectory holding files, made unwriteable, so removing the
+    // stale directory fails with `PermissionDenied`.
+    let sub = slugged.join("sub");
+    fs::create_dir(&sub).unwrap();
+    fs::write(sub.join("v"), "x").unwrap();
+    fs::write(sub.join("probe"), "x").unwrap();
+    let restore = RestoreMode::set(&sub, 0o500);
+    // Precondition: without write permission the probe cannot go, so a
+    // root runner fails here loudly instead of passing vacuously.
+    let probe_err = fs::remove_file(sub.join("probe")).unwrap_err();
+    assert_eq!(
+        probe_err.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{probe_err}"
+    );
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let err = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap()
+    .commit()
+    .unwrap_err();
+    let Error::Io { path, .. } = &err else {
+        panic!("an unremovable stale directory names its path: {err}");
+    };
+    assert_eq!(path, &slugged, "{err}");
+    // The new member committed under its short; only the stale duplicate
+    // is left, reported by the error above rather than kept silently.
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/futuristic/extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert!(
+        slugged.is_dir(),
+        "the stale directory is still reported, not silently kept"
+    );
+    drop(restore);
 }

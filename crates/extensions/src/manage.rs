@@ -12,9 +12,12 @@ use contract::clock::Clock;
 
 use crate::Error;
 use crate::git::{Origin, full_name, split};
-use crate::install::{Paths, Provenance, Record, Scratch, commit_all, io, remove, slug, stage};
+use crate::install::{
+    Paths, Provenance, Record, Scratch, commit_all, io, remove, slug, stage, stage_under_short,
+};
 use crate::installed::{Damaged, Installed, Lock, lock, read};
 use crate::prepare::{Observe, prepare};
+use crate::release::EXTENSIONS;
 use crate::resolve::{meets, newest, newest_within, pick, root_meets};
 
 /// What is asked for.
@@ -231,17 +234,21 @@ impl Plan<'_> {
 
     /// Stages one archive-covered member over what the batch plan staged
     /// from git: removes the fetched copy, then stages the unpacked
-    /// archive member `adopted` with the release's version and commit,
-    /// keeping the installed requested and floor. The item carries no
-    /// changes: the archive is the update.
+    /// archive member `adopted` under its short directory with the
+    /// release's version and commit, keeping the installed requested and
+    /// floor. The item carries no changes: the archive is the update.
+    /// The installed set still decides: only installed names are adopted.
     pub(crate) fn adopt(
         &mut self,
         home: &Path,
-        fiber_version: &str,
+        // `layout` already ran every check staging makes on the adopted
+        // member, so this stages it without checking again.
+        _fiber_version: &str,
         adopted: &Adopted<'_>,
     ) -> Result<(), Error> {
         let Adopted {
             installed,
+            short,
             version,
             commit,
             source,
@@ -255,13 +262,26 @@ impl Plan<'_> {
             requested: installed.requested,
             floor: installed.floor.clone(),
         };
-        let (manifest, providers, paths) = stage(home, source, fiber_version, &record)?;
+        let (manifest, providers, paths) = stage_under_short(home, source, short, &record)?;
         if manifest.name != installed.name {
             remove(&paths.fresh)?;
             return Err(Error::WrongName {
                 asked: installed.name.clone(),
                 found: manifest.name,
             });
+        }
+        // The member stages under its short, which an installed member of
+        // another name may already hold: two staged items must never share
+        // a target, so the archive member refuses before the first rename,
+        // naming the directory both would take.
+        for other in self.items.keys() {
+            if other != &installed.name && slug(other).is_ok_and(|mine| mine == **short) {
+                remove(&paths.fresh)?;
+                return Err(Error::BadArchive {
+                    archive: EXTENSIONS.into(),
+                    why: format!("`{short}` would replace `{other}` at `extensions/{short}`"),
+                });
+            }
         }
         retire(self, &installed.name)?;
         self.items.insert(
@@ -521,6 +541,9 @@ pub(crate) fn plan_updates<'c>(
 pub(crate) struct Adopted<'a> {
     /// The installed member the archive replaces.
     pub installed: &'a Installed,
+    /// The member's short directory name in the archive, which is also
+    /// its stage target.
+    pub short: &'a str,
     /// The release's version.
     pub version: &'a str,
     /// The release tag's commit.
