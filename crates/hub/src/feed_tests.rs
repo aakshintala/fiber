@@ -2192,7 +2192,8 @@ fn a_scan_counts_only_confirmed_keepers_never_answer_excluded() {
         .get_or_init(|| Arc::clone(&probe) as Arc<dyn crate::KeeperProbe>);
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
-    // The subscribe-time snapshot predates the first scan: empty.
+    // The subscribe-time snapshot predates the first scan: empty
+    // (`docs/events.md`, "Hub feed").
     let snapshotted = sub.next("the snapshot keepers line");
     assert_eq!(snapshotted["kind"], "keepers");
     assert_eq!(snapshotted["payload"], json!({"keepers": []}));

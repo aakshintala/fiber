@@ -333,19 +333,27 @@ impl hub::KeeperProbe for Seam {
         // a keeper still holds read as keepers, in id order. A session
         // that died as the probe landed reads keeper-or-gone but holds
         // no lock, so the check below leaves it out.
-        doors::classify_sockets(home, clock)
-            .map(|probed| {
-                probed
-                    .into_iter()
-                    .filter_map(|(id, class)| {
-                        if !matches!(class, doors::SocketClass::KeeperOrGone) {
-                            return None;
-                        }
-                        keeper_held(home, &id).then_some(id)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        match doors::classify_sockets(home, Arc::clone(&clock)) {
+            Ok(probed) => probed
+                .into_iter()
+                .filter_map(|(id, class)| {
+                    if !matches!(class, doors::SocketClass::KeeperOrGone) {
+                        return None;
+                    }
+                    keeper_held(home, &id).then_some(id)
+                })
+                .collect(),
+            Err(error) => {
+                log::diag::Diag::new(home, log::diag::Process::Hub, log::diag::Level::Info, clock)
+                    .line(
+                        log::diag::Severity::Warn,
+                        None,
+                        "keepers_unreadable",
+                        &format!("keeper probe of {} failed: {error}", home.display()),
+                    );
+                Vec::new()
+            }
+        }
     }
 }
 
