@@ -1913,6 +1913,33 @@ fn an_approval_rewrite_without_a_requested_call_draws_no_tool_row() {
 }
 
 #[test]
+fn an_approval_rewrite_refolds_identically_live_and_on_replay() {
+    let lines = [
+        call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"arguments": {"path": "b.txt"}, "changed_by": ["fiber.test/guard"]}),
+        ),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"arguments": {"path": "c.txt"}, "changed_by": ["fiber.test/other"]}),
+        ),
+    ];
+    let live = folded(&lines);
+    let mut replay = Queue::default();
+    for line in &lines {
+        replay.fold(line);
+    }
+    assert_eq!(rendered(&live), rendered(&replay));
+}
+
+#[test]
 fn an_approval_rewrite_keeps_the_dim_mark_after_a_long_summary() {
     let long = "a/very/long/path/that/keeps/going/on/and/on/file.txt";
     let queue = folded(&rewritten_read(
