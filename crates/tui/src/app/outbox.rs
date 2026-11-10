@@ -317,12 +317,12 @@ impl Outbox {
             return Some(line);
         }
         // An Enter before the hub connects is held, not lost: `start`
-        // goes out once the hub speaks `hub_hello`.
+        // goes out once the hub speaks `hub_hello`, paired in the
+        // registry then with the line as flushed.
         let sent = Sent {
             id: CommandId(id),
             line,
         };
-        self.note_hub_sent(&sent.id, &sent.line);
         self.held.push(sent);
         None
     }

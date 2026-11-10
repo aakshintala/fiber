@@ -1695,11 +1695,12 @@ impl App {
         match hub.kind() {
             HubEventKind::HubHello if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.hub_hello_version(&hub.payload);
-                // Held lines already carry their ids: each was paired
-                // in the registry when held, so a failed flush settles
-                // by the carried id with no second note.
+                // Held lines carry their ids into the fold: each is
+                // paired in the registry once here, with the line as
+                // flushed, so a failed flush settles by the carried id.
                 let mut lines = Vec::new();
                 for sent in std::mem::take(&mut self.outbox.held) {
+                    self.outbox.note_hub_sent(&sent.id, &sent.line);
                     lines.push(sent.line);
                 }
                 lines.extend(self.reconnected());
