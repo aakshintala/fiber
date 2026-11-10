@@ -45,7 +45,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // refuses before removing any part of the set.
     let mut locks = Vec::with_capacity(set.len());
     let mut busy: Vec<String> = Vec::new();
-    for (id, dir) in &set {
+    for (id, _, dir) in &set {
         if parsed.dry_run {
             let held = dry_run_held(dir);
             #[cfg(test)]
@@ -61,7 +61,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
         }
     }
     if parsed.dry_run {
-        let ids: Vec<&str> = set.iter().map(|(id, _)| id.0.as_str()).collect();
+        let ids: Vec<&str> = set.iter().map(|(id, _, _)| id.0.as_str()).collect();
         return Ok(Some(serde_json::json!({"sessions": ids, "held": busy})));
     }
     if let Some(first) = busy.first().cloned() {
@@ -69,9 +69,9 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     }
     // Discovery order puts each session after the one it continues, so in
     // reverse no survivor points at a removed session.
-    for ((id, dir), lock) in set.iter().zip(locks.iter()).rev() {
+    for ((id, project, dir), lock) in set.iter().zip(locks.iter()).rev() {
         log::delete_session(dir, lock).map_err(|error| io_failed(id, &error))?;
-        hub.feed.forget(&id.0);
+        hub.feed.forget_deleted(&id.0, project);
     }
     drop(locks);
     Ok(None)
@@ -139,8 +139,8 @@ fn resolve(
     session: &SessionId,
     cascade: bool,
     expect: Option<&BTreeSet<SessionId>>,
-) -> Result<Vec<(SessionId, PathBuf)>, Refused> {
-    let Some(dir) = session_dir(hub, session) else {
+) -> Result<Vec<(SessionId, String, PathBuf)>, Refused> {
+    let Some((project, dir)) = session_dir(hub, session) else {
         return Err(not_found(session));
     };
     let dependents = log::dependents(&hub.home, session);
@@ -156,15 +156,15 @@ fn resolve(
             ),
         });
     }
-    let mut set = vec![(session.clone(), dir)];
+    let mut set = vec![(session.clone(), project, dir)];
     // A dependent whose directory went since the walk is not deleted.
     set.extend(
         dependents
             .into_iter()
-            .filter_map(|id| session_dir(hub, &id).map(|dir| (id, dir))),
+            .filter_map(|id| session_dir(hub, &id).map(|(project, dir)| (id, project, dir))),
     );
     if cascade && let Some(expect) = expect {
-        let set_ids: BTreeSet<&SessionId> = set.iter().map(|(id, _)| id).collect();
+        let set_ids: BTreeSet<&SessionId> = set.iter().map(|(id, _, _)| id).collect();
         let wanted: BTreeSet<&SessionId> = expect.iter().collect();
         confirm(&set_ids, &wanted)?;
     }
@@ -244,12 +244,13 @@ fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Res
     })
 }
 
-/// `session`'s directory: a real directory, never a link, holding its log.
-/// The link check precedes the lock, which would create `session.lock`
-/// inside whatever `dir` names, so a linked directory stays untouched.
-fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
-    let (_, dir) = crate::recent::lookup_logged(&hub.home, session)?;
-    log::is_plain_dir(&dir).then_some(dir)
+/// `session`'s directory and its project key: a real directory, never a
+/// link, holding its log. The link check precedes the lock, which would
+/// create `session.lock` inside whatever `dir` names, so a linked
+/// directory stays untouched.
+fn session_dir(hub: &Hub, session: &SessionId) -> Option<(String, PathBuf)> {
+    let (project, dir) = crate::recent::lookup_logged(&hub.home, session)?;
+    log::is_plain_dir(&dir).then_some((project, dir))
 }
 
 /// A delete refusal: only a real `session_held` refusal carries the busy

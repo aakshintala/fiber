@@ -33,7 +33,7 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
     let session = parse(args).ok_or_else(invalid)?;
     // No resume starts a process for a session while it is archived.
     let _gate = lock(&hub.resume_gate);
-    let Some((_, dir)) = recent::lookup_logged(&hub.home, &session) else {
+    let Some((project, dir)) = recent::lookup_logged(&hub.home, &session) else {
         return Err(not_found(&session));
     };
     if !log::is_plain_dir(&dir) {
@@ -69,7 +69,7 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
                 .unwrap_or_else(|| missing_row(hub, &dir, &session));
             recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
         }
-        hub.feed.forget(&session.0);
+        hub.feed.forget_archived(&session.0, &project);
         return Ok(None);
     }
     log.append(&Event::Archived(Empty {}), None, None)
@@ -81,7 +81,7 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
     // The index is derived state, not a second record of truth: a failed
     // append refuses without rolling back the log's event.
     recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
-    hub.feed.forget(&session.0);
+    hub.feed.forget_archived(&session.0, &project);
     Ok(None)
 }
 
