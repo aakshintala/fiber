@@ -86,7 +86,10 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
             .collect(),
         Effect::SendTracked(sents) => sents
             .iter()
-            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
+            .map(|sent| {
+                let line = &sent.line;
+                .map(|sent| serde_json::from_str(line).unwrap_or_default())
+            })
             .collect(),
         Effect::None
         | Effect::Quit

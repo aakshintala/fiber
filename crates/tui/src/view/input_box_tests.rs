@@ -1137,7 +1137,10 @@ fn item_opened(app: &mut App) {
             .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
-            .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{sent.line}: {err}")))
+            .map(|sent| {
+                let line = &sent.line;
+                .map(|sent| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            })
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
