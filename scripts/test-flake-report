@@ -1184,6 +1184,77 @@ code=$(run_producer "$producer_pr" STUB_EVENT=pull_request STUB_RUNNER=macos-26 
 expect_exit producer-pr "$code" 0
 [ "$(cat "$producer_pr/marker")" = true ] || fail "producer-pr: a pull request run must ignore the push-only records"
 grep -Fq 'complete=true' "$producer_pr/out/output" || fail "producer-pr: the output must read complete=true"
+# run_collate_status DIR VAR=value...: runs the extracted Collate step
+# like run_collate but with the caller's selection env, and prints the
+# step's exit code instead of failing: a selected leg with no readable
+# list fails closed, like the job. The case asserts the code plus the
+# flakes output and the summary.
+run_collate_status() {
+  dir=$1
+  shift
+  code=0
+  mkdir -p "$dir/out"
+  : >"$dir/out/output"
+  : >"$dir/out/summary"
+  # shellcheck disable=SC2086
+  env -i PATH="$PATH" \
+    FLAKY_DIR="$dir/flaky" LINUX_SELECTED=false LINUX_FLAKES=false LINUX_COMPLETE=true TEST_SELECTED=false \
+    RUNNER_TEMP="$dir/out" GITHUB_OUTPUT="$dir/out/output" GITHUB_STEP_SUMMARY="$dir/out/summary" \
+    "$@" \
+    bash --noprofile --norc -eo pipefail "$collate_dir/collate.sh" || code=$?
+  echo "$code"
+}
+# A leg whose tests failed but whose list was written still feeds the
+# collate: a non-empty arm list with a false marker warns and reports
+# flakes instead of failing closed, beside a complete-empty macos list.
+collate_failed_leg=$tmp/collate-failed-leg
+mkdir -p "$collate_failed_leg/flaky"
+printf 'main::probe a\td1\n' >"$collate_failed_leg/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo false >"$collate_failed_leg/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_failed_leg/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_failed_leg/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_failed_leg" TEST_SELECTED=true)
+expect_exit collate-failed-leg "$code" 0
+expect_flakes "$collate_failed_leg" 'has_flakes=true'
+expect_summary "$collate_failed_leg/out" "the ubuntu-24.04-arm collection is incomplete: partial report"
+# A selected leg with no list is no report for that leg only: with the
+# arm list feeding the scan, the collate warns and reports flakes
+# instead of failing closed.
+collate_no_report_leg=$tmp/collate-no-report-leg
+mkdir -p "$collate_no_report_leg/flaky"
+printf 'main::probe a\td1\n' >"$collate_no_report_leg/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo true >"$collate_no_report_leg/flaky/collection-complete-ubuntu-24.04-arm.txt"
+echo true >"$collate_no_report_leg/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_no_report_leg" TEST_SELECTED=true)
+expect_exit collate-no-report-leg "$code" 0
+expect_flakes "$collate_no_report_leg" 'has_flakes=true'
+expect_summary "$collate_no_report_leg/out" "the flaky-tests-macos-26 list is missing: partial report"
+# The Linux-only completed-empty result stays a success with no flakes:
+# no list was ever uploaded, and none is expected.
+collate_linux_only_empty=$tmp/collate-linux-only-empty
+mkdir -p "$collate_linux_only_empty/flaky"
+code=$(run_collate_status "$collate_linux_only_empty" LINUX_SELECTED=true TEST_SELECTED=false)
+expect_exit collate-linux-only-empty "$code" 0
+expect_flakes "$collate_linux_only_empty" 'has_flakes=false'
+# Both runner lists absent with the matrix selected is no report at
+# all: the collate fails closed with the missing-list sentence.
+collate_both_absent=$tmp/collate-both-absent
+mkdir -p "$collate_both_absent/flaky"
+code=$(run_collate_status "$collate_both_absent" TEST_SELECTED=true)
+[ "$code" -ne 0 ] || fail "collate-both-absent: the collate step must fail with no lists"
+expect_summary "$collate_both_absent/out" "the flaky-tests-ubuntu-24.04-arm list is missing: no report"
+# Existing-but-empty lists with false markers are the parser-error
+# placeholder: no report, so the incomplete-collection fail-closed
+# stands.
+collate_both_empty_false=$tmp/collate-both-empty-false
+mkdir -p "$collate_both_empty_false/flaky"
+: >"$collate_both_empty_false/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo false >"$collate_both_empty_false/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_both_empty_false/flaky/flaky-tests-macos-26.txt"
+echo false >"$collate_both_empty_false/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_both_empty_false" TEST_SELECTED=true)
+[ "$code" -ne 0 ] || fail "collate-both-empty-false: the collate step must fail on the parser-error placeholder"
+expect_summary "$collate_both_empty_false/out" "the ubuntu-24.04-arm collection is incomplete: no report"
 
 # A malformed JUnit file fails collection with no list, so the producer
 # marks the collection incomplete instead of a complete empty list. An
