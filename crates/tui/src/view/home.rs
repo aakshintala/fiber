@@ -346,6 +346,11 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 row.left
                     .push(Span::styled(format!("     … {count} more"), dim));
             }
+            ListLine::ArchivedHead { key, count } => {
+                row.spot = Some(Spot::Archived(*key));
+                row.left
+                    .push(Span::styled(format!("  archived · {count}"), dim));
+            }
         }
         rows.push(row);
     }
@@ -956,7 +961,7 @@ pub(super) fn render(
                 lift_hover(buf, target.rect);
             } else if !matches!(
                 id,
-                TargetId::Home(Spot::Entry(_) | Spot::Stop(_) | Spot::More(_))
+                TargetId::Home(Spot::Entry(_) | Spot::Stop(_) | Spot::More(_) | Spot::Archived(_))
             ) {
                 buf.set_style(target.rect, FOCUS_STYLE);
             }

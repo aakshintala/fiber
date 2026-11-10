@@ -291,9 +291,10 @@ final message, any questions, usage totals and worktree state. Their keys are
   `usage_recorded` lines it is missing.
 - Before marking a delegate job orphaned, the resumed parent reads its
   session log. When the log's latest run holds `fiber_exited`, the parent
-  settles the job from it: its exit code, its outcome and its final message,
-  as a live finish would. Only a delegate whose log's latest run has no
-  `fiber_exited` is marked orphaned. Shell jobs are unchanged.
+  settles the job from it: its exit code, its outcome, its final message
+  and, for an isolated delegate, its worktree, as a live finish would.
+  Only a delegate whose log's latest run has no `fiber_exited` is marked
+  orphaned. Shell jobs are unchanged.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 
@@ -314,6 +315,9 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   to lose, or any with `--force` (`docs/invocation.md`, "Deleting and
   pruning").
 - `delegate_finished` reports the path, the branch and whether it is dirty.
+  On a settled finish the `dirty` read is taken at settle time, which is
+  later than the live path's: it may describe a worktree that has since
+  changed or been removed.
 - A resume goes back into the kept worktree, or gets a fresh one from the
   current HEAD if it was removed. It reads the delegate's worktree record and
   run boundary from the delegate's project, including when `workspace` selected
