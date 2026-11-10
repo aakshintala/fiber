@@ -689,7 +689,7 @@ impl Store {
 
     /// Resolves the manifest's `depends` against an empty installed set and
     /// commits each inside the copy, before its own install step runs, so
-    /// two versions never share one (`docs/extensions.md`, "Pinning").
+    /// two versions never share one (`docs/extensions.md`, "Code a repository ships").
     /// With no dependencies nothing is fetched and no directory is made.
     fn install_depends(
         &self,

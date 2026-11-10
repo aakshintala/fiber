@@ -2,7 +2,7 @@
 //! that reads its commands and answers them, and, once it has subscribed, a
 //! thread that writes its events.
 
-mod level;
+pub(crate) mod level;
 mod writer;
 
 #[cfg(test)]
@@ -414,9 +414,9 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Sandbox(args, ack));
         }
-        Command::Handoff(args) => {
+        Command::Compact(args) => {
             let ack = inbox_ack(conn, id.clone());
-            conn.gate.deliver(Delivery::Handoff(id, args, ack));
+            conn.gate.deliver(Delivery::Compaction(id, args, ack));
         }
         Command::Rewind(args) => crate::rewind::run(conn, id, args),
         Command::ChangeWorkspace(args) => {
@@ -623,7 +623,7 @@ fn cancel(conn: &mut Conn, id: CommandId) {
 /// before this returns. The thread gets the shell and its answer only once
 /// it has started; if it cannot start, the reader answers `io_failed`.
 fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name: &str) {
-    let Some(running) = crate::shell::start(&conn.gate, args) else {
+    let Some(running) = crate::shell::start(&conn.gate, &id, args, conn.outbox()) else {
         return unknown(conn, id, name);
     };
     let gate = Arc::clone(&conn.gate);
@@ -1241,7 +1241,7 @@ pub(crate) fn session_command_refusal(
         | Command::Credential(_)
         | Command::Name(_)
         | Command::AddDirectory(_)
-        | Command::Handoff(_)
+        | Command::Compact(_)
         | Command::Rewind(_)
         | Command::ChangeWorkspace(_)
         | Command::Shell(_)
@@ -1494,7 +1494,7 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
 }
 
 /// Answers `closing` when the loop drops the acknowledgement uncalled.
-fn guard(answer: impl FnOnce(Answer) + Send + 'static) -> Ack {
+pub(crate) fn guard(answer: impl FnOnce(Answer) + Send + 'static) -> Ack {
     let mut once = Once {
         answer: Some(Box::new(answer)),
     };

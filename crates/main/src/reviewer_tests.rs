@@ -38,6 +38,7 @@ fn here() -> crate::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     }
 }
 

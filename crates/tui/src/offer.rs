@@ -175,6 +175,8 @@ impl Offer {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients
@@ -207,8 +209,8 @@ impl Offer {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -465,6 +467,15 @@ impl Offer {
         self.held
             .as_mut()
             .is_some_and(|held| held.source.take().is_some())
+    }
+
+    /// The `offered_file` command id the held source still waits on.
+    pub(crate) fn source_asked(&self) -> Option<String> {
+        self.held
+            .as_ref()
+            .and_then(|held| held.source.as_ref())
+            .and_then(|source| source.asked_id())
+            .map(str::to_owned)
     }
 
     pub(crate) fn ask_file(&mut self, id: &str, session: &SessionId) -> Option<String> {

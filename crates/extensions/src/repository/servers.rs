@@ -1,7 +1,7 @@
 //! A repository's servers whose current content is approved: what runs is
 //! the pinned copy in Fiber home, never the repository's files
 //! (`docs/mcp.md`, "A repository's servers"; `docs/extensions.md`,
-//! "Pinning"). Gathering hashes only the paths the declarations name,
+//! "Code a repository ships"). Gathering hashes only the paths the declarations name,
 //! never the rest of the tree.
 
 use std::collections::{BTreeMap, BTreeSet};

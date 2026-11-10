@@ -830,7 +830,7 @@ fn input_value(input: &Input<'_>) -> Value {
                 "flat": answers.flat,
             }),
         },
-        Input::HandoffBand(band) => {
+        Input::CompactionBand(band) => {
             json!({
                 "trigger": band.trigger,
                 "ts": band.ts,
@@ -1024,6 +1024,10 @@ fn delegates_value(card: &tui::ext::DelegatesCard<'_>) -> Value {
                 delegate.outcome.map(outcome_value),
             );
             insert_present(&mut out, "ended", delegate.ended.map(|ended| json!(ended)));
+            insert_present(&mut out, "cost", delegate.cost.map(|(billed, subscription)| json!({
+                "billed": billed,
+                "subscription": subscription,
+            })));
             Value::Object(out)
         }).collect::<Vec<_>>(),
         "flat": card.flat,
@@ -1241,7 +1245,7 @@ fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
 
 /// A band's state as Lua reads it: `writing`, `done` with its context
 /// sizes, or `unchanged` with `cancelled` (`docs/tui.md`, "The slots",
-/// `handoff_band`).
+/// `compaction_band`).
 fn band_state_value(state: &tui::ext::TurnBandState) -> Value {
     match state {
         tui::ext::TurnBandState::Writing => json!({"kind": "writing"}),

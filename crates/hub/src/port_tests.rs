@@ -707,8 +707,7 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
             Item::Close(code, reason) => {
                 // `stop` ends the hub as SIGTERM does (`docs/invocation.md`,
                 // "Driver commands"), and SIGTERM sends each websocket one
-                // close message (`docs/invocation.md`, "The terminal and the
-                // hub").
+                // close message (`docs/invocation.md`, "Shutdown").
                 assert!(!closed, "the connection closes once");
                 assert_eq!(code, 1000);
                 assert!(reason.is_empty(), "the close carries no reason");
@@ -785,7 +784,7 @@ fn a_websocket_sessions_stop_answers_the_count_before_the_close() {
     let ack = text_of(&client, "the stop acknowledgement");
     assert_eq!(ack["kind"], "command_accepted");
     assert_eq!(ack["payload"]["command_id"], "c_stop");
-    // docs/events.md:1389 defines `sessions_stopped` as the sessions that confirmed closed.
+    // `docs/events.md`, "Command acknowledgements" defines `sessions_stopped` as the sessions that confirmed closed.
     assert_eq!(
         ack["payload"]["result"],
         json!({"sessions_stopped": 1}),

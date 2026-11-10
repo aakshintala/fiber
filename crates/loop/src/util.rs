@@ -57,8 +57,8 @@ pub(crate) struct Transcript<'a> {
     pub(crate) asks: &'a mut crate::reviewer::PendingAsks,
     /// The content the model last had per instruction file path.
     pub(crate) had: &'a mut BTreeMap<String, String>,
-    /// The render state a handoff reads.
-    pub(crate) carry: &'a mut crate::handoff::Carry,
+    /// The render state a compaction reads.
+    pub(crate) carry: &'a mut crate::compaction::Carry,
     /// The session's known network hosts, folded from the same durable events.
     pub(crate) known: &'a mut crate::known_hosts::KnownHosts,
 }
@@ -113,7 +113,7 @@ impl crate::Loop {
     /// the reviewer's transcript, through the one [`Transcript`] path.
     ///
     /// Public for the `review` jig's replay, which renders a source log's
-    /// handoff boundary through the same path (`docs/testing.md`,
+    /// compaction boundary through the same path (`docs/testing.md`,
     /// "Jigs"); the jig never writes to the source directory.
     pub fn write(
         &mut self,
@@ -126,7 +126,7 @@ impl crate::Loop {
             reviewed: &mut self.reviewed,
             asks: &mut self.pending_asks,
             had: &mut self.changes.had,
-            carry: &mut self.handoff.carry,
+            carry: &mut self.compaction.carry,
             known: &mut self.known_hosts,
         }
         .write(&self.log, &self.model.reference, event, turn, action)?;
@@ -136,14 +136,14 @@ impl crate::Loop {
             // summary instead of the log (`docs/events.md`, `fiber_exited`).
             self.summary.observe(event, action);
         }
-        // A completed handoff restarts the reviewer's input from the kept
-        // person's messages (`docs/permissions.md`, "At a handoff"), so
+        // A completed compaction restarts the reviewer's input from the kept
+        // person's messages (`docs/permissions.md`, "At a compaction"), so
         // the selection that follows re-sends from the start instead of
         // reusing a prefix end that names the old input. A failed or
-        // cancelled handoff, or a refused append, changes nothing.
+        // cancelled compaction, or a refused append, changes nothing.
         if matches!(
             event,
-            Event::HandoffCompleted(done) if done.outcome == Outcome::Completed
+            Event::CompactionCompleted(done) if done.outcome == Outcome::Completed
         ) {
             self.reviewer_sent = None;
         }

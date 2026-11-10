@@ -68,7 +68,7 @@ pub use temp_dir::TempDir;
 pub use wait_output::wait_output;
 pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
-pub use within::{MUST_SUCCEED_WITHIN, within};
+pub use within::{MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN, within};
 
 /// The check run's nonce for a child process: `("FIBER_CHECK_RUN", value)`
 /// when the test process carries it, and nothing otherwise, so a test that
@@ -84,7 +84,7 @@ pub fn check_run() -> Option<(&'static str, std::ffi::OsString)> {
 }
 
 /// The context window every fake model declares, in tokens: the window
-/// fixtures build sessions with, so size notices and the handoff trigger
+/// fixtures build sessions with, so size notices and the compaction trigger
 /// run as they do in production.
 pub const CONTEXT_WINDOW: u64 = 1_000_000;
 

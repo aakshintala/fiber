@@ -121,7 +121,7 @@ fn wait_keeper(keeper: u32) -> Result<(), String> {
 }
 
 /// The standing shell allow-rule for the long job: the session runs it
-/// without asking, the shape `crates/main/tests/keeper.rs` pins.
+/// without asking, the shape `crates/main/tests/hub_daemon/keeper.rs` pins.
 fn write_rule(home: &Home) -> Result<(), String> {
     let rule = json!({"decision": "allow", "tool": "shell", "prefix": job_command()});
     let path = home.home().join("rules");

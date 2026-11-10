@@ -64,7 +64,7 @@ every new worktree.
 `-c` works on both doors: `fiber ask`, and the terminal, which passes it to
 each session it asks the hub to start.
 The key is a dotted path and the value is JSON, or a bare string when it does
-not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
+not parse as JSON: `-c compaction.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
 the same thing, read before every `-c`, so `-c model=` wins over `--model`.
 `FIBER_HOME` names Fiber home, and `FIBER_CHANNEL` names the release channel `fiber update` follows: the `--channel` flag beats the environment, and an empty setting means stable. `install.sh` reads the same channel setting, plus `FIBER_INSTALL_DIR` and `FIBER_VERSION` (`docs/releasing.md`); the shell tool sets `FIBER_GREP_MATCHES`
@@ -125,10 +125,10 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). Only Fiber home's global and per-project files set it; `-c` is ignored with a `notice`. |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
-| `handoff.enabled` | true | yes | Whether automatic handoff runs (`docs/handoff.md`). |
-| `handoff.tokens` | 400000 | yes | The token trigger. |
-| `handoff.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |
-| `handoff.nudge` | true | yes | Whether the nudge is given. |
+| `compaction.enabled` | true | yes | Whether automatic compaction runs (`docs/compaction.md`). |
+| `compaction.tokens` | 400000 | yes | The token trigger. |
+| `compaction.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |
+| `compaction.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
 | `cache.warm_cap` | `2` | yes | How many cache lifetimes after the last turn warming stops, an integer; less than 12 (`docs/prompt-cache.md`, "Warming while idle"). |
@@ -158,6 +158,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `hooks.order."<hook point>"` | none | no | Extension names in the order their hooks run at that point (`docs/extensions.md`, "When several hooks share a point"). |
 | `providers."<name>".credential` | `default`; `fiber login` writes the first label it stores | no | The credential label a new session uses (`docs/model-routing.md`, "Which credential a session uses"). |
 | `providers."<name>".credentials."<label>"` | none | no | Where that label's key comes from, when it is not stored in Fiber home ("Secrets"). |
+| `providers.databricks.request_tags` | none | no | An object of string values merged into the `Databricks-Ai-Gateway-Request-Tags` header of the session's Databricks model calls, such as `{"run": "r1"}` ("A provider's data"). The person's global and project files and `-c` set it; a repository's value is ignored with a notice. |
 | `providers."<name>".reviewer_model` | the package's `reviewer_model` | no | The provider's saved reviewer pick, written by `fiber login` ("Secrets"). A reviewed call uses it after `reviewer.model` and before the package default; the stored ID is local and gains the provider's prefix once. |
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as `"<extension>/<widget>"`, and a widget the list does not name shows after the listed cards (`docs/tui.md`, "The panel"). The input box's status line, shown while the panel is not, follows the same order. |
 | `tui.rail.shown` | `true` | no | Whether the terminal's rail shows; ⌥R and `/rail` write it (`docs/tui.md`, "The rail"). |
@@ -187,17 +188,17 @@ and win over the same key at the top level of the same layer:
 
 ```json
 {
-  "handoff": { "tokens": 400000 },
+  "compaction": { "tokens": 400000 },
   "models": {
     "databricks/databricks-claude-opus-5": {
-      "handoff": { "window_fraction": 0.5 },
+      "compaction": { "window_fraction": 0.5 },
       "cache": { "lifetime": "5m" }
     }
   }
 }
 ```
 
-The keys that may be set per model are `handoff.*`, `cache.lifetime` and `thinking`. A
+The keys that may be set per model are `compaction.*`, `cache.lifetime` and `thinking`. A
 per-model key may be set by a repository when the top-level key may be.
 
 ### MCP servers
@@ -393,7 +394,7 @@ when (`docs/tui.md`, "Swapped views"):
 - `hub.port`, `hub.allowed_origins` and `hub.idle_exit_ms` when the hub starts again
 - `hub.default` and `hubs.*` at a client's next connection: the next `fiber` command, or the terminal's next start
 - `diagnostics.level` when each Fiber process starts again
-- `model`, `thinking`, `models."<provider/model>".thinking`, `providers."<name>".credential` and `providers."<name>".credentials` for sessions started after the write: a running session changes model, thinking level or credential only through a switch (`docs/model-routing.md`), never on `reload`
+- `model`, `thinking`, `models."<provider/model>".thinking`, `providers."<name>".credential`, `providers."<name>".credentials` and `providers.databricks.request_tags` for sessions started after the write: a running session changes model, thinking level or credential only through a switch (`docs/model-routing.md`), never on `reload`
 - `skills.disabled` at the next turn start
 - every other key on `/reload`, with the one prompt-cache miss it costs
 
@@ -404,7 +405,10 @@ A problem in a file is reported by file and key:
   session, such as `fiber config`, `fiber login` or `fiber models`, prints
   each notice as one line on stderr.
 - Invalid JSON, or a value of the wrong type, is a startup error. A headless
-  run fails with `config_invalid`.
+  run fails with `config_invalid`. The one exception is
+  `providers.databricks.request_tags`: a merged value that is not an object of
+  string values is ignored with one `config_invalid` notice that names the key,
+  and the default header is sent.
 
 ## When Fiber writes
 
@@ -434,7 +438,7 @@ Fiber writes configuration in these places:
   `--repo`
 - the terminal's `/settings` writes a key through the same path as
   `fiber config set`, in the layer the person picks among those the key
-  allows, and `tui.theme` to the global file (`docs/tui.md`, "Swapped views")
+  allows (`docs/tui.md`, "Swapped views")
 - the terminal's `/tools` switches write an MCP server's or an extension's
   `tools.enabled` and `tools.disabled` in the project's file or the global
   file, never a repository's; a file that holds no list starts from the one
@@ -619,6 +623,20 @@ declares") lists:
   providers in one package that share a key name the same directory. A provider
   whose token expires, such as an OAuth login, declares a Lua `credential()`
   function instead.
+- `headers` are sent on every request. For `databricks` the
+  `Databricks-Ai-Gateway-Request-Tags` header holds a JSON object of tags,
+  `{"source":"fiber"}` by default. The key `providers.databricks.request_tags`
+  adds to it for the session's model calls: an object of string values, set in
+  the global or project file or with `-c`, and read once when the session
+  starts. `fiber ask -c providers.databricks.request_tags='{"run":"r1"}'` and a
+  hub `start` with the override `providers.databricks.request_tags={"run":"r1"}`
+  both send `{"source":"fiber","run":"r1"}`. Objects merge key by key across
+  layers ("Layers"). `source` is always `fiber`: a `source` in the value is
+  dropped. A value that is not an object of string values, such as a bare
+  string, a number, a list, a nested object or an object with a non-string
+  entry, is ignored whole with one `config_invalid` notice naming the key
+  ("When Fiber reads configuration"), and the default header is sent. Model
+  discovery requests always send the default header.
 - `login` is `browser` for a provider whose `fiber login` runs its
   `credential()` login instead of reading a key. Absent means a key.
 - `credential_label` is for a provider whose `credential()` reads nothing

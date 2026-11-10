@@ -253,11 +253,11 @@ pub struct TurnOrphan<'a> {
     pub message: &'a str,
 }
 
-/// A handoff's band: what the band row reads. The context sizes ride
+/// A compaction's band: what the band row reads. The context sizes ride
 /// [`TurnBandState::Done`], so only a done band carries them.
 #[derive(Debug, Clone)]
 pub struct TurnBand<'a> {
-    /// What the handoff runs at.
+    /// What the compaction runs at.
     pub trigger: &'a str,
     /// The band's timestamp.
     pub ts: u64,
@@ -265,13 +265,13 @@ pub struct TurnBand<'a> {
     pub state: TurnBandState,
 }
 
-/// What a handoff's band is doing, or how it ended. The context sizes
+/// What a compaction's band is doing, or how it ended. The context sizes
 /// ride the done state, so a state without them cannot carry them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnBandState {
     /// The note is being written.
     Writing,
-    /// The handoff completed, with the context sizes.
+    /// The compaction completed, with the context sizes.
     Done(TurnSizes),
     /// It failed or was cancelled: the context is unchanged.
     Unchanged {
@@ -280,7 +280,7 @@ pub enum TurnBandState {
     },
 }
 
-/// A completed handoff's context sizes.
+/// A completed compaction's context sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TurnSizes {
     /// The context size before.
@@ -361,7 +361,7 @@ pub enum TurnEntry<'a> {
     Group(TurnGroup<'a>),
     /// A line that came while the turn ran.
     Aside(TurnAside<'a>),
-    /// A handoff's band: what follows is the second card.
+    /// A compaction's band: what follows is the second card.
     Band(TurnBand<'a>),
     /// The person's answers to a question form.
     Answers(TurnAnswers<'a>),

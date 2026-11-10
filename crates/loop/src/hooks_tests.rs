@@ -143,10 +143,10 @@ impl Hooks for FakeHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -1303,7 +1303,7 @@ fn extensions_loaded_groups_notices_by_code() {
     // One pass's startup notices reach the log grouped by code in
     // first-seen code order: the two `extension_shadowed` notices become
     // one naming both installs, and the singleton passes through
-    // (`docs/errors.md`, "Notices": one per code in first-seen order).
+    // (`docs/errors.md`, "Registry": one per code in first-seen order).
     let streamed = streamed_startup(|log| {
         crate::extensions_loaded(
             log,
@@ -1354,7 +1354,7 @@ fn extensions_loaded_groups_notices_by_code() {
 #[test]
 fn mcp_servers_started_groups_notices_by_code() {
     // Failures still write first in order; the two notices behind them
-    // arrive as one group (`docs/errors.md`, "Notices": one per code).
+    // arrive as one group (`docs/errors.md`, "Registry": one per code).
     let streamed = streamed_startup(|log| {
         crate::mcp_servers_started(
             log,
@@ -1464,7 +1464,7 @@ fn naming_output() -> Output {
             },
         ],
         control: Some(contract::events::Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: None,
             name: Some("Fix the parser".into()),

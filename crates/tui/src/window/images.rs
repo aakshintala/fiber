@@ -31,6 +31,8 @@ impl Pages {
             | EventKind::TurnCompleted
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients
@@ -64,8 +66,8 @@ impl Pages {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

@@ -1,6 +1,7 @@
 use super::*;
 
-use contract::settings::SettingsTab;
+use contract::ThinkingLevel;
+use contract::settings::{SettingControl, SettingsTab};
 
 #[test]
 fn cache_diagnostics_defaults_to_off() {
@@ -233,6 +234,7 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "scoped_models",
             "thinking",
             "web_search.backend",
+            "providers.databricks.request_tags",
         ],
     ),
     (
@@ -250,10 +252,10 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
     (
         SettingsTab::Sessions,
         &[
-            "handoff.enabled",
-            "handoff.tokens",
-            "handoff.window_fraction",
-            "handoff.nudge",
+            "compaction.enabled",
+            "compaction.tokens",
+            "compaction.window_fraction",
+            "compaction.nudge",
             "budget.usd",
             "repository_extensions",
         ],
@@ -338,4 +340,120 @@ fn settings_metadata_tabs_follow_key_classification() {
             );
         }
     }
+}
+
+/// The control a key's schema type gives it, for each key a person edits.
+fn control_of(path: &str) -> SettingControl {
+    KEYS.iter()
+        .find(|key| key.path == path)
+        .unwrap_or_else(|| panic!("`{path}` is a schema key"))
+        .kind
+        .control()
+}
+
+#[test]
+fn every_kind_has_the_control_its_type_calls_for() {
+    // One value per Kind variant: a new variant fails to compile in
+    // `control`, and the table below pins what each maps to.
+    let cases: [(Kind, SettingControl); 16] = [
+        (Kind::Str, SettingControl::Text),
+        (Kind::Model, SettingControl::Model),
+        (Kind::Theme, SettingControl::Theme),
+        (Kind::Bool, SettingControl::Boolean),
+        (Kind::Count, SettingControl::Number),
+        (Kind::CountBelow(12), SettingControl::Number),
+        (Kind::Number, SettingControl::Number),
+        (
+            Kind::OneOf(&["b", "a"]),
+            SettingControl::Fixed(vec!["b".into(), "a".into()]),
+        ),
+        (Kind::StrList, SettingControl::StringList),
+        (Kind::StrOrStrList, SettingControl::Json),
+        (Kind::Role, SettingControl::Json),
+        (Kind::EnvMap, SettingControl::Json),
+        (Kind::BoolMap, SettingControl::Json),
+        (Kind::Credential, SettingControl::Json),
+        (
+            Kind::RepositoryExtensions,
+            SettingControl::RepositoryExtensions,
+        ),
+        (Kind::Duration, SettingControl::Text),
+    ];
+    for (kind, want) in cases {
+        assert_eq!(kind.control(), want);
+    }
+}
+
+#[test]
+fn fixed_choices_keep_the_schemas_order() {
+    // `ThinkingLevel::NAMES` is the doc's order; a sorted list would put
+    // `high` before `low`.
+    let want: Vec<String> = ThinkingLevel::NAMES
+        .iter()
+        .map(|n| (*n).to_owned())
+        .collect();
+    assert_ne!(
+        {
+            let mut sorted = want.clone();
+            sorted.sort();
+            sorted
+        },
+        want,
+        "the levels are not alphabetical, so this test tells order from sorting"
+    );
+    assert_eq!(control_of("thinking"), SettingControl::Fixed(want));
+    assert_eq!(
+        control_of("cache.lifetime"),
+        SettingControl::Fixed(vec!["5m".into(), "1h".into()])
+    );
+    assert_eq!(
+        control_of("diagnostics.level"),
+        SettingControl::Fixed(vec!["info".into(), "debug".into()])
+    );
+}
+
+#[test]
+fn model_and_theme_keys_are_not_plain_text() {
+    assert_eq!(control_of("model"), SettingControl::Model);
+    assert_eq!(control_of("reviewer.model"), SettingControl::Model);
+    assert_eq!(control_of("tui.theme"), SettingControl::Theme);
+    // A free-text key stays text.
+    assert_eq!(control_of("hub.default"), SettingControl::Text);
+}
+
+#[test]
+fn model_and_theme_check_a_value_as_a_string_does() {
+    for kind in [Kind::Model, Kind::Theme] {
+        // A theme file's name, or a reference with a credential label,
+        // is any string.
+        assert!(kind.accepts(&serde_json::json!("anything/at-all:label")));
+        assert!(kind.accepts(&serde_json::json!("")));
+        assert!(!kind.accepts(&serde_json::json!(1)));
+        assert!(!kind.accepts(&serde_json::json!(["a"])));
+        assert_eq!(kind.expected(), Kind::Str.expected());
+    }
+}
+
+#[test]
+fn string_lists_and_object_lists_have_different_controls() {
+    assert_eq!(control_of("scoped_models"), SettingControl::StringList);
+    assert_eq!(control_of("skills.disabled"), SettingControl::StringList);
+    assert_eq!(
+        control_of("repository_extensions"),
+        SettingControl::RepositoryExtensions
+    );
+}
+
+#[test]
+fn scalar_keys_get_boolean_number_and_text_controls() {
+    assert_eq!(control_of("sandbox.enabled"), SettingControl::Boolean);
+    assert_eq!(
+        control_of("compaction.window_fraction"),
+        SettingControl::Number
+    );
+    assert_eq!(control_of("hub.port"), SettingControl::Number);
+    assert_eq!(
+        control_of("model_lists.refresh_after"),
+        SettingControl::Text
+    );
 }

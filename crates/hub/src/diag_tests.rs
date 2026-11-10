@@ -1,5 +1,4 @@
-//! Tests for the hub's diagnostic log (`docs/state.md`, "Diagnostic logs"
-//! and "Bounds"): the line shape, rotation past 10 MiB, and that start-up
+//! Tests for the hub's diagnostic log (`docs/state.md`, "What each part holds"): the line shape, rotation past 10 MiB, and that start-up
 //! deletes what `log::diag::old_diagnostics` selects.
 
 #![allow(

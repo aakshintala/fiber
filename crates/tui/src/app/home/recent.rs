@@ -1,34 +1,45 @@
 //! Home's feed, recent pages and project counts (`docs/tui.md`, "The
 //! session list"). It owns the request ids and cursor used to fold them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
 use super::super::{
     App, Effect, mint,
-    outbox::{Outbox, Waiting},
+    outbox::{Outbox, RecentAsk, Waiting},
 };
 use super::{refusal, refusal_code};
 use crate::home::{Row, Sessions, recent_rows};
 use contract::ErrorCode;
 
 /// The home feed and recent-page requests waiting for their answers.
+/// Each one lives only as its outbox `Feed` or `Recent` tag.
 #[derive(Default)]
 pub(super) struct Recent {
     /// `feed` and the first `recent` page went out.
     fed: bool,
-    /// The `feed` command waiting for its answer.
-    // debt: the feed command id kept here beside the outbox `Feed` tag by hand, the outbox tag becomes the sole record once the feed lookup runs off the tag alone once #4127 lands.
-    feed_id: Option<String>,
-    /// The latest `recent` command waiting for its answer, and whether it
-    /// asked the first page.
-    // debt: the unscoped recent command id kept here beside the outbox `Recent` tag by hand, the outbox tag becomes the sole record once the recent lookup runs off the tag alone once #4127 lands.
-    recent_ask: Option<(String, bool)>,
-    /// The scoped `recent` commands waiting for their answers, command
-    /// id to project: at most one entry per project.
-    // debt: the scoped recent command ids kept here beside the outbox `Recent` tags by hand, the outbox tags become the sole record once the scoped lookup runs off the tag alone once #4127 lands.
-    scoped_asks: BTreeMap<String, String>,
+}
+
+/// Whether a scoped `recent` ask for `project` is out.
+fn scoped_out(outbox: &Outbox, project: &str) -> bool {
+    outbox.tags().any(|(_, waiting)| {
+        matches!(waiting, Waiting::Recent(RecentAsk::Scoped(asked)) if asked == project)
+    })
+}
+
+/// Whether an unscoped `recent` ask, first page or later, is out.
+fn unscoped_out(outbox: &Outbox) -> bool {
+    outbox
+        .tags()
+        .any(|(_, waiting)| matches!(waiting, Waiting::Recent(RecentAsk::First | RecentAsk::Page)))
+}
+
+/// Settles every unscoped `recent` tag.
+fn settle_unscoped(outbox: &mut Outbox) {
+    outbox.settle_where(|waiting| {
+        matches!(waiting, Waiting::Recent(RecentAsk::First | RecentAsk::Page))
+    });
 }
 
 /// A correlated answer the home screen consumes.
@@ -70,81 +81,77 @@ impl Notice {
 
 impl Recent {
     /// Takes the one-time feed and first unscoped page, if not sent yet.
-    /// The call after `fed` is cleared settles the old feed and recent
-    /// ids.
+    /// The call after `fed` is cleared settles the old feed and unscoped
+    /// recent tags.
     pub(super) fn first_asks(&mut self, outbox: &mut Outbox) -> Option<Vec<String>> {
         if self.fed {
             return None;
         }
         self.fed = true;
-        if let Some(old) = self.feed_id.take() {
-            outbox.settled(&old);
-        }
-        if let Some((old, _)) = self.recent_ask.take() {
-            outbox.settled(&old);
-        }
+        outbox.settle_where(|waiting| matches!(waiting, Waiting::Feed));
+        settle_unscoped(outbox);
         let feed = mint();
         let recent = mint();
         outbox.wait(&feed, Waiting::Feed);
-        outbox.wait(&recent, Waiting::Recent);
-        self.feed_id = Some(feed.clone());
-        self.recent_ask = Some((recent.clone(), true));
+        outbox.wait(&recent, Waiting::Recent(RecentAsk::First));
         Some(vec![
             json!({"id": feed, "command": "feed"}).to_string(),
             recent_line(&recent, None, None),
         ])
     }
 
-    /// Correlates one feed or recent answer, clearing the matching request
-    /// before returning its fold instructions. Stale ids return `None`.
+    /// Folds one feed or recent answer by the tag its id carried, read
+    /// before the tag settles. A tag that is neither the feed's nor a
+    /// recent page's returns `None`.
     pub(super) fn answer(
         &mut self,
-        id: &str,
+        tag: &Waiting,
         accepted: bool,
         payload: &serde_json::Map<String, Value>,
         sessions: &mut Sessions,
     ) -> Option<Outcome> {
-        if self.feed_id.as_deref() == Some(id) {
-            self.feed_id = None;
+        if matches!(tag, Waiting::Feed) {
             let notice = (!accepted).then(|| Notice::from_payload(payload));
             return Some(Outcome::Feed(notice));
         }
-
-        if let Some((_, first)) = self.recent_ask.as_ref().filter(|(asked, _)| asked == id) {
-            let first = *first;
-            self.recent_ask = None;
-            let result = if accepted {
-                let (rows, _) = payload.get("result").map(recent_rows).unwrap_or_default();
-                // Projects on home before this page folds:
-                // only a project first appearing in the page
-                // earns an ask. The delete path separately asks
-                // its captured project directly, so a refill
-                // cannot retry an already-seen refusal.
-                let before = sessions
-                    .sections(None)
-                    .into_iter()
-                    .map(|section| section.project.to_owned())
-                    .collect();
-                Ok((rows, before))
-            } else {
-                Err(Notice::from_payload(payload))
-            };
-            return Some(Outcome::First { first, result });
-        }
-
-        // A scoped answer folds only while its id is still
-        // pending: a stale answer after a reconnect drops
-        // untouched.
-        let project = self.scoped_asks.remove(id)?;
+        let Waiting::Recent(ask) = tag else {
+            return None;
+        };
+        let first = match ask {
+            RecentAsk::Scoped(project) => {
+                let result = if accepted {
+                    scoped_result(payload).ok_or_else(|| Notice::from_payload(payload))
+                } else {
+                    Err(Notice::from_payload(payload))
+                };
+                if result.is_err() {
+                    sessions.clear_dirty(project);
+                }
+                return Some(Outcome::Scoped {
+                    project: project.clone(),
+                    result,
+                });
+            }
+            RecentAsk::First => true,
+            RecentAsk::Page => false,
+        };
         let result = if accepted {
-            scoped_result(payload).ok_or_else(|| Notice::from_payload(payload))
+            let (rows, _) = payload.get("result").map(recent_rows).unwrap_or_default();
+            // Projects on home before this page folds:
+            // only a project first appearing in the page
+            // earns an ask. The delete path separately asks
+            // its captured project directly, so a refill
+            // cannot retry an already-seen refusal.
+            let before = sessions
+                .sections(None)
+                .into_iter()
+                .map(|section| section.project.to_owned())
+                .collect();
+            Ok((rows, before))
         } else {
             Err(Notice::from_payload(payload))
         };
-        if result.is_err() {
-            sessions.clear_dirty(&project);
-        }
-        Some(Outcome::Scoped { project, result })
+        Some(Outcome::First { first, result })
     }
 
     /// Asks the first unscoped `recent` page again: an accepted delete
@@ -161,10 +168,8 @@ impl Recent {
             return Vec::new();
         }
         let id = mint();
-        if let Some((old, _)) = self.recent_ask.replace((id.clone(), true)) {
-            outbox.settled(&old);
-        }
-        outbox.wait(&id, Waiting::Recent);
+        settle_unscoped(outbox);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::First));
         let mut out = vec![recent_line(&id, None, None)];
         if let Some(project) = delete_project {
             out.extend(self.scoped_first(project, sessions, connected, outbox));
@@ -187,13 +192,12 @@ impl Recent {
         if project.is_empty() || !connected {
             return Vec::new();
         }
-        if self.scoped_asks.values().any(|pending| pending == project) {
+        if scoped_out(outbox, project) {
             sessions.mark_dirty(project);
             return Vec::new();
         }
         let id = mint();
-        self.scoped_asks.insert(id.clone(), project.to_owned());
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
         vec![recent_line(&id, Some(project), None)]
     }
 
@@ -220,10 +224,7 @@ impl Recent {
                 !section.project.is_empty()
                     && !before.contains(section.project)
                     && sessions.total_for(section.project).is_none()
-                    && !self
-                        .scoped_asks
-                        .values()
-                        .any(|pending| pending == section.project)
+                    && !scoped_out(outbox, section.project)
             })
             .map(|section| section.project.to_owned())
             .collect();
@@ -279,12 +280,11 @@ impl Recent {
         if project.is_empty() || !connected {
             return None;
         }
-        if self.scoped_asks.values().any(|pending| pending == project) {
+        if scoped_out(outbox, project) {
             return None;
         }
         let id = mint();
-        self.scoped_asks.insert(id.clone(), project.to_owned());
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
         Some(recent_line(&id, Some(project), before))
     }
 
@@ -317,7 +317,7 @@ impl Recent {
         if let Some((project, before)) = scoped {
             return self.scoped_page(&project, before.as_deref(), connected, outbox);
         }
-        if !sessions.more() || self.recent_ask.is_some() {
+        if !sessions.more() || unscoped_out(outbox) {
             return None;
         }
         let before = sessions
@@ -327,15 +327,14 @@ impl Recent {
             .0
             .clone();
         let id = mint();
-        self.recent_ask = Some((id.clone(), false));
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::Page));
         Some(recent_line(&id, None, Some(before.as_str())))
     }
 
     /// Starts a new connection's feed cycle and queues one scoped first
-    /// page per project already on home. The dropped scoped ids settle
-    /// their tags here, so a late answer matches nothing; `feed_id` and
-    /// `recent_ask` keep their entries and their tags.
+    /// page per project already on home. The dropped scoped tags settle
+    /// here, so a late answer matches nothing; the feed and unscoped
+    /// tags stay.
     pub(super) fn reset_for_connection(
         &mut self,
         sessions: &Sessions,
@@ -343,9 +342,7 @@ impl Recent {
         outbox: &mut Outbox,
     ) -> Vec<String> {
         self.fed = false;
-        for (old, _) in std::mem::take(&mut self.scoped_asks) {
-            outbox.settled(&old);
-        }
+        outbox.settle_where(|waiting| matches!(waiting, Waiting::Recent(RecentAsk::Scoped(_))));
         let projects: Vec<String> = sessions
             .sections(launch_project)
             .into_iter()
@@ -357,8 +354,7 @@ impl Recent {
                 continue;
             }
             let id = mint();
-            self.scoped_asks.insert(id.clone(), project.clone());
-            outbox.wait(&id, Waiting::Recent);
+            outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.clone())));
             out.push(recent_line(&id, Some(&project), None));
         }
         out
@@ -417,10 +413,11 @@ impl App {
         payload: &serde_json::Map<String, Value>,
     ) -> Option<Vec<String>> {
         let connected = self.outbox.is_up();
+        let tag = self.outbox.waiting(id)?;
         let answer = {
             let home = &mut self.home;
             home.recent
-                .answer(id, accepted, payload, &mut home.sessions)?
+                .answer(&tag, accepted, payload, &mut home.sessions)?
         };
         self.outbox.settled(id);
         match answer {

@@ -428,7 +428,7 @@ tool("full", function()
     content = { { type = "text", text = "a" }, { type = "text", text = "b" } },
     details = { count = 3 },
     error = { code = "nonzero_exit", message = "m" },
-    control = { handoff = "n" },
+    control = { compact = "n" },
   }
 end)
 tool("nothing", function() return nil end)
@@ -469,7 +469,7 @@ fn each_return_maps_to_its_result() {
     assert_eq!(full.details, Some(json!({ "count": 3 })));
     assert_eq!(failed(&full), (ErrorCode::NonzeroExit, "m".to_owned()));
     assert_eq!(
-        full.control.and_then(|control| control.handoff),
+        full.control.and_then(|control| control.compact),
         Some("n".to_owned())
     );
     let bad = |why: &str| (ErrorCode::ToolError, format!("the tool `{why}"));

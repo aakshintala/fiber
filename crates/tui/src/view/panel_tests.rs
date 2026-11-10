@@ -156,7 +156,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     let mut app = attached(160, 40);
     // The first frame draws the context rows and every figure in
     // docs order, after the title, workspace, branch and model slots.
-    let context = ["▆", "handoff at", "then a summary"];
+    let context = ["▆", "compacts at", "then a summary"];
     let first_context: Vec<usize> = context.iter().map(|label| row_y(&app, 40, label)).collect();
     assert_eq!(first_context, vec![5, 6, 7]);
     let first: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
@@ -175,7 +175,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
             .count(),
         17
     );
-    assert!(drawn[6].line.to_string().starts_with("handoff at —"));
+    assert!(drawn[6].line.to_string().starts_with("compacts at —"));
     assert_eq!(drawn[7].line.to_string(), "then a summary, fresh context");
     // Before any data the bar is bare track and every unknown figure
     // a dim dash: the dash span reads muted, not text.
@@ -310,7 +310,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     }
 }
 
-/// A `preamble_built` with `trigger`: `None` leaves automatic handoff
+/// A `preamble_built` with `trigger`: `None` leaves automatic compaction
 /// off.
 fn preamble_line(trigger: Option<u64>) -> Line {
     preamble_line_for("s_aaaaaaaaaaaaaaaa", 1000, trigger)
@@ -662,11 +662,11 @@ fn pct_and_bar_floor() {
     // styles do (see the roles test).
     let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "119";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // The handoff row fits with three of pad, nothing cut.
+    // The compaction row fits with two of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at 800         11% of window"),
+            .any(|row| *row == "compacts at 800        11% of window"),
         "{drawn:?}"
     );
     assert!(
@@ -693,7 +693,7 @@ fn context_rows_need_a_window_and_a_status() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at 800".to_owned() + &" ".repeat(21) + "—"),
+            .any(|row| *row == "compacts at 800".to_owned() + &" ".repeat(20) + "—"),
         "{drawn:?}"
     );
     assert!(
@@ -735,7 +735,7 @@ fn a_zero_context_window_holds_the_empty_bar() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(23) + "—"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(22) + "—"),
         "{drawn:?}"
     );
 }
@@ -752,11 +752,11 @@ fn a_full_context_fills_every_cell() {
     // All 17 cells fill, no marker without a trigger, then the size.
     let bar = "\u{2586}".repeat(17) + &" ".repeat(15) + "1.0k";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // With no trigger the handoff point is still unknown.
+    // With no trigger the compaction point is still unknown.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(10) + "100% of window"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(9) + "100% of window"),
         "{drawn:?}"
     );
 }
@@ -805,11 +805,11 @@ fn the_marker_follows_the_seventeen_cells() {
     let drawn = texts(&app, 40);
     let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "500";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // The handoff row fits with two of pad, nothing cut.
+    // The compaction row fits with one of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at 1.0k        50% of window"),
+            .any(|row| *row == "compacts at 1.0k       50% of window"),
         "{drawn:?}"
     );
 }
@@ -1057,7 +1057,7 @@ fn the_session_card_names_the_session_status_model_over_the_preamble() {
 }
 
 /// Folds a session with every row present: directory, model and thinking,
-/// context with its bar, marker and handoff, tokens, cache hits, both
+/// context with its bar, marker and compaction, tokens, cache hits, both
 /// costs, speed, turns and a server down.
 fn full_session(app: &mut App) {
     app.on_line(preamble_line(Some(800)));
@@ -1287,7 +1287,7 @@ fn every_context_card_row_opens_the_context_view() {
         .iter()
         .filter(|row| row.spot == Some(Spot::Context))
         .collect();
-    // The bar, the handoff row and the summary row, each opening the
+    // The bar, the compaction row and the summary row, each opening the
     // context breakdown.
     assert_eq!(context_rows.len(), 3);
     assert!(
@@ -2191,7 +2191,7 @@ fn the_blank_row_after_a_card_shows_no_card_tint() {
 
 /// The Session card draws from the first frame: the title, the
 /// working-directory, branch and model slots; context bar with its
-/// handoff and explainer rows; and every figure row with a dim dash
+/// compaction and explainer rows; and every figure row with a dim dash
 /// where its figure is unknown (`docs/tui.md`, "The panel").
 #[test]
 fn the_session_card_reserves_its_rows_from_the_first_frame() {
@@ -2214,13 +2214,13 @@ fn the_session_card_reserves_its_rows_from_the_first_frame() {
         );
     }
     // No preamble and no status: the bar is bare track with a dim dash
-    // for the size, and the handoff point and share are dim dashes.
+    // for the size, and the compaction point and share are dim dashes.
     let bar = "\u{2586}".repeat(17) + &" ".repeat(18) + "—";
     assert!(drawn.contains(&bar), "{drawn:?}");
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(23) + "—"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(22) + "—"),
         "{drawn:?}"
     );
     // Zero turns are known, not unknown.
@@ -2292,7 +2292,7 @@ fn full_session_on_main(app: &mut App) {
 
 /// The Session card's rows at width 34: the title, the working directory,
 /// "git" and the branch, the model and thinking, the 17-cell bar with its
-/// handoff rows, and every figure with its label dim and its value
+/// compaction rows, and every figure with its label dim and its value
 /// right-aligned (`docs/tui.md`, "The panel").
 #[test]
 fn session_card_rows_match_the_doc_at_width_34() {
@@ -2313,7 +2313,7 @@ fn session_card_rows_match_the_doc_at_width_34() {
             "git  main".to_owned(),
             "test/model".to_owned() + &" ".repeat(16) + "high",
             bar,
-            "handoff at 800   50% of window".to_owned(),
+            "compacts at 800  50% of window".to_owned(),
             "then a summary, fresh context".to_owned(),
             "tokens in / out".to_owned() + &" ".repeat(5) + "1.1k / 200",
             "cache hits".to_owned() + &" ".repeat(18) + "9%",
@@ -2582,6 +2582,533 @@ fn a_drag_on_a_widget_card_copies_its_text() {
     let _ = report(MouseKind::Drag(Button::Left), col + 10, row);
     let effect = report(MouseKind::Release, col + 10, row);
     assert_eq!(effect, Effect::Copy("alpha beta".to_owned()));
+}
+
+/// A delegate session id, distinct from every attached fixture.
+const DELEGATE: &str = "s_dddddddddddddddd";
+
+/// Folds job `job` with `description` as a Fiber delegate with session
+/// `delegate` on the attached session.
+fn delegate_job(app: &mut App, job: &str, delegate: &str, description: &str, ts: u64) {
+    app.on_line(timed_line_for(
+        "s_aaaaaaaaaaaaaaaa",
+        "job_started",
+        ts,
+        serde_json::json!({"job_id": job, "description": description,
+            "output_path": "/tmp/out"}),
+    ));
+    app.on_line(timed_line_for(
+        "s_aaaaaaaaaaaaaaaa",
+        "delegate_started",
+        ts,
+        serde_json::json!({"job_id": job, "delegate_session_id": delegate,
+            "harness": "fiber", "model": "delegate/model",
+            "workspace": "/w/delegate"}),
+    ));
+}
+
+/// Opens `job`'s delegate view through the panel.
+fn open_delegate(app: &mut App, job: &str) {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let serial = app
+        .serial_of_job(&contract::JobId(job.to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let _ = app.on_click(TargetId::Panel(Spot::Delegate(serial)));
+    assert!(app.item_open());
+}
+
+/// Closes the open item view through its header target.
+fn close_delegate(app: &mut App) {
+    use crate::mouse::TargetId;
+    let _ = app.on_click(TargetId::Item(crate::app::items::Spot::Close));
+    assert!(!app.item_open());
+}
+
+/// A delegate `session_status` in `workspace` naming `model`, with git,
+/// a context fill and a cache expiry.
+fn delegate_status(delegate: &str, workspace: &str, model: &str, expiry: u64) -> Line {
+    delegate_status_window(delegate, workspace, model, expiry, 4000)
+}
+
+/// A delegate `session_status` in `workspace` naming `model`, with a
+/// chosen context `window`.
+fn delegate_status_window(
+    delegate: &str,
+    workspace: &str,
+    model: &str,
+    expiry: u64,
+    window: u64,
+) -> Line {
+    timed_line_for(
+        delegate,
+        "session_status",
+        0,
+        serde_json::json!({
+            "name": "delegate work", "workspace": workspace, "project": "-w",
+            "state": "streaming", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 10, "cache_read": 4,
+                "cache_write": {}, "output": 5},
+                "cost": 0.02, "subscription_cost": 0.01},
+            "model": model, "delegates": 0, "jobs": 0, "clients": 0,
+            "git": {"branch": "delegate-branch"},
+            "context": {"tokens": 1500, "window": window},
+            "cache_expires": expiry,
+        }),
+    )
+}
+
+/// A delegate `preamble_built` naming `model` with a window, trigger
+/// and thinking level.
+fn delegate_preamble(delegate: &str, model: &str, thinking: &str) -> Line {
+    timed_line_for(
+        delegate,
+        "preamble_built",
+        0,
+        serde_json::json!({
+            "reason": "start", "model": model, "context_window": 4000,
+            "trigger_at": 3200, "thinking": thinking,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    )
+}
+
+/// The Session card's row range in `rows()`: its title to the next
+/// card's title.
+fn session_card_range(app: &App, width: u16) -> (usize, usize) {
+    let drawn = texts(app, width);
+    let start = drawn
+        .iter()
+        .position(|row| row.starts_with("Session status") || row.starts_with("◆"))
+        .unwrap_or_else(|| panic!("a Session title in {drawn:?}"));
+    let end = drawn[start + 1..]
+        .iter()
+        .position(|row| {
+            ["Changed files", "Jobs", "Delegates", "Quota"]
+                .iter()
+                .any(|title| row.starts_with(title))
+        })
+        .map(|at| start + 1 + at)
+        .unwrap_or(drawn.len());
+    (start, end)
+}
+
+/// The Session card's rows as text.
+fn session_card(app: &App, width: u16) -> Vec<String> {
+    let drawn = texts(app, width);
+    let (start, end) = session_card_range(app, width);
+    drawn[start..end].to_vec()
+}
+
+/// A running Fiber delegate's view shows its own Session figures under
+/// a "◆ <description>" title; Esc restores the parent's card
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_session_card_shows_the_open_delegate_and_restores_on_esc() {
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(status_line(
+        spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+    ));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 0);
+    open_delegate(&mut app, "j_1");
+    app.on_line(delegate_preamble(DELEGATE, "two/model", "medium"));
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model", 2_550_000));
+    let card = session_card(&app, 40);
+    assert!(
+        card[0].starts_with("◆ review the diff"),
+        "the title names the delegate: {card:?}"
+    );
+    // Workspace, branch, model and thinking are the delegate's.
+    assert_eq!(card[1], "/two");
+    assert!(card[2].contains("delegate-branch"), "{card:?}");
+    assert!(
+        card.iter()
+            .any(|row| row.contains("two/model") && row.contains("medium")),
+        "the delegate model and level: {card:?}"
+    );
+    assert!(
+        !card.iter().any(|row| row.contains("test/model")),
+        "no parent model: {card:?}"
+    );
+    // The context bar fills from the delegate's tokens, and the costs
+    // read its spend.
+    assert!(
+        card.iter().any(|row| row.contains("1.5k")),
+        "the delegate context size: {card:?}"
+    );
+    assert!(
+        card.iter()
+            .any(|row| row.starts_with("cache hits") && row.contains("28%")),
+        "the delegate hit rate: {card:?}"
+    );
+    assert!(
+        card.iter()
+            .any(|row| row.starts_with("cost ") && row.contains("$0.02")),
+        "the delegate billed cost: {card:?}"
+    );
+    insta::assert_snapshot!(
+        "delegate_session_card",
+        super::super::text(&draw_targets(&app).0)
+    );
+    // Esc restores the parent's card.
+    close_delegate(&mut app);
+    let card = session_card(&app, 40);
+    assert!(card[0].starts_with("Session status"), "{card:?}");
+    assert!(
+        card.iter().any(|row| row.contains("test/model")),
+        "the parent model is back: {card:?}"
+    );
+    assert!(
+        !card.iter().any(|row| row.contains("two/model")),
+        "no delegate model: {card:?}"
+    );
+}
+
+/// With the parent seeded but no delegate line folded, the delegate's
+/// card shows unknown forms, never the parent's figures.
+#[test]
+fn delegate_session_card_unknown_values_show_dashes_never_the_parent() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    let payload = serde_json::json!({
+        "name": "work", "workspace": "/Users/you/work/fiber", "project": "-w",
+        "state": "idle", "started": 0, "calls": 0, "since": 0,
+        "spend": {"tokens": {"input": 900, "cache_read": 100,
+            "cache_write": {"5m": 50}, "output": 200},
+            "cost": 0.41, "subscription_cost": 1.10},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        "git": {"branch": "main"},
+        "context": {"tokens": 500, "window": 1000},
+        "cache_expires": 600_000,
+    });
+    app.on_line(session_line("session_status", payload));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 0);
+    open_delegate(&mut app, "j_1");
+    let card = session_card(&app, 40);
+    assert!(card[0].starts_with("◆ review the diff"), "{card:?}");
+    // The workspace line and the branch slot stay blank.
+    assert_eq!(card[1], "", "no parent workspace: {card:?}");
+    assert_eq!(card[2], "", "no parent branch: {card:?}");
+    // The model slot stays blank until the delegate names one.
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(model.line.to_string(), "");
+    // The context bar draws empty: no marker, dim dashes.
+    let bars: Vec<_> = rows(&app, 40)
+        .into_iter()
+        .filter(|row| row.spot == Some(Spot::Context))
+        .collect();
+    assert_eq!(bars.len(), 3);
+    assert!(
+        !bars[0].line.to_string().contains("│"),
+        "no handoff marker: {:?}",
+        bars[0].line.to_string()
+    );
+    assert!(
+        bars[0].line.to_string().contains("—"),
+        "a dim dash for the size: {:?}",
+        bars[0].line.to_string()
+    );
+    assert!(
+        bars[1].line.to_string().starts_with("compacts at —"),
+        "an unknown compaction point: {:?}",
+        bars[1].line.to_string()
+    );
+    // Every figure row holds its dim dash.
+    for row in rows(&app, 40)
+        .into_iter()
+        .filter(|row| row.spot == Some(Spot::Usage))
+    {
+        assert!(
+            row.line.to_string().ends_with("—"),
+            "a reserved figure: {:?}",
+            row.line.to_string()
+        );
+    }
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| row.starts_with("speed, last reply") && row.ends_with("—")),
+        "an unknown speed: {card:?}"
+    );
+    // No parent figure leaks into the delegate's card.
+    for row in texts(&app, 40) {
+        assert!(!row.contains("test/model"), "parent model in {row}");
+        assert!(
+            !row.contains("/Users/you/work/fiber"),
+            "parent workspace in {row}"
+        );
+        assert!(!row.contains("main"), "parent branch in {row}");
+        assert!(!row.contains("$0.41"), "parent cost in {row}");
+    }
+}
+
+/// A zero context window on the delegate names no context: the card
+/// keeps its dim dashes rather than drawing its figures
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_session_card_zero_window_shows_dashes_never_figures() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(status_line(
+        spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+    ));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 0);
+    open_delegate(&mut app, "j_1");
+    app.on_line(delegate_status_window(
+        DELEGATE,
+        "/two",
+        "two/model",
+        2_550_000,
+        0,
+    ));
+    let card = session_card(&app, 40);
+    assert!(card[0].starts_with("◆ review the diff"), "{card:?}");
+    // The status folded: the workspace, branch and model are the
+    // delegate's, so the dashes below are about the window.
+    assert_eq!(card[1], "/two");
+    assert!(card[2].contains("delegate-branch"), "{card:?}");
+    assert!(
+        card.iter().any(|row| row.contains("two/model")),
+        "the delegate model folded: {card:?}"
+    );
+    // The context bar and its lines hold their unknown forms.
+    assert!(
+        !card.iter().any(|row| row.contains("1.5k")),
+        "no delegate context size: {card:?}"
+    );
+    let bars: Vec<_> = rows(&app, 40)
+        .into_iter()
+        .filter(|row| row.spot == Some(Spot::Context))
+        .collect();
+    assert_eq!(bars.len(), 3);
+    assert!(
+        bars[0].line.to_string().contains("—"),
+        "a dim dash for the size: {:?}",
+        bars[0].line.to_string()
+    );
+    assert!(
+        bars[1].line.to_string().starts_with("compacts at —"),
+        "an unknown compaction point: {:?}",
+        bars[1].line.to_string()
+    );
+}
+
+/// A finished delegate's view shows its last status dimmed, with the
+/// items outcome in the title.
+#[test]
+fn delegate_session_card_finished_shows_last_status_dim_with_outcome() {
+    use ratatui::style::Modifier;
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(status_line(
+        spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+    ));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 0);
+    open_delegate(&mut app, "j_1");
+    app.on_line(delegate_preamble(DELEGATE, "two/model", "medium"));
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model", 2_550_000));
+    app.on_line(timed_line_for(
+        "s_aaaaaaaaaaaaaaaa",
+        "job_completed",
+        5000,
+        serde_json::json!({"job_id": "j_1", "status": "failed"}),
+    ));
+    let (start, end) = session_card_range(&app, 40);
+    let card_rows = &rows(&app, 40)[start..end];
+    // The title keeps the delegate's name and appends the exact outcome.
+    assert!(
+        card_rows[0]
+            .line
+            .to_string()
+            .starts_with("◆ review the diff"),
+        "{:?}",
+        card_rows[0].line.to_string()
+    );
+    assert!(
+        card_rows[0].line.to_string().contains("failed"),
+        "the outcome word: {:?}",
+        card_rows[0].line.to_string()
+    );
+    // The last status still shows, dimmed.
+    assert!(
+        card_rows
+            .iter()
+            .any(|row| row.line.to_string().contains("two/model")),
+        "the delegate model stays"
+    );
+    // Edge rows draw their box, not their empty span; every text span
+    // dims.
+    let mut dimmed = 0;
+    for row in card_rows.iter().filter(|row| !row.edge) {
+        if row.line.spans.is_empty() {
+            assert_eq!(
+                row.line.to_string(),
+                "",
+                "only the blank separator hides from the dim"
+            );
+            continue;
+        }
+        for span in &row.line.spans {
+            assert!(
+                span.style.add_modifier.contains(Modifier::DIM),
+                "every Session row dims while finished: {:?}",
+                row.line.to_string()
+            );
+            dimmed += 1;
+        }
+    }
+    assert!(dimmed > 10, "the card's text dims: {dimmed}");
+}
+
+/// A finished Fiber delegate view with no stored status shows its
+/// calls and elapsed time with the outcome; model and context read
+/// unknown. Covers a refused finished-transcript open, whose item
+/// stays open with the refusal message.
+#[test]
+fn delegate_session_card_finished_without_status_shows_calls_and_outcome() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    // The link is up so the open subscribes; the refusal below then
+    // lands on the open finished view.
+    let _ = app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: contract::HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.on_line(preamble_line(Some(800)));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 2000);
+    let send = match open_send(&mut app, "j_1") {
+        Some(lines) => lines,
+        None => panic!("the open subscribes"),
+    };
+    app.on_line(timed_line_for(
+        "s_aaaaaaaaaaaaaaaa",
+        "job_completed",
+        5000,
+        serde_json::json!({"job_id": "j_1", "status": "completed"}),
+    ));
+    // The replay's subscribe is refused after completion: the item stays
+    // open with the message, and no transcript arrives.
+    let full = send
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a subscribe in {send:?}"));
+    let id = full["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    app.on_line(timed_line_for(
+        DELEGATE,
+        "command_rejected",
+        0,
+        serde_json::json!({"command_id": id, "code": "session_not_found",
+            "message": "gone"}),
+    ));
+    let view = app.item_view().unwrap_or_else(|| panic!("an open view"));
+    assert!(!view.running);
+    assert!(
+        view.message
+            .as_deref()
+            .is_some_and(|message| message.contains("Could not open")),
+        "the refusal message"
+    );
+    assert!(!view.has_transcript);
+    let card = session_card(&app, 40);
+    assert!(card[0].starts_with("◆ review the diff"), "{card:?}");
+    assert!(card[0].contains("completed"), "the outcome word: {card:?}");
+    // Calls and elapsed from the items record, unknown model/context.
+    assert!(
+        card.iter().any(|row| row.contains("0 calls · 3s")),
+        "calls and elapsed: {card:?}"
+    );
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(model.line.to_string(), "");
+}
+
+/// Opens `job`'s delegate view, returning the parsed lines going out.
+fn open_send(app: &mut App, job: &str) -> Option<Vec<serde_json::Value>> {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let serial = app
+        .serial_of_job(&contract::JobId(job.to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    match app.on_click(TargetId::Panel(Spot::Delegate(serial))) {
+        crate::app::Effect::Send(lines) => Some(
+            lines
+                .iter()
+                .map(|line| {
+                    serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+                })
+                .collect(),
+        ),
+        crate::app::Effect::None
+        | crate::app::Effect::Quit
+        | crate::app::Effect::ListFiles
+        | crate::app::Effect::FindPause { .. }
+        | crate::app::Effect::Search { .. }
+        | crate::app::Effect::Editor { .. }
+        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::Copy(_)
+        | crate::app::Effect::OpenLink(_)
+        | crate::app::Effect::OpenFile(_)
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => None,
+    }
+}
+
+/// The countdown row and its wake follow the open delegate's expiry,
+/// not the parent's.
+#[test]
+fn delegate_session_card_cache_countdown_follows_the_delegate_expiry() {
+    use contract::clock::Clock;
+    use std::time::Duration;
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(status_with_expiry(
+        spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+        Some(600_000),
+    ));
+    delegate_job(&mut app, "j_1", DELEGATE, "review the diff", 0);
+    open_delegate(&mut app, "j_1");
+    app.on_line(delegate_preamble(DELEGATE, "two/model", "medium"));
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model", 2_550_000));
+    let clock = fakes::clock::FakeClock::new();
+    app.set_now(clock.now(), 0);
+    // The delegate's expiry, not the parent's minutes, counts down.
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| row.starts_with("cache resets in") && row.ends_with("42m")),
+        "the delegate countdown: {:?}",
+        texts(&app, 40)
+    );
+    // Finished, the last status still counts down and the painted wake
+    // follows the delegate's boundary, not the parent's.
+    app.on_line(timed_line_for(
+        "s_aaaaaaaaaaaaaaaa",
+        "job_completed",
+        5000,
+        serde_json::json!({"job_id": "j_1", "status": "completed"}),
+    ));
+    app.motion().clear_wake();
+    let _ = draw_targets(&app);
+    assert_eq!(
+        app.motion().take_wake(),
+        Some(clock.now() + Duration::from_millis(30_001)),
+        "the delegate expiry's wake"
+    );
 }
 
 /// A cut row copies what it shows without the cut marker, while a

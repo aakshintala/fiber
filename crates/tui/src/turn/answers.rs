@@ -258,6 +258,8 @@ pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients
@@ -290,8 +292,8 @@ pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept

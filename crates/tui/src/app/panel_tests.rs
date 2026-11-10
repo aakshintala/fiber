@@ -1,9 +1,10 @@
 //! Tests for the panel's folded state: widgets and going home.
 
 use super::super::{App, Effect};
+use super::Spot;
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::link::Line;
-use contract::{HubEventKind, events::EventKind};
+use contract::{HubEventKind, clock::Clock, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -52,11 +53,16 @@ fn progress_finished_figures_need_a_summary_and_an_end_and_saturate() {
     for (ended, elapsed) in [(1999, 0), (2000, 0), (2001, 1)] {
         let mut app = attached();
         assert_eq!(app.panel_state().finished_figures(&job), None);
-        app.panel_state.keep_last(job.clone(), 6, 2000);
+        app.panel_state
+            .keep_last(job.clone(), 6, 2000, Some((Some(0.42), 1.10)));
         assert_eq!(app.panel_state().finished_figures(&job), None);
         app.on_line(ts_line(SESSION, "delegate_finished", ended, json!({"job_id": "j_1", "text": "done",
             "usage": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0}, "cost": null, "subscription_cost": 0.0}})));
         assert_eq!(app.panel_state().finished_figures(&job), Some((6, elapsed)));
+        assert_eq!(
+            app.panel_state().finished_cost(&job),
+            Some((Some(0.42), 1.10))
+        );
         app.on_line(ts_line(
             SESSION,
             "job_started",
@@ -64,8 +70,9 @@ fn progress_finished_figures_need_a_summary_and_an_end_and_saturate() {
             json!({"job_id": "j_1", "description": "again", "output_path": "/tmp/out"}),
         ));
         assert_eq!(app.panel_state().finished_figures(&job), None);
-        app.panel_state.keep_last(job.clone(), 1, 3000);
+        app.panel_state.keep_last(job.clone(), 1, 3000, None);
         assert_eq!(app.panel_state().finished_figures(&job), None);
+        assert_eq!(app.panel_state().finished_cost(&job), None);
     }
 }
 
@@ -565,6 +572,30 @@ fn a_completed_delegate_stays_on_the_card_as_done() {
     assert_eq!(app.panel_state().jobs().len(), 1);
 }
 
+#[test]
+fn enter_toggles_the_finished_delegate_fold_without_a_driver_effect() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "review the diff"));
+    app.on_line(delegated_line("j_1"));
+    app.on_line(completed_line("j_1", "completed"));
+    app.focus = Some(crate::mouse::TargetId::Panel(Spot::DelegateFold));
+    assert_eq!(
+        app.on_key(
+            crate::keys::Key::Enter,
+            fakes::clock::FakeClock::new().now()
+        ),
+        Effect::None
+    );
+    assert!(app.panel_state().delegates_open());
+    assert_eq!(
+        app.focus,
+        Some(crate::mouse::TargetId::Panel(Spot::DelegateFold))
+    );
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    assert!(!app.panel_state().delegates_open());
+    assert_eq!(app.panel_state().delegate_scroll(), 0);
+}
+
 /// A resume is a new run of the same job: it runs again, once, last in
 /// start order (`docs/delegates.md`, "Identity and resume").
 #[test]
@@ -628,11 +659,13 @@ fn delegate_scroll_clamps_over_running_and_finished() {
     app.on_line(completed_line("j_5", "completed"));
     assert_eq!(app.panel_state().running_delegates().len(), 3);
     assert_eq!(app.panel_state().finished_delegates().len(), 2);
-    // Five held, three shown: down clamps at two.
+    // The fold and two finished entries are in the weighted window:
+    // the last full window starts at the first finished entry.
+    app.panel_state.toggle_delegates();
     for _ in 0..9 {
         app.panel_state.scroll_delegates(false);
     }
-    assert_eq!(app.panel_state.delegate_scroll(), 2);
+    assert_eq!(app.panel_state.delegate_scroll(), 3);
     // Up saturates at the top.
     for _ in 0..9 {
         app.panel_state.scroll_delegates(true);
@@ -1969,5 +2002,543 @@ fn a_second_branch_answer_after_settle_changes_nothing() {
     assert_eq!(
         app.panel_state().branch(),
         Some(&Branch::Named("main".to_owned()))
+    );
+}
+
+/// A delegate session id, distinct from every attached fixture.
+const DELEGATE: &str = "s_dddddddddddddddd";
+/// A second delegate session id, for the open-A-open-B interleaving.
+const DELEGATE_B: &str = "s_eeeeeeeeeeeeeeee";
+
+/// Folds job `job` as a `harness` delegate with session `delegate` on the
+/// attached session.
+fn delegate_job(app: &mut App, job: &str, delegate: &str, harness: &str) {
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        json!({"job_id": job, "description": format!("task {job}"),
+            "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        json!({"job_id": job, "delegate_session_id": delegate,
+            "harness": harness, "model": "delegate/model",
+            "workspace": "/w/delegate"}),
+    ));
+}
+
+/// Opens job `job`'s item view.
+fn open_job(app: &mut App, job: &str) {
+    app.open_item(&contract::JobId(job.to_owned()));
+}
+
+/// A delegate `session_status` in `workspace` naming `model`, with git,
+/// context, spend and a cache expiry.
+fn delegate_status(delegate: &str, workspace: &str, model: &str) -> Line {
+    ts_line(
+        delegate,
+        "session_status",
+        0,
+        json!({
+            "name": "delegate work", "workspace": workspace, "project": "-w",
+            "state": "streaming", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 10, "cache_read": 4,
+                "cache_write": {}, "output": 5},
+                "cost": 0.02, "subscription_cost": 0.01},
+            "model": model, "delegates": 0, "jobs": 0, "clients": 0,
+            "git": {"branch": "delegate-branch"},
+            "context": {"tokens": 500, "window": 2000},
+            "cache_expires": 9000,
+        }),
+    )
+}
+
+/// A delegate `preamble_built` naming `model` with a window, trigger,
+/// budget and credential.
+fn delegate_preamble(delegate: &str, model: &str) -> Line {
+    ts_line(
+        delegate,
+        "preamble_built",
+        0,
+        json!({
+            "reason": "start", "model": model, "context_window": 4000,
+            "trigger_at": 3200, "thinking": "high", "budget": 2.5,
+            "credential": "delegate-key",
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    )
+}
+
+/// A delegate `assistant_message_started` at `ts`.
+fn delegate_reply(app: &mut App, delegate: &str, ts: u64) {
+    app.on_line(ts_line(
+        delegate,
+        "assistant_message_started",
+        ts,
+        json!({}),
+    ));
+}
+
+/// A delegate `usage_recorded` of `output` tokens at `ts`.
+fn delegate_usage(delegate: &str, output: u64, ts: u64) -> Line {
+    ts_line(
+        delegate,
+        "usage_recorded",
+        ts,
+        json!({
+            "generation_id": "g_1", "model": "delegate/model",
+            "tokens": {"input": 10, "cache_read": 0,
+                "cache_write": {}, "output": output},
+            "input_bytes": 0, "cost": 0.01,
+        }),
+    )
+}
+
+/// The open Fiber delegate's session, if any.
+fn followed(app: &App) -> Option<contract::SessionId> {
+    app.delegate_session()
+}
+
+fn delegate_id() -> contract::SessionId {
+    contract::SessionId(DELEGATE.to_owned())
+}
+
+/// A Fiber delegate's `session_status` folds into the delegate-scoped
+/// fields, leaving the parent's figures alone (`docs/tui.md`, "Swapped
+/// views").
+#[test]
+fn delegate_fold_status_routes_to_the_open_fiber_delegate() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_line(status_line("/one", "one/model"));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    assert_eq!(followed(&app), Some(delegate_id()));
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model"));
+    let session = delegate_id();
+    let panel = app.panel_state();
+    assert_eq!(
+        panel
+            .delegate_status_for(&session)
+            .map(|status| status.workspace.as_str()),
+        Some("/two")
+    );
+    assert_eq!(
+        panel
+            .delegate_status_for(&session)
+            .and_then(|status| status.git.as_ref())
+            .and_then(|git| git.branch.as_deref()),
+        Some("delegate-branch")
+    );
+    assert_eq!(panel.delegate_model_for(&session), Some("two/model"));
+    assert_eq!(
+        panel.delegate_window_for(&session),
+        Some(2000),
+        "the reported window holds until the delegate's own preamble lands"
+    );
+    assert_eq!(
+        panel
+            .delegate_status_for(&session)
+            .and_then(|status| status.cache_expires),
+        Some(9000)
+    );
+    // The parent's figures are untouched.
+    assert_eq!(
+        app.panel_state()
+            .status()
+            .map(|status| status.workspace.as_str()),
+        Some("/one")
+    );
+    assert_eq!(app.panel_state().session_model(), Some("one/model"));
+}
+
+/// A Fiber delegate's `preamble_built` supplies its window, trigger
+/// and budget; a parent-only preamble leaves the delegate's bar empty.
+#[test]
+fn delegate_fold_preamble_supplies_window_trigger_and_budget() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_line(preamble_line("one/model", "low", 1000, 800));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    let session = delegate_id();
+    assert_eq!(app.panel_state().delegate_window_for(&session), None);
+    app.on_line(delegate_preamble(DELEGATE, "two/model"));
+    let panel = app.panel_state();
+    assert_eq!(panel.delegate_model_for(&session), Some("two/model"));
+    assert_eq!(panel.delegate_thinking_for(&session), Some("high"));
+    assert_eq!(panel.delegate_window_for(&session), Some(4000));
+    assert_eq!(panel.delegate_trigger_for(&session), Some(3200));
+    assert_eq!(panel.delegate_budget_for(&session), Some(2.5));
+    // The parent's preamble is untouched.
+    assert_eq!(
+        app.panel_state().window_for(app.session().unwrap()),
+        Some(1000)
+    );
+    assert_eq!(app.panel_state().trigger_at(), Some(800));
+    assert_eq!(app.panel_state().budget(), None);
+}
+
+/// With the parent seeded but no delegate line folded, the delegate's
+/// figures read unknown: nothing falls back to the parent.
+#[test]
+fn delegate_fold_leaves_unknown_forms_without_delegate_lines() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_line(status_line("/one", "one/model"));
+    app.on_line(preamble_line("one/model", "low", 1000, 800));
+    reply(&mut app, 1000);
+    app.on_line(usage_line(500, 3000));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    let session = delegate_id();
+    assert_eq!(followed(&app), Some(session.clone()));
+    let panel = app.panel_state();
+    assert_eq!(panel.delegate_status_for(&session), None);
+    assert_eq!(panel.delegate_model_for(&session), None);
+    assert_eq!(panel.delegate_thinking_for(&session), None);
+    assert!(!panel.delegate_thinking_now_for(&session));
+    assert_eq!(panel.delegate_window_for(&session), None);
+    assert_eq!(panel.delegate_trigger_for(&session), None);
+    assert_eq!(panel.delegate_budget_for(&session), None);
+    assert_eq!(panel.delegate_turns_for(&session), 0);
+    assert_eq!(panel.delegate_speed_for(&session), None);
+    assert_eq!(panel.delegate_down_for(&session), None);
+}
+
+/// A Fiber delegate's `model_changed` updates its model and thinking,
+/// leaving the parent's alone.
+#[test]
+fn delegate_fold_model_changed_updates_model_and_thinking() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_line(changed_line("one/model", "low"));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    app.on_line(ts_line(
+        DELEGATE,
+        "model_changed",
+        0,
+        json!({
+            "before": {"model": "old/delegate", "cache_lifetime": "5m"},
+            "after": {"model": "two/model", "thinking": "high",
+                "cache_lifetime": "5m"},
+            "source": "driver",
+        }),
+    ));
+    let session = delegate_id();
+    assert_eq!(
+        app.panel_state().delegate_model_for(&session),
+        Some("two/model")
+    );
+    assert_eq!(
+        app.panel_state().delegate_thinking_for(&session),
+        Some("high")
+    );
+    assert_eq!(app.panel_state().session_model(), Some("one/model"));
+    assert_eq!(app.panel_state().thinking(), Some("low"));
+}
+
+/// The thinking marker follows the open delegate's own streamed deltas,
+/// not the parent's.
+#[test]
+fn delegate_fold_thinking_marker_follows_the_delegate_stream() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    let session = delegate_id();
+    assert!(!app.panel_state().delegate_thinking_now_for(&session));
+    // A parent delta never lights the delegate's marker.
+    app.on_line(session_line(SESSION, "reasoning_delta", json!({})));
+    assert!(!app.panel_state().delegate_thinking_now_for(&session));
+    // The delegate's own reasoning delta lights it.
+    app.on_line(ts_line(DELEGATE, "reasoning_delta", 0, json!({})));
+    assert!(app.panel_state().delegate_thinking_now_for(&session));
+    // The first text delta latches it shut for the call.
+    app.on_line(ts_line(DELEGATE, "assistant_message_delta", 0, json!({})));
+    assert!(!app.panel_state().delegate_thinking_now_for(&session));
+    // A settled turn ends the call; a new call starts unlit.
+    app.on_line(ts_line(DELEGATE, "turn_completed", 0, json!({})));
+    app.on_line(ts_line(DELEGATE, "reasoning_delta", 0, json!({})));
+    assert!(!app.panel_state().delegate_thinking_now_for(&session));
+    delegate_reply(&mut app, DELEGATE, 1000);
+    app.on_line(ts_line(DELEGATE, "reasoning_delta", 0, json!({})));
+    assert!(app.panel_state().delegate_thinking_now_for(&session));
+    assert_eq!(app.panel_state().delegate_turns_for(&session), 1);
+}
+
+/// Turns and speed come from the delegate's own span: its reply to its
+/// usage. A copied or extension usage is not its last reply.
+#[test]
+fn delegate_fold_turns_and_speed_use_the_delegate_span() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    let session = delegate_id();
+    delegate_reply(&mut app, DELEGATE, 1000);
+    app.on_line(delegate_usage(DELEGATE, 500, 3000));
+    assert_eq!(app.panel_state().delegate_turns_for(&session), 0);
+    assert_eq!(app.panel_state().delegate_speed_for(&session), Some(250));
+    app.on_line(ts_line(DELEGATE, "turn_completed", 0, json!({})));
+    assert_eq!(app.panel_state().delegate_turns_for(&session), 1);
+    // The parent's own span never sets the delegate's speed.
+    reply(&mut app, 4000);
+    app.on_line(usage_line(9000, 9000));
+    assert_eq!(app.panel_state().delegate_speed_for(&session), Some(250));
+    assert_eq!(app.panel_state().speed(), Some(1800));
+}
+
+/// A zero reply span leaves the delegate's speed out, like the parent's.
+#[test]
+fn delegate_fold_zero_span_leaves_speed_out() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    delegate_reply(&mut app, DELEGATE, 1000);
+    app.on_line(delegate_usage(DELEGATE, 500, 1000));
+    assert_eq!(app.panel_state().delegate_speed_for(&delegate_id()), None);
+}
+
+/// A copied usage or an extension's usage is not the delegate's last
+/// reply.
+#[test]
+fn delegate_fold_copied_or_extension_usage_is_not_the_last_reply() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    delegate_reply(&mut app, DELEGATE, 1000);
+    app.on_line(delegate_usage(DELEGATE, 500, 3000));
+    let session = delegate_id();
+    assert_eq!(app.panel_state().delegate_speed_for(&session), Some(250));
+    app.on_line(ts_line(
+        DELEGATE,
+        "usage_recorded",
+        9000,
+        json!({
+            "generation_id": "g_2", "model": "delegate/model",
+            "tokens": {"input": 10, "cache_read": 0,
+                "cache_write": {}, "output": 9000},
+            "input_bytes": 0, "cost": 0.01, "origin_session_id": "s_cccccccccccccccc",
+        }),
+    ));
+    app.on_line(ts_line(
+        DELEGATE,
+        "usage_recorded",
+        9000,
+        json!({
+            "generation_id": "g_3", "model": "delegate/model",
+            "tokens": {"input": 10, "cache_read": 0,
+                "cache_write": {}, "output": 9000},
+            "input_bytes": 0, "cost": 0.01, "extension": "plan",
+        }),
+    ));
+    assert_eq!(app.panel_state().delegate_speed_for(&session), Some(250));
+}
+
+/// A delegate's MCP down and ready events land only in its own set;
+/// the parent's set stays its own.
+#[test]
+fn delegate_fold_mcp_down_and_ready_stay_delegate_scoped() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    app.on_line(failed_line("parent-down"));
+    app.on_line(ts_line(
+        DELEGATE,
+        "mcp_server_failed",
+        0,
+        json!({"server": "delegate-down", "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+    let session = delegate_id();
+    let down: Vec<&str> = app
+        .panel_state()
+        .delegate_down_for(&session)
+        .map(|set| set.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    assert_eq!(down, vec!["delegate-down"]);
+    assert_eq!(
+        app.panel_state()
+            .down()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["parent-down"]
+    );
+    app.on_line(ts_line(
+        DELEGATE,
+        "mcp_server_ready",
+        0,
+        json!({"server": "delegate-down"}),
+    ));
+    assert_eq!(app.panel_state().delegate_down_for(&session), None);
+    assert_eq!(app.panel_state().down().len(), 1);
+}
+
+/// Another harness's delegate, a plain job, or any other session never
+/// touches the delegate fold: the parent's figures stay selected.
+#[test]
+fn delegate_fold_ignores_other_harness_job_and_other_session_views() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    // Another harness's delegate view is open: its lines do not fold.
+    delegate_job(&mut app, "j_1", DELEGATE, "claude");
+    open_job(&mut app, "j_1");
+    assert_eq!(followed(&app), None);
+    app.on_line(delegate_status(DELEGATE, "/other", "other/model"));
+    assert_eq!(app.panel_state().delegate_status_for(&delegate_id()), None);
+    app.close_item();
+    // A plain job's view is open: another session's lines do not fold.
+    delegate_job(&mut app, "j_2", DELEGATE_B, "fiber");
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        json!({"job_id": "j_3", "description": "plain",
+            "output_path": "/tmp/out"}),
+    ));
+    open_job(&mut app, "j_3");
+    assert_eq!(followed(&app), None);
+    app.on_line(delegate_status(DELEGATE_B, "/other", "other/model"));
+    assert_eq!(
+        app.panel_state()
+            .delegate_status_for(&contract::SessionId(DELEGATE_B.to_owned())),
+        None
+    );
+    app.close_item();
+    // A Fiber delegate's view is open, but another session's lines do
+    // not fold into it.
+    delegate_job(&mut app, "j_4", DELEGATE, "fiber");
+    open_job(&mut app, "j_4");
+    app.on_line(delegate_status(OTHER, "/other", "other/model"));
+    assert_eq!(app.panel_state().delegate_status_for(&delegate_id()), None);
+}
+
+/// Closing the view restores the parent's selection; the folded figures
+/// wait, keyed, for the same delegate to open again.
+#[test]
+fn delegate_fold_close_keeps_figures_but_restores_the_parent() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_line(status_line("/one", "one/model"));
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model"));
+    app.close_item();
+    assert_eq!(followed(&app), None);
+    assert_eq!(
+        app.panel_state()
+            .status()
+            .map(|status| status.workspace.as_str()),
+        Some("/one")
+    );
+    // The same delegate opens again: its last figures are still keyed to
+    // it until its new run's lines land.
+    open_job(&mut app, "j_1");
+    assert_eq!(followed(&app), Some(delegate_id()));
+    assert_eq!(
+        app.panel_state()
+            .delegate_status_for(&delegate_id())
+            .map(|status| status.model.as_str()),
+        Some("two/model")
+    );
+}
+
+/// A second delegate's first line never inherits the first delegate's
+/// cached status: with only its own preamble folded the card reads
+/// unknown figures, never the other session's model, context or spend
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn delegate_fold_second_session_starts_from_unknown() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model"));
+    app.on_line(delegate_preamble(DELEGATE, "two/model"));
+    app.close_item();
+    delegate_job(&mut app, "j_2", DELEGATE_B, "fiber");
+    open_job(&mut app, "j_2");
+    let other = contract::SessionId(DELEGATE_B.to_owned());
+    assert_eq!(followed(&app), Some(other.clone()));
+    // Its first line is a preamble: the status stays unknown, not the
+    // first delegate's, while its own preamble's model lands.
+    app.on_line(delegate_preamble(DELEGATE_B, "other/model"));
+    assert_eq!(app.panel_state().delegate_status_for(&other), None);
+    assert_eq!(
+        app.panel_state().delegate_model_for(&other),
+        Some("other/model")
+    );
+    // ... until its own status lands.
+    app.on_line(delegate_status(DELEGATE_B, "/other", "other/model"));
+    assert_eq!(
+        app.panel_state()
+            .delegate_status_for(&other)
+            .map(|status| status.workspace.as_str()),
+        Some("/other")
+    );
+}
+
+/// A resume of the open job clears its stale figures; resuming another
+/// job while its view is open leaves them intact.
+#[test]
+fn delegate_fold_resume_clears_the_open_run_and_spares_another_view() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    delegate_job(&mut app, "j_1", DELEGATE, "fiber");
+    open_job(&mut app, "j_1");
+    app.on_line(delegate_status(DELEGATE, "/two", "two/model"));
+    app.on_line(delegate_preamble(DELEGATE, "two/model"));
+    // The same job runs again: the stale figures clear.
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        json!({"job_id": "j_1", "description": "task j_1",
+            "output_path": "/tmp/out"}),
+    ));
+    let session = delegate_id();
+    assert_eq!(followed(&app), Some(session.clone()));
+    assert_eq!(app.panel_state().delegate_status_for(&session), None);
+    assert_eq!(app.panel_state().delegate_model_for(&session), None);
+    assert_eq!(app.panel_state().delegate_window_for(&session), None);
+    // ... until the new run's lines land.
+    app.on_line(delegate_status(DELEGATE, "/three", "three/model"));
+    assert_eq!(
+        app.panel_state()
+            .delegate_status_for(&session)
+            .map(|status| status.workspace.as_str()),
+        Some("/three")
+    );
+    // Another delegate opens; resuming the first while the second is
+    // open leaves the second's figures intact.
+    delegate_job(&mut app, "j_2", DELEGATE_B, "fiber");
+    app.close_item();
+    open_job(&mut app, "j_2");
+    let other = contract::SessionId(DELEGATE_B.to_owned());
+    app.on_line(delegate_status(DELEGATE_B, "/four", "four/model"));
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        json!({"job_id": "j_1", "description": "task j_1",
+            "output_path": "/tmp/out"}),
+    ));
+    assert_eq!(followed(&app), Some(other.clone()));
+    assert_eq!(
+        app.panel_state()
+            .delegate_status_for(&other)
+            .map(|status| status.workspace.as_str()),
+        Some("/four")
+    );
+    assert_eq!(
+        app.panel_state().delegate_status_for(&session),
+        None,
+        "the resumed-away run holds no figures of its own"
     );
 }

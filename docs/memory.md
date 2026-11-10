@@ -81,7 +81,7 @@ so an empty store adds nothing to the opening message.
 An index changed during a session reaches the model as instruction files do
 (`docs/system-prompt.md`, "When something changes"): the session's own edit
 sends nothing, another session's or the person's edit sends a diff at the next
-turn start, and a handoff sends both indexes again in full. Nothing about
+turn start, and a compaction sends both indexes again in full. Nothing about
 memory enters the preamble, so a memory write never causes a prompt-cache miss
 (`docs/prompt-cache.md`).
 

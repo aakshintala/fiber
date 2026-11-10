@@ -1,4 +1,4 @@
-//! Part 8 tool phase timers (`docs/state.md`, "Diagnostic logs"): one
+//! Part 8 tool phase timers (`docs/state.md`, "What each part holds"): one
 //! `op_timing` line per entered tool phase through the one installed timer.
 //!
 //! Time comes from the injected clock: synchronous fake work inside the
@@ -1267,10 +1267,10 @@ impl Hooks for ProbeHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -3836,10 +3836,10 @@ fn an_escalated_block_splits_stage_and_wait_durations() {
     assert_eq!(permission[0].ms, 17, "the order holds stages and wait");
 }
 
-// The handoff selection judges person messages through the same request
+// The compaction selection judges person messages through the same request
 // path but times no tool stage.
 #[test]
-fn a_handoff_selection_reviews_with_no_tool_stage() {
+fn a_compaction_selection_reviews_with_no_tool_stage() {
     let rules = Arc::new(FakeRules::default());
     let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
     let mut setup = Setup::new(Arc::clone(&rules));
@@ -3861,7 +3861,7 @@ fn a_handoff_selection_reviews_with_no_tool_stage() {
         .expect("the turn started")
         .turn_id
         .expect("a turn id");
-    world.loop_mut().reviewer_handoff(&turn_id).unwrap();
+    world.loop_mut().reviewer_compaction(&turn_id).unwrap();
     assert_eq!(
         world.reviewer.as_ref().expect("a reviewer").called(),
         2,
@@ -6467,7 +6467,7 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
 }
 
 // A reply's hook notices come first in request order, then its
-// `permission_resolved` lines (`docs/permissions.md`, "What is recorded"):
+// `permission_resolved` lines (`docs/permissions.md`, "What the log records"):
 // preparing every call runs its `before_tool` hooks before the first
 // stage fans out, so no fanned-out usage can slip ahead of a notice.
 #[test]

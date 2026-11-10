@@ -1,5 +1,5 @@
 //! What the session loads once its offer step has run, before its first
-//! preamble (`docs/extensions.md`, "Offering"): the post-offer load runs
+//! preamble (`docs/extensions.md`, "Code a repository ships"): the post-offer load runs
 //! once per process, writes its events before `preamble_built`, and never
 //! runs in a process that started with an inherited preamble.
 
@@ -1611,7 +1611,7 @@ fn a_switch_before_the_first_prompt_loads_nothing() {
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
-            handoff: r#loop::HandoffSettings::default(),
+            compaction: r#loop::CompactionSettings::default(),
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
                 message: "no reviewer".into(),

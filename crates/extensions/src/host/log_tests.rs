@@ -53,7 +53,7 @@ fn logged(delivery: Delivery) -> ExtensionLog {
         | Delivery::Sandbox(..)
         | Delivery::AddDirectory(..)
         | Delivery::Message(..)
-        | Delivery::Handoff(..)
+        | Delivery::Compaction(..)
         | Delivery::Model(..)
         | Delivery::Reload(..)
         | Delivery::McpReconnect(..)
@@ -71,6 +71,7 @@ fn logged(delivery: Delivery) -> ExtensionLog {
         | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
         | Delivery::Shell(..)
+        | Delivery::ShellStarted(..)
         | Delivery::Cancelled) => panic!("expected extension_log, got {other:?}"),
     }
 }
@@ -165,7 +166,7 @@ fn a_line_before_deliver_to_keeps_order_with_an_exec_that_ends_after_it() {
         | Delivery::Sandbox(..)
         | Delivery::AddDirectory(..)
         | Delivery::Message(..)
-        | Delivery::Handoff(..)
+        | Delivery::Compaction(..)
         | Delivery::Model(..)
         | Delivery::Reload(..)
         | Delivery::McpReconnect(..)
@@ -183,6 +184,7 @@ fn a_line_before_deliver_to_keeps_order_with_an_exec_that_ends_after_it() {
         | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
         | Delivery::Shell(..)
+        | Delivery::ShellStarted(..)
         | Delivery::Cancelled) => panic!("expected extension_exec, got {other:?}"),
     }
 }

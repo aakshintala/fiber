@@ -502,9 +502,9 @@ impl Fold {
                     && line.action_id.is_some()
                     && recorded.extension.is_none()
                     && recorded.origin_session_id.is_none()
-                    && crate::handoff::prompt_tokens(&recorded.tokens) > 0
+                    && crate::compaction::prompt_tokens(&recorded.tokens) > 0
                 {
-                    self.context = Some(crate::handoff::context_tokens(&recorded.tokens));
+                    self.context = Some(crate::compaction::context_tokens(&recorded.tokens));
                 }
                 // The cache pin moves on a conversation request (an
                 // envelope action of the session's own, not an
@@ -519,7 +519,7 @@ impl Fold {
                     self.cache_ts = Some(line.ts);
                 }
             }
-            Event::HandoffCompleted(_) => {
+            Event::CompactionCompleted(_) => {
                 self.context = None;
                 // The reviewer misses the cache once, as the model does
                 // (`docs/prompt-cache.md`, "Rules for other areas").
@@ -557,6 +557,8 @@ impl Fold {
             | Event::SteeringApplied(_)
             | Event::SteeringQueue(_)
             | Event::ShellCommand(_)
+            | Event::ShellCommandStarted(_)
+            | Event::ShellCommandDelta(_)
             | Event::Clients(_)
             | Event::SessionStatus(_)
             | Event::ContextAdded(_)
@@ -571,7 +573,7 @@ impl Fold {
             | Event::InstructionFile(_)
             | Event::DateChanged(_)
             | Event::SkillsChanged(_)
-            | Event::HandoffStarted(_)
+            | Event::CompactionStarted(_)
             | Event::SkillsResent(_)
             | Event::ContextNudged(_)
             | Event::ReviewerKept(_)
@@ -744,7 +746,7 @@ fn prompt_of(input: &[InputItem]) -> Option<String> {
         InputItem::Message { .. }
         | InputItem::ShellCommand { .. }
         | InputItem::Jobs { .. }
-        | InputItem::Handoff { .. }
+        | InputItem::Compaction { .. }
         | InputItem::Rewind { .. }
         | InputItem::Unknown => None,
     });
@@ -761,7 +763,7 @@ fn prompt_of(input: &[InputItem]) -> Option<String> {
 
 /// What a preamble built with that decides whether a resume kept the
 /// cache's chain alive: the settings, the system prompt and the tool
-/// definitions. Anything else (a handoff point, a budget, a window)
+/// definitions. Anything else (a compaction point, a budget, a window)
 /// leaves the cached prefix alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PreambleTag {
@@ -1054,6 +1056,8 @@ impl Observer {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients
@@ -1088,8 +1092,8 @@ impl Observer {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

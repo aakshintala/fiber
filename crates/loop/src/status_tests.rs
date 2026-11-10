@@ -358,7 +358,7 @@ fn cache_expiry_pins_repins_and_clears() {
     copy["origin_session_id"] = json!("s_delegate");
     w.feed("usage_recorded", Some("a4"), &copy);
     let mut reviewer = usage("g5", 5, None);
-    reviewer["reviewer"] = json!({"purpose": "handoff"});
+    reviewer["reviewer"] = json!({"purpose": "compaction"});
     w.feed("usage_recorded", None, &reviewer);
     w.feed("usage_recorded", None, &usage("g6", 5, None));
     assert_eq!(w.status().cache_expires, pinned);
@@ -384,7 +384,7 @@ fn cache_expiry_pins_repins_and_clears() {
     assert_eq!(w.status().cache_expires, None);
     w.feed("usage_recorded", Some("a7"), &usage("g7", 10, None));
     assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
-    // A reload, a model switch and a handoff each clear the pin; the
+    // A reload, a model switch and a compaction each clear the pin; the
     // next qualifying request re-pins either way.
     w.feed(
         "reloaded",
@@ -405,7 +405,7 @@ fn cache_expiry_pins_repins_and_clears() {
     w.feed("usage_recorded", Some("a9"), &usage("g9", 10, None));
     assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 12}),
     );
@@ -711,9 +711,9 @@ fn only_a_session_model_reply_sets_the_context() {
     // The latest wins.
     w.feed("usage_recorded", Some("a2"), &usage("g5", 7, None));
     assert_eq!(w.status().context.unwrap().tokens, 12);
-    // A handoff clears it until the next reply.
+    // A compaction clears it until the next reply.
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 12}),
     );
@@ -751,9 +751,9 @@ fn a_record_that_reported_no_input_tokens_never_moves_the_context() {
     assert_eq!(w.status().context.unwrap().tokens, 505);
     w.feed("usage_recorded", Some("a3"), &usage("g3", 0, None));
     assert_eq!(w.status().context.unwrap().tokens, 505);
-    // After a handoff it waits for the next record that reports its input.
+    // After a compaction it waits for the next record that reports its input.
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 505}),
     );
@@ -788,10 +788,10 @@ fn a_late_correction_of_an_earlier_call_never_moves_the_context() {
     w.feed("usage_recorded", Some("a1"), &usage("g1", 40, Some(0.5)));
     assert_eq!(w.status().context.unwrap().tokens, 12);
     assert_eq!(w.status().spend.cost, Some(0.5));
-    // After a handoff, a correction of a call before it leaves the context
+    // After a compaction, a correction of a call before it leaves the context
     // unknown until the next reply.
     w.feed(
-        "handoff_completed",
+        "compaction_completed",
         None,
         &json!({"outcome": "completed", "tokens_before": 12}),
     );
@@ -1269,10 +1269,10 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
     w.feed("tool_call_requested", Some("a1"), &paris);
     assert_eq!(w.status().repeats, None);
     w.feed("tool_call_requested", Some("a2"), &paris);
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.feed("tool_call_requested", Some("a3"), &paris);
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(3));
     // A different name resets the run.
     w.feed(
@@ -1286,7 +1286,7 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
         Some("a5"),
         &json!({"name": "shell", "arguments": {"city": "Paris"}}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // The same name with different arguments resets it too.
     w.feed(
@@ -1308,7 +1308,7 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
         Some("a8"),
         &json!({"name": "shell", "arguments": {"days": "2"}}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // An inner call counts like any other: the fold tracks no `ran_by`.
     w.feed(
@@ -1317,7 +1317,7 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
         &json!({"name": "shell", "arguments": {"days": "2"},
             "ran_by": {"extension": "x", "outer_action_id": "a0"}}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(3));
 }
 
@@ -1338,7 +1338,7 @@ fn repeats_compares_arguments_structurally_and_survives_turns() {
         Some("a2"),
         &json!({"name": "read", "arguments": "{\"city\": \"Paris\"}"}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // A non-JSON string compares by bytes: an identical one counts, a
     // trailing space does not.
@@ -1353,7 +1353,7 @@ fn repeats_compares_arguments_structurally_and_survives_turns() {
         Some("a4"),
         &json!({"name": "read", "arguments": "not json"}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.feed(
         "tool_call_requested",
@@ -1366,21 +1366,21 @@ fn repeats_compares_arguments_structurally_and_survives_turns() {
         Some("a6"),
         &json!({"name": "read", "arguments": "not json "}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // The run persists across the turn boundary: no differing call reset it.
     w.finish();
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.prompt("again");
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.feed(
         "tool_call_requested",
         Some("a7"),
         &json!({"name": "read", "arguments": "not json "}),
     );
-    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
+    // `docs/events.md`, "`session_status`": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(3));
 }
 

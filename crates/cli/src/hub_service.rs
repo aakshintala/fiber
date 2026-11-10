@@ -321,7 +321,7 @@ pub(crate) fn install(
     let changed = previous.as_deref() != Some(rendered.as_bytes());
     if row.hub_answers && changed {
         // The installed hub takes over at once through the `run/` lock
-        // handoff, so no wait follows the send. A second install of an
+        // transfer, so no wait follows the send. A second install of an
         // unchanged unit sends nothing, so the running hub keeps its pid.
         stop_running_hub(row.home, row.clock);
     }
@@ -363,7 +363,7 @@ pub(crate) fn install(
 /// Sends `stop` to the hub answering on `home`, if one still does, so the
 /// installed hub takes over at once. Every failure proceeds silently: a
 /// hub that vanished between the probe and the send needs nothing, and
-/// the `run/` lock handoff covers a live hub.
+/// the `run/` lock transfer covers a live hub.
 pub(crate) fn stop_running_hub(home: &Path, clock: &dyn Clock) {
     let mut never = || Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"));
     let Ok((stream, _)) =

@@ -3,22 +3,26 @@
 //! wait all admit a delivery through the same rules.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use contract::commands::AddDirectoryArgs;
 use contract::commands::Reply;
 use contract::emit::Emit;
 use contract::events::DirectoryAdded;
-use contract::events::{Event, ExtensionExec, ExtensionLog, ShellCommand, UsageRecorded};
-use contract::inbox::{Ack, Delivery, Message, Rejection};
+use contract::events::{
+    Event, ExtensionExec, ExtensionLog, ShellCommand, ShellCommandStarted, UsageRecorded,
+};
+use contract::inbox::{Ack, Delivery, Handshake, Message, Rejection};
 use contract::steering;
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
 use crate::before_message::Hooked;
 use crate::cancel::SignalState;
 use crate::jobs::Queued;
+use support::lock;
+
 use crate::{Error, Loop};
 
 mod asked;
@@ -257,7 +261,7 @@ impl Loop {
                     Queued::Job(..)
                     | Queued::Notice(..)
                     | Queued::Line(_)
-                    | Queued::Handoff(..)
+                    | Queued::Compaction(..)
                     | Queued::Pending(..) => true,
                 })
                 .collect();
@@ -372,7 +376,7 @@ impl Loop {
                 Queued::Job(..)
                 | Queued::Notice(..)
                 | Queued::Line(_)
-                | Queued::Handoff(..)
+                | Queued::Compaction(..)
                 | Queued::Pending(..) => true,
             })
             .collect();
@@ -473,7 +477,7 @@ impl Loop {
             Queued::Job(..)
             | Queued::Notice(..)
             | Queued::Line(_)
-            | Queued::Handoff(..)
+            | Queued::Compaction(..)
             | Queued::Pending(..) => true,
         });
         self.write_queued(turn)?;
@@ -525,7 +529,7 @@ impl Loop {
             | Delivery::AddDirectory(..)
             | Delivery::Sandbox(..)
             | Delivery::Message(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)
@@ -545,7 +549,8 @@ impl Loop {
             | Delivery::DelegateUsage { .. }
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
-            | Delivery::Shell(..)) => {
+            | Delivery::Shell(..)
+            | Delivery::ShellStarted(..)) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
             }
@@ -634,15 +639,15 @@ impl Loop {
             }
             // A session message joins the turn's input, after `close` too.
             Delivery::Message(message, ack) => self.admit_message_idle(message, ack, input)?,
-            // Like a steer, a handoff starts a turn while idle: one
-            // `handoff` item per command, run at the turn's first step
+            // Like a steer, a compaction starts a turn while idle: one
+            // `compaction` item per command, run at the turn's first step
             // boundary.
-            Delivery::Handoff(id, args, ack) => {
+            Delivery::Compaction(id, args, ack) => {
                 if self.closing && input.pieces.is_empty() {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
                     accept(ack);
-                    input.pieces.push(Queued::Handoff(id, args.instructions));
+                    input.pieces.push(Queued::Compaction(id, args.instructions));
                 }
             }
             // A switch admitted while idle applies at once, before the
@@ -670,6 +675,11 @@ impl Loop {
             // A sent shell joins the next turn's input: written at this
             // drain, held for the next `turn_started`, starting no turn.
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
+            // A sent shell's start line is written at this drain, before
+            // its command starts; it starts no turn either.
+            Delivery::ShellStarted(line, handshake, ack) => {
+                self.take_shell_started(line, handshake, ack)?
+            }
             // Starts a new session that continues this one from an
             // earlier point, once, while idle (`docs/events.md`,
             // "Rewind").
@@ -691,7 +701,7 @@ impl Loop {
             // for the session's jobs; without them the claim is left
             // untaken. The claim is asked here, at admission: a refused
             // claim starts no turn.
-            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+            Delivery::Job(notice) if self.compaction.carry.owned(&notice.completed.job_id.0) => {
                 self.end_extension_job(notice)?;
             }
             Delivery::Job(notice) => {
@@ -831,10 +841,10 @@ impl Loop {
             Delivery::Message(message, ack) => self.admit_message_running(message, ack, turn)?,
             // Held until the next step boundary; not listed on
             // `steering_queue`, which holds steering messages only.
-            Delivery::Handoff(id, args, ack) => {
+            Delivery::Compaction(id, args, ack) => {
                 accept(ack);
                 self.queued
-                    .push_back(Queued::Handoff(id, args.instructions));
+                    .push_back(Queued::Compaction(id, args.instructions));
             }
             // A switch admitted during a turn waits for the next turn
             // boundary. While `deferred` still holds one, a live one
@@ -889,6 +899,11 @@ impl Loop {
             // turn: written at this drain and held for the next
             // `turn_started`.
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
+            // Its start line is written at this drain too, mid-turn
+            // included, before its command starts.
+            Delivery::ShellStarted(line, handshake, ack) => {
+                self.take_shell_started(line, handshake, ack)?
+            }
             // While a turn runs the session cannot close first: rewind
             // once it ends.
             Delivery::Rewind(_, _, ack) => {
@@ -912,7 +927,7 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning at a drain.
             Delivery::Cancelled => {}
-            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+            Delivery::Job(notice) if self.compaction.carry.owned(&notice.completed.job_id.0) => {
                 self.end_extension_job(notice)?;
             }
             Delivery::Job(notice) => self.admit_job(notice, turn)?,
@@ -959,6 +974,39 @@ impl Loop {
         let event = Event::ShellCommand(line);
         self.write(&event, None, None)?;
         accept(ack);
+        Ok(())
+    }
+
+    /// Takes a sent driver shell's start: written as `shell_command_started`
+    /// at this drain, the handshake set to `Written` while the line is
+    /// appended, then accepted with no result, so the command starts only
+    /// after its line is durable (`docs/events.md`, "`shell_command_started`").
+    /// A worker that gave up first has set `Abandoned`: nothing is written
+    /// and the ack answers `cancelled`. A failed append returns before
+    /// acknowledging, as every other take does, leaving the handshake
+    /// `Pending` for the worker to abandon when the dropped ack wakes it.
+    /// The handshake's lock is taken before the log's.
+    pub(crate) fn take_shell_started(
+        &mut self,
+        line: ShellCommandStarted,
+        handshake: Arc<Mutex<Handshake>>,
+        ack: Ack,
+    ) -> Result<(), Error> {
+        let mut state = lock(&handshake);
+        if *state == Handshake::Pending {
+            let event = Event::ShellCommandStarted(line);
+            self.write(&event, None, None)?;
+            *state = Handshake::Written;
+            drop(state);
+            accept(ack);
+        } else {
+            drop(state);
+            reject(
+                ack,
+                ErrorCode::Cancelled,
+                "the command was cancelled before it started",
+            );
+        }
         Ok(())
     }
 

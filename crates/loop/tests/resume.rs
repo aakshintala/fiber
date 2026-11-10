@@ -13,7 +13,7 @@ mod support;
 
 use support::History;
 use support::{
-    assistant, fiber_started, handoff_done, handoff_started, hosted_requested, job_completed,
+    assistant, compaction_done, compaction_started, fiber_started, hosted_requested, job_completed,
     job_started, kinds_of, message_started, opening_of, result_of, texts,
 };
 use support::{completed_event, requested, standing_request, started, user_turn};
@@ -978,7 +978,7 @@ fn a_reviewers_usage_is_not_the_sessions_model() {
     history.write(History::usage("g1", MODEL, Some(1.0)), Some("a_1"));
     let mut review = History::usage("g2", "other/reviewer", Some(2.0));
     if let Event::UsageRecorded(recorded) = &mut review {
-        recorded.reviewer = Some(contract::events::ReviewerUse::Handoff);
+        recorded.reviewer = Some(contract::events::ReviewerUse::Compaction);
     }
     history.write(review, Some("a_2"));
     let resumed = r#loop::resumed(&history.dir).unwrap();
@@ -2284,10 +2284,10 @@ fn a_cancel_reaches_a_call_running_after_a_resumed_credential_refusal() {
 }
 
 #[test]
-fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
+fn a_resumed_credential_refusal_compacts_from_a_later_call() {
     // The credential-refusal branch runs its batch uncancelled, so a later
-    // call whose result sets `control.handoff` restarts the context from
-    // its note through `handoff_from_tools`, as in any step: the `!cancelled`
+    // call whose result sets `control.compact` restarts the context from
+    // its note through `compaction_from_tools`, as in any step: the `!cancelled`
     // guard's effect, and the MISSED mutant that deletes the `!`.
     let keys = fakes::TempDir::new("fiber-resume-keys");
     let key = keys.path().join("openrouter");
@@ -2302,7 +2302,7 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: Some("the note".into()),
+        compact: Some("the note".into()),
         ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
@@ -2334,7 +2334,7 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     );
     assert!(denied.ran().is_empty(), "a denied call never runs");
     assert_eq!(wrapup.ran().len(), 1, "a call after the refusal runs");
-    let handed = new_of(&history, "handoff_completed");
+    let handed = new_of(&history, "compaction_completed");
     assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(handed[0].payload["outcome"], "completed");
     assert_eq!(handed[0].payload["note"], json!(["a_3"]));
@@ -2344,7 +2344,7 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
 fn asking(name: &'static str) -> Arc<support::TestTool> {
     let mut tool = support::TestTool::reads(name, "Asked.");
     tool.output.control = Some(contract::events::Control {
-        handoff: None,
+        compact: None,
         questions: Some(vec![contract::shapes::Question {
             header: "h".into(),
             question: "Which?".into(),
@@ -2579,9 +2579,9 @@ fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() 
 }
 
 #[test]
-fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
+fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_compaction() {
     // The batch ran with a note in hand but a cancel ended it, so the
-    // `!cancelled` guard skips `handoff_from_tools`: no `handoff_completed`
+    // `!cancelled` guard skips `compaction_from_tools`: no `compaction_completed`
     // is written, and the turn ends `interrupted`. Deleting the `!` hands
     // off instead, which this test forbids.
     let keys = fakes::TempDir::new("fiber-resume-keys");
@@ -2596,7 +2596,7 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: Some("the note".into()),
+        compact: Some("the note".into()),
         ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
@@ -2646,7 +2646,7 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
         slow.cancelled.lock().unwrap().contains(&true),
         "the slow call saw the cancel"
     );
-    // The note was in hand: the noted call completed with its handoff.
+    // The note was in hand: the noted call completed with its compaction.
     let done: Vec<(String, String)> = new_of(&history, "tool_call_completed")
         .into_iter()
         .map(|line| {
@@ -2668,10 +2668,10 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
         .into_iter()
         .find(|line| line.action_id.as_ref().unwrap().0 == "a_2")
         .unwrap();
-    assert_eq!(noted.payload["control"], json!({"handoff": "the note"}));
+    assert_eq!(noted.payload["control"], json!({"compact": "the note"}));
     assert!(
-        new_of(&history, "handoff_completed").is_empty(),
-        "a cancel that ended the batch skips the tool handoff: {:?}",
+        new_of(&history, "compaction_completed").is_empty(),
+        "a cancel that ended the batch skips the tool compaction: {:?}",
         history.new_kinds()
     );
 }
@@ -3003,7 +3003,7 @@ fn keeper_completions_join_one_turn_as_a_single_fiber_message() {
             .cloned()
             .collect::<Vec<_>>()
     };
-    // docs/tools.md, "The keeper": all kept notices join the next turn in one message, once.
+    // `docs/tools.md`, "The keeper": all kept notices join the next turn in one message, once.
     let messages = fiber_messages(&turns[0]);
     assert_eq!(messages.len(), 1);
     let text = messages[0]["content"][0]["text"].as_str().unwrap();
@@ -3228,15 +3228,15 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     );
 }
 
-// Handoff windows (`docs/handoff.md`, "Resume"): the rebuild renders what a
-// handoff leaves in force.
+// Compaction windows (`docs/compaction.md`, "Resume"): the rebuild renders what a
+// compaction leaves in force.
 
 /// A history holding an opening, one turn, and the note request's lines.
-fn handoff_history(script: Vec<Scripted>) -> History {
+fn compaction_history(script: Vec<Scripted>) -> History {
     let history = History::new(script);
     history.write(opening_of("old-os"), None);
     history.write(user_turn("one"), None);
-    history.write(handoff_started(), None);
+    history.write(compaction_started(), None);
     history.write(message_started(), Some("a_note"));
     history.write(assistant("the note"), Some("a_note"));
     history
@@ -3256,10 +3256,10 @@ fn resume_conversation(history: &mut History, prompt: &str) -> Vec<Input> {
 }
 
 #[test]
-fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
-    let mut history = handoff_history(vec![Scripted::text("Hello.")]);
+fn a_resume_after_a_completed_compaction_sends_from_the_last_compaction() {
+    let mut history = compaction_history(vec![Scripted::text("Hello.")]);
     history.write(
-        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        compaction_done(contract::events::Outcome::Completed, &["a_note"]),
         None,
     );
     history.write(opening_of("new-os"), None);
@@ -3269,7 +3269,7 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
 
     let seen = texts(&conversation);
     assert!(seen[0].contains("new-os"), "{seen:?}");
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         seen[1..],
         ["The person's new message:\none", "the note", "two"]
@@ -3292,8 +3292,8 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
 }
 
 #[test]
-fn a_resume_after_a_crash_mid_handoff_sends_the_context_as_it_was() {
-    let mut history = handoff_history(vec![Scripted::text("Two."), Scripted::text("Three.")]);
+fn a_resume_after_a_crash_mid_compaction_sends_the_context_as_it_was() {
+    let mut history = compaction_history(vec![Scripted::text("Two."), Scripted::text("Three.")]);
     // The process that resumes writes `fiber_started`.
     history.write(fiber_started(), None);
     history.freeze();
@@ -3320,9 +3320,9 @@ fn a_resume_after_a_crash_mid_handoff_sends_the_context_as_it_was() {
 
 #[test]
 fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn() {
-    let mut history = handoff_history(vec![Scripted::text("Hello.")]);
+    let mut history = compaction_history(vec![Scripted::text("Hello.")]);
     history.write(
-        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        compaction_done(contract::events::Outcome::Completed, &["a_note"]),
         None,
     );
     history.freeze();
@@ -3336,7 +3336,7 @@ fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn
     );
     assert!(seen[0].contains("Session log:"), "{seen:?}");
     assert!(!seen[0].contains("old-os"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         seen[1..],
         ["The person's new message:\none", "the note", "two"]
@@ -3696,22 +3696,22 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
     assert_eq!(exited.payload.get("suspended_on"), None);
 }
 
-// A resume after a completed handoff reads its window only (#874).
+// A resume after a completed compaction reads its window only (#874).
 
-/// A history whose first context ends in a completed handoff: the early
-/// turn's lines, then the handoff turn, the note and the new opening.
-fn handed_off(script: Vec<Scripted>) -> History {
+/// A history whose first context ends in a completed compaction: the early
+/// turn's lines, then the compaction turn, the note and the new opening.
+fn compacted(script: Vec<Scripted>) -> History {
     let history = History::new(script);
     history.write(opening_of("old-os"), None);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
     history.write(assistant("early answer"), Some("a_0"));
     history.write(user_turn("two"), None);
-    history.write(handoff_started(), None);
+    history.write(compaction_started(), None);
     history.write(message_started(), Some("a_note"));
     history.write(assistant("the note"), Some("a_note"));
     history.write(
-        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        compaction_done(contract::events::Outcome::Completed, &["a_note"]),
         None,
     );
     history.write(opening_of("new-os"), None);
@@ -3719,8 +3719,8 @@ fn handed_off(script: Vec<Scripted>) -> History {
 }
 
 #[test]
-fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() {
-    let mut history = handed_off(vec![Scripted::text("Hello.")]);
+fn a_resume_after_a_completed_compaction_sends_the_note_and_what_came_after_only() {
+    let mut history = compacted(vec![Scripted::text("Hello.")]);
     history.write(message_started(), Some("a_3"));
     history.write(assistant("after"), Some("a_3"));
     history.freeze();
@@ -3742,7 +3742,7 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
         })
         .collect();
     assert!(seen[0].contains("new-os"), "{seen:?}");
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         seen[1..],
         [
@@ -3755,11 +3755,11 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
 }
 
 #[test]
-fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_after_the_pass() {
+fn a_turn_suspended_after_a_compaction_re_raises_its_request_past_lines_written_after_the_pass() {
     // `main`'s order: the pass, then `fiber_started` and the like, then the
     // resume. The window ends where the pass ended, so the suspension it
     // read still stands.
-    let mut history = handed_off(vec![Scripted::text("Hello.")]);
+    let mut history = compacted(vec![Scripted::text("Hello.")]);
     history.write(user_turn("three"), None);
     history.write(message_started(), Some("a_5"));
     history.write(requested("read", "Paris"), Some("a_1"));
@@ -3920,14 +3920,14 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
 }
 
 #[test]
-fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
+fn an_allowed_call_that_sets_control_compact_compacts_after_the_batch() {
     // The finishing turn's batch ran uncancelled: a call whose result set
-    // `control.handoff` restarts the context from its note, as in any step.
+    // `control.compact` restarts the context from its note, as in any step.
     let mut history = suspended_batch(vec![Scripted::text("Done.")], &["wrapup"], 1);
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: Some("the note".into()),
+        compact: Some("the note".into()),
         ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
@@ -3939,7 +3939,7 @@ fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
     assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
     assert!(is_accepted(&seen), "the reply was accepted");
     assert_eq!(wrapup.ran().len(), 1);
-    let handed = new_of(&history, "handoff_completed");
+    let handed = new_of(&history, "compaction_completed");
     assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(handed[0].payload["outcome"], "completed");
     assert_eq!(handed[0].payload["note"], json!(["a_1"]));
@@ -4467,7 +4467,7 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
                 cache_lifetime: contract::events::CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: r#loop::HandoffSettings::default(),
+                compaction: r#loop::CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: contract::ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
@@ -4916,7 +4916,7 @@ fn a_resume_switching_the_label_marks_orphans_first() {
 fn naming_tool(name: &'static str, called: &str) -> Arc<support::TestTool> {
     let mut tool = support::TestTool::reads(name, "Named.");
     tool.output.control = Some(contract::events::Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some(called.into()),
@@ -5082,14 +5082,17 @@ fn a_model_name_never_pins_the_session() {
 }
 
 #[test]
-fn a_person_name_before_a_handoff_still_pins_the_session() {
+fn a_person_name_before_a_compaction_still_pins_the_session() {
     use contract::events::{NamedBy, Outcome};
     let tool = naming_tool("name", "Theirs");
     let mut history = History::new(naming_script());
     history.write(user_turn("one"), None);
     history.write(named(Some("Mine"), NamedBy::Person), Some("a_0"));
-    history.write(support::handoff_started(), Some("a_1"));
-    history.write(support::handoff_done(Outcome::Completed, &[]), Some("a_1"));
+    history.write(support::compaction_started(), Some("a_1"));
+    history.write(
+        support::compaction_done(Outcome::Completed, &[]),
+        Some("a_1"),
+    );
     history.freeze();
 
     let looped = history.resume(tools_of(&[&tool]));

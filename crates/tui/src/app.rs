@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, EventKind, Notice, SessionNamed,
-    SessionStatus, ShellCommand, SteeringQueue, TurnStarted,
+    SessionStatus, ShellCommand, ShellCommandDelta, ShellCommandStarted, SteeringQueue,
+    TurnStarted,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
@@ -30,7 +31,7 @@ use crate::keys::Edit;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
-use crate::window::{Applied, Pages};
+use crate::window::{Applied, Ended, Pages};
 use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
@@ -72,6 +73,8 @@ mod home;
 pub(crate) mod hooks_view;
 mod hub_version;
 mod images;
+#[cfg(test)]
+mod interrupt_tests;
 pub(crate) mod items;
 mod keyboard;
 mod links;
@@ -226,7 +229,7 @@ pub(crate) enum Target {
     Thought(usize),
     /// The login a failed turn offers.
     Login,
-    /// A handoff's note.
+    /// A compaction's note.
     Note(usize),
     /// An image's line: clicking it, or Enter on it while focused,
     /// opens it in the system viewer (`docs/tui.md`, "Images").
@@ -326,7 +329,9 @@ pub(crate) struct App {
     queue: Queue,
     /// The attached session's offer of its repository's code.
     offer: crate::offer::Offer,
-    /// The attached session's steering queue.
+    /// The steering queue the input box shows: the attached session's, or
+    /// the open fiber delegate's while its view is swapped in, the attached
+    /// session's queue parked in the open item meanwhile.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
@@ -1019,6 +1024,17 @@ impl App {
                     continue;
                 }
                 self.change_workspace_dropped(&id);
+                // A lost line settles a model, reply, steer or shell
+                // wait with its entry: those register at queue time, so
+                // the entry the failure pops is theirs. A find, commands
+                // or offered-file wait has no entry to pop, so its own
+                // exits settle it instead.
+                if matches!(
+                    self.outbox.waiting(&id),
+                    Some(Waiting::Model | Waiting::Reply | Waiting::Steer | Waiting::Shell)
+                ) {
+                    self.outbox.settled(&id);
+                }
                 self.fail(&id);
             }
         }
@@ -1073,6 +1089,11 @@ impl App {
         {
             stashed.set_size(width, height);
         }
+    }
+
+    /// Number of models currently held by the picker catalogue.
+    pub(crate) fn model_catalogue_len(&self) -> usize {
+        self.model_picker.catalogue.models.len()
     }
 
     /// The terminal's size in columns and rows: what full-screen
@@ -1639,7 +1660,7 @@ impl App {
                             return lines;
                         }
                     }
-                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                    Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                         if self.image_answered(id, answer.payload.get("result")) {
                             return Vec::new();
                         }
@@ -1654,16 +1675,25 @@ impl App {
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
                     Some(
-                        Waiting::Directories
-                        | Waiting::Subscribe
+                        Waiting::Find
+                        | Waiting::Commands
+                        | Waiting::Model
+                        | Waiting::Reply
+                        | Waiting::OfferFile
+                        | Waiting::Steer
+                        | Waiting::Shell,
+                    ) => {}
+                    Some(
+                        Waiting::Directories(..)
+                        | Waiting::Subscribe { .. }
                         | Waiting::Stop
                         | Waiting::Delete
                         | Waiting::OfferImport
-                        | Waiting::DeleteDiscovery
-                        | Waiting::DeleteStop
-                        | Waiting::DeleteFinal
+                        | Waiting::DeleteDiscovery(..)
+                        | Waiting::DeleteStop { .. }
+                        | Waiting::DeleteFinal(..)
                         | Waiting::Feed
-                        | Waiting::Recent
+                        | Waiting::Recent(..)
                         | Waiting::Close,
                     ) => {}
                     Some(
@@ -1716,7 +1746,7 @@ impl App {
                             }
                         }
                         Some(Waiting::ClearClose) => self.clear_close_settled(id),
-                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                        Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                             if self.image_rejected(id, &message) {
                                 return Vec::new();
                             }
@@ -1738,6 +1768,15 @@ impl App {
                         Some(Waiting::RewindHistory) => {}
                         Some(Waiting::Sessions) => {}
                         Some(Waiting::Abandoned) => {}
+                        Some(
+                            Waiting::Find
+                            | Waiting::Commands
+                            | Waiting::Model
+                            | Waiting::Reply
+                            | Waiting::OfferFile
+                            | Waiting::Steer
+                            | Waiting::Shell,
+                        ) => {}
                         Some(Waiting::ConfigAsk) => {
                             self.outbox.settled(id);
                             self.config_views_refused(id, &message);
@@ -1761,16 +1800,16 @@ impl App {
                             self.outbox.settled(id);
                         }
                         Some(
-                            Waiting::Directories
-                            | Waiting::Subscribe
+                            Waiting::Directories(..)
+                            | Waiting::Subscribe { .. }
                             | Waiting::Stop
                             | Waiting::Delete
                             | Waiting::OfferImport
-                            | Waiting::DeleteDiscovery
-                            | Waiting::DeleteStop
-                            | Waiting::DeleteFinal
+                            | Waiting::DeleteDiscovery(..)
+                            | Waiting::DeleteStop { .. }
+                            | Waiting::DeleteFinal(..)
                             | Waiting::Feed
-                            | Waiting::Recent
+                            | Waiting::Recent(..)
                             | Waiting::Close,
                         ) => {}
                         None => {}
@@ -1780,7 +1819,7 @@ impl App {
                     // as a closed stream does; without one the row lands
                     // on the attached session.
                     let session = hub_string(&hub.payload, "session_id").map(SessionId);
-                    self.rejected_session(id, code, message, session);
+                    self.rejected_session(id, code, message, session, answer.waiting.clone());
                     // The panel's refusal clears its query next, so the
                     // generic refusal still seeing it proves it settled
                     // first.
@@ -1867,18 +1906,27 @@ impl App {
     /// arm names its session outright.
     fn rejected(&mut self, id: &str, code: ErrorCode, message: String) {
         let session = self.session().cloned();
-        self.rejected_session(id, code, message, session);
+        // Carries no owner: a model refusal routes by tag in `refused`
+        // and never reaches here, while replies settle their own tag.
+        self.rejected_session(id, code, message, session, None);
     }
 
     /// A command the terminal sent was refused for `session`: the
     /// notice, the refused shell run's error row on that session's
     /// pages, and the draft back in the box when the box is empty.
+    /// `waiting` is the answer's captured owner, if any. A refused
+    /// `model` command routes once here, by tag: `refused` sends model
+    /// refusals here without probing, and the hub arm names its own.
+    /// A choice from a dropped session stays silent; any other refusal
+    /// reports through the shared path below, and the wait settles
+    /// with it. Callers that never carry a model refusal pass none.
     fn rejected_session(
         &mut self,
         id: &str,
         code: ErrorCode,
         message: String,
         session: Option<SessionId>,
+        waiting: Option<Waiting>,
     ) {
         // Order seam: the panel's refusal clears `asked` next, so the
         // generic refusal still seeing it proves it settled first.
@@ -1886,9 +1934,18 @@ impl App {
         {
             self.rejected_saw_panel_asked = self.panel_state.asked_is(id);
         }
-        // A refused `model` command drops the writes its acceptance
-        // would have made.
-        self.model_picker_rejected(id);
+        if waiting == Some(Waiting::Model) {
+            // A refused `model` command drops the writes its acceptance
+            // would have made. A choice from a dropped session has no
+            // writes left: it stays silent, and the wait settles with
+            // the entry its answer would have closed.
+            if !self.model_picker_rejected(id) {
+                self.outbox.answered(id);
+                self.outbox.settled(id);
+                return;
+            }
+            self.outbox.settled(id);
+        }
         match self.outbox.pending.get(id) {
             None => {}
             // Another client may have dropped or amended the row first.
@@ -1920,7 +1977,12 @@ impl App {
                 if let Some(row) = row {
                     let session = session.or_else(|| self.session().cloned());
                     if let Some(session) = session {
-                        self.fold_pages(&session).add_shell(Some(row));
+                        let pages = self.fold_pages(&session);
+                        // The run's own row, when it drew one, becomes the
+                        // error row; a refusal before any start adds it.
+                        if !pages.end_shell(id, row.clone()) {
+                            pages.add_shell(Some(row));
+                        }
                     }
                 }
             }
@@ -1943,6 +2005,25 @@ impl App {
         };
         self.open_import_report(source, imported.clone(), left_behind.clone());
         true
+    }
+
+    /// A run ended with `item`, when it has one: the live row of `id`
+    /// becomes `item`, a row that already ended keeps its ending, and a
+    /// run with no row of its own, or no id, adds its row. Whether the
+    /// pages changed.
+    fn shell_ended(&mut self, session: &SessionId, id: Option<&str>, item: Option<String>) -> bool {
+        let Some(item) = item else {
+            return false;
+        };
+        let pages = self.fold_pages(session);
+        let Some(id) = id else {
+            return pages.add_shell(Some(item));
+        };
+        match pages.end_live_shell(id, item.clone()) {
+            Ended::Replaced => true,
+            Ended::Already => false,
+            Ended::None => pages.add_shell(Some(item)),
+        }
     }
 
     /// Settles an accepted command through its pending entry: the entry
@@ -2025,20 +2106,20 @@ impl App {
             Some(Waiting::RewindSend) => None,
             Some(Waiting::ClearStart) => None,
             Some(Waiting::History) => None,
-            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
             Some(
-                Waiting::Directories
-                | Waiting::Subscribe
+                Waiting::Directories(..)
+                | Waiting::Subscribe { .. }
                 | Waiting::Stop
                 | Waiting::Delete
                 | Waiting::OfferImport
-                | Waiting::DeleteDiscovery
-                | Waiting::DeleteStop
-                | Waiting::DeleteFinal
+                | Waiting::DeleteDiscovery(..)
+                | Waiting::DeleteStop { .. }
+                | Waiting::DeleteFinal(..)
                 | Waiting::Feed
-                | Waiting::Recent
+                | Waiting::Recent(..)
                 | Waiting::Close,
             ) => None,
             Some(
@@ -2054,6 +2135,15 @@ impl App {
                 | Waiting::JobStop
                 | Waiting::JobInput,
             ) => None,
+            Some(
+                Waiting::Find
+                | Waiting::Commands
+                | Waiting::Model
+                | Waiting::Reply
+                | Waiting::OfferFile
+                | Waiting::Steer
+                | Waiting::Shell,
+            ) => None,
             None => None,
         };
         // A `job_stop` or `job_input` answer settles its tag here so the
@@ -2065,13 +2155,36 @@ impl App {
         {
             self.outbox.settled(id);
         }
+        // A find, steer or shell answer settles its tag here for the
+        // same reason: a delegate's steer answers on its item session,
+        // and any answer can arrive on another session after a switch.
+        // Only answers settle, never a `shell_command` row naming the
+        // same run, and the attached arms settle again below.
+        if matches!(
+            envelope.kind(),
+            EventKind::CommandAccepted | EventKind::CommandRejected
+        ) && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+            && matches!(
+                waiting,
+                Some(Waiting::Find | Waiting::Steer | Waiting::Shell)
+            )
+        {
+            self.outbox.settled(id);
+        }
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind()) {
             self.queue.fold(envelope);
             self.request_arrived(envelope);
         }
-        let mut send = self.reply_ack(envelope);
+        // A `reply` answer runs its handler only for the reply tag:
+        // any other id keeps today's fall-through, which finds no
+        // `reply` pending and folds nothing.
+        let mut send = if waiting == Some(&Waiting::Reply) {
+            self.reply_ack(envelope)
+        } else {
+            Vec::new()
+        };
         // A `model` command's acceptance settles what it waited on,
         // from its own session: choosing may span a switch, but a late
         // accept after one, or another session's, names no row.
@@ -2086,7 +2199,14 @@ impl App {
             {
                 self.outbox.settled(&id);
             }
-            self.model_picker_accepted(&id, &envelope.session_id);
+            if waiting == Some(&Waiting::Model) {
+                self.model_picker_accepted(&id, &envelope.session_id);
+                // Another session's accept names no row, and its wait
+                // stays for the own session's answer still to come.
+                if Some(&envelope.session_id) == self.session() {
+                    self.outbox.settled(&id);
+                }
+            }
             self.credential_accepted(&accepted);
         }
         // The open delegate's lines fold into the swapped screen, never
@@ -2094,6 +2214,13 @@ impl App {
         // settle below, as any non-attached session's do.
         if self.is_item_session(&envelope.session_id) {
             self.item_session_line(envelope);
+            // The open Fiber delegate's own envelopes also fold its
+            // Session figures, so the card can follow its view; any
+            // other harness's keep the parent's (`docs/tui.md`, "Swapped
+            // views").
+            if self.delegate_session().as_ref() == Some(&envelope.session_id) {
+                self.panel_state.fold_delegate(envelope);
+            }
             match envelope.kind() {
                 EventKind::CommandAccepted => {
                     let accepted = read!(envelope, CommandAccepted);
@@ -2115,7 +2242,7 @@ impl App {
                         if move_from.is_some() {
                             self.change_workspace_refused(&id.0, &rejected.code);
                         }
-                        self.refused(&id.0, &rejected.code, rejected.message);
+                        self.refused(&id.0, &rejected.code, rejected.message, waiting.cloned());
                     }
                 }
                 EventKind::FiberStarted
@@ -2129,6 +2256,8 @@ impl App {
                 | EventKind::SteeringApplied
                 | EventKind::SteeringQueue
                 | EventKind::ShellCommand
+                | EventKind::ShellCommandStarted
+                | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
                 | EventKind::Clients
@@ -2163,8 +2292,8 @@ impl App {
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept
@@ -2223,7 +2352,7 @@ impl App {
                         if move_from.is_some() {
                             self.change_workspace_refused(&id.0, &rejected.code);
                         }
-                        self.refused(&id.0, &rejected.code, rejected.message);
+                        self.refused(&id.0, &rejected.code, rejected.message, waiting.cloned());
                     }
                 }
                 EventKind::FiberStarted
@@ -2237,6 +2366,8 @@ impl App {
                 | EventKind::SteeringApplied
                 | EventKind::SteeringQueue
                 | EventKind::ShellCommand
+                | EventKind::ShellCommandStarted
+                | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
                 | EventKind::Clients
@@ -2271,8 +2402,8 @@ impl App {
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept
@@ -2300,8 +2431,11 @@ impl App {
             return send;
         }
         // The search's fetch answers here, never in the pages: its lines
-        // fold into the scan and go no further.
-        if let Some(lines) = self.find_answered(envelope) {
+        // fold into the scan and go no further. A Find-tagged answer
+        // with no fetch falls through to the folds below.
+        if waiting == Some(&Waiting::Find)
+            && let Some(lines) = self.find_answered(envelope)
+        {
             send.extend(lines);
             return send;
         }
@@ -2338,21 +2472,61 @@ impl App {
                     }) {
                         send.extend(lines);
                     }
-                    self.commands_answered(&accepted);
-                    changed |= self.offer.file_answered(&accepted);
+                    if waiting == Some(&Waiting::Commands) {
+                        self.commands_answered(&accepted);
+                        // Only a `commands` result clears the wait: any
+                        // other result keeps the id, and the tag with it.
+                        if self.completion.commands_id.as_deref()
+                            != Some(accepted.command_id.0.as_str())
+                        {
+                            self.outbox.settled(&accepted.command_id.0);
+                        }
+                    }
+                    // The ask outlives the wait: an answer settles the
+                    // tag but leaves the ask for a late second answer,
+                    // so the handler runs on the ask and settles on
+                    // the tag.
+                    let file_answered = self.offer.file_answered(&accepted);
+                    if file_answered && waiting == Some(&Waiting::OfferFile) {
+                        self.outbox.settled(&accepted.command_id.0);
+                    }
+                    changed |= file_answered;
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
                         .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
-                    changed |= !kept && self.fold_pages(&envelope.session_id).add_shell(item);
+                    let id = accepted.command_id.0;
+                    changed |= !kept && self.shell_ended(&envelope.session_id, Some(&id), item);
                 }
             }
             EventKind::ShellCommand => {
                 if let Some(ran) = read!(envelope, ShellCommand) {
+                    let id = ran.command_id.as_ref().map(|id| id.0.as_str());
+                    changed |=
+                        !kept && self.shell_ended(&envelope.session_id, id, Some(shell::ran(&ran)));
+                }
+            }
+            // A `!` run draws from the line that records its start, in
+            // every client, before the command runs.
+            EventKind::ShellCommandStarted => {
+                if let Some(started) = read!(envelope, ShellCommandStarted) {
+                    let head = shell::live_head(&started.command, true);
                     changed |= !kept
                         && self
                             .fold_pages(&envelope.session_id)
-                            .add_shell(Some(shell::ran(&ran)));
+                            .start_shell(&started.command_id.0, head);
                 }
+            }
+            EventKind::ShellCommandDelta => {
+                if let Some(delta) = read!(envelope, ShellCommandDelta) {
+                    changed |= self
+                        .fold_pages(&envelope.session_id)
+                        .stream_shell(&delta.command_id.0, &delta.text);
+                }
+            }
+            // The next process, or this one's exit, ends the runs the last
+            // left running: their ending was never written.
+            EventKind::FiberStarted | EventKind::FiberExited => {
+                changed |= !kept && self.fold_pages(&envelope.session_id).settle_shells();
             }
             EventKind::CommandRejected => {
                 if let Some(rejected) = read!(envelope, CommandRejected)
@@ -2361,9 +2535,18 @@ impl App {
                     if move_from.is_some() {
                         self.change_workspace_refused(&id.0, &rejected.code);
                     }
-                    self.offer
-                        .file_refused(&id.0, &rejected.code, &rejected.message);
-                    self.refused(&id.0, &rejected.code, rejected.message);
+                    // A `duplicate_command` refusal keeps the ask, and
+                    // the tag with it; any other refusal settles the
+                    // tag. The handler runs on the ask, which outlives
+                    // the wait: a refusal after the answer still shows.
+                    if self
+                        .offer
+                        .file_refused(&id.0, &rejected.code, &rejected.message)
+                        && waiting == Some(&Waiting::OfferFile)
+                    {
+                        self.outbox.settled(&id.0);
+                    }
+                    self.refused(&id.0, &rejected.code, rejected.message, waiting.cloned());
                 }
             }
             // An offer's approval loads extensions with no `reloaded`,
@@ -2389,16 +2572,22 @@ impl App {
                 }
             }
             EventKind::RepositoryCodeOffered | EventKind::RepositoryCodeResolved => {
+                // Replacing the held offer, or resolving it away, drops
+                // the source view with it: its retired ask settles.
+                let asked = self.offer.source_asked();
                 self.offer.fold(envelope);
+                if let Some(asked) = asked
+                    && self.offer.source_asked().is_none()
+                {
+                    self.outbox.settled(&asked);
+                }
             }
             EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
-                    self.steering.fold(&queue, &mut self.draft);
+                    self.fold_attached_queue(&queue);
                 }
             }
-            EventKind::FiberStarted
-            | EventKind::FiberExited
-            | EventKind::SessionStarted
+            EventKind::SessionStarted
             | EventKind::Rewound
             | EventKind::Moved
             | EventKind::StepStarted
@@ -2433,8 +2622,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -2559,6 +2748,8 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
         | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
         | EventKind::Clients
@@ -2591,8 +2782,8 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept
@@ -2620,6 +2811,9 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::Unknown(_) => false,
     }
 }
+
+#[cfg(test)]
+mod delegate_steering_tests;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]

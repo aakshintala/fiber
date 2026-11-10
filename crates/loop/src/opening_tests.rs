@@ -614,7 +614,7 @@ fn live_and_resumed_conversations_render_the_same_opening() {
         None,
         "fake/model-1",
         &mut had,
-        &mut crate::handoff::Carry::default(),
+        &mut crate::compaction::Carry::default(),
         None,
     );
     assert!(matches!(&live[0], Input::User { text , ..} if text == &rendered));

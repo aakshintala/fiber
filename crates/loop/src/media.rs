@@ -18,7 +18,7 @@ use support::lock;
 /// could not be read is looked up again at the next request. An encoding
 /// lives while the latest request names its path, so the cache follows the
 /// context window, not the files the session has ever held
-/// (`docs/performance.md`, "Memory follows the context window").
+/// (`docs/performance.md`, "What a budget covers").
 #[derive(Default)]
 pub(crate) struct Cache {
     encoded: Mutex<HashMap<String, Arc<str>>>,

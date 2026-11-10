@@ -426,72 +426,28 @@ pub(crate) enum Level {
     Full,
 }
 
-/// What this connection holds, or will hold once its in-flight
-/// subscribes are answered, per session. The accepted level changes
-/// only on acceptance: answering removes the id from the in-flight
-/// list either way, and a rejection leaves the accepted level.
+/// The levels this connection holds per session. A subscribe waiting for
+/// its answer is only its outbox `Subscribe` tag: the accepted level
+/// changes when an acceptance is folded, and a rejection leaves it.
 #[derive(Default)]
 pub(crate) struct Subs {
     accepted: HashMap<SessionId, Level>,
-    inflight: Vec<(String, SessionId, Level)>,
 }
 
 impl Subs {
-    /// Records a subscribe sent with `id` for `session` at `level`.
-    pub(crate) fn sent(&mut self, id: String, session: SessionId, level: Level) {
-        self.inflight.push((id, session, level));
+    /// Records `level` as the accepted one for `session`.
+    pub(crate) fn accept(&mut self, session: SessionId, level: Level) {
+        self.accepted.insert(session, level);
     }
 
-    /// The level a new subscribe for `session` must differ from: the
-    /// last in-flight subscribe's level, else the accepted one.
-    pub(crate) fn expected(&self, session: &SessionId) -> Option<Level> {
-        self.inflight
-            .iter()
-            .rev()
-            .find(|(_, id, _)| id == session)
-            .map(|(_, _, level)| *level)
-            .or_else(|| self.accepted.get(session).copied())
-    }
-
-    /// The last in-flight subscribe's id when it asks for `summary`.
-    pub(crate) fn pending_summary(&self, session: &SessionId) -> Option<&str> {
-        self.inflight
-            .iter()
-            .rev()
-            .find(|(_, id, _)| id == session)
-            .filter(|(_, _, level)| *level == Level::Summary)
-            .map(|(id, _, _)| id.as_str())
-    }
-
-    /// Answers the in-flight subscribe `id`: on acceptance the level
-    /// becomes the accepted one. Some when the id was in flight, with
-    /// its session, either way.
-    pub(crate) fn answered(&mut self, id: &str, accepted: bool) -> Option<SessionId> {
-        let at = self.inflight.iter().position(|(sent, _, _)| sent == id)?;
-        let (_, session, level) = self.inflight.remove(at);
-        if accepted {
-            self.accepted.insert(session.clone(), level);
-        }
-        Some(session)
-    }
-
-    /// The session an in-flight subscribe `id` names, without consuming
-    /// it: the answer router checks the source session against it first.
-    pub(crate) fn session_for(&self, id: &str) -> Option<SessionId> {
-        self.inflight
-            .iter()
-            .find(|(sent, _, _)| sent == id)
-            .map(|(_, session, _)| session.clone())
+    /// The accepted level for `session`, if any.
+    pub(crate) fn accepted_level(&self, session: &SessionId) -> Option<Level> {
+        self.accepted.get(session).copied()
     }
 
     /// Whether the accepted level for `session` is `full`.
     pub(crate) fn full(&self, session: &SessionId) -> bool {
         self.accepted.get(session) == Some(&Level::Full)
-    }
-
-    /// Whether a subscribe for `session` waits for its answer.
-    pub(crate) fn pending(&self, session: &SessionId) -> bool {
-        self.inflight.iter().any(|(_, id, _)| id == session)
     }
 }
 

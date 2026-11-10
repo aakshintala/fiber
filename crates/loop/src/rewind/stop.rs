@@ -220,7 +220,7 @@ impl Loop {
             | Delivery::Sandbox(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Reply(..)
             | Delivery::Close(_)
             | Delivery::JobLine(_)
@@ -234,6 +234,7 @@ impl Loop {
             | Delivery::ExtensionUsage(_)
             | Delivery::DelegateUsage { .. }
             | Delivery::Shell(..)
+            | Delivery::ShellStarted(..)
             | Delivery::Cancelled) => {
                 crate::rewind::command::refuse_after_rewound(other);
                 Ok(())

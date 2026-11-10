@@ -18,7 +18,7 @@ use contract::diag::{DebugLog, HookChain, Op, Timing};
 use contract::events::{Class, Event, ExtensionReason, LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
-    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeCompactionAnswer,
     BeforeMessage, BeforeMessageAnswer, BeforeModelCall, BeforeToolAnswer, BeforeToolCall,
     CheckAnswer, ContextAnswer, Hooks, JobDelivery, SessionStart, StateLine, StateSeed, TurnEnd,
     TurnStart,
@@ -39,8 +39,8 @@ use crate::{API, Error, LuaProvider, LuaTool};
 
 mod before;
 mod chain;
+mod compaction;
 mod door;
-mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
@@ -751,7 +751,7 @@ impl SessionExtensions {
         // install of the same name: the merged list carries both in slug
         // order, with one notice per shadowed install, grouped by code
         // with the pass's other notices before it is written
-        // (`docs/errors.md`, "Notices").
+        // (`docs/errors.md`, "Registry").
         // The merged inventory, however each entry is switched: the
         // candidates' filter stays open, and each arm below applies its
         // own policy, so a disabled package's provider data still loads.
@@ -2130,7 +2130,7 @@ impl SessionExtensions {
             &self.lifecycle.before_model_call,
             &self.after_tool,
             &self.lifecycle.turn_end,
-            &self.lifecycle.before_handoff,
+            &self.lifecycle.before_compaction,
         ] {
             for entry in chain {
                 out.push(HookInfo::Hook {
@@ -2441,9 +2441,9 @@ impl Hooks for SessionExtensions {
         lifecycle::turn_end(self, end)
     }
 
-    fn before_handoff(&self, handoff: &BeforeHandoff<'_>) -> BeforeHandoffAnswer {
-        let _timer = self.timed(HookChain::BeforeHandoff);
-        handoff::before_handoff(self, handoff)
+    fn before_compaction(&self, compaction: &BeforeCompaction<'_>) -> BeforeCompactionAnswer {
+        let _timer = self.timed(HookChain::BeforeCompaction);
+        compaction::before_compaction(self, compaction)
     }
 
     fn wait_for_runs(&self) {

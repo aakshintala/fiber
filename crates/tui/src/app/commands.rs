@@ -61,7 +61,6 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "pwd" => &["cwd"],
         "settings" => &["config"],
         "keys" => &["keybindings", "keymap"],
-        "handoff" => &["compact"],
         "rules" => &["permissions"],
         "close" => &["stop"],
         "name" => &["rename"],
@@ -257,10 +256,10 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_fork,
     },
     CommandEntry {
-        name: "handoff",
-        description: "Starts a handoff.",
+        name: "compact",
+        description: "Starts a compaction.",
         hint: Some("[instructions]"),
-        run: run_handoff,
+        run: run_compaction,
     },
     CommandEntry {
         name: "name",
@@ -395,9 +394,9 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.toggle_rail())
 }
 
-fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
+fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("handoff", args).0)
+    Some(app.send_command("compact", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
@@ -928,10 +927,16 @@ impl App {
         self.forget_images();
         self.panel_state.reset();
         self.session_views_reset();
+        // Replacing the whole offer retires its source view's ask, and
+        // dropping the commands id forgets its wait.
+        if let Some(asked) = self.offer.source_asked() {
+            self.outbox.settled(&asked);
+        }
         self.offer = crate::offer::Offer::default();
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
     }
@@ -1028,7 +1033,11 @@ impl App {
     /// and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
-        self.completion.ask_commands(session)
+        let line = self.completion.ask_commands(session);
+        if let Some(id) = &self.completion.commands_id {
+            self.outbox.wait(id, super::outbox::Waiting::Commands);
+        }
+        line
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
@@ -1162,8 +1171,25 @@ impl App {
         }
         let draft = std::mem::take(&mut self.draft);
         let line = line.to_string();
+        // A `!!` run has no line on the session stream: its row starts
+        // here, where the terminal sends it, and its answer ends it.
+        let show_only = match (&self.phase, shell) {
+            (Phase::Attached { session, .. }, Some((command, false))) => {
+                Some((session.clone(), shell::live_head(command, false)))
+            }
+            (Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. }, _) => None,
+        };
+        let run = id.clone();
+        if kind == Kind::Shell {
+            self.outbox.wait(&id, super::outbox::Waiting::Shell);
+        }
         match self.outbox.send(id, kind, draft, line) {
-            Some(line) => Effect::Send(vec![line]),
+            Some(line) => {
+                if let Some((session, head)) = show_only {
+                    self.fold_pages(&session).start_shell(&run, head);
+                }
+                Effect::Send(vec![line])
+            }
             None => Effect::None,
         }
     }
@@ -1190,8 +1216,23 @@ impl App {
                 return Effect::None;
             }
         };
+        self.send_cancel(&session)
+    }
+
+    /// Interrupts the turn of the conversation on screen, whatever is open
+    /// over it: a delegate's own in its view, else the attached session's.
+    /// It closes nothing and leaves the draft and the steering queue.
+    pub(super) fn interrupt_turn(&mut self) -> Effect {
+        match self.interrupt_session() {
+            Some(session) => self.send_cancel(&session),
+            None => Effect::None,
+        }
+    }
+
+    /// One `cancel` of `session`'s turn, settled by its answer.
+    fn send_cancel(&mut self, session: &SessionId) -> Effect {
         let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
+        let line = session_command(&id, "cancel", session, None).to_string();
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }

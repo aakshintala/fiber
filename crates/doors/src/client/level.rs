@@ -60,6 +60,12 @@ impl Outbox {
         lock(&self.inner).push_kept(line);
     }
 
+    /// Pushes an ephemeral `line` to the writer's queue: a connection that
+    /// has fallen behind drops it, as it drops any other ephemeral line.
+    pub(crate) fn push(&self, line: Envelope) {
+        lock(&self.inner).push(line);
+    }
+
     /// Under one lock: pushes `control` (kept) into the current queue,
     /// then makes `next` current.
     pub(crate) fn swap(&self, control: Envelope, next: Injector) {

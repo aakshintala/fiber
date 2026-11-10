@@ -1,5 +1,5 @@
-//! Session diagnostics at the public API (`docs/state.md`, "Diagnostic
-//! logs"): one timer scope per non-tool hook dispatch, and one observed
+//! Session diagnostics at the public API (`docs/state.md`, "What each part
+//! holds"): one timer scope per non-tool hook dispatch, and one observed
 //! line per eligible Lua-provider HTTP request, without recording URLs.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
@@ -26,11 +26,11 @@ use config::{Config, ProjectKey, Sources};
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::clock::Wake;
-use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing};
+use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing, TimingName};
 use contract::events::CallStatus;
-use contract::events::HandoffTrigger;
+use contract::events::CompactionTrigger;
 use contract::hook::{
-    AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeMessage, BeforeMessageOutcome,
+    AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeMessage, BeforeMessageOutcome,
     BeforeModelCall, BeforeToolCall, CheckOutcome, ContextOutcome, Hooks, SessionStart,
     StartReason, TurnEnd, TurnStart,
 };
@@ -110,8 +110,14 @@ type Scopes = Arc<Mutex<Vec<(Op, Option<String>)>>>;
 fn recording() -> (Timing, Scopes) {
     let calls: Scopes = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&calls);
-    let timing: Timing = Arc::new(move |op, tool, _started| {
-        seen.lock().unwrap().push((op, tool.map(str::to_owned)));
+    let timing: Timing = Arc::new(move |op, name, _started| {
+        seen.lock().unwrap().push((
+            op,
+            name.and_then(|name| match name {
+                TimingName::Tool(tool) => Some(tool.to_owned()),
+                TimingName::Job(_) => None,
+            }),
+        ));
         Some(Box::new(()) as Box<dyn Send>)
     });
     (timing, calls)
@@ -182,7 +188,7 @@ fn all_chains() -> String {
         hook("turn_end", "transform", "{ context = \"e\" }"),
         hook("before_message", "sanitize", "{}"),
         hook("before_model_call", "transform", "{}"),
-        hook("before_handoff", "transform", "{ note = \"h\" }"),
+        hook("before_compaction", "transform", "{ note = \"h\" }"),
     ]
     .join("\n")
 }
@@ -260,13 +266,13 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
         },
     );
     fakes::within(
-        "session.before_handoff",
+        "session.before_compaction",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(session);
             move || {
-                session.before_handoff(&BeforeHandoff {
-                    trigger: HandoffTrigger::Auto,
+                session.before_compaction(&BeforeCompaction {
+                    trigger: CompactionTrigger::Auto,
                     instructions: None,
                     conversation: &[],
                     cancel: &Never,
@@ -312,7 +318,7 @@ fn each_chain_emits_one_scope_per_dispatch() {
             (Op::Hook(HookChain::TurnEnd), None),
             (Op::Hook(HookChain::BeforeMessage), None),
             (Op::Hook(HookChain::BeforeModelCall), None),
-            (Op::Hook(HookChain::BeforeHandoff), None),
+            (Op::Hook(HookChain::BeforeCompaction), None),
         ]
     );
     // Two successive dispatches emit twice.
@@ -353,7 +359,7 @@ fn empty_chains_emit_one_scope_each() {
             (Op::Hook(HookChain::TurnEnd), None),
             (Op::Hook(HookChain::BeforeMessage), None),
             (Op::Hook(HookChain::BeforeModelCall), None),
-            (Op::Hook(HookChain::BeforeHandoff), None),
+            (Op::Hook(HookChain::BeforeCompaction), None),
         ]
     );
 }
@@ -1091,7 +1097,7 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     .expect("two HTTP calls in one callback succeed");
     assert_eq!(server.requests().len(), 2);
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
+    // `docs/state.md`, "What each part holds": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 2);
     for record in &records {
         assert_eq!(record.identity(), Some(&Identity::Provider("p".to_owned())));
@@ -1266,7 +1272,7 @@ fn sign_command_and_entry_load_record_as_the_extension() {
         assert!(paths.contains(&path.to_owned()), "sent {path}: {paths:?}");
     }
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
+    // `docs/state.md`, "What each part holds": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
     assert_eq!(records.len(), 3, "command, load and models each record");
     let mut own: Vec<(Option<Identity>, String)> = records
         .iter()
@@ -1336,7 +1342,7 @@ fn hook_http_records_as_the_extension_with_a_sink_installed() {
     );
     assert_eq!(server.requests().len(), 1);
     let records = sink.requests.lock().unwrap();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(
         records.len(),
         1,
@@ -1403,7 +1409,7 @@ fn session_load_entry_http_records_with_the_load_sink() {
     );
     assert_eq!(server.requests().len(), 1, "the entry sent its HTTP");
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "the entry's request records");
     let record = &records[0];
     assert_eq!(
@@ -1461,7 +1467,7 @@ fn load_with_diagnostics_forwards_its_sink_to_entry() {
     let _session = load_with(Some(sink.clone() as Arc<dyn DebugLog>));
     assert_eq!(server.requests().len(), 1, "the entry sent its HTTP");
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "the entry's request records");
     assert_eq!(
         records[0].identity(),
@@ -1548,7 +1554,7 @@ fn request_lines_carry_no_url_or_content() {
     .unwrap_err();
     assert_eq!(dns_err.code(), contract::ErrorCode::ExtensionFailed);
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
+    // `docs/state.md`, "What each part holds": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 3);
     for record in &records[..2] {
         assert_eq!(
@@ -1613,7 +1619,7 @@ fn extension_lines_carry_the_extension_and_no_provider_or_host() {
     )
     .expect("the command succeeds");
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1);
     // The exact key set proves no `provider`, `host`, `path`, `model`
     // or `first_token_ms` key, present or null.
@@ -1712,7 +1718,7 @@ fn background_refresh_is_observed() {
     .expect("the background refresh succeeds");
     assert_eq!(server.requests().len(), 1);
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
+    // `docs/state.md`, "What each part holds": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 1);
     assert_eq!(
         records[0].identity(),
@@ -1905,7 +1911,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         },
     )
     .expect("the following command succeeds");
-    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
+    // `docs/state.md`, "What each part holds": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
     assert_eq!(sink_a.records().len(), 5);
 }
 

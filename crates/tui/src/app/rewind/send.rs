@@ -241,26 +241,33 @@ impl App {
                 });
                 true
             }
+            Waiting::Find
+            | Waiting::Commands
+            | Waiting::Model
+            | Waiting::Reply
+            | Waiting::OfferFile
+            | Waiting::Steer
+            | Waiting::Shell => false,
             Waiting::Dismiss(_)
             | Waiting::RewindHistory
             | Waiting::ChangeWorkspace(_)
             | Waiting::ClearStart
             | Waiting::ClearClose
             | Waiting::History
-            | Waiting::ImageFetch
-            | Waiting::ImageDisplay
+            | Waiting::ImageFetch { .. }
+            | Waiting::ImageDisplay { .. }
             | Waiting::Sessions
             | Waiting::Abandoned
-            | Waiting::Directories
-            | Waiting::Subscribe
+            | Waiting::Directories(..)
+            | Waiting::Subscribe { .. }
             | Waiting::Stop
             | Waiting::Delete
             | Waiting::OfferImport
-            | Waiting::DeleteDiscovery
-            | Waiting::DeleteStop
-            | Waiting::DeleteFinal
+            | Waiting::DeleteDiscovery(..)
+            | Waiting::DeleteStop { .. }
+            | Waiting::DeleteFinal(..)
             | Waiting::Feed
-            | Waiting::Recent
+            | Waiting::Recent(..)
             | Waiting::Close => false,
             // The session views and panels own no rewind refusal.
             Waiting::Figures
@@ -291,6 +298,13 @@ impl App {
     ) -> Option<Vec<String>> {
         match waiting {
             Waiting::Fork => {}
+            Waiting::Find
+            | Waiting::Commands
+            | Waiting::Model
+            | Waiting::Reply
+            | Waiting::OfferFile
+            | Waiting::Steer
+            | Waiting::Shell => return None,
             Waiting::RewindSend => {
                 if !self.rewind.send.matches() {
                     return None;
@@ -302,20 +316,20 @@ impl App {
             | Waiting::ClearStart
             | Waiting::ClearClose
             | Waiting::History
-            | Waiting::ImageFetch
-            | Waiting::ImageDisplay
+            | Waiting::ImageFetch { .. }
+            | Waiting::ImageDisplay { .. }
             | Waiting::Sessions
             | Waiting::Abandoned
-            | Waiting::Directories
-            | Waiting::Subscribe
+            | Waiting::Directories(..)
+            | Waiting::Subscribe { .. }
             | Waiting::Stop
             | Waiting::Delete
             | Waiting::OfferImport
-            | Waiting::DeleteDiscovery
-            | Waiting::DeleteStop
-            | Waiting::DeleteFinal
+            | Waiting::DeleteDiscovery(..)
+            | Waiting::DeleteStop { .. }
+            | Waiting::DeleteFinal(..)
             | Waiting::Feed
-            | Waiting::Recent
+            | Waiting::Recent(..)
             | Waiting::Close => return None,
             // The session views and panels own no rewind answer.
             Waiting::Figures

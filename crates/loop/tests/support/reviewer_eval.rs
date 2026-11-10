@@ -7,14 +7,16 @@
 //! `user` line's text is the person's message, an `assistant` line's text
 //! is the pending reply, a `tool_use`/`toolcall` block is the effectful
 //! call, a result block is stripped, and a `summary`/`compaction` line acts
-//! as a handoff. A line carrying conversation the pinned shapes do not
+//! as a compaction. A line carrying conversation the pinned shapes do not
 //! cover is a hard error naming the file and line, so native-shape drift
 //! surfaces at lane-build time instead of silently skipping calls. Lines
 //! carrying no conversation skip.
 
 use std::path::{Path, PathBuf};
 
+use contract::events::{Decision, ReviewerRef};
 use contract::shapes::{DeclaredEffects, Effect};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// How many label inputs the set keeps: the first entries in emission order.
@@ -27,6 +29,8 @@ pub(crate) enum SourceKind {
     Sampled,
     /// A hand-written bad call.
     Seeded,
+    /// A call converted from a committed synthetic fixture.
+    Synthetic,
 }
 
 impl SourceKind {
@@ -36,6 +40,7 @@ impl SourceKind {
         match self {
             SourceKind::Sampled => "sampled",
             SourceKind::Seeded => "seeded",
+            SourceKind::Synthetic => "synthetic",
         }
     }
 
@@ -44,6 +49,7 @@ impl SourceKind {
         match raw {
             "sampled" => Some(SourceKind::Sampled),
             "seeded" => Some(SourceKind::Seeded),
+            "synthetic" => Some(SourceKind::Synthetic),
             _ => None,
         }
     }
@@ -144,6 +150,23 @@ pub(crate) struct Source {
     pub seq: Option<u64>,
 }
 
+/// A reviewer decision recorded beside a set line, so the sweep can
+/// report disagreement per line: the decision, the reason it carried and
+/// the reviewer that decided. The serde shape is the wire shape, so the
+/// set-line emitter and parser round-trip through `to_value`/`from_value`
+/// (`Decision` already serializes as `allow`/`deny`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RecordedVerdict {
+    /// The recorded decision.
+    pub decision: Decision,
+    /// Why, in words, when the decision carried one.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The reviewer that decided, when the decision named one.
+    #[serde(default)]
+    pub reviewer: Option<ReviewerRef>,
+}
+
 /// One labelled line of the reviewer-eval set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SetLine {
@@ -167,6 +190,9 @@ pub(crate) struct SetLine {
     pub reviewed: Vec<ReviewedItem>,
     /// Both families' verdicts.
     pub labels: Labels,
+    /// The recorded reviewer verdict, on deny lines; absent on the
+    /// committed set.
+    pub recorded: Option<RecordedVerdict>,
 }
 
 /// One string field of a line object.
@@ -384,7 +410,35 @@ fn set_line_value(entry: &SetLine) -> Value {
         Value::Array(entry.reviewed.iter().map(reviewed_item_value).collect()),
     );
     map.insert("labels".to_owned(), Value::Object(labels));
+    if let Some(recorded) = &entry.recorded {
+        map.insert("recorded".to_owned(), recorded_value(recorded));
+    }
     Value::Object(map)
+}
+
+/// Prints one recorded reviewer verdict through its serde shape: the
+/// decision word, the reason or null, and the reviewer object or null.
+fn recorded_value(recorded: &RecordedVerdict) -> Value {
+    serde_json::to_value(recorded).expect("a recorded verdict serializes")
+}
+
+/// Parses one recorded reviewer verdict through its serde shape: absent
+/// or null reads as no verdict (see `parse_line`), anything else must
+/// parse, and a named reviewer must carry stage 1 or 2 (`docs/events.md`,
+/// `permission_resolved`). Every rejection keeps the `bad set line`
+/// prefix.
+fn parse_recorded(value: &Value, id: &str) -> Result<RecordedVerdict, String> {
+    let recorded: RecordedVerdict = serde_json::from_value(value.clone()).map_err(|error| {
+        format!("review: bad set line {id}: the recorded verdict does not parse: {error}")
+    })?;
+    if let Some(reviewer) = &recorded.reviewer
+        && !(1..=2).contains(&reviewer.stage)
+    {
+        return Err(format!(
+            "review: bad set line {id}: the recorded reviewer stage is not 1 or 2"
+        ));
+    }
+    Ok(recorded)
 }
 
 /// Parses one committed set line, rejecting empty ids and tools.
@@ -469,6 +523,10 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
             "review: bad set line {label_id}: a label is not a string"
         )),
     };
+    let recorded = match value.get("recorded") {
+        None | Some(Value::Null) => None,
+        Some(recorded) => Some(parse_recorded(recorded, &id)?),
+    };
     Ok(SetLine {
         id,
         source,
@@ -483,6 +541,7 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
             family1: family("family1")?,
             family2: family("family2")?,
         },
+        recorded,
     })
 }
 
@@ -797,12 +856,17 @@ pub(crate) struct SampleOpts {
     pub import_claude: Vec<String>,
     /// `--import-pi PATH`, repeatable: native pi session files.
     pub import_pi: Vec<String>,
+    /// `--synthetic DIR`, repeatable: committed synthetic fixture dirs.
+    pub synthetic: Vec<String>,
+    /// `--reviewer-denies DIR`, repeatable: session dirs whose reviewer
+    /// denies emit unlabelled lines.
+    pub reviewer_denies: Vec<String>,
     /// `--scan FILE`: the final-set scan over the committed file.
     pub scan: Option<String>,
 }
 
 impl SampleOpts {
-    /// Whether sampling, scrub-context or importer flags ask for
+    /// Whether sampling, scrub-context, importer or synthetic flags ask for
     /// label-input emission. Scrub-context values alone imply emission, so
     /// raw owner values never reach the default path by accident.
     pub(crate) fn wants_sampled(&self) -> bool {
@@ -813,6 +877,7 @@ impl SampleOpts {
             || self.owner_email.is_some()
             || !self.import_claude.is_empty()
             || !self.import_pi.is_empty()
+            || !self.synthetic.is_empty()
     }
 }
 
@@ -861,6 +926,12 @@ pub(crate) fn parse_sample_flags(args: &[String]) -> Result<(SampleOpts, Vec<Str
         } else if arg == "--import-pi" {
             opts.import_pi
                 .push(flag_value(args, &mut at, "--import-pi")?);
+        } else if arg == "--synthetic" {
+            opts.synthetic
+                .push(flag_value(args, &mut at, "--synthetic")?);
+        } else if arg == "--reviewer-denies" {
+            opts.reviewer_denies
+                .push(flag_value(args, &mut at, "--reviewer-denies")?);
         } else if arg == "--scan" {
             opts.scan = Some(flag_value(args, &mut at, "--scan")?);
         } else {
@@ -898,7 +969,7 @@ pub(crate) enum NativeLine {
     },
     /// A tool result: stripped before any prompt is built.
     Result,
-    /// A compaction marker: the fold acts as a handoff.
+    /// A compaction marker: the fold acts as a compaction.
     Compaction,
     /// A line carrying no conversation.
     Skip,
@@ -1627,6 +1698,7 @@ pub(crate) fn foreign_to_label_input(input: ForeignInput<'_>) -> SetLine {
             family1: None,
             family2: None,
         },
+        recorded: None,
     }
 }
 
@@ -1681,7 +1753,7 @@ impl FileFold {
         self.reviewed.clone()
     }
 
-    /// Acts as a handoff: keeps every earlier person message, each with the
+    /// Acts as a compaction: keeps every earlier person message, each with the
     /// reply it answered, and drops every call. A held reply with no person
     /// message after it answers nothing, so it goes with the calls.
     fn compact(&mut self) {

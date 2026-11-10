@@ -320,6 +320,69 @@ fn fold(app: &mut App, line: contract::Envelope) -> Vec<String> {
     app.on_line(Line::Session(line))
 }
 
+#[test]
+fn reply_answer_reaches_its_handler() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    // Declining answers with a `reply` the accept then cancels: the
+    // handler, not the generic path, sends the `cancel`.
+    let (id, value) = without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
+    assert_eq!(value["command"], "reply");
+    assert_eq!(value["session_id"], S_A);
+    assert_eq!(
+        value["args"],
+        json!({"request_id": "r_c", "declined": true})
+    );
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Reply));
+    let cancel = cancels(&mut app, accepted(S_A, &id), S_A);
+    assert_ne!(cancel, id);
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn reply_tag_is_gone_after_answer() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let (id, _) = sent(&mut app, Key::Enter);
+    fold(&mut app, accepted(S_A, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn reply_after_refusal() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let (id, _) = sent(&mut app, Key::Enter);
+    assert!(app.panel().is_none());
+    assert!(fold(&mut app, rejected(S_A, &id)).is_empty());
+    // The refusal restores the question, and its wait goes with the
+    // entry.
+    assert_eq!(header(&app), form_title(S_A, None, None));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_lost_reply_line_settles_its_tag_and_restores_the_queue() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter answers");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap();
+    let id = line["id"].as_str().unwrap_or_default();
+    assert_eq!(app.outbox.waiting(id), Some(crate::app::Waiting::Reply));
+    app.write_failed_inner(&lines);
+    // The lost line settles the wait with its entry, and the failure
+    // puts the question back where it was.
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(!app.outbox.pending.contains_key(id));
+    assert_eq!(header(&app), form_title(S_A, None, None));
+}
+
 /// The single `cancel` line folding `line` sends: its command id, after
 /// checking it names `session`.
 fn cancels(app: &mut App, line: contract::Envelope, session: &str) -> String {

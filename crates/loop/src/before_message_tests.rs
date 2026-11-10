@@ -236,10 +236,10 @@ impl Hooks for FakeHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -869,7 +869,7 @@ fn the_hook_sees_a_skill_command_before_expansion_and_its_rewrite_expands() {
             InputItem::Message { content, .. } => text_of(content),
             InputItem::ShellCommand { .. }
             | InputItem::Jobs { .. }
-            | InputItem::Handoff { .. }
+            | InputItem::Compaction { .. }
             | InputItem::Rewind { .. }
             | InputItem::Unknown => panic!("a message item"),
         })
@@ -1192,7 +1192,7 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
     // The complete kinds as a set with counts (`docs/testing.md`, "Event
     // streams"): `session_started` is the first line (`docs/events.md`,
     // "Session and turn"); the rest has no doc-promised order. One notice
-    // per code (`docs/errors.md`, "Notices").
+    // per code (`docs/errors.md`, "Registry").
     let actual = kinds(&all);
     assert_eq!(actual[0], EventKind::SessionStarted);
     let mut rest = actual[1..].to_vec();
@@ -1236,7 +1236,7 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
 
 /// The single grouped notice from `all`: exactly one, with the count and
 /// the first item up front and every item with its extension in the list
-/// (`docs/errors.md`, "Notices": one notice per code, count and first
+/// (`docs/errors.md`, "Registry": one notice per code, count and first
 /// item up front, no extension across extensions).
 fn grouped_notice(all: &[Envelope]) -> &Envelope {
     let notices: Vec<&Envelope> = all

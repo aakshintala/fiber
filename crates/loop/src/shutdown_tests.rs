@@ -941,6 +941,7 @@ fn a_normal_end_with_no_jobs_drains_nothing() {
         .inbox
         .send(Delivery::Shell(
             contract::events::ShellCommand {
+                command_id: None,
                 command: "late".into(),
                 output: "late".into(),
                 artifact: None,
@@ -961,6 +962,46 @@ fn a_normal_end_with_no_jobs_drains_nothing() {
             .iter()
             .any(|line| line.kind() == EventKind::ShellCommand)
     );
+}
+
+#[test]
+fn settle_writes_a_queued_shell_start_and_accepts_it() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    world.cancel.shutdown(143);
+    let (ack, answer) = answered();
+    let handshake = Arc::new(Mutex::new(contract::inbox::Handshake::Pending));
+    world
+        .inbox
+        .send(Delivery::ShellStarted(
+            contract::events::ShellCommandStarted {
+                command_id: CommandId("c_bang".into()),
+                command: "sleep 5".into(),
+            },
+            Arc::clone(&handshake),
+            ack,
+        ))
+        .unwrap();
+    let (finished, _inbox, held) = world.spawn_run();
+    ran(&finished);
+    assert!(
+        matches!(
+            Deadline::after(DEADLINE)
+                .recv(&answer)
+                .expect("the start is answered"),
+            Ok(())
+        ),
+        "a start taken at the settle is accepted"
+    );
+    assert_eq!(
+        *handshake.lock().unwrap(),
+        contract::inbox::Handshake::Written
+    );
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "shell_command_started"].map(EventKind::from_name)
+    );
+    assert_eq!(held.durable()[1].payload["command_id"], "c_bang");
 }
 
 #[test]
@@ -2060,13 +2101,13 @@ impl contract::hook::Hooks for CountingHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         // Never consulted: a shutdown runs no hook.
-        contract::hook::BeforeHandoffAnswer {
-            outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+        contract::hook::BeforeCompactionAnswer {
+            outcome: contract::hook::BeforeCompactionOutcome::NoNote,
             notices: Vec::new(),
         }
     }

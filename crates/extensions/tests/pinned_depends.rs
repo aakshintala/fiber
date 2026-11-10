@@ -1,5 +1,5 @@
 //! Approving a repository extension installs its manifest `depends` inside
-//! the pinned copy (`docs/extensions.md`, "Pinning"): the lowest tags that
+//! the pinned copy (`docs/extensions.md`, "Code a repository ships"): the lowest tags that
 //! meet every minimum, resolved with no personal install in scope, committed
 //! before the root's install step runs. No network: every dependency comes
 //! from a local tagged repository.

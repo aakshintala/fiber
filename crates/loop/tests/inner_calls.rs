@@ -433,7 +433,7 @@ fn an_inner_call_matching_one_other_tool_gets_no_suggestion() {
     // `read` is the one other tool whose schema fits them. The failure
     // still keeps only its field lines: the suggestion answers the model,
     // and an inner call's result goes to the extension instead
-    // (`docs/extensions.md`, "When an extension calls a tool").
+    // (`docs/extensions.md`, "Running a tool").
     let mut shell = FakeTool::new("shell", |_, _, _, _| text("must not run"));
     shell.schema = json!({
         "type": "object",
@@ -599,10 +599,10 @@ impl contract::hook::Hooks for FakeHooks {
             notices: Vec::new(),
         }
     }
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -1810,14 +1810,14 @@ fn an_inner_ask_is_declined_but_a_model_ask_in_the_same_answerable_session_is_ra
 }
 
 #[test]
-fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_handoff() {
+fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_compaction() {
     let control = contract::events::Control {
         name: Some("inner name".into()),
         skill: Some(contract::events::SkillLoad {
             name: "inner-skill".into(),
             path: "/skill/SKILL.md".into(),
         }),
-        handoff: Some("inner handoff".into()),
+        compact: Some("inner compaction".into()),
         ..Default::default()
     };
     let inner = Arc::new(FakeTool::new("inner", move |_, _, _, _| Output {
@@ -1842,7 +1842,11 @@ fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_han
         .find(|l| l.kind() == EventKind::SessionNamed)
         .unwrap();
     assert_eq!(named.payload["name"], "inner name");
-    assert!(!lines.iter().any(|l| l.kind() == EventKind::HandoffStarted));
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.kind() == EventKind::CompactionStarted)
+    );
     assert_eq!(
         outcomes.lock().unwrap()[0]
             .control

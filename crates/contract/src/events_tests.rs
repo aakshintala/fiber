@@ -427,6 +427,53 @@ fn directory_added_round_trips_with_its_resolved_path() {
     );
 }
 
+#[test]
+fn a_shell_command_without_a_command_id_reads_as_none_and_writes_back_without_the_key() {
+    let payload =
+        json!({"command": "ls", "output": "o", "process": {"exit_code": 0, "timed_out": false}});
+    let event = read("shell_command", payload.clone()).unwrap().unwrap();
+    let Event::ShellCommand(line) = &event else {
+        panic!("a shell_command line: {event:?}");
+    };
+    assert_eq!(line.command_id, None);
+    assert_eq!(
+        serde_json::to_value(event.payload().unwrap()).unwrap(),
+        payload
+    );
+    let paired = read(
+        "shell_command",
+        json!({"command_id": "c_bang", "command": "ls", "output": "o",
+        "process": {"exit_code": 0, "timed_out": false}}),
+    )
+    .unwrap()
+    .unwrap();
+    let Event::ShellCommand(line) = &paired else {
+        panic!("a shell_command line: {paired:?}");
+    };
+    assert_eq!(line.command_id, Some(CommandId("c_bang".to_owned())));
+}
+
+#[test]
+fn the_shell_command_start_is_durable_and_its_delta_is_not() {
+    let started = read(
+        "shell_command_started",
+        json!({"command_id": "c_bang", "command": "ls"}),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(started.class(), Class::Durable);
+    let delta = read(
+        "shell_command_delta",
+        json!({"command_id": "c_bang", "text": "o"}),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(delta.class(), Class::Ephemeral);
+    // Both keys are required: a payload missing one does not read.
+    assert!(read("shell_command_started", json!({"command_id": "c_bang"})).is_err());
+    assert!(read("shell_command_delta", json!({"text": "o"})).is_err());
+}
+
 /// One payload per kind, or more where the doc makes keys exclusive, with
 /// every key the doc lists for it.
 fn samples() -> Vec<(&'static str, Value)> {
@@ -482,7 +529,7 @@ fn samples() -> Vec<(&'static str, Value)> {
              "command_id": "c"},
             {"type": "shell_command", "seq": 2},
             {"type": "jobs", "job_ids": ["j"]},
-            {"type": "handoff", "command_id": "c"},
+            {"type": "compaction", "command_id": "c"},
             {"type": "rewind", "command_id": "c"}]}),
         ),
         ("step_started", json!({})),
@@ -511,8 +558,16 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "shell_command",
-            json!({"command": "ls", "output": "o", "artifact": "artifacts/o.log",
-            "process": process}),
+            json!({"command_id": "c_bang", "command": "ls", "output": "o",
+            "artifact": "artifacts/o.log", "process": process}),
+        ),
+        (
+            "shell_command_started",
+            json!({"command_id": "c_bang", "command": "ls"}),
+        ),
+        (
+            "shell_command_delta",
+            json!({"command_id": "c_bang", "text": "o"}),
         ),
         ("session_named", json!({"name": null, "by": "person"})),
         ("directory_added", json!({"path": "/shared"})),
@@ -659,7 +714,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
             "kept": [[0, 8192], [1040384, 1048576]],
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
-            "control": {"handoff": "note"}, "changed_by": ["e"],
+            "control": {"compact": "note"}, "changed_by": ["e"],
             "protected_paths": {"restored": [".fiber"], "failed": []},
             "hosts_surfaced": ["https://example.com/"]}),
         ),
@@ -671,7 +726,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "tool_call_completed",
             json!({"status": "completed", "content": content,
-            "control": {"handoff": "note", "questions": asked}}),
+            "control": {"compact": "note", "questions": asked}}),
         ),
         (
             "tool_call_completed",
@@ -898,19 +953,19 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"added": [{"name": "s", "description": "d", "path": "/s/SKILL.md",
             "source": "builtin"}], "removed": ["r"]}),
         ),
-        ("handoff_started", json!({"trigger": "overflow"})),
+        ("compaction_started", json!({"trigger": "overflow"})),
         (
-            "handoff_completed",
+            "compaction_completed",
             json!({"outcome": "completed", "note": ["a"], "tokens_before": 9,
             "instructions": "i"}),
         ),
         (
-            "handoff_completed",
+            "compaction_completed",
             json!({"outcome": "completed", "note_text": "n", "extension": "e",
             "tokens_before": 9}),
         ),
         (
-            "handoff_completed",
+            "compaction_completed",
             json!({"outcome": "failed", "error": error, "tokens_before": 9}),
         ),
         (
@@ -1359,16 +1414,16 @@ fn an_opening_message_with_added_folders_reads_and_writes_them_back() {
 }
 
 #[test]
-fn a_handoff_note_is_the_actions_or_a_hook_text_never_both() {
+fn a_compaction_note_is_the_actions_or_a_hook_text_never_both() {
     let both = json!({"outcome": "completed", "note": ["a"], "note_text": "n",
         "extension": "e", "tokens_before": 9});
-    assert!(read("handoff_completed", both).is_err());
+    assert!(read("compaction_completed", both).is_err());
     let hook_without_extension = json!({"outcome": "completed", "note_text": "n",
         "tokens_before": 9});
-    assert!(read("handoff_completed", hook_without_extension).is_err());
+    assert!(read("compaction_completed", hook_without_extension).is_err());
     let extension_without_hook = json!({"outcome": "completed", "extension": "e",
         "tokens_before": 9});
-    assert!(read("handoff_completed", extension_without_hook).is_err());
+    assert!(read("compaction_completed", extension_without_hook).is_err());
 }
 
 #[test]
@@ -1722,14 +1777,14 @@ fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
         Value::Object(Event::UsageRecorded(line).payload().unwrap()),
         staged
     );
-    // A handoff selection names no call.
-    let mut handoff = base();
-    handoff["reviewer"] = json!({"purpose": "handoff"});
-    let line = recorded(handoff.clone());
-    assert_eq!(line.reviewer, Some(ReviewerUse::Handoff));
+    // A compaction selection names no call.
+    let mut compaction = base();
+    compaction["reviewer"] = json!({"purpose": "compaction"});
+    let line = recorded(compaction.clone());
+    assert_eq!(line.reviewer, Some(ReviewerUse::Compaction));
     assert_eq!(
         Value::Object(Event::UsageRecorded(line).payload().unwrap()),
-        handoff
+        compaction
     );
     // Any other call carries none, and writes no key.
     let line = recorded(base());
@@ -1739,7 +1794,7 @@ fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
 }
 
 #[test]
-fn a_reviewer_use_names_its_call_on_a_stage_and_none_on_a_handoff() {
+fn a_reviewer_use_names_its_call_on_a_stage_and_none_on_a_compaction() {
     let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
     let base = || {
         json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
@@ -1750,19 +1805,19 @@ fn a_reviewer_use_names_its_call_on_a_stage_and_none_on_a_handoff() {
     let mut staged = base();
     staged["reviewer"] = json!({"purpose": "stage_1"});
     assert!(read("usage_recorded", staged).is_err());
-    // A handoff selection reviews no call, so an action id on one is not
+    // A compaction selection reviews no call, so an action id on one is not
     // a field of the variant: serde's default ignores it, and the line
-    // reads as a plain handoff and writes back without the key.
-    let mut handoff = base();
-    handoff["reviewer"] = json!({"purpose": "handoff", "action_id": "a_1"});
-    let event = read("usage_recorded", handoff).unwrap().unwrap();
+    // reads as a plain compaction and writes back without the key.
+    let mut compaction = base();
+    compaction["reviewer"] = json!({"purpose": "compaction", "action_id": "a_1"});
+    let event = read("usage_recorded", compaction).unwrap().unwrap();
     let Event::UsageRecorded(line) = &event else {
         panic!("{event:?}");
     };
-    assert_eq!(line.reviewer, Some(ReviewerUse::Handoff));
+    assert_eq!(line.reviewer, Some(ReviewerUse::Compaction));
     assert_eq!(
         Value::Object(event.payload().unwrap())["reviewer"],
-        json!({"purpose": "handoff"})
+        json!({"purpose": "compaction"})
     );
 }
 
@@ -2901,5 +2956,16 @@ fn a_session_hello_carries_its_session_id_and_reason() {
     assert_eq!(
         serde_json::from_value::<ExtensionHello>(value).unwrap(),
         hello
+    );
+}
+
+#[test]
+fn the_sandbox_preamble_reason_round_trips_as_sandbox() {
+    let reason = context::PreambleReason::Sandbox;
+    let value = serde_json::to_value(reason).unwrap();
+    assert_eq!(value, serde_json::json!("sandbox"));
+    assert_eq!(
+        serde_json::from_value::<context::PreambleReason>(value).unwrap(),
+        reason
     );
 }

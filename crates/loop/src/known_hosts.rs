@@ -143,6 +143,8 @@ impl KnownHosts {
             Event::TurnCompleted(_) => {}
             Event::SteeringQueue(_) => {}
             Event::ShellCommand(_) => {}
+            Event::ShellCommandStarted(_) => {}
+            Event::ShellCommandDelta(_) => {}
             Event::DirectoryAdded(_) => {}
             Event::SessionNamed(_) => {}
             Event::Clients(_) => {}
@@ -172,8 +174,8 @@ impl KnownHosts {
             Event::ModelChanged(_) => {}
             Event::DateChanged(_) => {}
             Event::SkillsChanged(_) => {}
-            Event::HandoffStarted(_) => {}
-            Event::HandoffCompleted(_) => {}
+            Event::CompactionStarted(_) => {}
+            Event::CompactionCompleted(_) => {}
             Event::SkillsResent(_) => {}
             Event::ContextNudged(_) => {}
             Event::ReviewerKept(_) => {}

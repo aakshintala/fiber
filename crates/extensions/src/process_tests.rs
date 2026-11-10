@@ -1115,7 +1115,7 @@ fn hook_registers_each_point_in_order() {
         "before_model_call",
         "after_tool",
         "turn_end",
-        "before_handoff",
+        "before_compaction",
     ];
     let home = Home::new();
     let init = points
@@ -2067,7 +2067,7 @@ fn hello_is_first_with_the_documented_fields() {
     assert_eq!(owner.drain(), CloseReason::Eof);
     let line = std::fs::read_to_string(&out_path).expect("the peer writes the first line");
     let envelope: Value = serde_json::from_str(&line).expect("the hello is one JSON line");
-    // docs/extensions.md:211, "`extension_hello` is the first line Fiber sends".
+    // `docs/extensions.md`, "Process extensions": "`extension_hello` is the first line Fiber sends".
     assert_eq!(envelope["kind"], json!("extension_hello"));
     assert_eq!(envelope["session_id"], json!("s_test"));
     assert_eq!(envelope["schema_version"], json!(1));
@@ -2131,7 +2131,7 @@ fn registrations_stand_only_before_ready() {
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
     let answers = read_json_file(&out_path, "the registration answers");
-    // docs/invocation.md:368, every command gets exactly one acknowledgement.
+    // `docs/invocation.md`, "Driver commands", every command gets exactly one acknowledgement.
     assert_eq!(answers.as_array().unwrap().len(), 5);
     for (id, index) in [("c1", 0), ("c2", 1), ("c3", 2)] {
         let answer = &answers[index];
@@ -2436,7 +2436,7 @@ fn stream_order_holds_while_tools_answer_reversed() {
         }
     }
     got.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
-    // docs/extensions.md:209, stream items run one at a time and tool
+    // `docs/extensions.md`, "Process extensions": stream items run one at a time and tool
     // calls run as they arrive; several tools may be outstanding.
     assert_eq!(
         got,
@@ -2453,7 +2453,7 @@ fn stream_order_holds_while_tools_answer_reversed() {
             .position(|entry| entry[0] == kind && entry[1] == what)
             .unwrap_or(usize::MAX)
     };
-    // docs/extensions.md, "Process extensions": stream items are sent one
+    // `docs/extensions.md`, "Process extensions": stream items are sent one
     // at a time, each after the reply to the last one.
     assert!(
         position("replied", "c2") < position("got", "c3"),
@@ -2701,7 +2701,7 @@ fn malformed_unknown_and_forwarded_lines() {
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
     let answers = read_json_file(&out_path, "the wire answers");
-    // docs/invocation.md:368, every command gets exactly one acknowledgement.
+    // `docs/invocation.md`, "Driver commands", every command gets exactly one acknowledgement.
     assert_eq!(answers.as_array().unwrap().len(), 4);
     assert_eq!(answers[0]["kind"], json!("command_rejected"));
     assert_eq!(answers[0]["payload"]["code"], json!("unknown_command"));
@@ -2855,7 +2855,7 @@ fn host_calls_reach_services_with_timer_attribution() {
         .collect();
     assert!(answers.remove("ready").is_some());
     let answers = Value::Object(answers);
-    // docs/invocation.md:368, every command gets exactly one acknowledgement.
+    // `docs/invocation.md`, "Driver commands", every command gets exactly one acknowledgement.
     assert_eq!(answers.as_object().unwrap().len(), calls.len());
     for (id, _, _) in &calls {
         let answer = &answers[id];
@@ -2912,7 +2912,7 @@ fn host_calls_reach_services_with_timer_attribution() {
         ("widget", "u2"),
     ];
     expected.sort();
-    // docs/extensions.md:31, 354–384: process extensions receive the
+    // `docs/extensions.md`, "What an extension is": process extensions receive the
     // same documented host calls as Lua extensions, with the same meaning.
     assert_eq!(recorded.len(), expected.len());
     for ((variant, ran_by), (want_variant, _)) in recorded.iter().zip(expected.iter()) {
@@ -3932,7 +3932,7 @@ fn process_http_records_the_calling_extension() {
     .expect("the request succeeds");
     assert!(answer.is_some());
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": a process extension's host.http records the callback's purpose.
+    // `docs/state.md`, "What each part holds": a process extension's host.http records the callback's purpose.
     assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(
@@ -4022,7 +4022,7 @@ fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
     .expect("the request succeeds");
     assert!(answer.is_some());
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": a process extension's host.http records the callback's purpose.
+    // `docs/state.md`, "What each part holds": a process extension's host.http records the callback's purpose.
     assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(
@@ -5187,7 +5187,7 @@ fn restart_after_first_death_serves_the_next_dispatch() {
         lifecycle_state(&owner),
         super::process::lifecycle::RunState::Running
     );
-    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    // `docs/extensions.md`, "Process extensions": one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     assert_eq!(lifecycle_deaths(&owner), 1);
     let tools_after: Vec<String> = support::lock(&owner.registry)
@@ -5295,7 +5295,7 @@ fn concurrent_dispatches_share_the_sole_restart() {
         let outcome = second.join().expect("the hook thread ends");
         assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
     }
-    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    // `docs/extensions.md`, "Process extensions": one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     assert_eq!(lifecycle_deaths(&owner), 1);
     kill_peer(&owner);
@@ -5330,7 +5330,7 @@ fn second_death_leaves_the_extension_gone() {
     owner.pump();
     let outcome = second.join().expect("the hook thread ends");
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
-    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    // `docs/extensions.md`, "Process extensions": one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     // The peer blocks after its reply, so the kill lands mid-request.
     kill_peer(&owner);
@@ -5340,7 +5340,7 @@ fn second_death_leaves_the_extension_gone() {
         super::process::lifecycle::RunState::Gone
     );
     assert_eq!(lifecycle_deaths(&owner), 2);
-    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    // `docs/extensions.md`, "Process extensions": one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     // Observing the same dead spawn again counts nothing: the stopped
     // pipe stays closed, and the count holds.
@@ -5356,7 +5356,7 @@ fn second_death_leaves_the_extension_gone() {
         matches!(outcome, Err(crate::Error::Stopped { .. })),
         "the gone extension stops, not {outcome:?}"
     );
-    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    // `docs/extensions.md`, "Process extensions": one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
 }
 
@@ -5417,7 +5417,7 @@ fn restart_hello_carries_the_current_folded_state() {
     owner.pump();
     let outcome = second.join().expect("the hook thread ends");
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
-    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    // `docs/extensions.md`, "Process extensions": one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     kill_peer(&owner);
     assert_eq!(owner.drain(), CloseReason::Stopped);

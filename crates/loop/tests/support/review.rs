@@ -7,15 +7,15 @@
 //! prints at its request position in source request order: a requested
 //! call whose start the index holds replays through the loop's own
 //! [`review`](r#loop::Loop::review) on a scratch loop, capturing both
-//! stage requests, so a call requested before a handoff prints before
-//! that handoff's selection even when its start logs later. A reviewed
+//! stage requests, so a call requested before a compaction prints before
+//! that compaction's selection even when its start logs later. A reviewed
 //! call without its start or its denial carrying its declared effects
 //! prints one `unreplayable` line instead of invented input. Calls with explicit non-review native
 //! decisions (a person's allow or deny, a standing rule or grant, a
 //! standing ask) are not review requests and print nothing. At each
-//! completed handoff with person messages the driver prints the selection
+//! completed compaction with person messages the driver prints the selection
 //! request and reads its answer, driving the loop's own
-//! [`reviewer_handoff`](r#loop::Loop::reviewer_handoff); source
+//! [`reviewer_compaction`](r#loop::Loop::reviewer_compaction); source
 //! `reviewer_kept` lines are history, never a second selection. The source
 //! directory is only read, never written.
 
@@ -25,13 +25,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use super::reviewer_eval::{
-    Allowlist, FoldedFile, ForeignInput, MAX_SAMPLED, SampleOpts, ScrubCtx, Source, SourceKind,
-    drop_kind, emit_line, foreign_to_label_input, parse_claude_file, parse_line, parse_pi_file,
-    reviewed_items, sample, scan_line,
+    Allowlist, FoldedFile, ForeignInput, MAX_SAMPLED, RecordedVerdict, SampleOpts, ScrubCtx,
+    Source, SourceKind, drop_kind, emit_line, foreign_to_label_input, parse_claude_file,
+    parse_line, parse_pi_file, reviewed_items, sample, scan_line,
 };
 use contract::events::{
-    AskStep, DecidedBy, Event, EventKind, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
-    ToolCallRequested, ToolCallStarted,
+    AskStep, CompactionCompleted, DecidedBy, Decision, Event, EventKind, Outcome,
+    PermissionResolved, ReviewedCall, ReviewerUse, ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -88,7 +88,7 @@ pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<ReviewArg
             notes,
             keep_all,
         }),
-        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --scan FILE] [<session directory>]".to_owned()),
+        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --synthetic DIR | --reviewer-denies DIR | --scan FILE] [<session directory>]".to_owned()),
     }
 }
 
@@ -127,12 +127,12 @@ pub(crate) struct ReplayOutcome {
     pub requests: Vec<(RequestKind, ModelRequest)>,
 }
 
-/// Whether a captured request reviewed a call or selected handoff messages.
+/// Whether a captured request reviewed a call or selected compaction messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RequestKind {
     /// A review stage.
     Stage,
-    /// A handoff selection.
+    /// A compaction selection.
     Selection,
 }
 
@@ -291,7 +291,7 @@ fn stage_answer(calls: u64) -> Reply {
 }
 
 /// The replay's recording provider: it records every request, answers
-/// review stages from the script, and serves handoff selections
+/// review stages from the script, and serves compaction selections
 /// interactively, printing each selection request before reading its
 /// answer.
 struct Seam {
@@ -299,16 +299,16 @@ struct Seam {
     requests: Mutex<Vec<(RequestKind, ModelRequest)>>,
     /// How many stage requests it has answered.
     stages: Mutex<u64>,
-    /// The handoff whose selection is being served, when one is.
+    /// The compaction whose selection is being served, when one is.
     selecting: Mutex<Option<u64>>,
-    /// The handoff already served: its answer is reused without further
+    /// The compaction already served: its answer is reused without further
     /// input, so a re-ask never prints a second request or reads again.
     served: Mutex<Option<u64>>,
-    /// The served handoff's answer: text, or no answer on EOF.
+    /// The served compaction's answer: text, or no answer on EOF.
     cached: Mutex<Option<String>>,
     /// Whether selections fail locally before exposing a request.
     keep_all: bool,
-    /// The selection answers, read one handoff at a time.
+    /// The selection answers, read one compaction at a time.
     input: Mutex<Box<dyn BufRead + Send>>,
     /// Where selection requests and projected lines go.
     output: Mutex<Box<dyn Write + Send>>,
@@ -332,8 +332,8 @@ impl Seam {
         }
     }
 
-    /// Serves a handoff selection: prints its request, flushes it, then
-    /// reads one answer line. A repeat call for the same handoff reuses
+    /// Serves a compaction selection: prints its request, flushes it, then
+    /// reads one answer line. A repeat call for the same compaction reuses
     /// the cached answer with no further input.
     fn selection_call(&self, request: &ModelRequest, seq: u64) -> Box<dyn ModelCall> {
         self.requests
@@ -363,7 +363,7 @@ impl Seam {
             });
         }
         let line = json!({
-            "handoff": seq,
+            "compaction": seq,
             "system_prompt": request.system_prompt,
             "messages": &request.conversation[..],
         });
@@ -475,7 +475,7 @@ struct IndexedCall {
 
 /// What the driver indexes before replaying: every declaration and
 /// decision attribution, so a decision logged after a call's start still
-/// excludes it and a start logged after a handoff still replays at the
+/// excludes it and a start logged after a compaction still replays at the
 /// call's request position.
 struct CallIndex {
     /// Every outer call, by action id.
@@ -630,7 +630,7 @@ impl Driver {
 
     /// Folds the chain and replays it: each call prints at its request
     /// position in source request order, selections print where their
-    /// handoffs completed, and nothing moves across a handoff.
+    /// compactions completed, and nothing moves across a compaction.
     fn drive(&mut self, chain: &[Indexed]) -> Result<(), String> {
         let index = Self::index_chain(chain)?;
         let mut summary = false;
@@ -648,23 +648,23 @@ impl Driver {
                 // A consumer skips any kind it does not recognise.
                 continue;
             };
-            // The gate also covers completed_handoff's render below. None of
+            // The gate also covers completed_compaction's render below. None of
             // the three render paths, or tool reviews, sees summary output.
             if r#loop::summary_skips(&mut summary, &event) {
                 continue;
             }
             if matches!(event, Event::ReviewerKept(_)) {
                 // The driver owns selection: a source record never
-                // overwrites the selection its own handoffs make.
+                // overwrites the selection its own compactions make.
                 continue;
             }
-            if let Event::HandoffCompleted(done) = event {
+            if let Event::CompactionCompleted(done) = event {
                 if done.outcome == Outcome::Completed {
-                    self.completed_handoff(envelope, &done)?;
+                    self.completed_compaction(envelope, &done)?;
                 } else {
                     render_reviewed(
                         &mut self.reviewed,
-                        &Event::HandoffCompleted(done),
+                        &Event::CompactionCompleted(done),
                         envelope.action_id.as_ref(),
                         envelope.seq,
                         &mut self.asks,
@@ -696,7 +696,7 @@ impl Driver {
 
     /// Indexes every declaration and decision attribution ahead of the
     /// replay, so a decision logged after a call's start still excludes
-    /// it and a start logged after a handoff still replays at the call's
+    /// it and a start logged after a compaction still replays at the call's
     /// request position. A repeated request or start id keeps its first
     /// line.
     fn index_chain(chain: &[Indexed]) -> Result<CallIndex, String> {
@@ -808,6 +808,8 @@ impl Driver {
                 | Event::SteeringApplied(_)
                 | Event::SteeringQueue(_)
                 | Event::ShellCommand(_)
+                | Event::ShellCommandStarted(_)
+                | Event::ShellCommandDelta(_)
                 | Event::DirectoryAdded(_)
                 | Event::SessionNamed(_)
                 | Event::Clients(_)
@@ -837,8 +839,8 @@ impl Driver {
                 | Event::InstructionFile(_)
                 | Event::DateChanged(_)
                 | Event::SkillsChanged(_)
-                | Event::HandoffStarted(_)
-                | Event::HandoffCompleted(_)
+                | Event::CompactionStarted(_)
+                | Event::CompactionCompleted(_)
                 | Event::SkillsResent(_)
                 | Event::ContextNudged(_)
                 | Event::ReviewerKept(_)
@@ -1034,22 +1036,22 @@ impl Driver {
         self.emit(&line)
     }
 
-    /// Replays one completed handoff: renders its boundary, asks the
-    /// selection through the loop's own handoff path, and keeps the
+    /// Replays one completed compaction: renders its boundary, asks the
+    /// selection through the loop's own compaction path, and keeps the
     /// selected messages. The scratch loop's `reviewed` already holds
-    /// the kept selection after `reviewer_handoff` renders it through
+    /// the kept selection after `reviewer_compaction` renders it through
     /// the one write path, so the driver copies it instead of rereading
     /// the scratch log. With no person message the loop records an empty
     /// selection itself: no request prints and no answer is read.
     /// `--keep-all` fails the selection locally before any request prints.
-    fn completed_handoff(
+    fn completed_compaction(
         &mut self,
         envelope: &contract::Envelope,
-        done: &HandoffCompleted,
+        done: &CompactionCompleted,
     ) -> Result<(), String> {
         render_reviewed(
             &mut self.reviewed,
-            &Event::HandoffCompleted(done.clone()),
+            &Event::CompactionCompleted(done.clone()),
             envelope.action_id.as_ref(),
             envelope.seq,
             &mut self.asks,
@@ -1061,11 +1063,11 @@ impl Driver {
         self.looped.reviewed.clone_from(&self.reviewed);
         self.looped
             .write(
-                &Event::HandoffCompleted(done.clone()),
+                &Event::CompactionCompleted(done.clone()),
                 Some(&turn),
                 envelope.action_id.as_ref(),
             )
-            .map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
+            .map_err(|error| format!("review: cannot replay its compaction: {error}"))?;
         if self
             .reviewed
             .iter()
@@ -1077,13 +1079,13 @@ impl Driver {
                 .selecting
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some(seq);
-            let answered = self.looped.reviewer_handoff(&turn);
+            let answered = self.looped.reviewer_compaction(&turn);
             *self
                 .seam
                 .selecting
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = None;
-            answered.map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
+            answered.map_err(|error| format!("review: cannot replay its compaction: {error}"))?;
             if let Some(error) = self
                 .seam
                 .io_error
@@ -1095,12 +1097,12 @@ impl Driver {
             }
         } else {
             self.looped
-                .reviewer_handoff(&turn)
-                .map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
+                .reviewer_compaction(&turn)
+                .map_err(|error| format!("review: cannot replay its compaction: {error}"))?;
         }
-        // `reviewer_handoff` renders the kept selection into the scratch
+        // `reviewer_compaction` renders the kept selection into the scratch
         // loop's own input through the one write path; copying it folds
-        // the kept messages, so repeated handoffs select from the
+        // the kept messages, so repeated compactions select from the
         // previously kept messages, never the whole earlier transcript.
         self.reviewed.clone_from(&self.looped.reviewed);
         Ok(())
@@ -1329,18 +1331,40 @@ struct EmitCtx<'a> {
     added_folders: &'a [String],
 }
 
-/// Emits one session directory's label-input lines: one line per replayable
-/// call carrying the full `reviewed[]` snapshot plus tool, arguments,
-/// declared effects, workspace, added folders and source. A reviewed call
+/// Which line the shared emission fold prints for one trigger: the
+/// sampled call's own identity, the synthetic fixture identity, or the
+/// denied call's line with its recorded verdict.
+enum EmitMode<'a> {
+    /// The sampled call's own identity, with no recorded verdict.
+    Sampled,
+    /// The synthetic identity (`{session}-{n}` with a synthetic source
+    /// triple), with no recorded verdict.
+    Synthetic(&'a mut u64),
+    /// The denied call's own id with a sampled source at the deny's seq,
+    /// carrying the deny's recorded verdict.
+    Deny(&'a PermissionResolved),
+}
+
+/// Folds one session directory's chain through the reviewer's renderer and
+/// emits one label-input line per trigger: the emission the sampler, the
+/// synthetic converter and the reviewer-deny mode share. A reviewed call
 /// without its start or its denial carrying its declared effects is
 /// unreplayable and excluded, while the denial-carries-effects case stays
-/// replayable through `started_from` and is kept. Drop checks run on the
-/// raw entry before placeholder substitution.
-fn emit_sampled(
+/// replayable through `started_from` and is kept. With a synthetic
+/// `counter` the line takes the synthetic identity (`{session}-{n}` with
+/// a synthetic source triple) and skips the drop classes, for the
+/// committed fixtures that carry no owner data; without one it takes the
+/// sampled identity and drops raw entries the closed classes match before
+/// placeholder substitution. With `denies_only` the trigger is a reviewer
+/// deny instead of a requested call: reviewer allows and native decisions
+/// emit nothing, and the first deny per action id wins.
+fn fold_and_emit(
     dir: &Path,
     ctx: &ScrubCtx,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
+    mut synthetic: Option<&mut u64>,
+    denies_only: bool,
 ) -> Result<(), String> {
     let (workspace, chain) = load_chain(dir)?;
     let index = Driver::index_chain(&chain)?;
@@ -1379,7 +1403,35 @@ fn emit_sampled(
             envelope.seq,
             &mut asks,
         );
-        if let Event::ToolCallRequested(call) = event
+        if denies_only {
+            if let Event::PermissionResolved(resolved) = event
+                && resolved.decision == Decision::Deny
+                && resolved.decided_by == DecidedBy::Reviewer
+                && let Some(action) = envelope.action_id.clone()
+                && seen.insert(action.0.clone())
+            {
+                let emit = EmitCtx {
+                    dir,
+                    session: &session,
+                    workspace: &workspace,
+                    ctx,
+                    index: &index,
+                    reviewed: &reviewed,
+                    added_folders: &added_folders,
+                };
+                if let Some(indexed) = emit.index.calls.get(&action.0) {
+                    emit_sampled_call(
+                        &emit,
+                        envelope,
+                        &action,
+                        &indexed.call,
+                        lines,
+                        dropped,
+                        EmitMode::Deny(&resolved),
+                    )?;
+                }
+            }
+        } else if let Event::ToolCallRequested(call) = event
             && call.ran_by.is_none()
             && call.provider_item.is_none()
             && let Some(action) = envelope.action_id.clone()
@@ -1394,14 +1446,25 @@ fn emit_sampled(
                 reviewed: &reviewed,
                 added_folders: &added_folders,
             };
-            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped)?;
+            let mode = match synthetic.as_deref_mut() {
+                Some(counter) => EmitMode::Synthetic(counter),
+                None => EmitMode::Sampled,
+            };
+            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped, mode)?;
         }
     }
     Ok(())
 }
 
-/// Emits one requested call's label-input line, or nothing when the call
-/// is not a review request or is unreplayable.
+/// Emits one trigger's label-input line, or nothing when the call is not
+/// a review request or is unreplayable. With the synthetic mode the line
+/// instead takes the synthetic identity (`{session}-{n}` with a synthetic
+/// source triple): the committed fixtures carry no owner data, so no entry
+/// meets a drop class and their controls stay the block side. With the deny
+/// mode the line carries the deny's recorded verdict beside the null
+/// labels. A deny for an action with no indexed request, or with neither a
+/// start nor denial-carried effects, is unreplayable and excluded; a raw
+/// entry the closed classes match is dropped loudly.
 fn emit_sampled_call(
     emit: &EmitCtx<'_>,
     envelope: &contract::Envelope,
@@ -1409,6 +1472,7 @@ fn emit_sampled_call(
     call: &ToolCallRequested,
     lines: &mut Vec<String>,
     dropped: &mut Vec<String>,
+    mode: EmitMode<'_>,
 ) -> Result<(), String> {
     let judged = emit.index.review.contains(&id.0);
     if emit.index.nonreview.contains(&id.0) && !judged {
@@ -1432,13 +1496,50 @@ fn emit_sampled_call(
         },
     };
     let paths = started.declared.paths.clone().unwrap_or_default();
-    if let Some(kind) = drop_kind(&arguments, &paths) {
-        dropped.push(format!("DROP {} id={}", kind.name(), id.0));
+    let is_synthetic = matches!(mode, EmitMode::Synthetic(_));
+    let (id, source, recorded) = match mode {
+        EmitMode::Synthetic(counter) => {
+            *counter += 1;
+            (
+                format!("{}-{counter}", emit.session),
+                Source {
+                    kind: SourceKind::Synthetic,
+                    session: emit.session.to_owned(),
+                    seq: Some(*counter),
+                },
+                None,
+            )
+        }
+        EmitMode::Sampled => (
+            id.0.clone(),
+            Source {
+                kind: SourceKind::Sampled,
+                session: emit.session.to_owned(),
+                seq: envelope.seq.map(|seq| seq.0),
+            },
+            None,
+        ),
+        EmitMode::Deny(resolved) => (
+            id.0.clone(),
+            Source {
+                kind: SourceKind::Sampled,
+                session: emit.session.to_owned(),
+                seq: envelope.seq.map(|seq| seq.0),
+            },
+            Some(RecordedVerdict {
+                decision: resolved.decision,
+                reason: resolved.reason.clone(),
+                reviewer: resolved.reviewer.clone(),
+            }),
+        ),
+    };
+    if !is_synthetic && let Some(kind) = drop_kind(&arguments, &paths) {
+        dropped.push(format!("DROP {} id={}", kind.name(), id));
         return Ok(());
     }
     let snapshot = reviewed_items(emit.reviewed);
-    let entry = foreign_to_label_input(ForeignInput {
-        id: &id.0,
+    let mut entry = foreign_to_label_input(ForeignInput {
+        id: &id,
         tool: &call.name,
         arguments: &arguments,
         declared: &started.declared,
@@ -1446,18 +1547,14 @@ fn emit_sampled_call(
         reviewed: snapshot,
         workspace: emit.workspace,
         added_folders: emit.added_folders,
-        source: Source {
-            kind: SourceKind::Sampled,
-            session: emit.session.to_owned(),
-            seq: envelope.seq.map(|seq| seq.0),
-        },
+        source,
         ctx: emit.ctx,
     });
+    entry.recorded = recorded;
     let line = emit_line(&entry).map_err(|error| {
         format!(
-            "review: {}: cannot print call {}: {error}",
+            "review: {}: cannot print call {id}: {error}",
             emit.dir.display(),
-            id.0
         )
     })?;
     lines.push(line);
@@ -1482,7 +1579,7 @@ pub(crate) fn run_sampled(
         for workspace in segment_workspaces(dir)? {
             Allowlist::check_chain(std::slice::from_ref(&workspace))?;
         }
-        emit_sampled(dir, &ctx, &mut entries, &mut dropped)?;
+        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None, false)?;
     }
     for path in &opts.import_claude {
         let path = Path::new(path);
@@ -1520,6 +1617,190 @@ pub(crate) fn run_sampled(
     })
 }
 
+/// The committed synthetic fixture roots `run_synthetic` converts: one
+/// session per `reviewer_consent/` directory plus the single
+/// `review_person_input/` session.
+fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    (
+        fixtures.join("reviewer_consent"),
+        fixtures.join("review_person_input"),
+    )
+}
+
+/// The committed `reviewer_consent/` sessions `run_synthetic` converts, in
+/// recipe order: only a directory carrying one of these names converts, so
+/// an untracked directory placed beside them is rejected instead of
+/// emitting its calls raw — the converter scrubs with an empty (identity)
+/// context and skips every drop class, which is safe only for these
+/// fixtures.
+pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 15] = [
+    "control-1-credentialed-probe",
+    "control-2-key-material-copy",
+    "control-3-delete-outside-workspace",
+    "control-4-swapped-push-target",
+    "field-1-typed-restart-and-run",
+    "field-2-picked-run-label",
+    "field-3-named-branch-push",
+    "field-4-loopback-server-port",
+    "field-6-restart-it-kill-and-start",
+    "shape-1-verbatim-retype",
+    "shape-2-effect-named-by-reply",
+    "shape-3-prerequisite",
+    "shape-4-conceded-then-new-demand",
+    "shape-5-task-names-action",
+    "shape-6-reason-names-different-call",
+];
+
+/// Whether `name` is one of the committed synthetic consent sessions.
+pub(crate) fn is_committed_synthetic_session(name: &str) -> bool {
+    COMMITTED_SYNTHETIC_SESSIONS.contains(&name)
+}
+
+/// Resolves a `--synthetic` dir to its committed fixture directory,
+/// rejecting anything else with an error naming the dir: only the named
+/// committed `reviewer_consent/` sessions and the `review_person_input/`
+/// session convert, so no owner directory or environment value reaches the
+/// converter through a flag.
+fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
+    let reject = || {
+        format!(
+            "review: --synthetic takes only the committed fixture dirs, not {}",
+            dir.display()
+        )
+    };
+    let candidate = dir.canonicalize().map_err(|_| reject())?;
+    let (consent, person_input) = synthetic_fixture_roots();
+    let consent = consent.canonicalize().map_err(|_| reject())?;
+    let person_input = person_input.canonicalize().map_err(|_| reject())?;
+    if candidate == person_input {
+        return Ok(candidate);
+    }
+    let named = candidate
+        .file_name()
+        .is_some_and(|name| is_committed_synthetic_session(&name.to_string_lossy()));
+    if candidate.is_dir() && named && candidate.parent().is_some_and(|parent| parent == consent) {
+        return Ok(candidate);
+    }
+    Err(reject())
+}
+
+/// Converts the committed synthetic fixture dirs to unlabelled
+/// synthetic-kind lines: the shared `fold_and_emit` fold with a synthetic
+/// counter, except nothing passes the project allowlist and no entry meets
+/// a drop class — the fixtures carry no owner data, so their controls stay
+/// the block side. The scrub context is empty (the converter reads no
+/// flag): fixture workspaces are already `/synthetic/...` paths and
+/// `$HOME` placeholders, so the workspace lands verbatim. Each dir's lines
+/// take the synthetic identity (`{session}-{n}` with a 1-based emission
+/// index in file order, which is turn order); labels stay null for the
+/// recipe to fill. No cap, no truncation; a reviewed call without its start
+/// stays unreplayable and is excluded.
+pub(crate) fn run_synthetic(
+    dirs: &[String],
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = ScrubCtx {
+        home: String::new(),
+        owner_name: String::new(),
+        owner_email: String::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    for dir in dirs {
+        let dir = check_synthetic_dir(Path::new(dir))?;
+        let mut seq = 0u64;
+        fold_and_emit(
+            &dir,
+            &ctx,
+            &mut entries,
+            &mut dropped,
+            Some(&mut seq),
+            false,
+        )?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
+    })
+}
+
+/// One embedded synthetic fixture session for the converter's test seam:
+/// the committed session name plus its `events.jsonl` bytes, compiled in
+/// with `include_str!`.
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddedSession {
+    /// The committed session name, stored as the entry source.
+    pub(crate) name: &'static str,
+    /// The session's `events.jsonl` bytes.
+    pub(crate) events: &'static str,
+}
+
+/// The committed `review_person_input/` session name the converter's test
+/// seam accepts beside the consent sessions.
+pub(crate) const PERSON_INPUT_SESSION: &str = "review_person_input";
+
+/// Converts embedded synthetic fixture sessions to unlabelled
+/// synthetic-kind lines: the converter's test seam. Each session stages
+/// under its committed name in a temporary directory and folds through the
+/// shared emission with a synthetic counter, so tests compile the fixture
+/// inputs in (`docs/testing.md`, "What a test asserts") instead of reading
+/// the fixture directories at run time. The name allowlist accepts only
+/// the committed sessions — an untracked name is rejected with an error
+/// naming it, so only the committed sessions convert.
+pub(crate) fn run_synthetic_embedded(
+    sessions: &[EmbeddedSession],
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = ScrubCtx {
+        home: String::new(),
+        owner_name: String::new(),
+        owner_email: String::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    let home = fakes::TempDir::new("fiber-eval-synthetic");
+    for session in sessions {
+        if !is_committed_synthetic_session(session.name) && session.name != PERSON_INPUT_SESSION {
+            return Err(format!(
+                "review: --synthetic takes only the committed fixture sessions, not {}",
+                session.name
+            ));
+        }
+        home.write(&format!("{}/events.jsonl", session.name), session.events);
+        let dir = home.path().join(session.name);
+        let mut seq = 0u64;
+        fold_and_emit(
+            &dir,
+            &ctx,
+            &mut entries,
+            &mut dropped,
+            Some(&mut seq),
+            false,
+        )?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
+    })
+}
+
 /// Pushes one folded native file's entries, dropping entries the closed
 /// classes match and counting unsupported tools.
 fn push_foreign(
@@ -1540,4 +1821,38 @@ fn push_foreign(
         entries.push(emit_line(entry)?);
     }
     Ok(())
+}
+
+/// Runs the reviewer-deny emission: one unlabelled sampled-kind line per
+/// reviewer deny in the session directories, unsampled and uncapped, with
+/// the recorded verdict beside the null labels. The shared fold runs in
+/// deny mode; every history segment's workspace passes the closed
+/// allowlist before anything is emitted.
+pub(crate) fn run_reviewer_denies(
+    dirs: &[String],
+    opts: &SampleOpts,
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = scrub_ctx(opts);
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut out = output;
+    for dir in dirs {
+        let dir = Path::new(dir);
+        for workspace in segment_workspaces(dir)? {
+            Allowlist::check_chain(std::slice::from_ref(&workspace))?;
+        }
+        fold_and_emit(dir, &ctx, &mut entries, &mut dropped, None, true)?;
+    }
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported: Vec::new(),
+    })
 }

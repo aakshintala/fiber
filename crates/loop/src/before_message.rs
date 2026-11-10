@@ -21,7 +21,7 @@ use crate::{Error, Loop};
 /// What [`Loop::on_rewrite`] reports to: a replaced prompt's command id
 /// and its replacement, as the hook returned it, before slash expansion.
 /// The door records it in the prompt history before the prompt's
-/// acceptance (`docs/state.md`, "Prompt history").
+/// acceptance (`docs/state.md`, "What each part holds").
 pub type OnRewrite = Arc<dyn Fn(&CommandId, &[ContentPart]) + Send + Sync>;
 
 /// What the `before_message` chain left on an admitted message: who
@@ -39,7 +39,7 @@ pub(crate) struct Hooked {
 impl Loop {
     /// Reports a replaced prompt's replacement to the door, which records
     /// it in the prompt history before the prompt's acceptance
-    /// (`docs/state.md`, "Prompt history"). Like [`Loop::hooks`]: without
+    /// (`docs/state.md`, "What each part holds"). Like [`Loop::hooks`]: without
     /// it the door records what was sent.
     pub fn on_rewrite(mut self, rewritten: OnRewrite) -> Self {
         self.on_rewrite = Some(rewritten);

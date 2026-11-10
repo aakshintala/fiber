@@ -15,7 +15,7 @@ use contract::tool::Cancel;
 use super::background::MoveAsk;
 use super::drive::{LoopEnd, Phase, Run, pump_inner};
 use super::moved::{CancelBridge, Moved};
-use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock};
+use super::output::{Errors, OUTPUT_CAP, PacedStream, Shared, bump, lock};
 use super::sandbox::protected::{
     Guard as ProtectionGuard, ProtectedPaths, Report as ProtectedReport,
 };
@@ -114,6 +114,9 @@ pub(crate) enum Ran {
     /// The command is still running and should become a job. The guard
     /// rides in the move and ends with the job.
     Moved(Box<Moved>),
+    /// The emitter declined the start (`Emit::starting`): nothing was
+    /// spawned, and the call is cancelled before it started.
+    Declined,
 }
 
 /// Runs `command` as `program -c` in `workdir` until the group is empty, the
@@ -194,7 +197,7 @@ impl std::error::Error for SandboxApply {}
 pub(super) enum Drive {
     /// The existing pipeline: one drive pass, then the end.
     Plain,
-    /// The Seatbelt pipeline: every handoff waits for the marker.
+    /// The Seatbelt pipeline: every transfer waits for the marker.
     #[cfg(target_os = "macos")]
     Gated(Arc<super::sandbox::MarkerWatch>),
 }
@@ -282,7 +285,7 @@ fn open_streams(cmd: &mut Command, policy: MovePolicy) -> std::io::Result<SpawnS
 
 /// Drives a spawned child through the existing execution pipeline. The
 /// Seatbelt spawn shares it; only its command construction, marker
-/// stripping, and handoff gating differ, carried by `drive`.
+/// stripping, and transfer gating differ, carried by `drive`.
 #[allow(
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy, the spill and the drive gate are one call"
@@ -374,6 +377,9 @@ pub(super) fn finish_spawned(
         hosted,
         shared,
         job: None,
+        // A call that moves to a job flushes this stream first, and the
+        // job's own stream carries the output from there.
+        paced: emit.paced().then(PacedStream::call),
         feed: None,
     };
     let ended = match &drive {
@@ -534,6 +540,12 @@ fn execute_inner(
         output_cap: OUTPUT_CAP,
         sandbox: None,
     };
+    // Every check that can refuse the call has run: the person's command
+    // starts only if its start is recorded (`Emit::starting`).
+    if !emit.starting() {
+        drop(guard);
+        return Ok(Ran::Declined);
+    }
     let (child, listing, streams) = build_inner(
         &spec,
         policy,
@@ -791,6 +803,9 @@ pub(crate) fn execute_confined(
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
     support::group::detach(&mut cmd, tty);
+    if !emit.starting() {
+        return Ok(Ran::Declined);
+    }
     let (child, listing) = match support::group::spawn(&mut cmd) {
         Ok(started) => started,
         Err(error) => {
@@ -824,9 +839,9 @@ pub(crate) fn execute_confined(
     )
 }
 
-/// Drives a macOS call, gating every handoff on the confinement marker:
+/// Drives a macOS call, gating every transfer on the confinement marker:
 /// no `MovePolicy` — Foreground's move-after threshold nor immediate
-/// Background, Terminal or Monitor handoff — moves a confined call before
+/// Background, Terminal or Monitor transfer — moves a confined call before
 /// its marker is observed. Marker observed resumes normal move-policy
 /// behavior; the post-drive check fails the unobserved remainder closed.
 /// Unconfined calls drive exactly once, as before.

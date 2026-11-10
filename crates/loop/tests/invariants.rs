@@ -270,7 +270,7 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         tool.script = script;
         if kind.has_control() {
             tool.output.control = Some(Control {
-                handoff: None,
+                compact: None,
                 questions: Some(vec![question(index)]),
                 skill: None,
                 name: Some(format!("named {index}")),
@@ -549,7 +549,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
         gates.push(gate);
         if matches!(kind, OrderKind::Fails { asks: true }) {
             tool.output.control = Some(Control {
-                handoff: None,
+                compact: None,
                 questions: Some(vec![question(index)]),
                 skill: None,
                 name: None,
@@ -1117,8 +1117,8 @@ proptest! {
 
     /// No accepted input is lost or repeated (`docs/testing.md`,
     /// "Invariants"; `docs/loop.md`, "Starting a turn", "Ending a
-    /// turn" and "Interrupt"; `docs/invocation.md`, "A prompt arriving
-    /// mid-turn is rejected `busy`"). Batched inputs start one turn, a
+    /// turn" and "Interrupt"; `docs/invocation.md`, "What each command
+    /// does"). Batched inputs start one turn, a
     /// steer sent mid-turn continues it, and inputs a cancelled turn never
     /// read appear in the next one.
     /// Faults it catches:

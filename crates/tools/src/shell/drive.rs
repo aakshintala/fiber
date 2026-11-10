@@ -13,7 +13,7 @@ use rustix::process::Signal;
 use super::background::{GroupMembers, MoveAsk, Step, group_members, running_step, wait_deadline};
 use super::command::{Finished, Kept, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
-use super::output::{JobStream, Shared, lock, stream_output, stream_rest};
+use super::output::{PacedStream, Shared, lock, stream_output, stream_rest};
 use super::process_group::send_term;
 
 pub(super) struct View {
@@ -55,7 +55,11 @@ pub(super) struct Run {
     pub(super) listing: Option<Box<support::group::Listing>>,
     pub(super) shared: Arc<Shared>,
     /// A job's `job_delta` lines. Set only on a job's drive.
-    pub(super) job: Option<JobStream>,
+    pub(super) job: Option<PacedStream>,
+    /// A foreground call's `tool_call_delta` lines, paced, when its emitter
+    /// asks for it. Replaces the unpaced stream of every pass while set,
+    /// and is flushed and dropped when the call moves to a job.
+    pub(super) paced: Option<PacedStream>,
     /// A monitor's deliveries. Set only on a monitor's drive. Boxed, so a
     /// command that is not a monitor carries one pointer.
     pub(super) feed: Option<Box<Feed>>,
@@ -117,9 +121,12 @@ pub(super) fn pump_inner(
         // The drive loop holds the emitter and streams every pass, woken by
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
-        stream_output(&progress.shared, emit, &mut progress.stream_carry);
+        match progress.paced.as_mut() {
+            Some(paced) => paced.pass(&progress.shared, clock, emit),
+            None => stream_output(&progress.shared, emit, &mut progress.stream_carry),
+        }
         if let Some(job) = progress.job.as_mut() {
-            job.pass(&progress.shared, clock);
+            job.pass(&progress.shared, clock, emit);
         }
         // After the job's delta, before the park: the reader queues each
         // chunk for both under one lock, so every byte a delta carried is
@@ -131,8 +138,15 @@ pub(super) fn pump_inner(
                 matches!(progress.phase, Phase::Running),
             );
         }
-        // A held `job_delta` wakes the park when it falls due.
-        let held_until = progress.job.as_ref().and_then(JobStream::deadline);
+        // A held `job_delta` or paced `tool_call_delta` wakes the park when
+        // it falls due.
+        let held_until = progress
+            .job
+            .as_ref()
+            .and_then(PacedStream::deadline)
+            .into_iter()
+            .chain(progress.paced.as_ref().and_then(PacedStream::deadline))
+            .min();
         match progress.phase {
             Phase::Running => match running_step(
                 policy,
@@ -169,11 +183,13 @@ pub(super) fn pump_inner(
                     // listing that names members or never answers is saved
                     // and the loop re-reads the view, so a timeout or
                     // cancellation that became due during the listing wins
-                    // before any handoff.
+                    // before any transfer.
                     if !matches!(reason, MoveReason::ShellExited { .. }) {
+                        end_paced(progress, emit);
                         return LoopEnd::Move(reason);
                     }
                     if progress.members.is_some() {
+                        end_paced(progress, emit);
                         return LoopEnd::Move(reason);
                     }
                     match group_members(ps, progress.pgid, clock) {
@@ -240,7 +256,7 @@ pub(super) fn pump_inner(
                     {
                         support::group::live().unlist(*listing);
                     }
-                    let mut finished = finish(
+                    let mut finished = finish_paced(
                         &progress.shared,
                         progress.stop,
                         progress.sent_signal,
@@ -248,11 +264,12 @@ pub(super) fn pump_inner(
                         view.eof,
                         emit,
                         &mut progress.stream_carry,
+                        progress.paced.as_mut(),
                     );
                     // After `finish` the reader queues nothing more, so this
                     // is every byte the file holds, before the end is reported.
                     if let Some(job) = progress.job.as_mut() {
-                        job.flush(&progress.shared);
+                        job.flush(&progress.shared, emit);
                     }
                     if let Some(feed) = progress.feed.as_mut() {
                         feed.finish(&progress.shared, clock);
@@ -288,6 +305,17 @@ pub(super) fn view(shared: &Shared, cancel: &dyn Cancel) -> View {
     }
 }
 
+/// Flushes a foreground call's paced stream and drops it, as the call
+/// moves to a job: the job's own stream carries the output from here, and
+/// the queue the call's stream read is drained unpaced.
+fn end_paced(progress: &mut Run, emit: &dyn Emit) {
+    if let Some(mut paced) = progress.paced.take() {
+        paced.flush(&progress.shared, emit);
+    }
+}
+
+/// The end of a run with no paced stream: the queue's rest goes out
+/// unpaced.
 pub(super) fn finish(
     shared: &Shared,
     stop: Option<StopKind>,
@@ -296,6 +324,32 @@ pub(super) fn finish(
     eof: bool,
     emit: &dyn Emit,
     carry: &mut Vec<u8>,
+) -> Finished {
+    finish_paced(
+        shared,
+        stop,
+        sent_signal,
+        seen_empty,
+        eof,
+        emit,
+        carry,
+        None,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the end of a run reads its pipes, its stop, its emitter and its paced stream"
+)]
+fn finish_paced(
+    shared: &Shared,
+    stop: Option<StopKind>,
+    sent_signal: bool,
+    seen_empty: bool,
+    eof: bool,
+    emit: &dyn Emit,
+    carry: &mut Vec<u8>,
+    paced: Option<&mut PacedStream>,
 ) -> Finished {
     let (output, status, capped) = {
         let mut inner = lock(&shared.inner);
@@ -315,8 +369,12 @@ pub(super) fn finish(
         (output, inner.status, inner.cap_fired)
     };
     // The queue's rest goes out lossily, so below the cap the concatenated
-    // delta texts equal the lossy whole output.
-    stream_rest(shared, emit, carry);
+    // delta texts equal the lossy whole output. A paced call's held text
+    // goes with it.
+    match paced {
+        Some(paced) => paced.flush(shared, emit),
+        None => stream_rest(shared, emit, carry),
+    }
     let inner = lock(&shared.inner);
     let stop = if inner
         .hosted_exit

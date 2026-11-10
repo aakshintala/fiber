@@ -1,7 +1,7 @@
 //! Session diagnostics attachment and provider HTTP observation: the
 //! one-time sink on each VM, the hook-chain timer scopes and one observed
-//! line per eligible Lua-provider request (`docs/state.md`, "Diagnostic
-//! logs"). Same-crate tests for what no public API exposes: which VM
+//! line per eligible Lua-provider request (`docs/state.md`, "What each part
+//! holds"). Same-crate tests for what no public API exposes: which VM
 //! holds which sink, the purpose mapping, the milestone arithmetic and
 //! the admission and worker ordering the public API cannot freeze.
 
@@ -520,7 +520,7 @@ fn observed_and_plain_agree_on_every_outcome() {
         assert_eq!(status_got, status);
         assert_eq!(body.len() as u64, response_bytes);
         let records = sink.records();
-        // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
+        // `docs/state.md`, "What each part holds": one line when the request ends, with the provider's purpose.
         assert_eq!(records.len(), 1);
         let record = &records[0];
         assert_eq!(record.identity(), Some(&Identity::Provider("p".to_owned())));
@@ -546,7 +546,7 @@ fn observed_and_plain_agree_on_every_outcome() {
     assert_eq!(plain, seen);
     assert_eq!(plain.0, ErrorCode::ConnectionFailed);
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": one that fails after the send writes one without status or headers_ms and with zero response bytes.
+    // `docs/state.md`, "What each part holds": one that fails after the send writes one without status or headers_ms and with zero response bytes.
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, None);
     assert_eq!(records[0].headers_ms, None);
@@ -629,7 +629,7 @@ fn milestones_come_from_the_send() {
         .expect("the scripted reply succeeds");
         assert_eq!(seen.0, 200);
         let records = sink.records();
-        // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
+        // `docs/state.md`, "What each part holds": one line when the request ends, with the provider's purpose.
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].headers_ms, Some(headers_ms));
         assert_eq!(records[0].total_ms, total_ms);
@@ -713,7 +713,7 @@ fn partial_read_keeps_status_headers_and_count() {
     // The partial reply keeps its status, its headers and the bytes read
     // before the failure, not the configured length.
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read before the failure.
+    // `docs/state.md`, "What each part holds": a body read that fails keeps the status, the headers and the bytes read before the failure.
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, Some(200));
     assert!(records[0].headers_ms.is_some());
@@ -769,7 +769,7 @@ fn cap_boundaries_hold_on_both_paths() {
         );
         assert_eq!(plain, seen);
         let records = sink.records();
-        // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read before the failure.
+        // `docs/state.md`, "What each part holds": a body read that fails keeps the status, the headers and the bytes read before the failure.
         assert_eq!(records.len(), 1);
         // Past the bound the read fails and the bytes read so far are
         // kept: exactly the bound, not the configured length.
@@ -1322,7 +1322,7 @@ fn worker_emits_only_after_the_guard_releases() {
     // provider line for the models call, one extension line for the
     // hook's own HTTP, matched as a set since the two writes race.
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
+    // `docs/state.md`, "What each part holds": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
     assert_eq!(
         records.len(),
         2,
@@ -1442,7 +1442,7 @@ fn spawn_failure_starts_no_request_or_record() {
 /// Registered by no other test in this file. The pause is a process-wide
 /// hook, and nextest runs each test in its own process, so tests elsewhere
 /// never meet it.
-const PAUSE_POINT: &str = "before_handoff";
+const PAUSE_POINT: &str = "before_compaction";
 
 fn pausing_hook(url: &str) -> String {
     format!(
@@ -1554,7 +1554,7 @@ fn expired_before_admission_starts_nothing() {
     // The expired provider call records nothing; the released hook ran
     // its own HTTP, which records as the extension's.
     let records = sink.records();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "only the released hook's request records");
     let record = &records[0];
     assert_eq!(
@@ -1726,7 +1726,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
     assert_eq!(hook_record.purpose(), Purpose::Extension);
     assert_eq!(hook_record.status, Some(200));
     assert_eq!(hook_record.response_bytes, 2);
-    // docs/state.md, "Diagnostic logs": one line per completed HTTP request.
+    // `docs/state.md`, "What each part holds": one line per completed HTTP request.
     assert_eq!(sink.records().len(), 2);
     assert_eq!(hook_server.requests().len(), 1);
     assert_eq!(models_server.requests().len(), 1);

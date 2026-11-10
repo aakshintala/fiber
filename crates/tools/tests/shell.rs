@@ -4657,7 +4657,7 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
     let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
         Ok(receipt) => receipt,
         Err(_) => panic!(
-            "waited {:?} for the quiet call's handoff",
+            "waited {:?} for the quiet call's transfer",
             fakes::MUST_SUCCEED_WITHIN
         ),
     };
@@ -4670,7 +4670,7 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
         move || ready_for_wait.exists(),
     );
     // The child acknowledged after opening the FIFO and is now blocked on
-    // its read. The fake clock never moved: the handoff waited for the
+    // its read. The fake clock never moved: the transfer waited for the
     // marker, not for output, the end, or a deadline (`docs/sandbox.md`,
     // "On macOS": no move before the marker is observed).
     // The call creates one job object (`docs/tools.md`, "Background jobs").

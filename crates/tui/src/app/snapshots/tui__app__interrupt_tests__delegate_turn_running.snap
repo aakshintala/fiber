@@ -1,0 +1,35 @@
+---
+source: crates/tui/src/app/interrupt_tests.rs
+assertion_line: 315
+expression: text
+---
+  Delegate  ◆ task j_1                                                                   Esc returns
+ fix the parser › ◆ task j_1
+ harness fiber · model test/model
+ 0 calls · elapsed 0s · session s_dddddddddddddddd
+ ⏸ interrupt · ■ stop s_dddddddddddddddd
+
+
+
+
+
+
+
+
+
+⋮
+⋮                                                                                              ▄▄▄▄▄
+⋮                                                                                               go ▐
+                                                                                               ▀▀▀▀▀
+                                                                                          you 00:00
+
+   ● Working · ⌥I or click to interrupt
+ ● task j_1
+   fiber · test/model
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █                                                                   steering goes to ◆ task j_1
+ ▌─────────────────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                           ctx ▆▆▆▆▆▆▆▆ — · —
+ ▌0 waiting
+ ▌◆ 1 delegate running
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

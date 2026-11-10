@@ -678,7 +678,7 @@ fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
 
 /// A background `models()` stuck in `host.http` must not hold the extension's
 /// thread: `sign()` returns inside its own deadline (`docs/extensions.md`,
-/// "A host call suspends the code that made it").
+/// "How an extension runs").
 #[test]
 fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let setup = Setup::new();

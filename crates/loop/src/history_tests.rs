@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 
 use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    Anchor, Answer, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event,
-    EventKind, FormAnswer, Grant, HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem,
-    Interaction, InteractionRequested, InteractionResolved, ModelChanged, ModelSettings, Moved,
-    OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent, PermissionResolved,
-    PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered, RepositoryCodeResolved,
-    ResolvedBy, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent, SteeringApplied,
-    SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted, UsageRecorded, Variables,
-    VariablesSource,
+    Anchor, Answer, CacheLifetime, CallStatus, CompactionCompleted, CompactionStarted,
+    CompactionTrigger, Control, DecidedBy, Decision, Environment, Event, EventKind, FormAnswer,
+    Grant, InputItem, Interaction, InteractionRequested, InteractionResolved, ModelChanged,
+    ModelSettings, Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
+    PermissionResolved, PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered,
+    RepositoryCodeResolved, ResolvedBy, Rewound, SessionStarted, SkillLoad, SkillSent,
+    SkillsResent, SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted,
+    UsageRecorded, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{Choice, ContentPart, Origin, Point, Question, Sender, Tokens, True};
@@ -164,8 +164,8 @@ fn message_turn(text: &str) -> Event {
     })
 }
 
-fn handoff() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Completed,
         error: None,
         note: None,
@@ -224,8 +224,8 @@ fn sessions(name: &str) -> (fakes::TempDir, PathBuf) {
     (home, sessions)
 }
 
-/// The parent holds a handoff, a later usage record and a later model
-/// switch; the child continues it at the handoff. The fold holds the
+/// The parent holds a compaction, a later usage record and a later model
+/// switch; the child continues it at the compaction. The fold holds the
 /// parent to the point and the child's own lines after it.
 fn two_segment(sessions: &Path) {
     write_log(
@@ -236,7 +236,7 @@ fn two_segment(sessions: &Path) {
             envelope(A, 1, None, None, &built(Some("work"))),
             envelope(A, 2, None, None, &usage("fake/model-1", "fiber-1", 7)),
             envelope(A, 3, Some("t_1"), None, &turn()),
-            envelope(A, 4, Some("t_1"), None, &handoff()),
+            envelope(A, 4, Some("t_1"), None, &compaction()),
             envelope(A, 5, Some("t_2"), None, &turn()),
             envelope(A, 6, None, None, &usage("fake/model-2", "fiber-2", 9)),
             envelope(
@@ -270,7 +270,7 @@ fn a_two_segment_chain_folds_the_parent_to_the_point_and_the_child_after() {
     assert_eq!(folded.model.as_deref(), Some("fake/model-1"));
     assert_eq!(folded.credential.as_deref(), Some("work"));
     assert!(folded.thinking.is_none());
-    // The handoff before the point puts the window in the parent segment.
+    // The compaction before the point puts the window in the parent segment.
     assert_eq!(folded.window, (0, 3));
 }
 
@@ -554,15 +554,15 @@ fn the_seed_reads_requests_without_parsing_their_payloads() {
 }
 
 #[test]
-fn a_handoff_after_the_point_leaves_the_window_at_the_chains_start() {
-    let (_home, sessions) = sessions("handoff-after");
+fn a_compaction_after_the_point_leaves_the_window_at_the_chains_start() {
+    let (_home, sessions) = sessions("compaction-after");
     write_log(
         &sessions,
         A,
         &[
             envelope(A, 0, None, None, &started("/w", None)),
             envelope(A, 1, Some("t_1"), None, &turn()),
-            envelope(A, 2, Some("t_1"), None, &handoff()),
+            envelope(A, 2, Some("t_1"), None, &compaction()),
         ],
     );
     write_log(
@@ -718,8 +718,8 @@ fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
 fn the_window_reader_makes_a_parent_artifact_absolute_and_keeps_the_owns() {
     // A tool result's `artifact` is relative to the session that wrote
     // it: the reader makes a parent segment's absolute against that
-    // segment's directory, so the handoff note resolves the originating
-    // file (`docs/handoff.md`, "Overflow"). The own segment's lines pass
+    // segment's directory, so the compaction note resolves the originating
+    // file (`docs/compaction.md`, "Overflow"). The own segment's lines pass
     // through untouched, relative or absolute or absent.
     let result = |artifact: Option<&str>| {
         Event::ToolCallCompleted(ToolCallCompleted {
@@ -814,8 +814,8 @@ fn the_window_reader_makes_a_parent_artifact_absolute_and_keeps_the_owns() {
 }
 
 #[test]
-fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
-    // A completed handoff in the middle segment puts the window there:
+fn the_window_reader_starts_mid_chain_at_a_parents_compaction() {
+    // A completed compaction in the middle segment puts the window there:
     // the reader holds nothing before it, whatever segment it is on.
     const C: &str = "s_cccccccccccccccc";
     let (_home, sessions) = sessions("mid-chain");
@@ -833,7 +833,7 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
         &[
             envelope(B, 0, None, None, &started("/w", Some((A, 1)))),
             envelope(B, 1, Some("t_b2"), None, &message_turn("b-two")),
-            envelope(B, 2, Some("t_b2"), None, &handoff()),
+            envelope(B, 2, Some("t_b2"), None, &compaction()),
             envelope(B, 3, Some("t_b3"), None, &message_turn("b-three")),
         ],
     );
@@ -859,7 +859,7 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
         held,
         [
             (B, 1, EventKind::TurnStarted),
-            (B, 2, EventKind::HandoffCompleted),
+            (B, 2, EventKind::CompactionCompleted),
             (B, 3, EventKind::TurnStarted),
             (C, 0, EventKind::SessionStarted),
         ]
@@ -1150,7 +1150,7 @@ fn a_person_name_in_the_parent_does_not_pin_the_child() {
             envelope(A, 0, None, None, &started("/w", None)),
             envelope(A, 1, None, None, &named(Some("Mine"), NamedBy::Person)),
             envelope(A, 2, Some("t_1"), None, &turn()),
-            envelope(A, 3, Some("t_1"), None, &handoff()),
+            envelope(A, 3, Some("t_1"), None, &compaction()),
         ],
     );
     write_log(
@@ -1163,7 +1163,7 @@ fn a_person_name_in_the_parent_does_not_pin_the_child() {
     );
     let folded = fold(&log::history(&sessions.join(B)).unwrap()).unwrap();
     let control = contract::events::Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("x".into()),
@@ -1184,7 +1184,7 @@ fn a_person_name_in_the_own_log_pins_the_session() {
         &[
             envelope(A, 0, None, None, &started("/w", None)),
             envelope(A, 1, Some("t_1"), None, &turn()),
-            envelope(A, 2, Some("t_1"), None, &handoff()),
+            envelope(A, 2, Some("t_1"), None, &compaction()),
         ],
     );
     write_log(
@@ -1198,7 +1198,7 @@ fn a_person_name_in_the_own_log_pins_the_session() {
     );
     let folded = fold(&log::history(&sessions.join(B)).unwrap()).unwrap();
     let control = contract::events::Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("x".into()),
@@ -1232,7 +1232,7 @@ fn an_unreadable_name_line_fails_the_resume() {
             envelope(C, 0, None, None, &started("/w", None)),
             bad,
             envelope(C, 2, Some("t_1"), None, &turn()),
-            envelope(C, 3, Some("t_1"), None, &handoff()),
+            envelope(C, 3, Some("t_1"), None, &compaction()),
         ],
     );
     let Err(crate::Error::Unreadable(_)) = fold(&log::history(&sessions.join(C)).unwrap()) else {
@@ -1446,7 +1446,7 @@ fn skilled_completed(status: CallStatus, name: &str, path: &str) -> Event {
         kept: None,
         changes: None,
         control: Some(Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: Some(SkillLoad {
                 name: name.into(),
@@ -1463,8 +1463,8 @@ fn skilled_completed(status: CallStatus, name: &str, path: &str) -> Event {
 }
 
 fn begun() -> Event {
-    Event::HandoffStarted(HandoffStarted {
-        trigger: HandoffTrigger::Person,
+    Event::CompactionStarted(CompactionStarted {
+        trigger: CompactionTrigger::Person,
     })
 }
 
@@ -1519,7 +1519,7 @@ fn seed_log() -> Vec<(u64, Option<&'static str>, Option<&'static str>, Event)> {
         ),
         (4, Some("t_2"), None, message_turn("ask")),
         (5, Some("t_2"), None, begun()),
-        (6, Some("t_2"), None, handoff()),
+        (6, Some("t_2"), None, compaction()),
     ]
 }
 
@@ -1535,17 +1535,17 @@ fn write_seed_log(sessions: &Path) {
 }
 
 #[test]
-fn the_seed_holds_the_loads_before_the_handoff_window() {
+fn the_seed_holds_the_loads_before_the_compaction_window() {
     let (_home, sessions) = sessions("seed-loads");
     write_seed_log(&sessions);
     let folded = resumed(&sessions.join(A)).unwrap();
-    // The load predates the handoff turn's window, yet the seed holds it,
+    // The load predates the compaction turn's window, yet the seed holds it,
     // so the rebuilt restart arms the resend.
     assert_eq!(folded.seed.skills, [alpha()]);
 }
 
 #[test]
-fn failed_inner_and_pre_handoff_loads_never_seed() {
+fn failed_inner_and_pre_compaction_loads_never_seed() {
     let (_home, sessions) = sessions("seed-loads-filtered");
     write_log(
         &sessions,
@@ -1554,7 +1554,7 @@ fn failed_inner_and_pre_handoff_loads_never_seed() {
             envelope(A, 0, None, None, &started("/w", None)),
             envelope(A, 1, Some("t_1"), None, &turn()),
             envelope(A, 2, Some("t_1"), Some("a_1"), &requested()),
-            // A successful load before an earlier completed handoff.
+            // A successful load before an earlier completed compaction.
             envelope(
                 A,
                 3,
@@ -1581,7 +1581,7 @@ fn failed_inner_and_pre_handoff_loads_never_seed() {
                 &skilled_completed(CallStatus::Completed, "inner", "/w/inner/SKILL.md"),
             ),
             envelope(A, 8, Some("t_2"), None, &turn()),
-            envelope(A, 9, Some("t_2"), None, &handoff()),
+            envelope(A, 9, Some("t_2"), None, &compaction()),
             envelope(A, 10, Some("t_3"), None, &turn()),
             envelope(A, 11, Some("t_3"), Some("a_4"), &requested()),
             envelope(
@@ -1592,7 +1592,7 @@ fn failed_inner_and_pre_handoff_loads_never_seed() {
                 &skilled_completed(CallStatus::Completed, "beta", "/w/beta/SKILL.md"),
             ),
             envelope(A, 13, Some("t_4"), None, &turn()),
-            envelope(A, 14, Some("t_4"), None, &handoff()),
+            envelope(A, 14, Some("t_4"), None, &compaction()),
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
@@ -1605,7 +1605,7 @@ fn failed_inner_and_pre_handoff_loads_never_seed() {
     );
 }
 
-/// A log whose one skill load of `status` predates the handoff, as
+/// A log whose one skill load of `status` predates the compaction, as
 /// [`seed_log`] holds a completed one: only a completed Fiber-run load
 /// arms the resend.
 fn status_log(status: CallStatus) -> Vec<(u64, Option<&'static str>, Option<&'static str>, Event)> {
@@ -1620,7 +1620,7 @@ fn status_log(status: CallStatus) -> Vec<(u64, Option<&'static str>, Option<&'st
             skilled_completed(status, "alpha", "/w/alpha/SKILL.md"),
         ),
         (4, Some("t_2"), None, turn()),
-        (5, Some("t_2"), None, handoff()),
+        (5, Some("t_2"), None, compaction()),
     ]
 }
 
@@ -1637,7 +1637,7 @@ fn check_status_seeds_nothing(name: &str, status: CallStatus) {
     assert!(folded.seed.skills.is_empty());
     let mut live = Vec::new();
     let mut had = BTreeMap::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     for line in &lines {
         let Some(event) = Event::from_envelope(line).unwrap() else {
             continue;
@@ -1673,14 +1673,14 @@ fn a_failed_skill_load_seeds_nothing() {
 }
 
 #[test]
-fn a_crash_after_handoff_completed_rebuilds_the_armed_resend() {
+fn a_crash_after_compaction_completed_rebuilds_the_armed_resend() {
     let (_home, sessions) = sessions("crash-window-one");
     write_seed_log(&sessions);
     let folded = resumed(&sessions.join(A)).unwrap();
     let window = vec![
         envelope(A, 4, Some("t_2"), None, &message_turn("ask")),
         envelope(A, 5, Some("t_2"), None, &begun()),
-        envelope(A, 6, Some("t_2"), None, &handoff()),
+        envelope(A, 6, Some("t_2"), None, &compaction()),
     ];
     let (_, _, _, carry) =
         rebuild_and_sent(&window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
@@ -1696,7 +1696,7 @@ fn a_crash_after_skills_resent_rebuilds_no_resend() {
     let window = vec![
         envelope(A, 4, Some("t_2"), None, &message_turn("ask")),
         envelope(A, 5, Some("t_2"), None, &begun()),
-        envelope(A, 6, Some("t_2"), None, &handoff()),
+        envelope(A, 6, Some("t_2"), None, &compaction()),
         envelope(
             A,
             7,
@@ -1729,14 +1729,14 @@ fn a_crash_after_skills_resent_rebuilds_no_resend() {
 }
 
 #[test]
-fn a_complete_handoff_rebuilds_the_opening_and_the_skills() {
+fn a_complete_compaction_rebuilds_the_opening_and_the_skills() {
     let (_home, sessions) = sessions("crash-window-complete");
     write_seed_log(&sessions);
     let folded = resumed(&sessions.join(A)).unwrap();
     let window = vec![
         envelope(A, 4, Some("t_2"), None, &message_turn("ask")),
         envelope(A, 5, Some("t_2"), None, &begun()),
-        envelope(A, 6, Some("t_2"), None, &handoff()),
+        envelope(A, 6, Some("t_2"), None, &compaction()),
         envelope(
             A,
             7,
@@ -1768,7 +1768,7 @@ fn a_complete_handoff_rebuilds_the_opening_and_the_skills() {
 }
 
 #[test]
-fn a_skill_sent_again_is_seeded_at_the_next_handoff() {
+fn a_skill_sent_again_is_seeded_at_the_next_compaction() {
     let (_home, sessions) = sessions("seed-resent");
     write_seed_log(&sessions);
     let mut lines: Vec<Envelope> = seed_log()
@@ -1785,7 +1785,7 @@ fn a_skill_sent_again_is_seeded_at_the_next_handoff() {
     lines.push(envelope(A, 8, Some("t_2"), None, &opening()));
     lines.push(envelope(A, 9, Some("t_3"), None, &turn()));
     lines.push(envelope(A, 10, Some("t_3"), None, &begun()));
-    lines.push(envelope(A, 11, Some("t_3"), None, &handoff()));
+    lines.push(envelope(A, 11, Some("t_3"), None, &compaction()));
     write_log(&sessions, A, &lines);
     let folded = resumed(&sessions.join(A)).unwrap();
     assert_eq!(folded.seed.skills, [alpha()]);
@@ -1803,7 +1803,7 @@ fn an_empty_resend_seeds_nothing() {
     lines.push(envelope(A, 8, Some("t_2"), None, &opening()));
     lines.push(envelope(A, 9, Some("t_3"), None, &turn()));
     lines.push(envelope(A, 10, Some("t_3"), None, &begun()));
-    lines.push(envelope(A, 11, Some("t_3"), None, &handoff()));
+    lines.push(envelope(A, 11, Some("t_3"), None, &compaction()));
     write_log(&sessions, A, &lines);
     let folded = resumed(&sessions.join(A)).unwrap();
     assert!(folded.seed.skills.is_empty());
@@ -1823,7 +1823,7 @@ fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
         kept: None,
         changes: None,
         control: Some(Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: Some(alpha()),
             name: None,
@@ -1840,7 +1840,7 @@ fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
         envelope(A, 2, Some("t_1"), Some("a_1"), &requested()),
         envelope(A, 3, Some("t_1"), Some("a_1"), &provided),
         envelope(A, 4, Some("t_2"), None, &turn()),
-        envelope(A, 5, Some("t_2"), None, &handoff()),
+        envelope(A, 5, Some("t_2"), None, &compaction()),
     ];
     write_log(&sessions, A, &lines);
     let folded = resumed(&sessions.join(A)).unwrap();
@@ -1848,7 +1848,7 @@ fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
     // The live render and the rebuild render the same bytes.
     let mut live = Vec::new();
     let mut had = BTreeMap::new();
-    let mut carry = crate::handoff::Carry::default();
+    let mut carry = crate::compaction::Carry::default();
     for line in &lines {
         let Some(event) = Event::from_envelope(line).unwrap() else {
             continue;
@@ -1885,7 +1885,7 @@ fn a_skill_load_with_hosts_reaches_the_seed_and_the_known_hosts() {
             envelope(A, 2, Some("t_1"), Some("a_1"), &requested()),
             envelope(A, 3, Some("t_1"), Some("a_1"), &loaded),
             envelope(A, 4, Some("t_2"), None, &turn()),
-            envelope(A, 5, Some("t_2"), None, &handoff()),
+            envelope(A, 5, Some("t_2"), None, &compaction()),
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
@@ -1915,7 +1915,7 @@ fn a_turn_start_history_seed_keeps_extension_job_ownership() {
             envelope(A, 0, None, None, &started("/w", None)),
             envelope(A, 1, None, None, &job),
             envelope(A, 2, Some("t_1"), None, &turn()),
-            envelope(A, 3, Some("t_1"), None, &handoff()),
+            envelope(A, 3, Some("t_1"), None, &compaction()),
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
@@ -1924,10 +1924,10 @@ fn a_turn_start_history_seed_keeps_extension_job_ownership() {
 }
 
 #[test]
-fn a_cut_handoff_renders_nothing_and_keeps_the_skills_loaded() {
-    let seed = crate::handoff::Carry {
+fn a_cut_compaction_renders_nothing_and_keeps_the_skills_loaded() {
+    let seed = crate::compaction::Carry {
         skills: vec![alpha()],
-        ..crate::handoff::Carry::default()
+        ..crate::compaction::Carry::default()
     };
     let lines = vec![
         envelope(A, 0, Some("t_1"), None, &message_turn("ask")),
@@ -1939,7 +1939,7 @@ fn a_cut_handoff_renders_nothing_and_keeps_the_skills_loaded() {
             Some("a_1"),
             &skilled_completed(CallStatus::Completed, "alpha", "/w/alpha/SKILL.md"),
         ),
-        envelope(A, 3, Some("t_1"), None, &handoff()),
+        envelope(A, 3, Some("t_1"), None, &compaction()),
         envelope(
             A,
             4,
@@ -1950,7 +1950,7 @@ fn a_cut_handoff_renders_nothing_and_keeps_the_skills_loaded() {
         envelope(A, 5, Some("t_1"), None, &opening()),
     ];
     let (conversation, _) = summary_conversation(&lines, 3, "fake/model-1", seed.clone()).unwrap();
-    // The cut handoff adds no input: the call and its result only, no
+    // The cut compaction adds no input: the call and its result only, no
     // skill text and no opening.
     assert_eq!(conversation.len(), 3);
     assert!(
@@ -1987,8 +1987,8 @@ fn user(text: &str) -> Input {
     }
 }
 
-/// Turn 1's message A, then the handoff turn's message B, its completed
-/// handoff, the new opening and the reviewer's selection of both.
+/// Turn 1's message A, then the compaction turn's message B, its completed
+/// compaction, the new opening and the reviewer's selection of both.
 fn kept_log() -> Vec<Envelope> {
     vec![
         envelope(A, 0, None, None, &started("/w", None)),
@@ -2005,7 +2005,7 @@ fn kept_log() -> Vec<Envelope> {
         ),
         envelope(A, 3, Some("t_2"), None, &message_turn("B")),
         envelope(A, 4, Some("t_2"), None, &begun()),
-        envelope(A, 5, Some("t_2"), None, &handoff()),
+        envelope(A, 5, Some("t_2"), None, &compaction()),
         envelope(A, 6, Some("t_2"), None, &opening()),
         envelope(A, 7, Some("t_2"), None, &kept(&[(1, 0), (3, 0)])),
     ]
@@ -2017,7 +2017,7 @@ fn a_resume_seed_carries_the_kept_messages() {
     let lines = kept_log();
     write_log(&sessions, A, &lines);
     let folded = resumed(&sessions.join(A)).unwrap();
-    // The window starts at the handoff turn, so message A is only in the
+    // The window starts at the compaction turn, so message A is only in the
     // seed.
     // No doc promises the resume window's position, so the rebuild reads
     // from wherever the fold put it instead of pinning the count.
@@ -2036,7 +2036,7 @@ fn a_resume_seed_carries_the_kept_messages() {
     let (conversation, _, _, carry) =
         rebuild_and_sent(window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
     assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept message in its earlier block (item 4), carried input in a new-message block (item 5), then the note (item 6).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — kept message in its earlier block (item 4), carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         conversation[1..],
         [
@@ -2045,7 +2045,7 @@ fn a_resume_seed_carries_the_kept_messages() {
             user("")
         ]
     );
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         crate::reviewer::Reviewed::person_pairs(&carry.reviewed),
         [
@@ -2070,13 +2070,13 @@ fn a_resume_seed_carries_the_kept_messages() {
         &lines,
         "fake/model-1",
         &HashSet::new(),
-        crate::handoff::Carry::default(),
+        crate::compaction::Carry::default(),
     )
     .unwrap();
-    // docs/loop.md, "What the model is sent": "The conversation in each request is built from the session log's durable events, the only state of record (ADR 0001)" — the whole-log rebuild matches the window rebuild, index included.
+    // `docs/loop.md`, "What the model is sent": "The conversation in each request is built from the session log's durable events, the only state of record (ADR 0001)" — the whole-log rebuild matches the window rebuild, index included.
     assert_eq!(whole, conversation);
     assert_eq!(whole_carry.reviewed, carry.reviewed);
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "each in its own labelled block" — two kept messages, two pairs.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4: "each in its own labelled block" — two kept messages, two pairs.
     assert_eq!(
         crate::reviewer::Reviewed::person_pairs(&carry.reviewed).len(),
         2
@@ -2116,13 +2116,13 @@ fn a_summary_turn_message_never_reaches_the_seed() {
             envelope(A, 1, Some("t_1"), None, &summary),
             envelope(A, 2, Some("t_1"), None, &completed),
             envelope(A, 3, Some("t_2"), None, &message_turn("ask")),
-            envelope(A, 4, Some("t_2"), None, &handoff()),
+            envelope(A, 4, Some("t_2"), None, &compaction()),
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
     // No doc promises the resume window's position; the seed exclusion below
     // is the property under test.
-    // docs/handoff.md, "What the model sees after a handoff", item 4 holds "The person's earlier messages that still bind": the summary turn's driver message is not one, so the seed stays empty.
+    // `docs/compaction.md`, "What the model sees after a compaction", item 4 holds "The person's earlier messages that still bind": the summary turn's driver message is not one, so the seed stays empty.
     assert!(
         folded.seed.reviewed.is_empty(),
         "{:?}",
@@ -2132,11 +2132,11 @@ fn a_summary_turn_message_never_reaches_the_seed() {
 
 #[test]
 fn a_reviewer_kept_after_the_cut_inserts_nothing() {
-    let handoff_lines = |kept_line: bool| {
+    let compaction_lines = |kept_line: bool| {
         let mut lines = vec![
             envelope(A, 0, Some("t_1"), None, &message_turn("A")),
             envelope(A, 1, Some("t_2"), None, &message_turn("B")),
-            envelope(A, 2, Some("t_2"), None, &handoff()),
+            envelope(A, 2, Some("t_2"), None, &compaction()),
             envelope(A, 3, Some("t_2"), None, &opening()),
         ];
         if kept_line {
@@ -2144,21 +2144,22 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
         }
         lines
     };
-    let seed = crate::handoff::Carry::default();
-    // Cut before the handoff completes: it renders as failed, so the
+    let seed = crate::compaction::Carry::default();
+    // Cut before the compaction completes: it renders as failed, so the
     // selection has nothing to join.
     let (before, _) =
-        summary_conversation(&handoff_lines(true), 2, "fake/model-1", seed.clone()).unwrap();
+        summary_conversation(&compaction_lines(true), 2, "fake/model-1", seed.clone()).unwrap();
     let (without, _) =
-        summary_conversation(&handoff_lines(false), 2, "fake/model-1", seed.clone()).unwrap();
+        summary_conversation(&compaction_lines(false), 2, "fake/model-1", seed.clone()).unwrap();
     assert_eq!(before, without);
     assert_eq!(before, [user("A"), user("B")]);
-    // Cut between the completed handoff and its selection: the selection
+    // Cut between the completed compaction and its selection: the selection
     // is past the cut and inserts nothing.
-    let (after, _) = summary_conversation(&handoff_lines(true), 4, "fake/model-1", seed).unwrap();
+    let (after, _) =
+        summary_conversation(&compaction_lines(true), 4, "fake/model-1", seed).unwrap();
     assert_eq!(after.len(), 3);
     assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(after[1..], [user("The person's new message:\nB"), user("")]);
 }
 
@@ -2254,7 +2255,7 @@ fn skipped(id: &str) -> Event {
 /// A rewind edge and a move edge fold in one pass: the rewind keeps the
 /// old workspace's state, and the move into another workspace drops the
 /// grants and offers folded before it while keeping the session's model
-/// and handoff state.
+/// and compaction state.
 #[test]
 fn a_rewind_then_a_move_clears_grants_and_offers_on_entry() {
     let (_home, sessions) = sessions("fold-move");
@@ -2298,7 +2299,7 @@ fn a_rewind_then_a_move_clears_grants_and_offers_on_entry() {
     // another cleared them on entry.
     assert!(folded.grants.is_empty(), "{:?}", folded.grants);
     assert_eq!(folded.offers.counts(), (0, 0));
-    // The session's other handoff state survives the move: its model,
+    // The session's other compaction state survives the move: its model,
     // credential and window.
     assert_eq!(folded.model.as_deref(), Some("fake/model-1"));
     assert_eq!(folded.credential.as_deref(), Some("work"));
@@ -2641,8 +2642,8 @@ fn seen_details(path: &str, hash: u64) -> Value {
     json!({"file_seen": {"path": path, "hash": hash}})
 }
 
-fn failed_handoff() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn failed_compaction() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Failed,
         error: None,
         note: None,
@@ -2796,10 +2797,10 @@ fn legacy_malformed_and_unfinished_completions_create_and_erase_nothing() {
 }
 
 #[test]
-fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
-    // A handoff clears what was seen, and a fork rebuilds up to its point
+fn a_completed_compaction_clears_seen_while_a_failed_one_keeps_it() {
+    // A compaction clears what was seen, and a fork rebuilds up to its point
     // (`docs/tools.md`, "Stale files").
-    let (_home, sessions) = sessions("seen-handoff");
+    let (_home, sessions) = sessions("seen-compaction");
     write_log(
         &sessions,
         A,
@@ -2812,7 +2813,7 @@ fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
                 Some("a_1"),
                 &file_completed(CallStatus::Completed, Some(seen_details("/w/a.txt", 1))),
             ),
-            envelope(A, 2, Some("t_1"), None, &handoff()),
+            envelope(A, 2, Some("t_1"), None, &compaction()),
             envelope(
                 A,
                 3,
@@ -2820,7 +2821,7 @@ fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
                 Some("a_2"),
                 &file_completed(CallStatus::Completed, Some(seen_details("/w/b.txt", 2))),
             ),
-            envelope(A, 4, Some("t_2"), None, &failed_handoff()),
+            envelope(A, 4, Some("t_2"), None, &failed_compaction()),
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
@@ -2828,9 +2829,9 @@ fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
         folded.seen_files(),
         &BTreeMap::from([(PathBuf::from("/w/b.txt"), 2)])
     );
-    let before_handoff = forked(&sessions.join(A), Seq(1)).unwrap();
+    let before_compaction = forked(&sessions.join(A), Seq(1)).unwrap();
     assert_eq!(
-        before_handoff.seen_files(),
+        before_compaction.seen_files(),
         &BTreeMap::from([(PathBuf::from("/w/a.txt"), 1)])
     );
 }
@@ -3140,7 +3141,7 @@ fn person_input_turn_snapshot_keeps_staged_request() {
         previous_workspace: None,
         parent_ledger: crate::usage::Ledger::default(),
         asks: crate::reviewer::PendingAsks::default(),
-        running: crate::handoff::Carry::default(),
+        running: crate::compaction::Carry::default(),
         starts: HashMap::new(),
         orphans: crate::jobs::Orphans::default(),
         delegate_sessions: HashMap::new(),

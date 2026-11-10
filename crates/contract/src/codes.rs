@@ -211,7 +211,7 @@ codes! {
     /// Code a repository declares was skipped: nobody approved it and nobody
     /// could be asked.
     RepositoryCodeSkipped = "repository_code_skipped",
-    /// The reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one.
+    /// The reviewer could not choose which of the person's messages still bind at a compaction, so it kept every one.
     ReviewerSelectionFailed = "reviewer_selection_failed",
     /// The reviewer blocked a call while both layers of the notes are empty;
     /// the notice names the `reviewer-setup` skill.

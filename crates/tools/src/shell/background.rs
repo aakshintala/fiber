@@ -24,7 +24,7 @@ use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::drive::finish;
 use super::monitor::Feed;
 use super::moved::Moved;
-use super::output::{JobStream, Shared, align_char_boundary, lock};
+use super::output::{PacedStream, Shared, align_char_boundary, lock};
 use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::tty;
 use super::{Limit, assemble};
@@ -430,7 +430,7 @@ fn hand_off(
     let path = opened.path.clone();
     let job_id = opened.started.job_id.clone();
     let end = opened.end;
-    let stream = JobStream::new(job_id.clone(), opened.emit);
+    let stream = PacedStream::job(job_id.clone(), opened.emit);
     let errors = errors_path(&opened.path);
     // A monitor's standard error file, or why it could not be created.
     let mut sink = None;
@@ -465,7 +465,7 @@ fn hand_off(
     // plus what is left of the drive's deadline, saturated when the
     // deadline already passed. A keeper-hosted move keeps no drive
     // deadline (`docs/tools.md`, "The keeper"), so the receipt reads the
-    // wall the host handoff stored instead. Without a limit, or without a
+    // wall the host transfer stored instead. Without a limit, or without a
     // deadline in hand, there is nothing to name. Captured before the job's
     // thread takes the move, beside the saved members above.
     let stop = match (limit, moved.progress.timeout_at) {

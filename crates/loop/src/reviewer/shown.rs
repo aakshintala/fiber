@@ -26,7 +26,7 @@ pub enum Shown {
     Person(KeptMessage),
     /// The agent's raw, uncapped text that a person message answers.
     /// Held at the tail until a person message takes it or a call, a
-    /// handoff or a failed turn removes it.
+    /// compaction or a failed turn removes it.
     Reply(String),
 }
 
@@ -102,7 +102,7 @@ impl PendingAsks {
         self.staged.remove(id)
     }
 
-    /// Drops every staged entry: a completed handoff restarts the
+    /// Drops every staged entry: a completed compaction restarts the
     /// reviewer's input, so no earlier question answers anything after it.
     pub(crate) fn clear(&mut self) {
         self.staged.clear();
@@ -153,7 +153,7 @@ pub fn summary_skips(inside: &mut bool, event: &Event) -> bool {
 /// agent's; a tool call between that text and the message breaks the link,
 /// so no reply is shown. A `reviewer_kept` keeps only the named person
 /// items, in their current order, each with the reply it answered, and
-/// drops every tool call. A completed handoff drops every tool call and
+/// drops every tool call. A completed compaction drops every tool call and
 /// keeps every person item with the replies they answered, releasing the
 /// calls' allocation: the reviewer's
 /// input follows the context window, not the transcript.
@@ -254,10 +254,10 @@ pub fn render_reviewed(
                 });
             }
         }
-        Event::HandoffCompleted(done) => {
-            // At a completed handoff the reviewer's input restarts from
+        Event::CompactionCompleted(done) => {
+            // At a completed compaction the reviewer's input restarts from
             // the person's messages that still bind
-            // (`docs/permissions.md`, "At a handoff"), each with the
+            // (`docs/permissions.md`, "At a compaction"), each with the
             // reply it answered: earlier tool calls
             // can never be reviewed again, so they leave the resident
             // input while every person item stays for the selection
@@ -265,10 +265,10 @@ pub fn render_reviewed(
             // with no person message after it answers nothing, so it
             // goes with the calls. Shrinking the allocation keeps a busy turn's
             // peak from becoming permanent kept state. A failed or
-            // cancelled handoff leaves the context as it was
-            // (`docs/handoff.md`, "Recording").
+            // cancelled compaction leaves the context as it was
+            // (`docs/compaction.md`, "Recording").
             if done.outcome == Outcome::Completed {
-                // A completed handoff restarts the reviewer's input: no
+                // A completed compaction restarts the reviewer's input: no
                 // earlier staged question answers anything after it.
                 asks.clear();
                 let mut keep = kept_flags(reviewed, |_| true).into_iter();
@@ -289,6 +289,7 @@ pub fn render_reviewed(
         Event::FiberStarted(_) | Event::FiberExited(_) | Event::SessionStarted(_) => {}
         Event::Rewound(_) | Event::Moved(_) | Event::StepStarted(_) => {}
         Event::SteeringQueue(_) | Event::ShellCommand(_) | Event::SessionNamed(_) => {}
+        Event::ShellCommandStarted(_) | Event::ShellCommandDelta(_) => {}
         // A folder addition shows no call for the reviewer to judge.
         Event::DirectoryAdded(_) => {}
         Event::Clients(_) | Event::SessionStatus(_) | Event::ContextAdded(_) => {}
@@ -340,7 +341,7 @@ pub fn render_reviewed(
         Event::Notice(_) | Event::PreambleBuilt(_) | Event::ModelChanged(_) => {}
         Event::OpeningMessage(_) | Event::InstructionFile(_) | Event::DateChanged(_) => {}
         Event::SkillsChanged(_) | Event::SkillsResent(_) => {}
-        Event::HandoffStarted(_) | Event::ContextNudged(_) => {}
+        Event::CompactionStarted(_) | Event::ContextNudged(_) => {}
         Event::McpServerFailed(_) | Event::McpServerReady(_) | Event::Reloaded(_) => {}
         Event::ExtensionsLoaded(_)
         | Event::ExtensionStateSet(_)

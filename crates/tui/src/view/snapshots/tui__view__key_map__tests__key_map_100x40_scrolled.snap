@@ -1,38 +1,38 @@
 ---
 source: crates/tui/src/view/key_map_tests.rs
-expression: "screen(&app, 100, 40)"
+expression: "whole_screen(&app, 100, 40)"
 ---
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
    Key map                                                                                       ✕
 
    Every binding by area, with its other paths.
-   38 actions, 26 with other paths
+   39 actions, 27 with other paths
 
    All  Sessions  The input box  The conversation  Steering  Requests, models and help
    Type to search shortcuts› █
-     The conversation           Search (where forwarded)                Ctrl+F; Cmd+F
-     The conversation           Open the search results (with search    Ctrl+F · click the match
-                                open)                                   count
-     The conversation           Next or previous match (with search     Enter or ↓, Shift+Enter or
-                                open)                                   ↑
-     The conversation           Jump to the end                         End · click "↓ New
-                                                                        messages below"
-     Steering                   Select a queued steering message        ⌥↑ ⌥↓ · its mouse target
-     Steering                   Amend it                                Enter · its mouse target
-     Steering                   Drop it                                 ⌥X · its mouse target
-⋮    Requests, models and help  Reopen a request put aside, or move to  ⌥A · /approvals; click the
-⋮                               the next, the oldest first, switching   badge or a waiting card
-⋮                               to its session
-     Requests, models and help  Open the model picker                   Ctrl+L · /model
-     Requests, models and help  Choose in the model picker for this     Ctrl+S
-                                session only
-     Requests, models and help  Show every model in the model picker,   Tab · click "[show all]"
-                                or only the scoped ones
-     Requests, models and help  Refresh every model list in the model   Ctrl+R · click "⟳ refresh
-                                picker                                  all"
-   › Requests, models and help  Open the key map                        F1 · /? or /help
-   ↑ 25 more
+     The conversation           Search (where forwarded)            Ctrl+F; Cmd+F
+     The conversation           Open the search results (with       Ctrl+F · click the match count
+                                search open)
+     The conversation           Next or previous match (with        Enter or ↓, Shift+Enter or ↑
+                                search open)
+     The conversation           Jump to the end                     End · click "↓ New messages
+                                                                    below"
+     Steering                   Select a queued steering message    ⌥↑ ⌥↓ · its mouse target
+     Steering                   Amend it                            Enter · its mouse target
+     Steering                   Drop it                             ⌥X · its mouse target
+⋮    Requests, models and help  Reopen a request put aside, or      ⌥A · /approvals; click the
+⋮                               move to the next, the oldest        badge or a waiting card
+⋮                               first, switching to its session
+     Requests, models and help  Open the model picker               Ctrl+L · /model
+     Requests, models and help  Choose in the model picker for      Ctrl+S
+                                this session only
+     Requests, models and help  Show every model in the model       Tab · click "[show all]"
+                                picker, or only the scoped ones
+     Requests, models and help  Refresh every model list in the     Ctrl+R · click "⟳ refresh all"
+                                model picker
+   › Requests, models and help  Open the key map                    F1 · /? or /help
+   ↑ 26 more
 
    ↑↓ move · ←→ tabs · Esc closes
 

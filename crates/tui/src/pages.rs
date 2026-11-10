@@ -272,6 +272,8 @@ impl Index {
                     | EventKind::SteeringApplied
                     | EventKind::SteeringQueue
                     | EventKind::ShellCommand
+                    | EventKind::ShellCommandStarted
+                    | EventKind::ShellCommandDelta
                     | EventKind::DirectoryAdded
                     | EventKind::SessionNamed
                     | EventKind::Clients
@@ -304,8 +306,8 @@ impl Index {
                     | EventKind::InstructionFile
                     | EventKind::DateChanged
                     | EventKind::SkillsChanged
-                    | EventKind::HandoffStarted
-                    | EventKind::HandoffCompleted
+                    | EventKind::CompactionStarted
+                    | EventKind::CompactionCompleted
                     | EventKind::SkillsResent
                     | EventKind::ContextNudged
                     | EventKind::ReviewerKept
@@ -351,6 +353,8 @@ impl Index {
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
             | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
             | EventKind::Clients
@@ -379,8 +383,8 @@ impl Index {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

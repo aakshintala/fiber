@@ -27,12 +27,12 @@ fork or when a server reconnects. So:
 - nothing in the conversation is rendered from the clock or from state outside
   the log: wake inputs, notices, monitor batches, the jobs line and the nudge are
   built from logged fields, and the envelope `ts` never reaches the model
-- the conversation only grows at its end, apart from a handoff
-  (`docs/handoff.md`)
+- the conversation only grows at its end, apart from a compaction
+  (`docs/compaction.md`)
 
 ## The preamble
 
-The preamble is built at four points, and only these:
+The preamble is built at five points, and only these:
 
 | Point | What happens |
 |---|---|
@@ -40,6 +40,7 @@ The preamble is built at four points, and only these:
 | Resume | Built again from current inputs: the person's system prompt files, extension prompt texts, the model's addendum, the servers' tool lists. Instruction files and the date are not inputs: they live in the logged opening message (`docs/system-prompt.md`). If nothing changed, the bytes match and the cache still hits. |
 | `reload` | Built again with the new tool set (`docs/mcp.md`, "Reload"). |
 | Switch | Built again with the new model, thinking level or credential label ("Switching model"). |
+| `/sandbox` | Built again with the shell tool's new description; the miss stays person-initiated, which is allowed. |
 
 Each build is logged as `preamble_built` (`docs/events.md`), carrying the
 reason, the request settings, the system prompt text and the full tool
@@ -180,7 +181,9 @@ does no work. With `cache.warm_idle` set, an idle session refreshes its cache
 counted from the last request's send, with a request that reads the cached prefix
 and asks for one token of output, so a person who returns after a long pause finds the
 cache still warm. The refresh is logged as `usage_recorded` like any request,
-so its cost shows in the session's spend.
+so its cost shows in the session's spend. A `/sandbox` toggle or a `reload`
+stops warming, dropping the held request, so the next refresh resends the
+fresh bytes.
 
 A refresh is the session's last request with its output capped at one token,
 so it reads the cache only when every other byte is the same. A session sends
@@ -318,7 +321,7 @@ Each of these costs one rebuild and is logged:
 
 | Cause | Event | Rebuilt from |
 |---|---|---|
-| Handoff | `handoff_completed` | after the preamble (`docs/handoff.md`) |
+| Compaction | `compaction_completed` | after the preamble (`docs/compaction.md`) |
 | `reload` | `reloaded`, `preamble_built` | the start |
 | Switch | `model_changed`, `preamble_built` | the start |
 | Resume with changed inputs | `fiber_started`, `preamble_built` | the first changed byte |
@@ -339,11 +342,11 @@ A cache entry also expires after its lifetime with no request.
   the call under review with its declared effects, then the stage's
   instruction. Both stages send byte-identical bytes up to the stage
   instruction, so every reviewer
-  pass of either stage extends one cache chain between handoffs. The
+  pass of either stage extends one cache chain between compactions. The
   `reviewer_sent` cursor moves past the whole batch once, so the next review
-  reuses the cache the concurrent requests wrote. At a handoff
+  reuses the cache the concurrent requests wrote. At a compaction
   the chain restarts from the kept messages (`docs/permissions.md`, "At a
-  handoff"), so the reviewer misses the cache once, as the model does. A call
+  compaction"), so the reviewer misses the cache once, as the model does. A call
   must render identically when it later appears in history, because the chain
   depends on it. Where a provider routes by key, its key is the reviewed
   session's own id plus `reviewer`, a delegate's included.

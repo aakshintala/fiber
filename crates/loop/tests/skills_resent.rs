@@ -1,7 +1,7 @@
-//! Handoff resends loaded skills (`docs/handoff.md`, "What the model sees
-//! after a handoff"): after a completed handoff each skill the previous
+//! Compaction resends loaded skills (`docs/compaction.md`, "What the model sees
+//! after a compaction"): after a completed compaction each skill the previous
 //! context loaded is sent again, once, in first-load order, with the body
-//! read from disk at the handoff, logged as `skills_resent`.
+//! read from disk at the compaction, logged as `skills_resent`.
 
 #![allow(
     clippy::unwrap_used,
@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 
 use support::{
     DEADLINE, ENDED, OPENING, REPLY, STEP, Session, StartHooks, assert_kinds, calls_reply,
-    delivery, handoff, kinds, of_kind, start_added, start_empty,
+    compaction, delivery, kinds, of_kind, start_added, start_empty,
 };
 
 /// One reply calling one skill: streamed arguments, requests, then runs.
@@ -86,16 +86,16 @@ const HOSTED_SKILL: &[&str] = &[
     "usage_recorded",
     "assistant_message_completed",
 ];
-/// A handoff whose streamed note the model wrote, through the completion.
-const HANDOFF_NOTE: &[&str] = &[
-    "handoff_started",
+/// A compaction whose streamed note the model wrote, through the completion.
+const COMPACTION_NOTE: &[&str] = &[
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
 ];
 /// Three durable skill calls as the log keeps them: no streamed deltas.
 const DURABLE_SKILL3: &[&str] = &[
@@ -112,14 +112,14 @@ const DURABLE_SKILL3: &[&str] = &[
     "tool_call_completed",
     "tool_call_completed",
 ];
-/// A handoff note as the log keeps it: no streamed deltas.
+/// A compaction note as the log keeps it: no streamed deltas.
 const DURABLE_NOTE: &[&str] = &[
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
 ];
 /// A text reply as the log keeps it: no streamed deltas.
 const DURABLE_TEXT: &[&str] = &[
@@ -132,7 +132,7 @@ const DURABLE_TEXT: &[&str] = &[
 /// A tool named `skill`: it reads `workspace/.agents/skills/{name}/SKILL.md`,
 /// answers the header's body under the file's path, and records the load.
 /// `after` runs after each read, so a test can change or remove the file
-/// before the handoff reads it again.
+/// before the compaction reads it again.
 /// Runs after the `skill` tool reads a file: `hook(name, file)`.
 type AfterRead = Box<dyn Fn(&str, &Path) + Send>;
 
@@ -211,7 +211,7 @@ impl Tool for Skill {
                 text: format!("{path}\n\n{body}"),
             }],
             control: Some(Control {
-                handoff: None,
+                compact: None,
                 questions: None,
                 skill: Some(SkillLoad {
                     name,
@@ -294,7 +294,7 @@ fn payload_skills(line: &Envelope) -> Vec<(String, String, String)> {
 }
 
 /// The resend notices: `invalid_arguments` lines naming the skill that was
-/// not sent again after the handoff.
+/// not sent again after the compaction.
 fn resend_notices(lines: &[Envelope]) -> Vec<&Envelope> {
     of_kind(lines, "notice")
         .into_iter()
@@ -302,7 +302,7 @@ fn resend_notices(lines: &[Envelope]) -> Vec<&Envelope> {
             line.payload["message"]
                 .as_str()
                 .unwrap_or("")
-                .contains(" was not sent again after the handoff: ")
+                .contains(" was not sent again after the compaction: ")
         })
         .collect()
 }
@@ -337,7 +337,7 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -349,17 +349,17 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
             STEP,
             SKILL3,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message"],
             REPLY,
             ENDED,
         ],
     );
-    // One durable line, between the handoff and the new opening.
+    // One durable line, between the compaction and the new opening.
     let all = kinds(&lines);
     let at = all
         .iter()
-        .position(|kind| *kind == EventKind::HandoffCompleted)
+        .position(|kind| *kind == EventKind::CompactionCompleted)
         .unwrap();
     assert_eq!(all[at + 1], EventKind::SkillsResent);
     assert_eq!(all[at + 2], EventKind::OpeningMessage);
@@ -380,12 +380,12 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
     assert_eq!(requests.len(), 3);
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 5);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(next[3], resent_block(&sent[0].0, &sent[0].1, &sent[0].2));
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(next[4], resent_block(&sent[1].0, &sent[1].1, &sent[1].2));
     assert_eq!(requests[2].previous_end, None);
     // The new opening lists both skills.
@@ -401,7 +401,7 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
 }
 
 #[test]
-fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_handoff() {
+fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_compaction() {
     let skill = Skill::named();
     *skill.after.lock().unwrap() = Some(Box::new(|name, file| {
         if name == "alpha" {
@@ -418,7 +418,7 @@ fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_handoff() {
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -430,7 +430,7 @@ fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_handoff() {
             STEP,
             SKILL1,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message"],
             REPLY,
             ENDED,
@@ -443,7 +443,7 @@ fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_handoff() {
     assert_eq!(sent[0].2, "Alpha revised.");
     let requests = session.requests();
     let next = &requests[2].conversation;
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         *next.last().unwrap(),
         resent_block(&sent[0].0, &sent[0].1, &sent[0].2)
@@ -459,7 +459,7 @@ fn a_context_with_no_loaded_skills_sends_nothing_extra() {
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -471,7 +471,7 @@ fn a_context_with_no_loaded_skills_sends_nothing_extra() {
             STEP,
             REPLY,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["opening_message"],
             REPLY,
             ENDED,
@@ -482,7 +482,7 @@ fn a_context_with_no_loaded_skills_sends_nothing_extra() {
     let requests = session.requests();
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
 }
@@ -501,7 +501,7 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -513,13 +513,13 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
             STEP,
             SKILL2,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message", "notice"],
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "completed");
     let resent = of_kind(&lines, "skills_resent");
@@ -534,7 +534,7 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
         notices[0].payload["message"]
             .as_str()
             .unwrap()
-            .starts_with("Skill beta was not sent again after the handoff: "),
+            .starts_with("Skill beta was not sent again after the compaction: "),
         "{}",
         notices[0].payload["message"]
     );
@@ -554,9 +554,10 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
     );
 
     // Both gone: no line, one grouped notice naming both skills, and the
-    // handoff still completes (`docs/errors.md`, "Notices": one notice per
-    // code; `docs/handoff.md`, "What the model sees after a handoff": a
-    // skill left out at the handoff gets a `notice` naming it and the
+    // compaction still completes (`docs/errors.md`, "Registry": one notice
+    // per code; `docs/compaction.md`, "What the model sees after a
+    // compaction": a
+    // skill left out at the compaction gets a `notice` naming it and the
     // reason). The notice lands at the opening flush, after the new
     // `opening_message`.
     let skill = Skill::named();
@@ -569,7 +570,7 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -581,7 +582,7 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
             STEP,
             SKILL2,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["opening_message", "notice"],
             REPLY,
             ENDED,
@@ -594,20 +595,20 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
     let message = resend[0].payload["message"].as_str().unwrap();
     assert!(
         message.starts_with(
-            "2 `invalid_arguments` notices: Skill alpha was not sent again after the handoff: "
+            "2 `invalid_arguments` notices: Skill alpha was not sent again after the compaction: "
         ),
         "{message}"
     );
     assert!(
-        message.contains("Skill beta was not sent again after the handoff: "),
+        message.contains("Skill beta was not sent again after the compaction: "),
         "{message}"
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
 }
 
 #[test]
-fn a_skill_whose_header_no_longer_parses_is_not_sent_and_the_handoff_still_completes() {
+fn a_skill_whose_header_no_longer_parses_is_not_sent_and_the_compaction_still_completes() {
     let skill = Skill::named();
     *skill.after.lock().unwrap() = Some(Box::new(|name, file| {
         if name == "beta" {
@@ -620,7 +621,7 @@ fn a_skill_whose_header_no_longer_parses_is_not_sent_and_the_handoff_still_compl
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -632,13 +633,13 @@ fn a_skill_whose_header_no_longer_parses_is_not_sent_and_the_handoff_still_compl
             STEP,
             SKILL1,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["opening_message", "notice", "notice"],
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
     assert!(of_kind(&lines, "skills_resent").is_empty());
     let notices = resend_notices(&lines);
@@ -647,7 +648,7 @@ fn a_skill_whose_header_no_longer_parses_is_not_sent_and_the_handoff_still_compl
         notices[0].payload["message"]
             .as_str()
             .unwrap()
-            .starts_with("Skill beta was not sent again after the handoff: "),
+            .starts_with("Skill beta was not sent again after the compaction: "),
         "{}",
         notices[0].payload["message"]
     );
@@ -675,7 +676,7 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let target = session.credentials.join("sec").join("SKILL.md");
@@ -701,13 +702,13 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
             STEP,
             SKILL2,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message", "notice"],
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
     for line in of_kind(&lines, "skills_resent") {
         for skill in line.payload["skills"].as_array().unwrap() {
@@ -726,7 +727,7 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
 
 #[test]
 fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
-    // The link's header still names the loaded skill, so the handoff's
+    // The link's header still names the loaded skill, so the compaction's
     // fresh listing holds beta and only the resend's permission check
     // leaves it out: without `refuse` the credential bytes would be read
     // and sent again.
@@ -737,7 +738,7 @@ fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let target = session.credentials.join("sec").join("SKILL.md");
@@ -763,13 +764,13 @@ fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
             STEP,
             SKILL2,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message", "notice"],
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "completed");
     let resent = of_kind(&lines, "skills_resent");
@@ -783,7 +784,7 @@ fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
         notices[0].payload["message"]
             .as_str()
             .unwrap()
-            .starts_with("Skill beta was not sent again after the handoff: "),
+            .starts_with("Skill beta was not sent again after the compaction: "),
         "{}",
         notices[0].payload["message"]
     );
@@ -806,7 +807,7 @@ fn a_resume_renders_the_same_bytes() {
             Scripted::text("Done."),
             Scripted::text("After resume."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, _) = run(&mut session, "hi");
@@ -834,7 +835,7 @@ fn the_session_start_context_stays_between_the_opening_and_the_input() {
             Scripted::text("Done."),
             Scripted::text("After resume."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     hook(hooks.clone(), &mut session);
@@ -843,14 +844,14 @@ fn the_session_start_context_stays_between_the_opening_and_the_input() {
     let live = session.requests()[2].conversation.clone();
     assert_eq!(live.len(), 6);
     assert_eq!(live[1], user("hook context"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
     assert_eq!(live[2], user("The person's new message:\nhi"));
     assert_eq!(live[3], user("The note."));
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert!(
         matches!(&live[4], Input::User { text, .. } if text.starts_with("Skills reloaded from the previous context:\nalpha — ") && text.ends_with("\n\nAlpha body."))
     );
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert!(
         matches!(&live[5], Input::User { text, .. } if text.starts_with("Skills reloaded from the previous context:\nbeta — ") && text.ends_with("\n\nBeta body."))
     );
@@ -864,16 +865,16 @@ fn the_session_start_context_stays_between_the_opening_and_the_input() {
     assert_eq!(&requests[3].conversation[..live.len()], &live[..]);
 }
 
-/// A handoff sent while the loop is idle starts its own turn; each turn ends
-/// before the test sends the next handoff, so the rounds need no rendezvous.
-fn idle_handoff(session: &mut Session, id: &str) -> (Option<TurnOutcome>, Vec<Envelope>) {
-    session.inbox.send(handoff(id, None)).unwrap();
+/// A compaction sent while the loop is idle starts its own turn; each turn ends
+/// before the test sends the next compaction, so the rounds need no rendezvous.
+fn idle_compaction(session: &mut Session, id: &str) -> (Option<TurnOutcome>, Vec<Envelope>) {
+    session.inbox.send(compaction(id, None)).unwrap();
     let outcome = session.turn();
     (outcome, session.lines())
 }
 
 #[test]
-fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
+fn a_skill_sent_again_is_sent_at_the_next_compaction_until_its_file_is_gone() {
     let skill = Skill::named();
     let mut session = start(
         vec![
@@ -892,17 +893,17 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
     let (outcome, mut lines) = run(&mut session, "go");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
 
-    let (outcome, second) = idle_handoff(&mut session, "c_h1");
+    let (outcome, second) = idle_compaction(&mut session, "c_h1");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     lines.extend(second);
-    // A fresh load of alpha in the new context, between the handoffs.
+    // A fresh load of alpha in the new context, between the compactions.
     let (outcome, third) = run(&mut session, "more");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     lines.extend(third);
-    let (outcome, fourth) = idle_handoff(&mut session, "c_h2");
+    let (outcome, fourth) = idle_compaction(&mut session, "c_h2");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     lines.extend(fourth);
-    // The alpha load between the handoffs keeps first-load order.
+    // The alpha load between the compactions keeps first-load order.
     let resent = of_kind(&lines, "skills_resent");
     assert_eq!(resent.len(), 2);
     for line in &resent {
@@ -911,10 +912,10 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
         assert_eq!(names, ["alpha", "beta"]);
     }
 
-    // Beta's file is gone before the third handoff: only alpha is sent,
+    // Beta's file is gone before the third compaction: only alpha is sent,
     // with one notice naming beta.
     std::fs::remove_dir_all(session.workspace.join(".agents/skills/beta")).unwrap();
-    let (outcome, fifth) = idle_handoff(&mut session, "c_h3");
+    let (outcome, fifth) = idle_compaction(&mut session, "c_h3");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     lines.extend(fifth);
     let resent = of_kind(&lines, "skills_resent");
@@ -924,8 +925,8 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
     assert_eq!(names, ["alpha"]);
     assert_eq!(resend_notices(&lines).len(), 1);
 
-    // The fourth handoff sends alpha with no new notice.
-    let (outcome, sixth) = idle_handoff(&mut session, "c_h4");
+    // The fourth compaction sends alpha with no new notice.
+    let (outcome, sixth) = idle_compaction(&mut session, "c_h4");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     lines.extend(sixth);
     let resent = of_kind(&lines, "skills_resent");
@@ -953,7 +954,7 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
             ENDED,
             &["turn_started"],
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message"],
             ENDED,
             &["turn_started"],
@@ -964,17 +965,17 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
             ENDED,
             &["turn_started"],
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message"],
             ENDED,
             &["skills_changed", "turn_started"],
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message", "notice"],
             ENDED,
             &["turn_started"],
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["skills_resent", "opening_message"],
             ENDED,
         ],
@@ -982,7 +983,7 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
 }
 
 #[test]
-fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
+fn a_crash_after_compaction_completed_sends_the_skills_with_the_next_opening() {
     let skill = Skill::named();
     let mut session = start(
         vec![
@@ -991,17 +992,17 @@ fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
             Scripted::text("Done."),
             Scripted::text("After resume."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, _) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let recorded = session.requests()[2].conversation.clone();
 
-    // Cut the log after the handoff, then resume from the cut file: the
+    // Cut the log after the compaction, then resume from the cut file: the
     // resume writes the resend and the opening, and the request matches the
     // live one except for the resumed turn's own new input, appended last.
-    truncate_after(&session, "handoff_completed");
+    truncate_after(&session, "compaction_completed");
     let (mut looped, inbox, provider) =
         resume_truncated(&mut session, &skill, vec![Scripted::text("After resume.")]);
     inbox.send(delivery("again")).unwrap();
@@ -1026,7 +1027,7 @@ fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
     let all = kinds(&lines);
     let at = all
         .iter()
-        .position(|kind| *kind == EventKind::HandoffCompleted)
+        .position(|kind| *kind == EventKind::CompactionCompleted)
         .unwrap();
     // The new process rebuilds its preamble before the opening; the resend
     // still immediately precedes the opening.
@@ -1054,7 +1055,7 @@ fn a_crash_after_skills_resent_writes_only_the_opening() {
             Scripted::text("Done."),
             Scripted::text("After resume."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, _) = run(&mut session, "hi");
@@ -1120,7 +1121,7 @@ fn a_provider_run_record_carrying_a_skill_is_not_a_load() {
             Scripted::text("Done."),
             Scripted::text("After resume."),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         &skill,
     );
     let (outcome, lines) = run(&mut session, "hi");
@@ -1132,7 +1133,7 @@ fn a_provider_run_record_carrying_a_skill_is_not_a_load() {
             STEP,
             HOSTED_SKILL,
             STEP,
-            HANDOFF_NOTE,
+            COMPACTION_NOTE,
             &["opening_message"],
             REPLY,
             ENDED,
@@ -1180,7 +1181,7 @@ fn hosted_skill() -> Scripted {
         kept: None,
         changes: None,
         control: Some(Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: Some(SkillLoad {
                 name: "alpha".into(),

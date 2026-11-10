@@ -844,7 +844,7 @@ fn jobs_check_drains_an_extension_start_after_reading_the_running_list() {
     looped.check_jobs(&mut input).unwrap();
     assert!(input.pieces.is_empty());
     assert!(looped.queued.is_empty());
-    assert!(looped.handoff.carry.owned(DELEGATE));
+    assert!(looped.compaction.carry.owned(DELEGATE));
 }
 
 struct EmptyOffer;
@@ -4333,6 +4333,7 @@ fn a_notice_while_idle_writes_what_its_claim_took_ahead_first() {
 fn shell(command: &str, output: &str) -> Delivery {
     Delivery::Shell(
         ShellCommand {
+            command_id: None,
             command: command.into(),
             output: output.into(),
             artifact: None,
@@ -4738,13 +4739,13 @@ impl Hooks for RecordingHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         // Never consulted on the delivery path: the neutral answer.
-        contract::hook::BeforeHandoffAnswer {
-            outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+        contract::hook::BeforeCompactionAnswer {
+            outcome: contract::hook::BeforeCompactionOutcome::NoNote,
             notices: Vec::new(),
         }
     }

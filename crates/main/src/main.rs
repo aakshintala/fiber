@@ -14,11 +14,11 @@ mod builtin;
 mod case;
 mod cli;
 mod clock;
+mod compaction;
 mod completion;
 mod configure;
 mod continue_session;
 mod delegates;
-mod handoff;
 mod hub_command;
 mod keeper;
 mod keeper_child;
@@ -792,6 +792,8 @@ fn feedback(
         clock: clock.as_ref(),
         doctor: &|| doctor_report(&home, &workspace, &version, clock.as_ref()),
         diagnostics: &|id| ::cli::diagnostics(&home, clock.as_ref(), id),
+        // The headless door draws no frames, so its ring is empty.
+        frames: &[],
     };
     match ::cli::write(&description, session.as_ref(), &context) {
         Ok(done) => {
@@ -934,8 +936,8 @@ fn headless_protected_lines(event: &Event) -> Vec<String> {
 
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
-/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
-/// what ran. `run` writes the session's first lines through
+/// the first prompt, closes after an ask or delegate run, and writes
+/// `fiber_exited` for what ran. `run` writes the session's first lines through
 /// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
 /// nothing was written to the session log for this process, and `run_turn`
 /// returns `code` with no `quiesce`, no `fiber_exited` and no stderr line.
@@ -951,7 +953,7 @@ fn run_turn(
     log: &Arc<Log>,
     dir: &Path,
     prompt: Option<String>,
-    one_turn: bool,
+    admission: session_command::StartupAdmission,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
     current: &Arc<session_extensions::Current>,
@@ -961,6 +963,7 @@ fn run_turn(
         &mut Option<r#loop::Summary>,
     ) -> Result<Option<i32>, Failure>,
 ) -> i32 {
+    let one_turn = admission != session_command::StartupAdmission::Serve;
     // The session's watchers, subscribed for the whole turn: every appended
     // line fans out to them, until the shutdown drops the offer. Dropped
     // before `fiber_exited` below, so the session-end drain owns the exit
@@ -984,21 +987,35 @@ fn run_turn(
     // The summary the run leaves behind, as `committed` is: `fiber_exited`
     // reads it, never the log.
     let mut summary: Option<r#loop::Summary> = None;
-    let ran = match prompt {
+    let ran = match (prompt, admission) {
         // `fiber ask` runs one turn: the prompt, then `close`. It always
         // supplies a prompt; without one it would wait for a client.
-        Some(prompt) if one_turn => session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
-            match run(inbox, turn, &mut summary) {
+        (Some(prompt), session_command::StartupAdmission::Ask) => {
+            session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
+                match run(inbox, turn, &mut summary) {
+                    Ok(code) => {
+                        committed = code;
+                        Ok(())
+                    }
+                    Err(failure) => Err(failure),
+                }
+            })
+        }
+        (Some(prompt), session_command::StartupAdmission::Delegate) => session.run_delegate(
+            log,
+            prompt,
+            Arc::new(move || door.cancel()),
+            |inbox| match run(inbox, turn, &mut summary) {
                 Ok(code) => {
                     committed = code;
                     Ok(())
                 }
                 Err(failure) => Err(failure),
-            }
-        }),
+            },
+        ),
         // The session command queues its prompt when one was supplied and
         // serves clients until idle exit or `close`.
-        prompt => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
+        (prompt, _) => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
             match run(inbox, turn, &mut summary) {
                 Ok(code) => {
                     committed = code;
@@ -1254,17 +1271,19 @@ fn terminal(
     // the launch directory, so a later `/feedback` reports the same
     // `doctor` output the headless door would.
     let feedback_report = std::sync::Arc::clone(&report);
-    let feedback: tui::WriteFeedback =
-        std::sync::Arc::new(move |description: &str, session: Option<&SessionId>| {
+    let feedback: tui::WriteFeedback = std::sync::Arc::new(
+        move |description: &str, session: Option<&SessionId>, shapes: &[tui::FrameShape]| {
             let context = ::cli::ReportContext {
                 version: &feedback_version,
                 cwd: &feedback_workspace,
                 clock: feedback_clock.as_ref(),
                 doctor: &|| feedback_report(),
                 diagnostics: &|id| ::cli::diagnostics(&feedback_home, feedback_clock.as_ref(), id),
+                frames: shapes,
             };
             ::cli::write(description, session, &context).map_err(|error| error.to_string())
-        });
+        },
+    );
     launch.feedback = Some(feedback);
     // The `/doctor` view's report reader: `cli::doctor`'s capture
     // behind the contract seam, beside the report writer. It shares the

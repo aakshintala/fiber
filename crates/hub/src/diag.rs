@@ -1,5 +1,4 @@
-//! The hub's diagnostic log at `logs/hub.log` (`docs/state.md`, "Diagnostic
-//! logs"): one JSON object per line, rotated past 10 MiB, pruned at start.
+//! The hub's diagnostic log at `logs/hub.log` (`docs/state.md`, "What each part holds"): one JSON object per line, rotated past 10 MiB, pruned at start.
 //!
 //! Each line is `ts`, `level` (`error`, `warn`, `info` or `debug`),
 //! `process` (`hub`), `session_id` when one is known, `code` and `message`,
@@ -18,7 +17,7 @@ use std::time::SystemTime;
 use contract::clock::Clock;
 
 /// Past this size `hub.log` is renamed to `hub.log.1` before the next write
-/// (`docs/state.md`, "Bounds").
+/// (`docs/state.md`, "What each part holds").
 const ROTATE_AT: u64 = 10 * 1024 * 1024;
 
 use log::diag::{Level, Process};

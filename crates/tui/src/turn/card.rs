@@ -1,6 +1,6 @@
 //! One turn's card as surfaces: the prompt bubble above, the entries and
 //! the ending on the turn tint with half-block edges, broken at a
-//! handoff's band (`docs/tui.md`, "Look", "Turns", "Handoff"). A child of
+//! compaction's band (`docs/tui.md`, "Look", "Turns", "Compaction"). A child of
 //! `turn`, so it reads the card's fields.
 
 use contract::Seq;
@@ -87,9 +87,9 @@ impl Turn {
     }
 
     /// The bubble and its time row, then the card's pieces on `turn`,
-    /// each broken at a handoff's band; `edges` says whether the first
+    /// each broken at a compaction's band; `edges` says whether the first
     /// piece draws its top edge and the last its bottom one
-    /// (`docs/tui.md`, "Look", "Turns", "Handoff"). `layout` names
+    /// (`docs/tui.md`, "Look", "Turns", "Compaction"). `layout` names
     /// the session's images, so each draws as its one clickable line
     /// (`docs/tui.md`, "Images").
     pub(crate) fn rows(
@@ -295,7 +295,7 @@ impl Turn {
         let mut separates = !top;
         let mut piece_drew = false;
         // Whether a band drew since the last block: no blank row goes
-        // next to a handoff band (`docs/tui.md`, "Turns", "Handoff").
+        // next to a compaction band (`docs/tui.md`, "Turns", "Compaction").
         let mut after_band = false;
         for (index, entry) in self.entries.iter().enumerate() {
             out.set_source(self.entry_seqs.get(index).copied().flatten());
@@ -495,19 +495,19 @@ fn message_rows(
         },
     );
     if !text.trim().is_empty() {
-        let style = if muted {
-            Style::default().add_modifier(Modifier::DIM)
+        if out.is_count_only() {
+            let counted = crate::markdown::render_prompt_count(text, width);
+            out.push_counted(counted.rows, &[]);
         } else {
-            Style::default()
-        };
-        for (row, join) in crate::format::wrap_joined(text, usize::from(width)) {
-            out.push_text(
-                (Line::from(Span::styled(row, style)), None),
-                crate::rows::RowText {
-                    join,
-                    ..crate::rows::RowText::plain()
-                },
-            );
+            let rendered = crate::markdown::render_prompt(text, width);
+            for (mut line, mark) in rendered.lines.into_iter().zip(rendered.text) {
+                if muted {
+                    for span in &mut line.spans {
+                        span.style = span.style.add_modifier(Modifier::DIM);
+                    }
+                }
+                out.push_text((line, None), mark);
+            }
         }
     }
     super::images::steer_rows(&message.images, width, layout, out);

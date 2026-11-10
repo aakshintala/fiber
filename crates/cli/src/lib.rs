@@ -167,6 +167,7 @@ mod test_support;
 
 pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
+pub use contract::feedback::FrameShape;
 pub use doctor::{capture, doctor, first_blocker, with_fix};
 pub use extension::{
     FirstPartyInstall, Io, LoginNeed, extension_install, extension_list, extension_reinstall,

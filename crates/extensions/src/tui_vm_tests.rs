@@ -768,7 +768,7 @@ fn animate_is_refused_unless_a_table_with_a_positive_whole_interval() {
 
 #[test]
 fn animate_with_a_key_beside_interval_ms_is_refused() {
-    // docs/extensions.md:1507-1509: any other animate shape fails
+    // `docs/extensions.md`, "Commands and screens": any other animate shape fails
     // registration, naming the slot.
     for bad in [
         "{ interval_ms = 500, extra = 1 }",
@@ -1031,7 +1031,7 @@ fn fiber_key_with_a_non_string_key_is_rejected() {
             "fiber.key({name}, {{ timeout = 100, run = function() end }})"
         ));
         assert!(bindings.is_empty(), "{name}: {bindings:?}");
-        // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
         assert_eq!(rejected.len(), 1, "{name}: {rejected:?}");
         assert!(rejected[0].reason.contains("key"), "{name}: {rejected:?}");
     }
@@ -1042,7 +1042,7 @@ fn fiber_key_with_a_non_table_spec_is_rejected() {
     for spec in ["5", "nil", "'run'"] {
         let (bindings, rejected) = rejections(&format!("fiber.key('ctrl+o', {spec})"));
         assert!(bindings.is_empty(), "{spec}: {bindings:?}");
-        // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
         assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
         assert!(
             rejected[0].reason.contains("ctrl+o"),
@@ -1055,7 +1055,7 @@ fn fiber_key_with_a_non_table_spec_is_rejected() {
 fn fiber_key_with_neither_run_nor_action_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+o', {})");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("run") && rejected[0].reason.contains("action"));
 }
@@ -1065,7 +1065,7 @@ fn fiber_key_with_both_run_and_action_is_rejected() {
     let (bindings, rejected) =
         rejections("fiber.key('ctrl+o', { timeout = 100, run = function() end, action = 'send' })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("run") && rejected[0].reason.contains("action"));
 }
@@ -1077,7 +1077,7 @@ fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
             "fiber.key('ctrl+o', {{ timeout = {timeout}, run = function() end }})"
         ));
         assert!(bindings.is_empty(), "{timeout}: {bindings:?}");
-        // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
         assert_eq!(rejected.len(), 1, "{timeout}: {rejected:?}");
         assert!(
             rejected[0].reason.contains("timeout"),
@@ -1087,7 +1087,7 @@ fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
     let (bindings, rejected) =
         rejections("fiber.key('ctrl+o', { run = function() return true end })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
 }
@@ -1096,7 +1096,7 @@ fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
 fn fiber_key_with_a_non_function_run_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+o', { timeout = 100, run = 'yes' })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("run"), "{rejected:?}");
 }
@@ -1106,7 +1106,7 @@ fn fiber_key_with_an_action_and_a_timeout_names_timeout() {
     let (bindings, rejected) =
         rejections("fiber.key('alt+h', { action = 'move_word', variant = 'left', timeout = 100 })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
 }
@@ -1117,7 +1117,7 @@ fn fiber_key_with_a_run_and_a_variant_names_variant() {
         "fiber.key('ctrl+o', { timeout = 100, run = function() end, variant = 'left' })",
     );
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("variant"), "{rejected:?}");
 }
@@ -1126,13 +1126,13 @@ fn fiber_key_with_a_run_and_a_variant_names_variant() {
 fn fiber_key_with_a_non_string_action_or_variant_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+o', { action = 5 })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("action"), "{rejected:?}");
     let (bindings, rejected) =
         rejections("fiber.key('alt+h', { action = 'move_word', variant = 5 })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("variant"), "{rejected:?}");
 }
@@ -1141,7 +1141,7 @@ fn fiber_key_with_a_non_string_action_or_variant_is_rejected() {
 fn fiber_key_with_clear_then_quit_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+q', { action = 'clear_then_quit' })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(
         rejected[0].reason.contains("clear_then_quit"),
@@ -1155,7 +1155,7 @@ fn fiber_key_with_a_duplicate_raw_name_keeps_the_first() {
         "fiber.key('ctrl+o', { timeout = 100, run = function() return true end })\n\
          fiber.key('ctrl+o', { timeout = 200, run = function() return false end })",
     );
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1, "{rejected:?}");
     assert!(rejected[0].reason.contains("ctrl+o"), "{rejected:?}");
     assert!(rejected[0].reason.contains("twice"), "{rejected:?}");

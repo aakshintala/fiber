@@ -755,7 +755,7 @@ fn prepared(rig: &SwitchRig) -> crate::Prepared {
         cache_lifetime: CacheLifetime::OneHour,
         context_window: fakes::CONTEXT_WINDOW,
         addendum: None,
-        handoff: crate::HandoffSettings::default(),
+        compaction: crate::CompactionSettings::default(),
         reviewer,
         observe,
         reviewer_observe,
