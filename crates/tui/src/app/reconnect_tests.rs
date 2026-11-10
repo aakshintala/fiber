@@ -1248,9 +1248,9 @@ fn a_failed_sessions_write_ignores_the_forged_line_id() {
 fn a_flushed_held_start_leaves_no_registry_entry_once_answered() {
     let mut app = home();
     // Enter before the hub connects: the start is held, paired in the
-    // registry once at hold time.
+    // registry once at flush time with the line as flushed.
     assert_eq!(enter(&mut app, "hi"), Effect::None);
-    // The hello flushes the held start with no second note.
+    // The hello flushes the held start with that single note.
     let out = fold(&mut app, hello());
     let start = out
         .iter()
