@@ -14,9 +14,9 @@ pub const FINAL_MESSAGE: &str = "artifacts/final.md";
 impl FiberExited {
     /// The finish the exit line carries: the final message's text, the
     /// questions and usage copied through, no worktree and no artifact.
-    /// The live drive bounds the text and assigns a worktree after the
-    /// fold; a resumed settle bounds it at its own write and keeps no
-    /// worktree.
+    /// The live drive bounds the text and assigns the worktree after the
+    /// fold; a resumed settle bounds it at its own write and assigns the
+    /// recorded worktree after, through the injected inspection.
     pub fn delegate_finished(&self, job_id: &JobId) -> DelegateFinished {
         DelegateFinished {
             job_id: job_id.clone(),
