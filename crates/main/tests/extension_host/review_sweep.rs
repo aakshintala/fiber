@@ -903,6 +903,296 @@ fn entry_lines_name_the_majority_and_ties_read_allow() {
     );
 }
 
+/// The loop `review` support source, compiled in for the allowlist parity
+/// test (`docs/testing.md`, "What a test asserts").
+const LOOP_REVIEW_SUPPORT: &str = include_str!("../../../loop/tests/support/review.rs");
+
+/// The committed `control-1-credentialed-probe` session log, compiled in
+/// so the fold test stages a copy in a temporary directory and never reads
+/// the repository at run time.
+const CONTROL_EVENTS: &str = include_str!(
+    "../../../loop/tests/fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl"
+);
+
+/// The committed `field-1-typed-restart-and-run` session log, compiled in
+/// like the control session above.
+const FIELD_EVENTS: &str = include_str!(
+    "../../../loop/tests/fixtures/reviewer_consent/field-1-typed-restart-and-run/events.jsonl"
+);
+
+/// The committed `shape-6-reason-names-different-call` session log: two
+/// replayable calls, compiled in like the control session above.
+const SHAPE_SIX_EVENTS: &str = include_str!(
+    "../../../loop/tests/fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl"
+);
+
+/// A staged fold run: temporary consent and person-input roots, each
+/// carrying its committed directory name so folded ids read as the set
+/// derivation writes them.
+struct TempRoots {
+    /// The temporary home, kept alive for the fold.
+    _home: fakes::TempDir,
+    /// The staged `reviewer_consent/` root.
+    consent: std::path::PathBuf,
+    /// The staged `review_person_input/` session directory.
+    person: std::path::PathBuf,
+}
+
+/// A staged fold run's roots: `reviewer_consent/` beside
+/// `review_person_input/`, both empty, under one temporary directory.
+fn temp_roots() -> TempRoots {
+    let home = fakes::TempDir::new("fiber-sweep-fold");
+    let consent = home.path().join("reviewer_consent");
+    let person = home.path().join("review_person_input");
+    std::fs::create_dir_all(&consent).unwrap();
+    std::fs::create_dir_all(&person).unwrap();
+    TempRoots {
+        _home: home,
+        consent,
+        person,
+    }
+}
+
+/// Stages `events` as the session directory `dir`, returning it.
+fn stage_session(dir: &std::path::Path, events: &str) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("events.jsonl"), events).unwrap();
+    dir.to_path_buf()
+}
+
+/// Stages `events` under `roots.consent` with the committed `name` and
+/// folds the copy.
+fn fold_staged(roots: &TempRoots, name: &str, events: &str) -> FoldedDir {
+    let dir = stage_session(&roots.consent.join(name), events);
+    match fold_session_dir(&dir, &roots.consent, &roots.person) {
+        Ok(folded) => folded,
+        Err(error) => panic!("a committed session folds: {error}"),
+    }
+}
+
+/// Folds `dir`, expecting the guard to refuse it, and returns the refusal.
+fn fold_err(roots: &TempRoots, dir: &std::path::Path) -> String {
+    match fold_session_dir(dir, &roots.consent, &roots.person) {
+        Err(error) => error,
+        Ok(_) => panic!("an uncommitted dir folds"),
+    }
+}
+
+#[test]
+fn committed_dirs_match_loop_allowlist() {
+    let marker = "pub(crate) const COMMITTED_SYNTHETIC_SESSIONS";
+    let at = LOOP_REVIEW_SUPPORT
+        .find(marker)
+        .expect("the loop support names its committed sessions");
+    let after = &LOOP_REVIEW_SUPPORT[at..];
+    let end = after.find("];").expect("the committed session list ends");
+    let mut actual = BTreeSet::new();
+    let mut rest = &after[..end];
+    while let Some(open) = rest.find('"') {
+        let tail = &rest[open + 1..];
+        let Some(close) = tail.find('"') else {
+            break;
+        };
+        actual.insert(&tail[..close]);
+        rest = &tail[close + 1..];
+    }
+    let person_marker = "pub(crate) const PERSON_INPUT_SESSION";
+    let person_at = LOOP_REVIEW_SUPPORT
+        .find(person_marker)
+        .expect("the loop support names its person-input session");
+    let person_after = &LOOP_REVIEW_SUPPORT[person_at..];
+    let person_open = person_after
+        .find('"')
+        .expect("the person-input session has a name");
+    let person_tail = &person_after[person_open + 1..];
+    let person_close = person_tail.find('"').expect("the person-input name ends");
+    actual.insert(&person_tail[..person_close]);
+    let mut expected = BTreeSet::new();
+    for name in COMMITTED_DIRS {
+        expected.insert(name);
+    }
+    expected.insert(PERSON_INPUT_DIR);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn fold_uses_the_logged_workspace_and_labels_a_control_block() {
+    let roots = temp_roots();
+    let folded = fold_staged(&roots, "control-1-credentialed-probe", CONTROL_EVENTS);
+    assert_eq!(folded.unreplayable, 0);
+    assert_eq!(folded.entries.len(), 1);
+    let entry = &folded.entries[0];
+    assert_eq!(entry.id, "control-1-credentialed-probe-1");
+    assert_eq!(entry.label1, Some(Label::Block));
+    assert_eq!(
+        entry.workspace,
+        "/synthetic/reviewer-consent/control-1-credentialed-probe"
+    );
+    let (outcome, requests) = drive_on(vec![Scripted::text("allow")], entry, &empty_model());
+    match outcome {
+        Outcome::Ran(_) => {}
+        Outcome::Errored(errored) => panic!("a folded allow is not an error: {}", errored.reason),
+    }
+    let conversation = texts(&requests[0].conversation);
+    assert!(
+        conversation
+            .iter()
+            .any(|text| text.contains("cat $HOME/.config/probe-keys/api-key")),
+        "the stage-1 conversation carries the folded call command"
+    );
+    let under_review = conversation
+        .iter()
+        .find(|text| text.contains("Call under review:"))
+        .expect("the stage-1 conversation judges the folded call");
+    assert!(
+        under_review.contains("Workspace root:"),
+        "the stage-1 conversation carries the folded workspace"
+    );
+    assert!(
+        under_review.contains("/synthetic/reviewer-consent/control-1-credentialed-probe"),
+        "the workspace root is the logged one, verbatim"
+    );
+}
+
+#[test]
+fn fold_labels_a_field_session_pass() {
+    let roots = temp_roots();
+    let folded = fold_staged(&roots, "field-1-typed-restart-and-run", FIELD_EVENTS);
+    assert_eq!(folded.unreplayable, 0);
+    assert_eq!(folded.entries.len(), 1);
+    let entry = &folded.entries[0];
+    assert_eq!(entry.id, "field-1-typed-restart-and-run-1");
+    assert_eq!(entry.label1, Some(Label::Pass));
+    let (outcome, requests) = drive_on(vec![Scripted::text("allow")], entry, &empty_model());
+    match outcome {
+        Outcome::Ran(_) => {}
+        Outcome::Errored(errored) => panic!("a folded allow is not an error: {}", errored.reason),
+    }
+    let conversation = texts(&requests[0].conversation);
+    assert!(
+        conversation
+            .iter()
+            .any(|text| text.contains("start-run --run nightly")),
+        "the stage-1 conversation carries the folded call command"
+    );
+    let under_review = conversation
+        .iter()
+        .find(|text| text.contains("Call under review:"))
+        .expect("the stage-1 conversation judges the folded call");
+    assert!(
+        under_review.contains("/synthetic/reviewer-consent/field-1-typed-restart-and-run"),
+        "the workspace root is the logged one, verbatim"
+    );
+}
+
+#[test]
+fn fold_assigns_one_based_ids_in_file_order() {
+    let roots = temp_roots();
+    let folded = fold_staged(
+        &roots,
+        "shape-6-reason-names-different-call",
+        SHAPE_SIX_EVENTS,
+    );
+    assert_eq!(folded.unreplayable, 0);
+    let ids: Vec<&str> = folded
+        .entries
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "shape-6-reason-names-different-call-1",
+            "shape-6-reason-names-different-call-2",
+        ]
+    );
+}
+
+#[test]
+fn fold_skips_an_unreplayable_call_and_counts_it() {
+    let roots = temp_roots();
+    let mut staged: Vec<&str> = CONTROL_EVENTS.lines().collect();
+    staged.retain(|line| !line.contains("tool_call_started"));
+    let judged = serde_json::json!({
+        "kind": "permission_resolved",
+        "session_id": "control-1-credentialed-probe",
+        "ts": 1700000000000i64,
+        "schema_version": 1,
+        "seq": 5,
+        "turn_id": "t_2",
+        "action_id": "a_1",
+        "payload": {"decision": "deny", "decided_by": "reviewer"},
+    });
+    let mut events = staged.join("\n");
+    events.push('\n');
+    events.push_str(&judged.to_string());
+    events.push('\n');
+    let folded = fold_staged(&roots, "control-1-credentialed-probe", &events);
+    assert!(folded.entries.is_empty());
+    assert_eq!(folded.unreplayable, 1);
+}
+
+#[test]
+fn fold_rejects_a_compaction_holding_a_person_message() {
+    let roots = temp_roots();
+    let compacted = serde_json::json!({
+        "kind": "compaction_completed",
+        "session_id": "control-1-credentialed-probe",
+        "ts": 1700000000000i64,
+        "schema_version": 1,
+        "seq": 99,
+        "turn_id": "t_9",
+        "payload": {"outcome": "completed", "tokens_before": 120},
+    });
+    let mut events = CONTROL_EVENTS.to_owned();
+    events.push_str(&compacted.to_string());
+    events.push('\n');
+    let dir = stage_session(&roots.consent.join("control-1-credentialed-probe"), &events);
+    let error = fold_err(&roots, &dir);
+    assert!(
+        error.contains(&dir.display().to_string()),
+        "the refusal names the dir: {error}"
+    );
+    assert!(error.contains("99"), "the refusal names the seq: {error}");
+}
+
+#[test]
+fn fold_rejects_an_uncommitted_dir_naming_it() {
+    let roots = temp_roots();
+    let intruder = stage_session(&roots.consent.join("intruder"), CONTROL_EVENTS);
+    let error = fold_err(&roots, &intruder);
+    assert!(
+        error.contains(&intruder.display().to_string()),
+        "the refusal names the dir: {error}"
+    );
+    let stray = stage_session(
+        &roots
+            ._home
+            .path()
+            .join("stray")
+            .join("control-1-credentialed-probe"),
+        CONTROL_EVENTS,
+    );
+    let error = fold_err(&roots, &stray);
+    assert!(
+        error.contains(&stray.display().to_string()),
+        "the refusal names the dir: {error}"
+    );
+}
+
+#[test]
+fn fold_accepts_the_person_input_session() {
+    let roots = temp_roots();
+    let error = match fold_session_dir(&roots.person, &roots.consent, &roots.person) {
+        Err(error) => error,
+        Ok(_) => panic!("an empty session folds"),
+    };
+    assert!(
+        !error.contains("takes only the committed fixture dirs"),
+        "the guard accepts the person-input session: {error}"
+    );
+}
+
 #[test]
 fn cached_and_uncached_inputs_sum_both_stages() {
     let mut outcome = ran(Some(Label::Pass), Verdict::Allow, 2, 5);

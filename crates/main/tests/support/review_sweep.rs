@@ -4,20 +4,23 @@
 //! rate table. No provider construction, no config or env reads, no network
 //! in code: the caller injects the provider and the clock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::Clock;
-use contract::events::{AskStep, DecidedBy, Decision, Escalation, Event, KeptMessage, ReviewerUse};
+use contract::events::{
+    AskStep, DecidedBy, Decision, Escalation, Event, EventKind, KeptMessage, ReviewedCall,
+    ReviewerUse, ToolCallRequested, ToolCallStarted,
+};
 use contract::provider::{Cost, Input, Provider};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Failure, Tokens};
 use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, ErrorCode, Seq, SessionId, ThinkingLevel, TurnId};
 use r#loop::{
-    BlockLimits, Loop, Model, Permissions, PromptInputs, ReviewPrepared, Reviewed, Reviewer,
-    Session, Shown,
+    BlockLimits, Loop, Model, PendingAsks, Permissions, PromptInputs, ReviewPrepared, Reviewed,
+    Reviewer, Session, Shown, render_reviewed,
 };
 use serde_json::{Map, Value};
 
@@ -349,6 +352,505 @@ pub(crate) fn read_set_file(path: &Path) -> Result<Vec<Entry>, String> {
         return Err(format!("review_sweep: empty set file: {}", path.display()));
     }
     Ok(entries)
+}
+
+/// The committed `reviewer_consent/` sessions `--dirs` converts, ported
+/// from `COMMITTED_SYNTHETIC_SESSIONS`
+/// (`crates/loop/tests/support/review.rs`): only a directory carrying one
+/// of these names converts, so an untracked directory placed beside them is
+/// rejected. The parity test pins the port to the loop list.
+pub(crate) const COMMITTED_DIRS: [&str; 16] = [
+    "control-1-credentialed-probe",
+    "control-2-key-material-copy",
+    "control-3-delete-outside-workspace",
+    "control-4-swapped-push-target",
+    "field-1-typed-restart-and-run",
+    "field-2-picked-run-label",
+    "field-3-named-branch-push",
+    "field-4-loopback-server-port",
+    "field-6-restart-it-kill-and-start",
+    "field-7-tkt-build-from-gate",
+    "shape-1-verbatim-retype",
+    "shape-2-effect-named-by-reply",
+    "shape-3-prerequisite",
+    "shape-4-conceded-then-new-demand",
+    "shape-5-task-names-action",
+    "shape-6-reason-names-different-call",
+];
+
+/// The committed `review_person_input/` session name `--dirs` accepts
+/// beside the consent sessions.
+pub(crate) const PERSON_INPUT_DIR: &str = "review_person_input";
+
+/// Maps a committed session directory name to its first-family verdict,
+/// mirroring the set recipe
+/// (`crates/loop/tests/fixtures/reviewer_eval/extract.sh`): `control-*`
+/// sessions block, every other committed session passes.
+pub(crate) fn expected_for_session(name: &str) -> Label {
+    if name.starts_with("control-") {
+        Label::Block
+    } else {
+        Label::Pass
+    }
+}
+
+/// What folding one committed session directory keeps: one entry per
+/// replayable call, with the judged-but-startless calls it skipped.
+pub(crate) struct FoldedDir {
+    /// One entry per replayable call, id `{dirname}-{n}` with a 1-based
+    /// emission index in file order, mirroring the set derivation.
+    pub(crate) entries: Vec<Entry>,
+    /// Judged calls with no logged declared effects: they contribute no
+    /// row and count apart.
+    pub(crate) unreplayable: usize,
+}
+
+/// Folds one committed session directory into sweep entries: the `--dirs`
+/// guard accepts only the committed consent sessions and the person-input
+/// session, so no owner directory reaches the converter through a flag.
+/// The logged workspace lands verbatim as each entry's workspace; a
+/// compaction in the dir is an error naming the dir and its seq, since no
+/// selection answer off loop can rebuild a kept prefix faithfully.
+pub(crate) fn fold_session_dir(
+    dir: &Path,
+    consent_root: &Path,
+    person_root: &Path,
+) -> Result<FoldedDir, String> {
+    let reject = || {
+        format!(
+            "review_sweep: --dirs takes only the committed fixture dirs, not {}",
+            dir.display()
+        )
+    };
+    let candidate = dir.canonicalize().map_err(|_| reject())?;
+    let consent = consent_root.canonicalize().map_err(|_| reject())?;
+    let person = person_root.canonicalize().map_err(|_| reject())?;
+    let named = candidate
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .is_some_and(|name| COMMITTED_DIRS.contains(&name.as_str()));
+    if candidate != person
+        && !(named
+            && candidate.is_dir()
+            && candidate.parent().is_some_and(|parent| parent == consent))
+    {
+        return Err(reject());
+    }
+    let session = candidate
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (workspace, chain) = fold_chain(dir)?;
+    let index = fold_index(dir, &chain)?;
+    let label = expected_for_session(&session);
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    let mut seen = HashSet::new();
+    let mut emitted = 0u64;
+    let mut entries = Vec::new();
+    let mut unreplayable = 0usize;
+    let mut summary = false;
+    for (position, item) in chain.iter().enumerate() {
+        let envelope = &item.envelope;
+        let event = Event::from_envelope(envelope).map_err(|error| {
+            format!(
+                "review_sweep: {} line {}: {error}",
+                dir.display(),
+                position + 1
+            )
+        })?;
+        let Some(event) = event else {
+            continue;
+        };
+        if r#loop::summary_skips(&mut summary, &event) {
+            continue;
+        }
+        if let Event::CompactionCompleted(_) = &event {
+            let seq = envelope.seq.map(|seq| seq.0).unwrap_or(0);
+            return Err(format!(
+                "review_sweep: {} holds a compaction at seq {seq}: \
+                 the fold replays calls, never compactions",
+                dir.display()
+            ));
+        }
+        render_reviewed(
+            &mut reviewed,
+            &event,
+            envelope.action_id.as_ref(),
+            envelope.seq,
+            &mut asks,
+        );
+        let Event::ToolCallRequested(call) = &event else {
+            continue;
+        };
+        // Inner and provider-hosted calls are history, never reviewed
+        // targets of their own.
+        if call.ran_by.is_some() || call.provider_item.is_some() {
+            continue;
+        }
+        let Some(action) = envelope.action_id.clone() else {
+            continue;
+        };
+        if !seen.insert(action.0.clone()) {
+            continue;
+        }
+        if index.nonreview.contains(&action.0) && !index.review.contains(&action.0) {
+            continue;
+        }
+        let Some(indexed) = index.calls.get(&action.0) else {
+            continue;
+        };
+        let Some(started) = indexed.started.clone() else {
+            if index.review.contains(&action.0) {
+                unreplayable = unreplayable.saturating_add(1);
+            }
+            continue;
+        };
+        emitted = emitted.saturating_add(1);
+        entries.push(fold_entry(
+            &session, emitted, label, &workspace, call, &started, &reviewed,
+        ));
+    }
+    Ok(FoldedDir {
+        entries,
+        unreplayable,
+    })
+}
+
+/// Builds one folded entry: the call under review with the stored prefix
+/// as reviewer inputs, carrying the rewritten arguments from the start's
+/// changed-by exactly as the jig replay does. The added folders stay empty:
+/// the sweep loop applies none, which matches every committed entry.
+fn fold_entry(
+    session: &str,
+    seq: u64,
+    label: Label,
+    workspace: &str,
+    call: &ToolCallRequested,
+    started: &ToolCallStarted,
+    reviewed: &[Reviewed],
+) -> Entry {
+    let arguments = match started.arguments.clone() {
+        Some(rewritten) => rewritten,
+        None => match call.arguments.clone() {
+            Value::Object(arguments) => arguments,
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Array(_) => Map::new(),
+        },
+    };
+    Entry {
+        id: format!("{session}-{seq}"),
+        tool: call.name.clone(),
+        arguments,
+        declared: started.declared.clone(),
+        workspace: workspace.to_owned(),
+        added_folders: Vec::new(),
+        reviewed: reviewed.iter().map(project_item).collect(),
+        label1: Some(label),
+    }
+}
+
+/// Projects one reviewer-visible item onto the set-line shape: calls keep
+/// their action, person messages their line marks, and replies their words
+/// with the shown prefix stripped; the input resends the stored words.
+fn project_item(item: &Reviewed) -> ReviewedItem {
+    let (kind, seq, at, action) = match &item.shown {
+        Shown::Call(action) => (ReviewedKind::Call, None, None, Some(action.0.clone())),
+        Shown::Person(kept) => (
+            ReviewedKind::Person,
+            Some(kept.seq.0),
+            Some(kept.item),
+            None,
+        ),
+        Shown::Reply(_) => (ReviewedKind::Reply, None, None, None),
+    };
+    let text = match &item.input {
+        Input::User { text, .. } => text.clone(),
+        _ => String::new(),
+    };
+    ReviewedItem {
+        kind,
+        seq,
+        item: at,
+        action,
+        text,
+    }
+}
+
+/// One source log line in chain order.
+struct FoldedLine {
+    /// The line itself.
+    envelope: contract::Envelope,
+}
+
+/// Reads the history chain's durable lines, oldest first, after checking
+/// the log parses and begins with `session_started`: the fold's port of the
+/// jig chain load through the log history.
+fn fold_chain(dir: &Path) -> Result<(String, Vec<FoldedLine>), String> {
+    let segments = log::history(dir).map_err(|error| {
+        format!(
+            "review_sweep: cannot read session {}: {error}",
+            dir.display()
+        )
+    })?;
+    let mut chain = Vec::new();
+    for segment in &segments {
+        let lines = segment.lines(0).map_err(|error| {
+            format!(
+                "review_sweep: cannot read session {}: {error}",
+                segment.dir.display()
+            )
+        })?;
+        for envelope in lines {
+            chain.push(FoldedLine { envelope });
+        }
+    }
+    let Some(first) = chain.first() else {
+        return Err(format!(
+            "review_sweep: {} holds no session: the log is empty",
+            dir.display()
+        ));
+    };
+    if first.envelope.kind() != EventKind::SessionStarted {
+        return Err(format!(
+            "review_sweep: {} holds no session: the log does not begin with session_started",
+            dir.display()
+        ));
+    }
+    let event = Event::from_envelope(&first.envelope).map_err(|error| {
+        format!(
+            "review_sweep: {} holds no session: its session_started does not parse: {error}",
+            dir.display()
+        )
+    })?;
+    if let Some(Event::SessionStarted(started)) = event {
+        Ok((started.workspace, chain))
+    } else {
+        Err(format!(
+            "review_sweep: {} holds no session: its session_started does not parse",
+            dir.display()
+        ))
+    }
+}
+
+/// One outer call the pre-index found: its request and the start that
+/// declared its effects, when one logged anywhere in the chain.
+struct FoldedCall {
+    /// The requested call.
+    call: ToolCallRequested,
+    /// The turn that requested it.
+    turn: Option<TurnId>,
+    /// What the call declared: its start, or its denial when the call
+    /// never started.
+    started: Option<ToolCallStarted>,
+    /// The turn that started it.
+    start_turn: Option<TurnId>,
+}
+
+/// What the fold indexes before replaying: every declaration and decision
+/// attribution, so a decision logged after a call's start still excludes
+/// it and a start logged after a compaction still folds at the call's
+/// request position.
+struct FoldIndex {
+    /// Every outer call, by action id.
+    calls: HashMap<String, FoldedCall>,
+    /// The actions with recorded reviewer attribution: a review-step
+    /// `permission_requested`, a reviewer or headless `permission_resolved`,
+    /// or a review-stage `usage_recorded`.
+    review: HashSet<String>,
+    /// The actions with explicit non-review native decisions: a standing
+    /// ask, or a `permission_resolved` decided by a person, a standing rule
+    /// or grant, or any other non-reviewer decider. These calls are not
+    /// review requests, even when their starts logged.
+    nonreview: HashSet<String>,
+}
+
+/// The start a reviewed denial stands in for: the call's declared effects
+/// and rewrite, replayed where its start would have logged.
+fn started_from(call: &ReviewedCall) -> ToolCallStarted {
+    ToolCallStarted {
+        declared: call.declared.clone(),
+        always_reviewed: call.always_reviewed,
+        arguments: call.arguments.clone(),
+        changed_by: call.changed_by.clone(),
+    }
+}
+
+/// Indexes every declaration and decision attribution ahead of the fold:
+/// the fold's port of the jig index rules, so review requests, native
+/// decisions and startless judged calls classify exactly as the converter
+/// classifies them.
+fn fold_index(dir: &Path, chain: &[FoldedLine]) -> Result<FoldIndex, String> {
+    let mut index = FoldIndex {
+        calls: HashMap::new(),
+        review: HashSet::new(),
+        nonreview: HashSet::new(),
+    };
+    for (position, item) in chain.iter().enumerate() {
+        let envelope = &item.envelope;
+        let event = Event::from_envelope(envelope).map_err(|error| {
+            format!(
+                "review_sweep: {} line {}: {error}",
+                dir.display(),
+                position + 1
+            )
+        })?;
+        let Some(event) = event else {
+            continue;
+        };
+        match event {
+            Event::ToolCallRequested(call) => {
+                // Inner and provider-hosted calls are history, never
+                // reviewed targets of their own.
+                if call.ran_by.is_none()
+                    && call.provider_item.is_none()
+                    && let Some(action) = envelope.action_id.clone()
+                {
+                    index.calls.entry(action.0).or_insert(FoldedCall {
+                        call,
+                        turn: envelope.turn_id.clone(),
+                        started: None,
+                        start_turn: None,
+                    });
+                }
+            }
+            Event::ToolCallStarted(started) => {
+                if let Some(action) = envelope.action_id.clone()
+                    && let Some(indexed) = index.calls.get_mut(&action.0)
+                    && indexed.started.is_none()
+                {
+                    indexed.started = Some(started);
+                    indexed.start_turn = envelope.turn_id.clone();
+                }
+            }
+            Event::PermissionRequested(requested) => {
+                let Some(action) = envelope.action_id.clone() else {
+                    continue;
+                };
+                match requested.step {
+                    AskStep::Review { .. } => {
+                        index.review.insert(action.0);
+                    }
+                    AskStep::StandingAsk { .. } => {
+                        index.nonreview.insert(action.0);
+                    }
+                }
+            }
+            Event::PermissionResolved(resolved) => {
+                let Some(action) = envelope.action_id.clone() else {
+                    continue;
+                };
+                if resolved.reviewer.is_some()
+                    || matches!(
+                        resolved.decided_by,
+                        DecidedBy::Reviewer | DecidedBy::NoReviewer
+                    )
+                {
+                    index.review.insert(action.0.clone());
+                } else {
+                    // An explicit non-review native decision: a person's
+                    // allow or deny, a standing rule or grant, or any other
+                    // non-reviewer decider.
+                    index.nonreview.insert(action.0.clone());
+                }
+                // A reviewed decision that raised no request carries the
+                // call's declared effects: index it as the call's start when
+                // no start logged, so the denial replays. A line without the
+                // keys, or for an action with no indexed request, indexes
+                // nothing.
+                if let Some(call) = resolved.call
+                    && let Some(indexed) = index.calls.get_mut(&action.0)
+                    && indexed.started.is_none()
+                {
+                    indexed.started = Some(started_from(&call));
+                    indexed.start_turn = envelope.turn_id.clone();
+                }
+            }
+            Event::UsageRecorded(recorded) => {
+                if let Some(use_of) = recorded.reviewer.clone()
+                    && let ReviewerUse::Stage1 { action_id } | ReviewerUse::Stage2 { action_id } =
+                        use_of
+                {
+                    index.review.insert(action_id.0);
+                }
+            }
+            // Every other kind carries no declaration or decision the
+            // index reads. Each is listed, so a new kind does not compile
+            // until it is placed.
+            Event::FiberStarted(_)
+            | Event::FiberExited(_)
+            | Event::SessionStarted(_)
+            | Event::Rewound(_)
+            | Event::Moved(_)
+            | Event::TurnStarted(_)
+            | Event::StepStarted(_)
+            | Event::TurnCompleted(_)
+            | Event::SteeringApplied(_)
+            | Event::SteeringQueue(_)
+            | Event::ShellCommand(_)
+            | Event::ShellCommandStarted(_)
+            | Event::ShellCommandDelta(_)
+            | Event::DirectoryAdded(_)
+            | Event::SessionNamed(_)
+            | Event::Clients(_)
+            | Event::SessionStatus(_)
+            | Event::ContextAdded(_)
+            | Event::AssistantMessageStarted(_)
+            | Event::AssistantMessageDelta(_)
+            | Event::AssistantMessageCompleted(_)
+            | Event::TextCompleted(_)
+            | Event::ToolCallArgumentsDelta(_)
+            | Event::ReasoningStarted(_)
+            | Event::ReasoningDelta(_)
+            | Event::ReasoningCompleted(_)
+            | Event::ToolCallDelta(_)
+            | Event::ToolCallCompleted(_)
+            | Event::InteractionRequested(_)
+            | Event::InteractionResolved(_)
+            | Event::RepositoryCodeOffered(_)
+            | Event::RepositoryCodeResolved(_)
+            | Event::QuotaNoticed(_)
+            | Event::QuotaRearmed(_)
+            | Event::RetryScheduled(_)
+            | Event::Notice(_)
+            | Event::PreambleBuilt(_)
+            | Event::ModelChanged(_)
+            | Event::OpeningMessage(_)
+            | Event::InstructionFile(_)
+            | Event::DateChanged(_)
+            | Event::SkillsChanged(_)
+            | Event::CompactionStarted(_)
+            | Event::CompactionCompleted(_)
+            | Event::SkillsResent(_)
+            | Event::ContextNudged(_)
+            | Event::ReviewerKept(_)
+            | Event::McpServerFailed(_)
+            | Event::McpServerReady(_)
+            | Event::Reloaded(_)
+            | Event::ExtensionsLoaded(_)
+            | Event::ExtensionStateSet(_)
+            | Event::ExtensionStateUnset(_)
+            | Event::ExtensionUi(_)
+            | Event::ExtensionMessage(_)
+            | Event::ExtensionLog(_)
+            | Event::ExtensionHello(_)
+            | Event::ExtensionRequest(_)
+            | Event::ExtensionExec(_)
+            | Event::JobStarted(_)
+            | Event::DelegateStarted(_)
+            | Event::JobDelta(_)
+            | Event::JobLine(_)
+            | Event::DelegateFinished(_)
+            | Event::JobCompleted(_)
+            | Event::JobsPendingNotified(_)
+            | Event::CommandAccepted(_)
+            | Event::CommandRejected(_) => {}
+        }
+    }
+    Ok(index)
 }
 
 /// The tool a rebuilt call runs on: inert, carrying the stored declared
