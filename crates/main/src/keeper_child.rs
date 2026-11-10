@@ -562,8 +562,17 @@ impl Runtime {
         thread::spawn(move || {
             let mut reader = BufReader::new(stream);
             let mut chunk = Vec::new();
-            // EOF or a dead peer drops the connection unread.
-            if reader.read_until(b'\n', &mut chunk).unwrap_or(0) == 0 {
+            // The first read is bounded to the frozen line plus its
+            // newline: a longer chunk without the newline drops the
+            // connection, as the torn-tail branch below does. EOF or a
+            // dead peer drops it unread.
+            if reader
+                .by_ref()
+                .take((CRASHED_STOP_LINE.len() + 1) as u64)
+                .read_until(b'\n', &mut chunk)
+                .unwrap_or(0)
+                == 0
+            {
                 return;
             }
             // A chunk without the framing newline is a torn tail: the peer

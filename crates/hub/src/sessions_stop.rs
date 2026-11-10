@@ -556,10 +556,12 @@ fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
 }
 
 /// Stops one keeper: a fresh connection, the frozen stop line, then the
-/// socket's close. Only an observed close after the write confirms: a
-/// refused or failed write is a session gone mid-handshake, anything the
-/// holder writes back is a live session, and the bound leaves it
-/// unconfirmed. Every wait shares the loop deadline and ends on the stop.
+/// socket's close. Only a closed socket after the write confirms, clean
+/// EOF or a reset, broken pipe or aborted connection alike: a refused or
+/// failed write is a session gone mid-handshake, anything the holder
+/// writes back is a live session, any other read error is unconfirmed at
+/// once, and the bound leaves the rest unconfirmed. Every wait shares the
+/// loop deadline and ends on the stop.
 fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
     let stream = match connect_session(hub, id, end) {
         Connected::Stream(stream) => stream,
@@ -590,8 +592,22 @@ fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
                     return SessionOutcome::Unconfirmed;
                 }
             }
-            // A reset socket is closed: the keeper stopped.
-            Err(_) => return SessionOutcome::KeeperConfirmed,
+            // A closed socket confirms: a reset, broken pipe or
+            // aborted connection after the write, like a clean EOF.
+            // Any other read error is something a keeper never writes
+            // (`docs/events.md`, "Hub feed", "keepers"),
+            // so it is unconfirmed at once, with no wait.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionReset
+                        | ErrorKind::BrokenPipe
+                        | ErrorKind::ConnectionAborted
+                ) =>
+            {
+                return SessionOutcome::KeeperConfirmed;
+            }
+            Err(_) => return SessionOutcome::Unconfirmed,
         }
     }
 }

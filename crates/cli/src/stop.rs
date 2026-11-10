@@ -311,7 +311,7 @@ fn exchange_stop(
             match answered {
                 Ok(result) => Ok(Some(Answered::Stopped {
                     sessions: sessions_stopped(&result)?,
-                    keepers: keepers_stopped(&result),
+                    keepers: keepers_stopped(&result)?,
                 })),
                 Err(rejection) => Ok(Some(Answered::Rejected(rejection))),
             }
@@ -367,13 +367,14 @@ fn sessions_stopped(result: &Value) -> Result<u64, CliError> {
         .ok_or(CliError::StopCountMissing)
 }
 
-/// The confirmed-stopped keeper count: an old hub omits it, which reads
-/// as zero rather than missing.
-fn keepers_stopped(result: &Value) -> u64 {
-    result
-        .get("keepers_stopped")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
+/// The confirmed-stopped keeper count: absent on old hubs, which reads
+/// as zero (`docs/events.md`, `command_accepted`, the `stop` row). A
+/// present count that is not a number is missing, as for sessions.
+fn keepers_stopped(result: &Value) -> Result<u64, CliError> {
+    match result.get("keepers_stopped") {
+        None => Ok(0),
+        Some(count) => count.as_u64().ok_or(CliError::StopCountMissing),
+    }
 }
 
 /// The stop's first line: the sessions part always prints, and the keeper

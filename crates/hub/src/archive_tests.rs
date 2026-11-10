@@ -643,23 +643,28 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
     temp.start_feed(&hub);
     temp.await_running(&hub, 10);
     let mut sub = Sub::new(&hub.feed);
-    // The snapshot replays the running status; the close's line comes next.
-    let snapshot: Value = {
-        let mut text = String::new();
-        sub.read.read_line(&mut text).expect("the snapshot arrives");
-        serde_json::from_str(&text).unwrap()
-    };
-    assert_eq!(snapshot["kind"], "session_status");
-    // The snapshot closes with the keepers line, empty: no probe is set
-    // in these tests (`docs/events.md`, "Hub feed").
-    let keepers: Value = {
+    // The snapshot is a set: the replayed status plus the always-on
+    // line (`docs/events.md`, "Hub feed", "keepers"), empty here.
+    // Place is not promised and the close's line comes after the set, so
+    // both snapshot lines are read before either one is asserted.
+    let mut snapshot: Vec<Value> = Vec::new();
+    for _ in 0..2 {
         let mut text = String::new();
         sub.read
             .read_line(&mut text)
-            .expect("the snapshot keepers line arrives");
-        serde_json::from_str(&text).unwrap()
-    };
-    assert_eq!(keepers["kind"], "keepers");
+            .expect("the snapshot lines arrive");
+        snapshot.push(serde_json::from_str(&text).unwrap());
+    }
+    let mut kinds: Vec<&str> = snapshot
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap_or("?"))
+        .collect();
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["keepers", "session_status"]);
+    let keepers = snapshot
+        .iter()
+        .find(|line| line["kind"] == "keepers")
+        .expect("the snapshot holds a keepers line");
     assert_eq!(keepers["payload"], serde_json::json!({"keepers": []}));
     temp.sessions.pop().unwrap().close();
     sub.left(&testkit::id(10), "crashed");

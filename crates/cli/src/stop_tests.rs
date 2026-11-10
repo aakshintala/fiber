@@ -314,6 +314,30 @@ fn a_close_before_the_answer_is_a_failure() {
 }
 
 #[test]
+fn an_answer_with_a_misshaped_keeper_count_is_a_failure() {
+    // A present keeper count that is not a number is missing, as for
+    // sessions; an absent one still reads as zero.
+    let (_got, client) = fake_hub(|hub| {
+        let mut bytes = serde_json::to_vec(&json!({"kind": "command_accepted", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": "c_stop",
+                "result": {"sessions_stopped": 3, "keepers_stopped": "x"}}}))
+        .unwrap();
+        bytes.push(b'\n');
+        (&hub).write_all(&bytes).unwrap();
+        drop(hub);
+    });
+    let clock = FakeClock::new();
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&run_wait(client, &clock))
+        .expect("the stop returns");
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::StopCountMissing), "{error}");
+    assert!(out.is_empty());
+}
+
+#[test]
 fn an_answer_without_a_session_count_is_a_failure() {
     let (_got, client) = fake_hub(|hub| {
         let mut bytes = serde_json::to_vec(&json!({"kind": "command_accepted", "ts": 1,

@@ -386,6 +386,52 @@ fn keeper_crashed_socket_drops_other_lines_and_keeps_running() {
     }
 }
 
+#[test]
+fn keeper_crashed_socket_drops_an_overlong_line_and_keeps_running() {
+    // The first read is bounded to the frozen line plus its newline, so
+    // more bytes with no newline drop the connection without parsing,
+    // as a torn tail does (`docs/invocation.md`, "Commands and flags").
+    // More than the frozen line plus its newline, held open: without the
+    // bound the read would wait past the deadline for a newline.
+    let id = SessionId("s_6123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let mut keeper = serve_keeper("keeper-crash-overlong", id, clock.clone());
+    let pgid = start_shell(&keeper, "sleepy", "sleep 60");
+    adopt_call(&keeper, "sleepy", "j_sleepy");
+    crash(&mut keeper);
+    let socket = crashed_socket(&keeper);
+    let mut peer = await_crashed_socket(&socket);
+    peer.write_all(&vec![b'x'; "{\"shutdown\":true}".len() + 9])
+        .expect("overlong line");
+    // The keeper drops the connection, so the held peer's read ends.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut eof = Vec::new();
+        tx.send(peer.read_to_end(&mut eof).map(|_| eof))
+            .unwrap_or(());
+    });
+    let eof = Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&rx, "the overlong drop")
+        .expect("peer read");
+    assert!(eof.is_empty(), "a dropped line reads as EOF");
+    assert!(
+        keeper.result.try_recv().is_err(),
+        "the keeper still runs after an overlong line"
+    );
+    assert!(
+        support::group::alive(pgid),
+        "the job still runs after an overlong line"
+    );
+    // A later frozen stop on a fresh connection still stops it.
+    let mut stop = await_crashed_socket(&socket);
+    stop.write_all(b"{\"shutdown\":true}\n")
+        .expect("frozen stop");
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "the keeper exit")
+        .expect("keeper exits on the frozen stop");
+    assert!(!socket.exists(), "the socket is unlinked on exit");
+}
+
 fn job_completed_lines(keeper: &Keeper) -> Vec<contract::Envelope> {
     log::read(&session_dir(keeper))
         .expect("log lines")

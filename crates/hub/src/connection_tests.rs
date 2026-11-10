@@ -856,6 +856,8 @@ fn stop_with_sessions_counts_a_stopped_keeper() {
     client.send(&command("c_stop", "stop", json!({"sessions": true})));
     let (id, result) = accepted(&client.next("the acknowledgement"));
     assert_eq!(id, "c_stop");
+    // The accepted `stop` answer carries both counts (`docs/events.md`,
+    // `command_accepted`, the `stop` row).
     assert_eq!(result, json!({"sessions_stopped": 0, "keepers_stopped": 1}));
     assert!(
         UnixStream::connect(temp.dir.join("run").join(&keeper.0)).is_err(),
@@ -992,6 +994,8 @@ fn stop_keepers_confirms_a_named_keeper_and_keeps_running() {
     ));
     let (id, result) = accepted(&client.next("the acknowledgement"));
     assert_eq!(id, "c_keepers");
+    // The accepted `stop_keepers` answer carries its count
+    // (`docs/events.md`, `command_accepted`, the `stop_keepers` row).
     assert_eq!(result, json!({"keepers_stopped": 1}));
     // The hub keeps running and keeps admitting binds after answering.
     assert!(!hub.sessions_stopping.load(Ordering::SeqCst));

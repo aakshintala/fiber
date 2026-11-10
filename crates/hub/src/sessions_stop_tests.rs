@@ -377,12 +377,13 @@ fn stop_keeper_waits_out_a_silent_keeper_to_the_bound() {
     ));
 }
 
-/// A garbage read after the stop is no wait: the keeper leg confirms
-/// the error at once instead of parking to its bound. Pins the read's
-/// error arm through the leg itself: waiting out every error would
-/// leave a stopped keeper unconfirmed past the bound.
+/// A garbage read after the stop is no wait and no confirmation: the
+/// keeper leg answers unconfirmed at once instead of parking to its
+/// bound, because a keeper never writes. Pins the read's error arm
+/// through the leg itself: waiting out every error would leave a live
+/// session unconfirmed past the bound.
 #[test]
-fn stop_keeper_confirms_an_overlong_read_without_waiting() {
+fn stop_keeper_leaves_an_overlong_read_unconfirmed_without_waiting() {
     let temp = Temp::new("ss-keeper-garbage");
     let id = SessionId(testkit::id(24));
     let listener = UnixListener::bind(temp.run(&id)).unwrap();
@@ -394,8 +395,9 @@ fn stop_keeper_confirms_an_overlong_read_without_waiting() {
             .unwrap();
         assert_eq!(line, FROZEN_STOP);
         // Overlong with no newline: the stop's read fails outright, so
-        // it confirms without the bound moving. Tolerate the stop
-        // closing mid-write: it answers as soon as it has read past the cap.
+        // it answers unconfirmed without the bound moving. Tolerate the
+        // stop closing mid-write: it answers as soon as it has read past
+        // the cap.
         let payload = vec![b'x'; support::framing::MAX_LINE + 8];
         stream.write_all(&payload).unwrap_or(());
         // Hold the socket open past the write: closing it would read
@@ -411,11 +413,12 @@ fn stop_keeper_confirms_an_overlong_read_without_waiting() {
     thread::spawn(move || {
         tx.send(stop_keeper(&hub, &id, end)).unwrap_or(());
     });
-    // No clock move: the error confirms at once. A mutant that waits
-    // out every error instead parks here past the wall deadline and fails.
+    // No clock move: the error answers unconfirmed at once. A mutant
+    // that waits out every error instead parks here past the wall
+    // deadline and fails.
     assert!(matches!(
         Deadline::after(DEADLINE).recv_or_fail(&rx, "the overlong stop"),
-        SessionOutcome::KeeperConfirmed
+        SessionOutcome::Unconfirmed
     ));
     assert_eq!(temp.clock.now(), temp.clock.origin());
 }
