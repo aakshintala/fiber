@@ -859,7 +859,8 @@ fn a_closing_row_shows_closing_with_no_number() {
             ListLine::Head { .. }
             | ListLine::ExitedHead { .. }
             | ListLine::Exited { .. }
-            | ListLine::More { .. } => None,
+            | ListLine::More { .. }
+            | ListLine::ArchivedHead { .. } => None,
         });
     assert_eq!(
         live.next(),
@@ -931,7 +932,8 @@ fn more_key(app: &App, project: &str) -> Option<u64> {
             ListLine::Head { .. }
             | ListLine::Live { .. }
             | ListLine::ExitedHead { .. }
-            | ListLine::Exited { .. } => None,
+            | ListLine::Exited { .. }
+            | ListLine::ArchivedHead { .. } => None,
         })
 }
 
@@ -2850,7 +2852,8 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
                 | crate::home::ListLine::Live { .. }
                 | crate::home::ListLine::ExitedHead { .. }
                 | crate::home::ListLine::Exited { .. }
-                | crate::home::ListLine::More { .. } => None,
+                | crate::home::ListLine::More { .. }
+                | crate::home::ListLine::ArchivedHead { .. } => None,
             })
         })
         .unwrap_or_else(|| panic!("the other project's plus target"));
@@ -3140,7 +3143,8 @@ fn a_click_on_more_expands_the_same_project_only() {
             crate::home::ListLine::Head { .. }
             | crate::home::ListLine::Live { .. }
             | crate::home::ListLine::ExitedHead { .. }
-            | crate::home::ListLine::More { .. } => None,
+            | crate::home::ListLine::More { .. }
+            | crate::home::ListLine::ArchivedHead { .. } => None,
             crate::home::ListLine::Exited { key, .. } => Some(*key),
         })
         .collect::<Vec<_>>();
@@ -3154,7 +3158,8 @@ fn a_click_on_more_expands_the_same_project_only() {
                 crate::home::ListLine::Head { .. }
                 | crate::home::ListLine::Live { .. }
                 | crate::home::ListLine::ExitedHead { .. }
-                | crate::home::ListLine::Exited { .. } => None,
+                | crate::home::ListLine::Exited { .. }
+                | crate::home::ListLine::ArchivedHead { .. } => None,
                 crate::home::ListLine::More { key, .. } => Some(*key),
             })
             .collect::<Vec<_>>(),
@@ -4169,7 +4174,8 @@ fn unreadable_rows_have_no_x() {
             crate::home::ListLine::Exited { .. } => Some(false),
             crate::home::ListLine::Head { .. }
             | crate::home::ListLine::ExitedHead { .. }
-            | crate::home::ListLine::More { .. } => None,
+            | crate::home::ListLine::More { .. }
+            | crate::home::ListLine::ArchivedHead { .. } => None,
         })
         .collect();
     assert_eq!(rows.len(), 3);
@@ -5749,6 +5755,9 @@ fn list_shapes(app: &App) -> Vec<String> {
                     ListLine::Head { name, .. } => format!("section {name}"),
                     ListLine::ExitedHead { count } => format!("head {count}"),
                     ListLine::More { count, .. } => format!("more {count}"),
+                    ListLine::ArchivedHead { count, .. } => {
+                        format!("archived {count}")
+                    }
                     ListLine::Exited { .. } | ListLine::Live { .. } => "row".to_owned(),
                 })
                 .collect()

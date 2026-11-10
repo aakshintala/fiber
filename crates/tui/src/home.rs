@@ -29,6 +29,10 @@ pub(crate) enum Spot {
     Start(u64),
     /// Reveal the remaining exited sessions in this project.
     More(u64),
+    /// The archived fold head: clicking it, or Enter on it while
+    /// focused, lists the project's archived rows in place, and again
+    /// folds them.
+    Archived(u64),
     /// The workspace chip: clicking it opens the workspace picker.
     Workspace,
     /// The new worktree switch: clicking it, or Enter on it while
@@ -63,11 +67,13 @@ pub(crate) enum Spot {
 
 impl Spot {
     /// Whether the spot is a list stop: an entry and its cross normalize
-    /// to the entry, and `More` stays its own stop.
+    /// to the entry, and `More` and the archived head stay their own
+    /// stops.
     pub(crate) fn list_stop(self) -> Option<Spot> {
         match self {
             Spot::Entry(key) | Spot::Stop(key) => Some(Spot::Entry(key)),
             Spot::More(key) => Some(Spot::More(key)),
+            Spot::Archived(key) => Some(Spot::Archived(key)),
             Spot::Start(_)
             | Spot::Workspace
             | Spot::Worktree
@@ -92,6 +98,7 @@ impl Spot {
             | Spot::Stop(_)
             | Spot::Start(_)
             | Spot::More(_)
+            | Spot::Archived(_)
             | Spot::Pick(_)
             | Spot::Blocker(_)
             | Spot::Keep
@@ -388,6 +395,13 @@ pub(crate) enum ListLine {
         key: u64,
         count: usize,
     },
+    ArchivedHead {
+        /// The fold head's target: a representative row key of its
+        /// project.
+        key: u64,
+        /// The hub's archived count, else the loaded archived rows.
+        count: usize,
+    },
 }
 
 /// What the open workspace picker draws (`docs/tui.md`, "Home").
@@ -572,6 +586,13 @@ pub(crate) struct Section<'a> {
     /// The hub's scoped total for the project: `None` means count the
     /// loaded rows.
     pub(crate) total: Option<usize>,
+    /// Loaded archived rows, newest first.
+    pub(crate) archived: Vec<&'a Row>,
+    /// Shown archived rows while the fold is open.
+    pub(crate) shown_archived: usize,
+    /// The hub's archived scoped total for the project: `None` means
+    /// count the loaded archived rows.
+    pub(crate) archived_total: Option<usize>,
 }
 
 impl Section<'_> {
@@ -594,9 +615,16 @@ impl Sessions {
 
     /// Project sections: launch first, live projects in feed order, exited-only
     /// projects by their earliest loaded start, with loaded order breaking ties.
+    /// A project holding only archived sessions still seeds a section,
+    /// so its fold has somewhere to draw (`docs/tui.md`, "The session
+    /// list").
     pub(crate) fn sections(&self, launch_project: Option<&str>) -> Vec<Section<'_>> {
         let mut sections: Vec<Section<'_>> = Vec::new();
-        for row in self.all() {
+        let live_recent = self.all();
+        for row in live_recent
+            .into_iter()
+            .chain(self.archived.values().flatten())
+        {
             if sections
                 .iter()
                 .any(|section| section.project == row.project)
@@ -632,6 +660,17 @@ impl Sessions {
                 .unwrap_or(&row.project)
                 .to_owned();
             let total = self.totals.get(&row.project).copied();
+            let archived: Vec<&Row> = self
+                .archived
+                .get(row.project.as_str())
+                .map(|rows| rows.iter().collect())
+                .unwrap_or_default();
+            let shown_archived = self
+                .archived_open
+                .contains(&row.project)
+                .then_some(archived.len())
+                .unwrap_or(0);
+            let archived_total = self.archived_totals.get(&row.project).copied();
             sections.push(Section {
                 project: &row.project,
                 name,
@@ -640,6 +679,9 @@ impl Sessions {
                 exited,
                 shown_exited,
                 total,
+                archived,
+                shown_archived,
+                archived_total,
             });
         }
         sections.sort_by_key(|section| {
@@ -921,6 +963,17 @@ impl Sessions {
     /// Whether `project`'s archived fold is open.
     pub(crate) fn is_archived_open(&self, project: &str) -> bool {
         self.archived_open.contains(project)
+    }
+
+    /// Whether any archived row is loaded: an archived-only project
+    /// still draws its section.
+    pub(crate) fn has_archived(&self) -> bool {
+        self.archived.values().any(|rows| !rows.is_empty())
+    }
+
+    /// Whether `id` names a loaded archived row.
+    pub(crate) fn is_archived(&self, id: &SessionId) -> bool {
+        self.archived.values().flatten().any(|row| row.id == *id)
     }
 
     /// The live feed rows, in feed order.

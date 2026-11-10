@@ -234,9 +234,10 @@ fn keys(app: &App) -> Vec<u64> {
                 .into_iter()
                 .filter_map(|line| match line {
                     ListLine::Live { key, .. } | ListLine::Exited { key, .. } => Some(key),
-                    ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => {
-                        None
-                    }
+                    ListLine::Head { .. }
+                    | ListLine::ExitedHead { .. }
+                    | ListLine::More { .. }
+                    | ListLine::ArchivedHead { .. } => None,
                 })
                 .collect()
         })
@@ -265,7 +266,8 @@ fn more_key(app: &App, project: &str) -> Option<u64> {
             ListLine::Head { .. }
             | ListLine::Live { .. }
             | ListLine::ExitedHead { .. }
-            | ListLine::Exited { .. } => None,
+            | ListLine::Exited { .. }
+            | ListLine::ArchivedHead { .. } => None,
         })
 }
 
@@ -306,6 +308,9 @@ fn list_shapes(app: &App) -> Vec<String> {
                     ListLine::Head { name, .. } => format!("section {name}"),
                     ListLine::ExitedHead { count } => format!("head {count}"),
                     ListLine::More { count, .. } => format!("more {count}"),
+                    ListLine::ArchivedHead { count, .. } => {
+                        format!("archived {count}")
+                    }
                     ListLine::Exited { .. } | ListLine::Live { .. } => "row".to_owned(),
                 })
                 .collect()

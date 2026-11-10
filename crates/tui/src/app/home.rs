@@ -420,8 +420,11 @@ impl App {
                 .count();
             // The `More` key resolves before the rows below move out of
             // the section: it names the first hidden loaded row, else the
-            // section's last loaded row, else a live row.
+            // section's last loaded row, else a live row. The archived
+            // head's key resolves with it, naming the first loaded
+            // archived row instead when one is loaded.
             let more = more_key(&section);
+            let archived = archived_key(&section);
             list.push(ListLine::Head {
                 start: section.start,
                 name: section.name,
@@ -508,6 +511,29 @@ impl App {
                     count: count.saturating_sub(section.shown_exited),
                 });
             }
+            // The archived fold draws its head when the hub held a count
+            // or rows loaded, then the loaded archived rows, each drawn
+            // as an exited row, while open.
+            let archived_count = section.archived_total.unwrap_or(section.archived.len());
+            if archived_count > 0 {
+                list.push(ListLine::ArchivedHead {
+                    key: archived,
+                    count: archived_count,
+                });
+            }
+            for row in section.archived.iter().take(section.shown_archived) {
+                list.push(ListLine::Exited {
+                    key: row.key,
+                    glyph: "○",
+                    name: crate::home::title(row),
+                    id: row.id.0.clone(),
+                    turns: row.status.as_ref().and_then(|status| status.turns),
+                    spend: crate::format::money(row.spend),
+                    age: row.status.as_ref().map(|status| {
+                        format!("{} ago", crate::view::rail::elapsed(status.since, wall))
+                    }),
+                });
+            }
         }
         let header = Header {
             counts: [waiting_count, working, retrying, crashed, ready]
@@ -538,7 +564,7 @@ impl App {
         Some(HomeScreen {
             header,
             list,
-            empty: home.sessions.all().is_empty(),
+            empty: home.sessions.all().is_empty() && !home.sessions.has_archived(),
             version: home.launch.version.clone(),
             glyph: home.launch.logo_glyph.clone(),
             chips: {
@@ -1134,7 +1160,8 @@ impl App {
     }
 
     /// Focuses the row `key` names after the next home frame: expands the
-    /// row's project when the row is an exited one hidden behind more, so
+    /// row's project when the row is an exited one hidden behind more,
+    /// and opens the archived fold when the row is an archived one, so
     /// the row is a list stop. An unknown key focuses nothing.
     pub(super) fn focus_row(&mut self, key: u64) {
         let home = &mut self.home;
@@ -1143,8 +1170,12 @@ impl App {
         };
         let exited = row.left.is_some();
         let project = row.project.clone();
+        let archived = home.sessions.is_archived(&row.id);
         if exited {
             home.sessions.expand(&project);
+        }
+        if archived {
+            home.sessions.open_archived(&project);
         }
         home.focus_list = Some(ListFocus::Row(key));
     }
@@ -1223,7 +1254,7 @@ impl App {
                 && matches!(
                     self.focus,
                     Some(TargetId::Home(
-                        Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)
+                        Spot::Entry(_) | Spot::Stop(_) | Spot::More(_) | Spot::Archived(_)
                     ))
                 )
             {
@@ -1233,8 +1264,9 @@ impl App {
         }
         // j follows the drawn list order; when it reaches the last drawn
         // stop it advances into the next logical row, or pages recents.
-        let Some(TargetId::Home(spot @ (Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)))) =
-            self.focus
+        let Some(TargetId::Home(
+            spot @ (Spot::Entry(_) | Spot::Stop(_) | Spot::More(_) | Spot::Archived(_)),
+        )) = self.focus
         else {
             return None;
         };
@@ -1329,6 +1361,25 @@ impl App {
                     if !lines.is_empty() {
                         return Effect::Send(lines);
                     }
+                }
+                Effect::None
+            }
+            Spot::Archived(key) => {
+                // The archived fold toggles in place: opening lists the
+                // loaded archived rows as exited rows, and again folds
+                // them. The head keeps the focus.
+                let project = self
+                    .home
+                    .sessions
+                    .by_key(key)
+                    .map(|row| row.project.clone());
+                if let Some(project) = project {
+                    if self.home.sessions.is_archived_open(&project) {
+                        self.home.sessions.close_archived(&project);
+                    } else {
+                        self.home.sessions.open_archived(&project);
+                    }
+                    self.focus = Some(TargetId::Home(Spot::Archived(key)));
                 }
                 Effect::None
             }
@@ -1438,6 +1489,17 @@ impl App {
                     }
                 }
             }
+            Spot::Archived(key) => {
+                let home = &self.home;
+                let row = home.sessions.by_key(key)?;
+                let section = home
+                    .sessions
+                    .sections(home.launch_project())
+                    .into_iter()
+                    .find(|section| section.project == row.project)?;
+                let count = section.archived_total.unwrap_or(section.archived.len());
+                (count > 0).then(|| format!("archived · {count}"))
+            }
             Spot::Stop(_)
             | Spot::Start(_)
             | Spot::Workspace
@@ -1516,6 +1578,17 @@ fn more_key(section: &Section<'_>) -> u64 {
         .or(section.live.last().map(|row| row.key))
         .or(section.start)
         .unwrap_or(0)
+}
+
+/// The key the archived fold head carries for its section: the first
+/// loaded archived row, else the `More` fallback chain, so the toggle
+/// still finds the section's project.
+fn archived_key(section: &Section<'_>) -> u64 {
+    section
+        .archived
+        .first()
+        .map(|row| row.key)
+        .unwrap_or_else(|| more_key(section))
 }
 
 /// A hub refusal's message, for a notice.

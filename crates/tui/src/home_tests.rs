@@ -33,6 +33,7 @@ pub(crate) fn home_test_rows(screen: &HomeScreen) -> Vec<(u64, String)> {
             ListLine::Exited {
                 key, glyph, name, ..
             } => Some((*key, format!("{glyph}  {name}"))),
+            ListLine::ArchivedHead { .. } => None,
             ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => None,
         })
         .collect()
