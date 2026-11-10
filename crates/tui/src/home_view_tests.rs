@@ -4309,3 +4309,75 @@ fn home_logo_rect_values() {
     keys.open_keys();
     assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
 }
+
+#[test]
+fn home_after_forgot_drops_the_row() {
+    // Client B's home after another client's delete: one live row and
+    // one exited row, then a `session_deleted` wire line for the
+    // exited row drops it and re-asks that project's counts.
+    let mut app = home(80, 24);
+    let lines: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let feed = lines
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {lines:?}"));
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {lines:?}"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    // The live status queues one scoped ask for the new project; settle
+    // it empty so the forgot re-ask below is exactly one line.
+    let asked: Vec<serde_json::Value> = app
+        .on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let scoped = asked
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a scoped ask: {asked:?}"));
+    assert!(
+        app.on_line(accepted(
+            scoped,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            recent,
+            serde_json::json!({"sessions": [recent_row("s_cccccccccccccccc", "old work", "exited")]}),
+        ))
+        .is_empty()
+    );
+    let before = screen(&app, 80, 24);
+    assert!(before.contains("old work"), "{before}");
+    let forgot = crate::link::parse_line(
+        r#"{"kind":"session_deleted","ts":0,"schema_version":1,"payload":{"session_id":"s_cccccccccccccccc","project":"-w"}}"#,
+    )
+    .unwrap_or_else(|| panic!("the forgot line parses"));
+    let sent: Vec<serde_json::Value> = app
+        .on_line(forgot)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["command"], "recent");
+    assert_eq!(sent[0]["args"]["project"], "-w");
+    assert!(sent[0]["args"].get("before").is_none());
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("fix the parser"), "{frame}");
+    assert!(!frame.contains("old work"), "{frame}");
+    insta::assert_snapshot!("home_after_forgot_drops_the_row", frame);
+}
