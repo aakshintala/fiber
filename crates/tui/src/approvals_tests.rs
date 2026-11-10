@@ -1990,6 +1990,45 @@ fn an_approval_reraise_rebuilds_request_fields_and_resets_a_gone_choice() {
         "the re-raise's reversibility wins, in {}",
         shown.lines[0]
     );
+    // A resume whose hook changes the paths and the rule offers only the
+    // new rule's remember choices, keeping the typed feedback.
+    queue.fold(&review(
+        S_A,
+        "r_1",
+        serde_json::json!({"rule": {"subject": "npm run build --watch", "prefix": "npm run build"},
+            "paths": ["e/f"], "effects": ["reads"], "reversible": true}),
+    ));
+    let shown = rendered(&queue);
+    assert_eq!(
+        shown.lines[1], "reads files · e/f · no rule allows this call",
+        "the re-raise's effects and paths win"
+    );
+    assert!(
+        shown.lines.iter().all(|line| !line.contains("npm test")),
+        "the gone rule offers no remembering rows, in {:?}",
+        shown.lines
+    );
+    assert_eq!(
+        shown.lines.len(),
+        9,
+        "four choices with the new rule, in {:?}",
+        shown.lines
+    );
+    assert_eq!(shown.lines[3], "▸ 1 Allow once", "reset to the default");
+    assert_eq!(
+        shown.lines[4], "  2 Allow for this session npm run build *",
+        "only the new rule's session choice"
+    );
+    assert_eq!(
+        shown.lines[5], "  3 Always allow in this project npm run build *",
+        "only the new rule's project choice"
+    );
+    assert_eq!(shown.lines[6], "  4 Deny  note", "typed feedback stays");
+    assert!(
+        !shown.lines[0].contains("irreversible"),
+        "the re-raise's reversibility wins, in {}",
+        shown.lines[0]
+    );
 }
 
 #[test]

@@ -709,7 +709,11 @@ fn an_approval_rewrite_shows_the_rewritten_arguments_with_the_mark() {
         row.trim_end().ends_with("\u{b7} via fiber.test/guard"),
         "the mark, in {row:?}"
     );
-    // Allow the call, let the turn finish, then quit.
+    // Allow the call, let the turn finish, then quit. The waiting title
+    // proves the turn waits on a person before the choice goes out
+    // (`docs/testing/screens.md`, "Screens"), so Enter never follows the
+    // card's grid match alone.
+    run.wait_bytes(from, support::pty::WAITING_TITLE, "the waiting turn");
     run.write(b"\r");
     run.wait_screen("the reply", |screen| {
         screen

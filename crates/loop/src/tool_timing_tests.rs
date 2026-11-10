@@ -2448,8 +2448,8 @@ fn permission_requested_rewrite_on_a_standing_ask_carries_the_rewritten_argument
         vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
     );
     prompt(&world, "hi");
-    let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let flight = spawn_turn(&mut world);
     let requested = wait_requested_payload(
         &mut watcher,
         &Deadline::after(MUST_SUCCEED_WITHIN),
