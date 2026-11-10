@@ -2668,8 +2668,12 @@ impl App {
     }
 
     /// PageUp and PageDown move by the conversation height less one.
-    /// The input boundary owns the layout pass.
+    /// The input boundary owns the layout pass. While an opening pass
+    /// runs, the screen stays as it was, so the page is dropped.
     fn page_inner(&mut self, up: bool) {
+        if self.pass_open() {
+            return;
+        }
         let height = self.conversation_height();
         self.screen.page(up, height);
     }
