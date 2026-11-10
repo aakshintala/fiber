@@ -354,3 +354,4 @@ providers/databricks/tests/models-not-json-body-raises.json	fiber-4257	plan	2026
 providers/databricks/tests/models-services-401-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/databricks/tests/models-services-not-a-list-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/databricks/tests/models-twentieth-page-with-a-token-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/*	fiber-4257	grant	2026-11-10T07:27:33Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/providers/4257-databricks-discovery	
