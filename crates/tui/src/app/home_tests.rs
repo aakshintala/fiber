@@ -7577,3 +7577,196 @@ fn set_home_replaces_the_seeded_home() {
     app.settle();
     assert_eq!(app.chrome().layout().expect("a layout").rail, None);
 }
+
+/// The archived scoped ask's id among outgoing `recent` lines.
+fn archived_ask_id(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .find(|line| is_archived(line))
+        .map(line_id)
+        .unwrap_or_else(|| panic!("an archived ask: {lines:?}"))
+        .to_owned()
+}
+
+/// The exited scoped ask's id among outgoing `recent` lines.
+fn exited_ask_id(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .filter(|line| !is_archived(line) && line["args"].get("project").is_some())
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("an exited scoped ask: {lines:?}"))
+        .to_owned()
+}
+
+/// Home with one archived row ("filed work") in `-w` and both counts
+/// held: the unscoped answer carries one exited row, the exited scoped
+/// answer is empty, and the archived scoped answer carries the
+/// archived row.
+fn home_with_archived_row() -> App {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    );
+    let scoped = exited_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "filed work")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    app
+}
+
+#[test]
+fn archived_status_unarchives_the_row_without_duplicating_it() {
+    let mut app = home_with_archived_row();
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(app.home.sessions.is_archived(&id));
+    // A live status for the archived id unarchives it locally: the row
+    // leaves the archived map and folds live, keeping its key, so no id
+    // ever shows in both lists.
+    assert!(
+        app.on_line(live(
+            "s_bbbbbbbbbbbbbbbb",
+            "resumed work",
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ))
+        .is_empty()
+    );
+    // Deleting the archived-map eviction lists the row twice, once live
+    // and once archived: the archived half fails this assertion.
+    assert!(!app.home.sessions.is_archived(&id));
+    let row = app
+        .home
+        .sessions
+        .row(&id)
+        .unwrap_or_else(|| panic!("the unarchived row"));
+    assert!(row.left.is_none());
+    assert!(
+        app.home
+            .sessions
+            .feed_row(&id)
+            .is_some_and(|row| row.left.is_none()),
+        "the row folds live"
+    );
+    assert_eq!(listed(&app), ["✓  resumed work", "○  old work"]);
+}
+
+#[test]
+fn archived_opening_an_archived_row_sends_the_subscribe_sequence() {
+    let mut app = home_with_archived_row();
+    // Opening an archived row resumes it the same way as an exited one:
+    // the same subscribe sequence goes out (`docs/tui.md`, "The session
+    // list"), with no pointer coordinates anywhere.
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(lines[0]["args"]["level"], "summary");
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    accept_summary(&mut app, "s_bbbbbbbbbbbbbbbb", ack);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_bbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
+fn archived_resumed_exit_returns_the_row_under_exited() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    accept_summary(&mut app, "s_bbbbbbbbbbbbbbbb", ack);
+    // The resumed session exits: both counts refetch, and its exit
+    // appends a row without `archived`, so the next scoped answers move
+    // it back under "exited" (`docs/invocation.md`, "Archiving").
+    let retrigger: Vec<Value> = commands(app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited")));
+    assert_eq!(retrigger.len(), 2);
+    let scoped = exited_ask_id(&retrigger);
+    let archived = archived_ask_id(&retrigger);
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "filed work")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(&archived, json!({"sessions": [], "total": 0})))
+            .is_empty()
+    );
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    assert_eq!(stored(&app, "-w"), Some(1));
+    assert_eq!(archived_stored(&app, "-w"), Some(0));
+    assert!(
+        !app.home
+            .sessions
+            .is_archived(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+    );
+    // The scoped page appends the returned row past the loaded one.
+    assert_eq!(listed(&app), ["○  old work", "○  filed work"]);
+}
+
+#[test]
+fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            ack,
+            "io_failed",
+            message
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    // A resume the hub refuses because the workspace is gone shows the
+    // ruled sentence, keeps the row, and adds no rail card
+    // (`docs/tui.md`, "The session list").
+    let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
+    assert_eq!(app.notice(), Some(ruled), "{message}");
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(
+        app.home.sessions.is_archived(&id),
+        "the archived row stays: {message}"
+    );
+    let row = app
+        .home
+        .sessions
+        .row(&id)
+        .unwrap_or_else(|| panic!("the row stays: {message}"));
+    assert_eq!(
+        row.note.as_deref(),
+        Some(ruled),
+        "the row's note: {message}"
+    );
+    assert!(
+        app.home.sessions.cards().is_empty(),
+        "no rail card: {message}"
+    );
+}

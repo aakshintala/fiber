@@ -713,6 +713,14 @@ impl App {
                     // resume line. An exited row from before the attach
                     // sets no marker: the session is live and resuming.
                     let after_attach = self.session() == Some(&exited);
+                    // The project resolves before the mark: an archived
+                    // row leaves the archived map on `left`, so resolving
+                    // after would lose its project and its refetch.
+                    let project = self
+                        .home
+                        .sessions
+                        .row(&exited)
+                        .map(|row| row.project.clone());
                     self.home.sessions.left(&exited, how);
                     if after_attach {
                         self.home.left_after_attach = Some(exited.clone());
@@ -720,11 +728,6 @@ impl App {
                     // The project's counts may have changed: ask again,
                     // each kind under its one-in-flight-plus-dirty
                     // bound, never adjusting a count here.
-                    let project = self
-                        .home
-                        .sessions
-                        .row(&exited)
-                        .map(|row| row.project.clone());
                     let mut lines = Vec::new();
                     if let Some(project) = &project {
                         lines.extend(self.scoped_first(project));

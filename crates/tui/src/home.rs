@@ -1051,9 +1051,15 @@ impl Sessions {
     }
 
     /// A refusal shows on the row, in place of its detail, as well as a
-    /// notice; an unknown id changes nothing.
+    /// notice; an unknown id changes nothing. Archived rows draw, so
+    /// they show notes the same way.
     pub(crate) fn note(&mut self, id: &SessionId, note: String) {
-        for row in self.feed.iter_mut().chain(self.recent.iter_mut()) {
+        for row in self
+            .feed
+            .iter_mut()
+            .chain(self.recent.iter_mut())
+            .chain(self.archived.values_mut().flatten())
+        {
             if row.id == *id {
                 row.note = Some(note);
                 return;
