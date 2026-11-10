@@ -67,8 +67,8 @@ fn view_of(picker: &ModelPicker) -> PickerView {
 
 #[test]
 fn first_run_picker_has_no_choice_until_explicit_navigation() {
-    // docs/tui.md, "First run": the first-run picker opens with no row
-    // chosen; docs/tui.md, "The model picker": Enter with no row
+    // `docs/tui.md`, "First run": the first-run picker opens with no row
+    // chosen; `docs/tui.md`, "The model picker": Enter with no row
     // focused does nothing until ↓ focuses one.
     let mut picker = ModelPicker::default();
     picker.catalogue.models = vec![entry("acme/only", &[], None, None)];

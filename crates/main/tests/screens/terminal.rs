@@ -3713,7 +3713,7 @@ fn first_run_completed_setup_skips_login_and_model_picker() {
 
 #[test]
 fn first_run_local_without_credential_opens_login_on_home() {
-    // docs/tui.md, "First run": with no usable credential a home launch
+    // `docs/tui.md`, "First run": with no usable credential a home launch
     // opens on home with the `/login` overlay up, even with a model
     // configured; Esc leaves home without it.
     let setup = support::Setup::new();

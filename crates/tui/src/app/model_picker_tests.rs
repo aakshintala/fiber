@@ -69,7 +69,7 @@ fn catalogue() -> Catalogue {
 
 #[test]
 fn first_run_catalogue_opens_unselected_picker_with_connected_local_outbox() {
-    // docs/tui.md, "First run": with a credential and no configured
+    // `docs/tui.md`, "First run": with a credential and no configured
     // model, the picker opens with no row chosen and chooses nothing on
     // Enter until the person navigates.
     let mut app = home();
@@ -101,7 +101,7 @@ fn first_run_catalogue_opens_unselected_picker_with_connected_local_outbox() {
 
 #[test]
 fn first_run_configured_model_with_credential_opens_neither_overlay() {
-    // docs/tui.md, "First run": the overlays open only until a
+    // `docs/tui.md`, "First run": the overlays open only until a
     // credential exists and only without a configured model, so a
     // finished setup sees neither.
     let mut app = home();

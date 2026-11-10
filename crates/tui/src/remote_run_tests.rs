@@ -251,7 +251,7 @@ fn the_start_pick_lists_the_hubs_models() {
     );
     // The start pick has no initial selection: the first Down selects
     // the first row, the second selects the hub's second model
-    // (docs/tui.md, "The model picker": no row is focused until ↓ or a
+    // (`docs/tui.md`, "The model picker": no row is focused until ↓ or a
     // click puts it there). The loop parks after what it already drew;
     // navigation redraws without touching the rows.
     pair.main

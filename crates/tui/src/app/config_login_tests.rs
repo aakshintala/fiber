@@ -429,7 +429,7 @@ fn a_stored_key_queues_a_reviewer_read_on_a_fresh_ticket() {
 
 #[test]
 fn first_run_secret_save_opens_unselected_picker_on_connected_home() {
-    // docs/tui.md, "First run": once the login's last step saves, the
+    // `docs/tui.md`, "First run": once the login's last step saves, the
     // overlay closes and the model picker opens with no row chosen.
     let seam = seam();
     *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {

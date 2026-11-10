@@ -24,7 +24,7 @@ fn first_run_enter_with_model_opens_login_and_preserves_the_draft() {
 }
 
 fn first_run_enter_login(model: Option<String>) {
-    // docs/tui.md, "First run": Enter on home with no credential keeps
+    // `docs/tui.md`, "First run": Enter on home with no credential keeps
     // the draft and opens `/login`, with or without a configured model.
     use std::sync::Arc;
     let seam = Arc::new(crate::configure_fake::Fake::new(Vec::new()));

@@ -3255,7 +3255,7 @@ fn start_rejected(app: &mut App, id: &str, message: &str) {
 
 #[test]
 fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
-    // docs/tui.md, "First run": Esc leaves home with the blocker lines;
+    // `docs/tui.md`, "First run": Esc leaves home with the blocker lines;
     // clicking a credential blocker line opens `/login`, and a keyless
     // one never reopens.
     let mut app = home_with(80, 24, launch());
