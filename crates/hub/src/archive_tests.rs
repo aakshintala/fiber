@@ -533,6 +533,20 @@ fn recv<T>(rx: &mpsc::Receiver<T>, what: &str) -> T {
         .unwrap_or_else(|_| panic!("never received {what}"))
 }
 
+/// Advances the clock to the feed scanner's next scheduled scan,
+/// waiting until the scanner parks there first: the late session's
+/// follow can only arrive after a scan observes its socket.
+fn advance_to_scan(temp: &Temp) {
+    let feed = temp.feed.as_ref().expect("the feed is started");
+    let scanner = feed.scanner_thread().expect("the feed is started");
+    temp.clock.advance_when_parked(
+        Some(temp.clock.now() + feed::RUN_SCAN),
+        Some(scanner),
+        feed::RUN_SCAN,
+        &Deadline::after(DEADLINE),
+    );
+}
+
 /// Joins a worker before the subsystem bound, returning its answer.
 #[track_caller]
 fn join<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
@@ -621,7 +635,7 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
     });
     let late = FakeSession::bind(&temp.dir, &id);
     testkit::await_scanner(&temp.clock);
-    temp.clock.advance(feed::RUN_SCAN);
+    advance_to_scan(&temp);
     assert!(
         late.await_subscribed(1, DEADLINE),
         "the follow connects before the close"

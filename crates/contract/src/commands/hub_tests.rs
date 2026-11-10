@@ -170,10 +170,12 @@ fn recent_and_sessions_read_archived_absent_false_and_true() {
         });
         let read = serde_json::from_value::<HubCommandLine>(sample.clone())
             .unwrap_or_else(|e| panic!("{sample}: {e}"));
-        let archived = match &read.command {
-            HubCommand::Recent(recent) => recent.archived,
-            HubCommand::Sessions(args) => args.archived,
-            other => panic!("{sample} reads as {other:?}"),
+        let archived = if let HubCommand::Recent(recent) = &read.command {
+            recent.archived
+        } else if let HubCommand::Sessions(args) = &read.command {
+            args.archived
+        } else {
+            panic!("{sample} reads as {:?}", read.command)
         };
         assert_eq!(archived, expected, "{sample}");
         assert_eq!(serde_json::to_value(&read).unwrap(), sample, "{sample}");
@@ -193,10 +195,12 @@ fn recent_and_sessions_read_a_null_archived_as_absent() {
         });
         let read = serde_json::from_value::<HubCommandLine>(sample.clone())
             .unwrap_or_else(|e| panic!("{sample}: {e}"));
-        let archived = match &read.command {
-            HubCommand::Recent(recent) => recent.archived,
-            HubCommand::Sessions(args) => args.archived,
-            other => panic!("{sample} reads as {other:?}"),
+        let archived = if let HubCommand::Recent(recent) = &read.command {
+            recent.archived
+        } else if let HubCommand::Sessions(args) = &read.command {
+            args.archived
+        } else {
+            panic!("{sample} reads as {:?}", read.command)
         };
         assert_eq!(archived, None, "{sample}");
     }

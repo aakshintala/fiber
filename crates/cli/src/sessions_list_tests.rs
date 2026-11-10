@@ -115,7 +115,7 @@ impl Drop for FakeHub {
     /// command line and exited, so no thread outlives the fake.
     fn drop(&mut self) {
         for worker in self.workers.drain(..) {
-            let _ = worker.join();
+            let _joined = worker.join();
         }
     }
 }

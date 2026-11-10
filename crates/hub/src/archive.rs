@@ -101,8 +101,7 @@ fn parse(args: &Map<String, Value>) -> Option<SessionId> {
 fn newest_row(home: &Path, session: &SessionId) -> Option<RecentRow> {
     recent::read_all(home)
         .into_iter()
-        .filter(|row| row.session_id == *session)
-        .last()
+        .rfind(|row| row.session_id == *session)
 }
 
 /// The newest row marked archived.

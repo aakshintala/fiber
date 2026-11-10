@@ -212,6 +212,15 @@ impl Feed {
         }
     }
 
+    /// Tests only: the scanner thread's id once starting spawned it, so
+    /// a test can advance the clock to the scanner's next park.
+    #[cfg(test)]
+    pub(crate) fn scanner_thread(&self) -> Option<thread::ThreadId> {
+        lock(&self.scanner)
+            .as_ref()
+            .map(|handle| handle.thread().id())
+    }
+
     /// Stops the scanner, stops every summary reader and shuts every
     /// summary connection, then ends every subscriber, joining their
     /// threads. Every tracked `Stop` is stopped before the first join of a
@@ -867,9 +876,12 @@ static JOIN_PAUSE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 /// without the signal the test cannot tell an `on_left` blocked on the
 /// mutex from one that has not arrived, and the weakened test would pass
 /// either way.
+/// One armed hook for a home's `on_left`, routed by that home.
 #[cfg(test)]
-static BEFORE_RECENT_MUTEX: Mutex<Vec<(PathBuf, Box<dyn FnOnce() + Send>)>> =
-    Mutex::new(Vec::new());
+type RecentMutexHook = (PathBuf, Box<dyn FnOnce() + Send>);
+
+#[cfg(test)]
+static BEFORE_RECENT_MUTEX: Mutex<Vec<RecentMutexHook>> = Mutex::new(Vec::new());
 
 /// Tests only: arms the `join` test's hook, firing when the joiner is
 /// inside [`join`] before it blocks: no outside seam observes that instant.

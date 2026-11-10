@@ -125,7 +125,7 @@ fn last_envelope(setup: &Setup, id: &str) -> Value {
     let log = fs::read_to_string(sessions_dir(setup).join(id).join("events.jsonl")).unwrap();
     log.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .last()
+        .next_back()
         .unwrap_or_else(|| panic!("{id} has a complete envelope"))
 }
 
@@ -133,7 +133,7 @@ fn last_envelope(setup: &Setup, id: &str) -> Value {
 fn listed(setup: &Setup, args: &[&str]) -> Vec<String> {
     let mut all = vec!["sessions", "--json"];
     all.extend_from_slice(args);
-    let output = headless(&setup, &all);
+    let output = headless(setup, &all);
     assert_eq!(output.status.code(), Some(0), "{:?}", text(&output));
     String::from_utf8(output.stdout)
         .unwrap()
@@ -149,7 +149,7 @@ fn listed(setup: &Setup, args: &[&str]) -> Vec<String> {
 
 /// Runs `fiber ask` to exit and returns the session's id.
 fn exited(setup: &Setup, prompt: &str) -> String {
-    let asked = headless(&setup, &["ask", prompt]);
+    let asked = headless(setup, &["ask", prompt]);
     assert_eq!(asked.status.code(), Some(0), "{:?}", text(&asked));
     only_session(setup)
 }
@@ -166,7 +166,7 @@ fn archived(setup: &Setup, selector: &str) -> String {
         !setup.hub_socket().exists(),
         "no hub runs before the archive"
     );
-    let output = headless(&setup, &["sessions", "archive", selector]);
+    let output = headless(setup, &["sessions", "archive", selector]);
     assert_eq!(output.status.code(), Some(0), "{:?}", text(&output));
     let (out, _) = text(&output);
     let id = out.trim_end().to_owned();
@@ -259,10 +259,10 @@ fn resume_unarchives_and_the_next_exit_lists_it() {
 /// Two exited sessions from two asks: the first reply's session and the
 /// second's, in ask order.
 fn two_exited(setup: &Setup) -> (String, String) {
-    let first = headless(&setup, &["ask", "first"]);
+    let first = headless(setup, &["ask", "first"]);
     assert_eq!(first.status.code(), Some(0), "{:?}", text(&first));
     let older = only_session(setup);
-    let second = headless(&setup, &["ask", "second"]);
+    let second = headless(setup, &["ask", "second"]);
     assert_eq!(second.status.code(), Some(0), "{:?}", text(&second));
     let mut ids = stored_ids(setup);
     assert_eq!(ids.len(), 2, "two sessions: {ids:?}");
@@ -337,7 +337,7 @@ fn hold_lock(
         let lock = File::open(&path).unwrap();
         lock.lock().unwrap();
         acquired.send(()).unwrap_or(());
-        let _ = release.recv();
+        let _released = release.recv();
         drop(lock);
     })
 }
