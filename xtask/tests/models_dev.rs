@@ -241,8 +241,14 @@ fn codex_is_generated_from_the_snapshot() {
     ids.sort();
     assert_eq!(
         ids,
-        ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
-        "codex lists exactly its four models"
+        [
+            "gpt-6-astra",
+            "gpt-6-luna",
+            "gpt-6-sol",
+            "gpt-6.1-sol",
+            "gpt-6.1-terra"
+        ],
+        "codex lists exactly its five models"
     );
     for model in models {
         assert_eq!(
