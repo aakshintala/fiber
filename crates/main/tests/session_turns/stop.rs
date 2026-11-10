@@ -75,7 +75,7 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
         String::from_utf8_lossy(&output.stdout),
         "Stopped 1 sessions and the hub.\n"
     );
-    // The hub unlinks its socket at exit (`docs/state.md`, "Sockets"), so check sockets only after it exits.
+    // The hub unlinks its socket at exit (`docs/state.md`, "What each part holds"), so check sockets only after it exits.
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     assert!(
         !hub.wait().success(),
@@ -129,7 +129,7 @@ fn a_bare_stop_leaves_the_session_socket_accepting() {
     close_session(&direct);
     drop(direct);
     // The close ending the socket only proves the peer went away: the
-    // session unlinks its path at exit (`docs/state.md`, "Sockets"), after.
+    // session unlinks its path at exit (`docs/state.md`, "What each part holds"), after.
     wait_for_path_gone(
         setup.deadline,
         &setup.session_socket(&session),

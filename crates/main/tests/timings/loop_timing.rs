@@ -1,5 +1,4 @@
-//! Part 7 operation timers at the binary level (`docs/state.md`,
-//! "Diagnostic logs"): the built `fiber` runs `ask` against the fake
+//! Part 7 operation timers at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask` against the fake
 //! provider server. At `debug` the real main-to-loop shared writer emits
 //! `startup.preamble`, `turn.request`, `turn.model_call` and `turn.compaction`
 //! with only `op` and `ms`; at the default nothing debug is written.

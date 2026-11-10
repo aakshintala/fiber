@@ -296,8 +296,7 @@ fn record_failure_prints_before_the_append_panics() {
 }
 
 /// Installs only the fake provider extension, as the installed-provider
-/// stand-in of a home right after install (`docs/releasing.md`, "Install
-/// steps"): the extension-install portion of `Setup::provider`, without
+/// stand-in of a home right after install (`docs/releasing.md`, "Installing"): the extension-install portion of `Setup::provider`, without
 /// its `config.json` write, so setup itself picks the provider, stores
 /// the key and writes the model.
 fn install_fake_provider_extension(setup: &Setup, server: &ProviderServer) {
@@ -828,9 +827,9 @@ fn update_nightly_floored_extension_to_newest_nightly() {
                     .unwrap(),
             )
             .unwrap();
-            // docs/extensions.md:1797, 1805-1807.
+            // `docs/extensions.md`, "Versions".
             assert_eq!(record["version"], nightlies.next.as_str(), "{record}");
-            // docs/extensions.md:1798-1799.
+            // `docs/extensions.md`, "Versions".
             assert_eq!(record["floor"], nightlies.floor.as_str(), "{record}");
         }),
     );
@@ -1148,7 +1147,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
 /// and `m-host` and `m-host2` name the `workspace` placeholder whose
 /// setting value is not a host (`model_unconfigured`, first message naming
 /// `m-host`). Each pair groups into one notice row with its count, which
-/// is what the journey asserts (`docs/errors.md`, "Notices").
+/// is what the journey asserts (`docs/tui.md`, "Notices").
 fn install_picker_states_provider(setup: &Setup, server_url: &str) {
     let source = setup.root.path().join("src");
     // The manifest lists every base-URL pattern the models use,
@@ -1282,8 +1281,7 @@ fn each_model_picker_notice_code_shown_as_itself() {
             // Each wait names its code and its first model, which survive
             // the 120-column truncation that cuts the message's tail. Each
             // pair groups into one row: the bulk lead counts both, and the
-            // first item names the first model (`docs/errors.md`,
-            // "Notices").
+            // first item names the first model (`docs/tui.md`, "Notices").
             let screen = run.wait_screen("the model_unconfigured notice", |grid| {
                 shows(grid, "model_unconfigured") && shows(grid, "fake/m-host")
             });
@@ -2836,7 +2834,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
             );
             let messages = replay_user_messages(&post.body);
             let flattened = messages.join("");
-            // docs/compaction.md, "What the model sees after a compaction", item 4:
+            // `docs/compaction.md`, "What the model sees after a compaction", item 4:
             // "each in its own labelled block" — two kept answers, two blocks.
             // The Anthropic envelope carries them in one user message, so
             // the count and the order below read the flattened text.
@@ -2856,7 +2854,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
                 skill["path"].as_str().unwrap(),
                 skill["content"].as_str().unwrap(),
             );
-            // docs/compaction.md, "What the model sees after a compaction", "In order:":
+            // `docs/compaction.md`, "What the model sees after a compaction", "In order:":
             // each block present once, oldest first, then the new message,
             // the note and the reloaded skill.
             let positions: Vec<usize> = [pair_one, pair_two, current, note, skill_block.as_str()]

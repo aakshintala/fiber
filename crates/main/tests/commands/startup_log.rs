@@ -1,5 +1,4 @@
-//! Binary-level tests of the startup diagnostic log (`docs/state.md`,
-//! "Diagnostic logs"): the built `fiber ask` records a failure that has no
+//! Binary-level tests of the startup diagnostic log (`docs/state.md`, "What each part holds"): the built `fiber ask` records a failure that has no
 //! session in `logs/ask-<pid>.log`. Every run carries a wall-clock deadline.
 
 #![allow(

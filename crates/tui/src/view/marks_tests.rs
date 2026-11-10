@@ -958,3 +958,58 @@ fn the_bar_boxes_with_no_colour() {
     assert_eq!((cursor.x, cursor.y), (6, y));
     assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
 }
+
+/// A click key minted for `id`, for the direct paint tests.
+fn click_key(cache: &crate::ext::cache::Cache, id: &str) -> crate::ext::cache::ClickKey {
+    cache.intern_click(&contract::SessionId("s".into()), "test", "badge", id)
+}
+
+#[test]
+fn decoration_rows_emit_no_click_target() {
+    use super::paint_clicks;
+    use crate::rows::RowText;
+    use ratatui::text::Line as TextLine;
+    let cache = crate::ext::cache::Cache::default();
+    let key = click_key(&cache, "go");
+    let line = TextLine::raw("go");
+    let mut targets = Vec::new();
+    // A decoration row draws no click target even with clicks on it:
+    // shed rows lend no target (`docs/tui.md`, "Input and focus").
+    paint_clicks(
+        &cache,
+        &[(0..2, key)],
+        &line,
+        &RowText {
+            decoration: true,
+            clicks: vec![(0..2, key)],
+            ..RowText::plain()
+        },
+        Rect::new(0, 0, 10, 1),
+        &mut targets,
+    );
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn fitted_click_text_clips_the_pad_tail() {
+    use super::paint_fitted_clicks;
+    use crate::ext::spans::FittedLine;
+    use ratatui::text::Line as TextLine;
+    let cache = crate::ext::cache::Cache::default();
+    let key = click_key(&cache, "go");
+    let line = FittedLine {
+        line: TextLine::raw("hello"),
+        links: Vec::new(),
+        pad: 3,
+        anim: None,
+        click_raw: Vec::new(),
+        clicks: vec![(0..8, key)],
+    };
+    let mut targets = Vec::new();
+    paint_fitted_clicks(&cache, &line, Rect::new(0, 0, 10, 1), &mut targets);
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].id, crate::mouse::TargetId::Extension(key));
+    // The pad is decoration, not text (`docs/tui.md`, "What a renderer
+    // returns"), so the click reads only the text before it.
+    assert_eq!(cache.click_text(key), Some("he".to_owned()));
+}

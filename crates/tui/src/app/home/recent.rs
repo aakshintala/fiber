@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use super::super::{
-    App, Effect, mint,
+    App, Effect,
     outbox::{Outbox, RecentAsk, Waiting},
 };
 use super::{refusal, refusal_code};
@@ -90,8 +90,8 @@ impl Recent {
         self.fed = true;
         outbox.settle_where(|waiting| matches!(waiting, Waiting::Feed));
         settle_unscoped(outbox);
-        let feed = mint();
-        let recent = mint();
+        let feed = support::mint("c_");
+        let recent = support::mint("c_");
         outbox.wait(&feed, Waiting::Feed);
         outbox.wait(&recent, Waiting::Recent(RecentAsk::First));
         Some(vec![
@@ -167,7 +167,7 @@ impl Recent {
         if !connected {
             return Vec::new();
         }
-        let id = mint();
+        let id = support::mint("c_");
         settle_unscoped(outbox);
         outbox.wait(&id, Waiting::Recent(RecentAsk::First));
         let mut out = vec![recent_line(&id, None, None)];
@@ -196,7 +196,7 @@ impl Recent {
             sessions.mark_dirty(project);
             return Vec::new();
         }
-        let id = mint();
+        let id = support::mint("c_");
         outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
         vec![recent_line(&id, Some(project), None)]
     }
@@ -283,7 +283,7 @@ impl Recent {
         if scoped_out(outbox, project) {
             return None;
         }
-        let id = mint();
+        let id = support::mint("c_");
         outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
         Some(recent_line(&id, Some(project), before))
     }
@@ -326,7 +326,7 @@ impl Recent {
             .id
             .0
             .clone();
-        let id = mint();
+        let id = support::mint("c_");
         outbox.wait(&id, Waiting::Recent(RecentAsk::Page));
         Some(recent_line(&id, None, Some(before.as_str())))
     }
@@ -353,7 +353,7 @@ impl Recent {
             if project.is_empty() {
                 continue;
             }
-            let id = mint();
+            let id = support::mint("c_");
             outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.clone())));
             out.push(recent_line(&id, Some(&project), None));
         }

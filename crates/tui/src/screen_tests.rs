@@ -681,7 +681,7 @@ fn a_variation_selector_emoji_trades_places_with_its_trailing_cell() {
     )
     .unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [
             (4, 0, " ".to_owned()),
@@ -700,7 +700,7 @@ fn a_variation_selector_emoji_without_a_trailing_cell_keeps_order() {
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji), (5, 0, &after)].into_iter()).unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [(3, 0, "⚠️".to_owned()), (5, 0, "c".to_owned()),]
     );
@@ -729,7 +729,7 @@ fn two_variation_selector_emojis_each_trade_places() {
     )
     .unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [
             (4, 0, " ".to_owned()),
@@ -751,7 +751,7 @@ fn a_wide_cell_without_a_variation_selector_keeps_order() {
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &wide), (4, 0, &after)].into_iter()).unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [(3, 0, "界".to_owned()), (4, 0, "c".to_owned())]
     );
@@ -772,7 +772,7 @@ fn a_narrow_cell_holding_a_variation_selector_keeps_order() {
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &narrow), (4, 0, &after)].into_iter()).unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [(3, 0, "a\u{FE0F}".to_owned()), (4, 0, "c".to_owned()),]
     );
@@ -785,7 +785,7 @@ fn a_trailing_variation_selector_emoji_draws_alone() {
     let emoji = held("⚠️");
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji)].into_iter()).unwrap();
-    // (docs/tui.md, "Wide variation-selector cells")
+    // (`docs/tui.md`, "Wide variation-selector cells")
     assert_eq!(backend.inner.ordered_cells(), [(3, 0, "⚠️".to_owned())]);
 }
 
@@ -802,7 +802,7 @@ fn a_variation_selector_emoji_does_not_pair_with_the_next_rows_first_cell() {
     )
     .unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [(3, 0, "⚠️".to_owned()), (0, 1, "a".to_owned()),]
     );
@@ -817,7 +817,7 @@ fn a_variation_selector_emoji_does_not_pair_with_an_earlier_column() {
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji), (2, 0, &earlier)].into_iter()).unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [(3, 0, "⚠️".to_owned()), (2, 0, "a".to_owned()),]
     );
@@ -832,7 +832,7 @@ fn a_variation_selector_emoji_does_not_pair_with_the_cell_below_its_trailing_col
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji), (4, 1, &below)].into_iter()).unwrap();
     assert_eq!(
-        // (docs/tui.md, "Wide variation-selector cells")
+        // (`docs/tui.md`, "Wide variation-selector cells")
         backend.inner.ordered_cells(),
         [(3, 0, "⚠️".to_owned()), (4, 1, "b".to_owned()),]
     );

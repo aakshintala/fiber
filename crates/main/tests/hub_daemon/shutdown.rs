@@ -585,7 +585,7 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
     // No session log here: a signal before `fiber_started` writes no durable
-    // event (`docs/invocation.md`, "What is written") and a failure before
+    // event (`docs/invocation.md`, "Shutdown") and a failure before
     // `fiber_started` has no session log (`docs/errors.md`, "Before a session
     // exists").
     let leftover = setup.logs();
@@ -711,7 +711,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
     // No session log here: a signal before `fiber_started` writes no durable
-    // event (`docs/invocation.md`, "What is written") and a failure before
+    // event (`docs/invocation.md`, "Shutdown") and a failure before
     // `fiber_started` has no session log (`docs/errors.md`, "Before a session
     // exists").
     let leftover = setup.logs();
@@ -748,12 +748,9 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     // server burns no CPU, and no `exec sleep` drops the trap. Dropping
     // the write end at the test's end (even on panic) releases the read
     // if still parked.
-    // The counts below cite their promises: exit 143 (`docs/invocation.md`,
-    // "Three signals, one path"); no event lines (a signal before
-    // `fiber_started` writes no durable event: `docs/invocation.md`, "What
-    // is written"); no session log or directory (`docs/errors.md`, "Before
-    // a session exists"); no provider request (`docs/invocation.md`, "What
-    // happens, all at once": "No model request is made").
+    // The counts below cite their promises: exit 143 (`docs/invocation.md`, "Shutdown"); no event lines (a signal before
+    // `fiber_started` writes no durable event: `docs/invocation.md`, "Shutdown"); no session log or directory (`docs/errors.md`, "Before
+    // a session exists"); no provider request (`docs/invocation.md`, "Shutdown": "No model request is made").
     // On the base commit the server gets only the bound's SIGKILL, so
     // the marker is never written and this fails there.
     let hold = setup.root.path().join("hold.fifo");
@@ -804,7 +801,7 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
     // No session log here: a signal before `fiber_started` writes no durable
-    // event (`docs/invocation.md`, "What is written") and a failure before
+    // event (`docs/invocation.md`, "Shutdown") and a failure before
     // `fiber_started` has no session log (`docs/errors.md`, "Before a session
     // exists").
     let leftover = setup.logs();

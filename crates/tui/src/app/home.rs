@@ -269,7 +269,7 @@ impl App {
 
     /// Stores bare `fiber`'s `--model` and `-c`, normalized into the
     /// per-run layer: each `start` carries them in `overrides`
-    /// (`docs/invocation.md`, "Sessions"). The loop calls it once with
+    /// (`docs/invocation.md`, "Commands and flags"). The loop calls it once with
     /// the launch description's layer, before the first frame.
     pub(crate) fn set_launch_overrides(&mut self, overrides: Vec<String>) {
         self.launch_overrides = overrides;
@@ -1467,7 +1467,7 @@ impl App {
     /// The `start` args: the picked workspace, else the launch
     /// workspace. Bare `fiber`'s
     /// `--model` and `-c` ride in `overrides`, normalized into the
-    /// per-run layer (`docs/invocation.md`, "Sessions"). The new
+    /// per-run layer (`docs/invocation.md`, "Commands and flags"). The new
     /// worktree switch adds `"worktree": true` only while it shows and
     /// is on. Sending one hides the placeholder and clears the blocker
     /// lines until the run ends.

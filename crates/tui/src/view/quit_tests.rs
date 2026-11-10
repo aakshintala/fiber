@@ -399,7 +399,7 @@ fn ask_close_all(app: &mut App) {
     }
     assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": "2 sessions, 2 working, 0 open elsewhere,
+    // `docs/tui.md`, "Quit": "2 sessions, 2 working, 0 open elsewhere,
     // 1 keeper" dim (live top-level sessions, how many working, how
     // many elsewhere, and the counted keepers).
     assert_eq!(app.close_all_question(), Some((2, 2, 0, 1)));
@@ -444,7 +444,7 @@ fn the_close_all_draw_shows_the_counted_line() {
     app.on_line(live("s_cccccccccccccccc", 0));
     app.on_line(keepers(&["s_dddddddddddddddd"]));
     ask_close_all_three(&mut app);
-    // docs/tui.md, "Quit": "3 sessions, 3 working, 0 open elsewhere,
+    // `docs/tui.md`, "Quit": "3 sessions, 3 working, 0 open elsewhere,
     // 1 keeper" dim (live top-level sessions, how many working, how
     // many elsewhere, and the counted keepers).
     assert_eq!(app.close_all_question(), Some((3, 3, 0, 1)));
@@ -469,7 +469,7 @@ fn close_all_with_only_keepers_shows_the_count_and_sends_the_stop() {
     }
     assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": no live session, one counted keeper.
+    // `docs/tui.md`, "Quit": no live session, one counted keeper.
     assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
     let shown = screen(&app, 80, 24);
     assert!(
@@ -517,7 +517,7 @@ fn a_click_on_close_all_does_what_enter_does() {
     let Effect::Send(lines) = by_click else {
         panic!("the confirm click closes all");
     };
-    // docs/tui.md, "Quit": "Enter sends each live top-level session
+    // `docs/tui.md`, "Quit": "Enter sends each live top-level session
     // `close` with `now`"; the subscribes the connection needs first
     // are not pinned.
     let mut closes: Vec<String> = Vec::new();

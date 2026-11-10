@@ -109,7 +109,7 @@ fn ctrl_g_opens_the_file_at_its_first_hunk_and_rereads_on_return() {
     run.turn_finished(from);
     // The Changed files list opens through `/diff`, keyboard-only: no
     // pointer input, so no row-position signal is needed
-    // (`docs/testing/screens.md`, "A pointer event…"). The frame-end
+    // (`docs/testing/screens.md`, "Screens"). The frame-end
     // marker proves the list drew after the command, and the top-row
     // title plus the file row proves the swapped list (not the panel
     // card) is on screen.

@@ -1,6 +1,5 @@
 //! Binary-level tests of `recent.jsonl` and the hub's feed
-//! (`docs/invocation.md`, "The hub"; `docs/state.md`, "Recently exited
-//! sessions"): every session appends its own row as it exits, and the hub
+//! (`docs/invocation.md`, "The hub"; `docs/state.md`, "Fiber home"): every session appends its own row as it exits, and the hub
 //! serves `feed` and `recent` across projects. A client that never sends
 //! `feed` still hears `attention` when a session needs the person
 //! (`docs/invocation.md`, "Attention").

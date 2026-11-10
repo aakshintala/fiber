@@ -1,8 +1,7 @@
 //! Prompt recall and search: ↑ and ↓ in the input box, and the Ctrl+R panel
 //! (`docs/tui.md`, "The input box"). The entries are this session's prompts
 //! as the terminal saw them, then the project's prompt history read through
-//! the hub's `prompt_history`, page by page (`docs/state.md`, "Prompt
-//! history").
+//! the hub's `prompt_history`, page by page (`docs/state.md`, "Fiber home").
 
 #[cfg(any(debug_assertions, test))]
 use std::cell::Cell;
@@ -17,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::commands::{Completions, Rows};
 use super::overlay::Overlay;
-use super::{App, Effect, mint};
+use super::{App, Effect};
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
 
@@ -229,7 +228,7 @@ impl History {
         if !up || self.ended || !more {
             return None;
         }
-        let id = mint();
+        let id = support::mint("c_");
         let mut args = json!({ "project": project });
         if let (Some(before), Some(object)) = (self.before, args.as_object_mut()) {
             object.insert("before".to_owned(), json!(before));

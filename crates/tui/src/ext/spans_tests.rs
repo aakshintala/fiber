@@ -315,6 +315,65 @@ fn from_ratatui_names_roles_and_flags() {
     );
 }
 
+fn clicked(text: &str, id: &str) -> RawSpan {
+    RawSpan {
+        text: text.to_owned(),
+        click: Some(id.to_owned()),
+        ..RawSpan::default()
+    }
+}
+
+#[test]
+fn click_fitting_keeps_span_ranges_beside_their_links() {
+    let fitted = fit(
+        &[vec![
+            clicked(" go ", "run"),
+            RawSpan {
+                text: "x".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                click: Some("badge".to_owned()),
+                ..RawSpan::default()
+            },
+        ]],
+        10,
+        false,
+    )
+    .expect("a valid line");
+    let line = first(&fitted);
+    assert_eq!(
+        line.click_raw,
+        vec![(0..4, "run".to_owned()), (4..5, "badge".to_owned())]
+    );
+    assert_eq!(line.links, vec![(4..5, "https://example.com".to_owned())]);
+    assert_eq!(line.pad, 5);
+    assert!(line.clicks.is_empty());
+}
+
+#[test]
+fn click_fitting_clips_cut_dropped_and_zero_width_cells() {
+    // A span cut to nothing lends no range, and a dropped span none.
+    let fitted = fit(
+        &[vec![clicked("abcdef", "cut"), clicked("zz", "dropped")]],
+        4,
+        false,
+    )
+    .expect("a valid line");
+    assert_eq!(first(&fitted).click_raw, vec![(0..4, "cut".to_owned())]);
+    // A zero-width span draws nothing, so it lends no range either.
+    let fitted = fit(
+        &[vec![clicked("", "empty"), clicked("x", "kept")]],
+        10,
+        false,
+    )
+    .expect("a valid line");
+    assert_eq!(first(&fitted).click_raw, vec![(0..1, "kept".to_owned())]);
+    // A wide glyph cut to nothing lends no range; one kept lends its cells.
+    let fitted = fit(&[vec![clicked("Ａb", "wide")]], 1, false).expect("a valid line");
+    assert!(first(&fitted).click_raw.is_empty());
+    let fitted = fit(&[vec![clicked("Ａb", "wide")]], 2, false).expect("a valid line");
+    assert_eq!(first(&fitted).click_raw, vec![(0..2, "wide".to_owned())]);
+}
+
 #[test]
 fn from_ratatui_then_fit_reproduces_the_ledger_styles() {
     use crate::theme::style;

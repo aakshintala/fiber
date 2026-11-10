@@ -252,9 +252,10 @@ fn an_idle_row_with_nothing_running_says_nothing() {
 
 /// Holds the session at `full` on this connection.
 fn hold_full(app: &mut App, session: &str) {
-    app.home
-        .subs
-        .accept(SessionId(session.to_owned()), crate::home::Level::Full);
+    app.home.subs.accept(
+        SessionId(session.to_owned()),
+        contract::commands::SubscribeLevel::Full,
+    );
 }
 
 #[test]

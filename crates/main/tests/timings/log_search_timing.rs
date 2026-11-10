@@ -1,5 +1,4 @@
-//! Part 13 timers at the binary level (`docs/state.md`, "Diagnostic
-//! logs"): the built `fiber` seeds a session, searches it from a second
+//! Part 13 timers at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` seeds a session, searches it from a second
 //! `ask` through the `session_search` tool, resumes, and runs the CLI.
 //! At `debug` the second ask writes one `session_search.scan` line, one
 //! `log.append` per durable line and one `log.fsync` per fsynced kind;

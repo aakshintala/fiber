@@ -3,16 +3,16 @@
 //! accepted switch can write the global label.
 
 use super::{App, Effect, Open};
-use crate::app::{Kind, mint, session_command};
+use crate::app::{Kind, session_line};
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::theme::Role;
 use contract::ErrorCode;
+use contract::commands::{Command, CredentialArgs};
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, CredentialLabels};
 use contract::{Envelope, SessionId};
-use serde_json::json;
 
 /// The labels query, its answer and the selection over that answer.
 #[derive(Debug)]
@@ -246,8 +246,12 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let id = mint();
-        let line = session_command(&id, "credentials", &session, None).to_string();
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::Credentials,
+        );
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, std::mem::take(&mut self.draft)));
@@ -319,9 +323,14 @@ impl App {
             return Vec::new();
         };
         self.say_cache_rebuild(Some(&label) != labels.credential.as_ref());
-        let id = mint();
-        let line =
-            session_command(&id, "credential", &session, Some(json!({"label":label}))).to_string();
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::Credential(CredentialArgs {
+                label: label.to_owned(),
+            }),
+        );
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, Draft::default()));

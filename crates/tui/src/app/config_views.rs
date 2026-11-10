@@ -11,10 +11,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::ErrorCode;
+use contract::commands::{Command, McpServerArgs};
 use contract::events::UsageRecorded;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{App, Effect, doctor_view};
 use crate::ThemeSetting;
@@ -417,7 +418,7 @@ impl App {
                 },
             },
             ConfigView::Credential => {
-                let Some((id, line)) = self.send_config_command("credentials", None) else {
+                let Some((id, line)) = self.send_config_command(Command::Credentials) else {
                     return Effect::None;
                 };
                 self.outbox.pending.insert(
@@ -447,10 +448,10 @@ impl App {
                 )))
             }
             ConfigView::Tools => {
-                return self.open_asking(seam, "tools", build_tools);
+                return self.open_asking(seam, Command::Tools, build_tools);
             }
             ConfigView::Skills => {
-                return self.open_asking(seam, "skills", build_skills);
+                return self.open_asking(seam, Command::Skills, build_skills);
             }
             ConfigView::Rules => {
                 let Some(workspace) = self.view_workspace() else {
@@ -459,7 +460,7 @@ impl App {
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             ConfigView::Mcp => {
-                return self.open_asking(seam, "mcp_servers", build_mcp);
+                return self.open_asking(seam, Command::McpServers, build_mcp);
             }
             ConfigView::Login => {
                 let Some(workspace) = self.view_workspace() else {
@@ -481,14 +482,10 @@ impl App {
     /// Sends `command` with `args` to the session on screen: the sent
     /// line and its id, for the caller to record and send. Nothing when
     /// no session is attached.
-    fn send_config_command(
-        &mut self,
-        command: &str,
-        args: Option<Value>,
-    ) -> Option<(String, String)> {
+    fn send_config_command(&mut self, command: Command) -> Option<(String, String)> {
         let (session, _) = self.command_session()?;
-        let id = super::mint();
-        let line = super::session_command(&id, command, &session, args).to_string();
+        let id = support::mint("c_");
+        let line = super::session_line(&contract::CommandId(id.clone()), &session, command);
         Some((id, line))
     }
 
@@ -498,10 +495,10 @@ impl App {
     fn open_asking(
         &mut self,
         seam: Arc<dyn Configure>,
-        command: &str,
+        command: Command,
         build: fn(String, &Ctx<'_>) -> Open,
     ) -> Effect {
-        let Some((id, line)) = self.send_config_command(command, None) else {
+        let Some((id, line)) = self.send_config_command(command) else {
             return Effect::None;
         };
         let Some(workspace) = self.view_workspace() else {
@@ -954,8 +951,20 @@ impl App {
                 }
                 Effect::None
             }
-            Act::McpReconnect(server) => self.send_mcp_driver("mcp_reconnect", &server, false),
-            Act::McpLogin(server) => self.send_mcp_driver("mcp_login", &server, true),
+            Act::McpReconnect(server) => self.send_mcp_driver(
+                Command::McpReconnect(McpServerArgs {
+                    server: server.clone(),
+                }),
+                &server,
+                false,
+            ),
+            Act::McpLogin(server) => self.send_mcp_driver(
+                Command::McpLogin(McpServerArgs {
+                    server: server.clone(),
+                }),
+                &server,
+                true,
+            ),
             Act::Copy(url) => {
                 // As a focused link's `y`: the copy goes through OSC 52
                 // and, on a local session, the system clipboard as well.
@@ -968,9 +977,8 @@ impl App {
     /// Sends a per-server driver command for the open MCP view and
     /// remembers its id as the server's wait: the answer clears the wait
     /// and queries the rows again. Nothing when no session is attached.
-    fn send_mcp_driver(&mut self, command: &str, server: &str, login: bool) -> Effect {
-        let Some((id, line)) = self.send_config_command(command, Some(json!({"server": server})))
-        else {
+    fn send_mcp_driver(&mut self, command: Command, server: &str, login: bool) -> Effect {
+        let Some((id, line)) = self.send_config_command(command) else {
             return Effect::None;
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
@@ -983,7 +991,7 @@ impl App {
     /// Re-sends `mcp_servers` for the open MCP view: its answer fills
     /// what `expect` names. Nothing when no session is attached.
     fn remcp_query(&mut self) -> Vec<String> {
-        let Some((id, line)) = self.send_config_command("mcp_servers", None) else {
+        let Some((id, line)) = self.send_config_command(Command::McpServers) else {
             return Vec::new();
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {

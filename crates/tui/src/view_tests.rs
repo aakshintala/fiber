@@ -2618,7 +2618,7 @@ fn paint_conversation(app: &App, at: std::time::Instant, height: u16) -> Buffer 
     let area = Rect::new(0, 0, WIDTH, height);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    let (_, painted) = conversation_rows(app, area, &mut buf, &mut targets);
+    let (_, painted, _) = conversation_rows(app, area, &mut buf, &mut targets);
     app.pages().ext.cache.mark_painted(&painted);
     buf
 }
@@ -3304,6 +3304,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::FindCount
             | crate::mouse::TargetId::FindResult(_)
             | crate::mouse::TargetId::View(_)
+            | crate::mouse::TargetId::Extension(_)
             | crate::mouse::TargetId::MoreNotices => None,
         })
         .collect()
@@ -5824,5 +5825,547 @@ fn a_drag_over_the_input_box_paints_the_covered_cells() {
         buf.cell((at.0 + 3, at.1)).map(|cell| cell.bg),
         Some(tint),
         "past the drag stays plain"
+    );
+}
+
+/// A `ledger_row` replacement drawing `go` as the click id `badge`.
+fn clicked_ledger() -> crate::ext::RawSpan {
+    crate::ext::RawSpan {
+        text: "qzx-click".to_owned(),
+        click: Some("badge".to_owned()),
+        ..crate::ext::RawSpan::default()
+    }
+}
+
+/// A minimal completed turn: one step with one read call and a reply.
+fn minimal_tool_turn(app: &mut App) {
+    use serde_json::json;
+    attach(app, S_A);
+    app.on_line(turn_started(S_A, "fix it"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        1_000,
+        json!({"text": "done"}),
+    ));
+    app.on_line(turn_completed(S_A, "completed"));
+}
+
+/// Opens the first tool group: completed groups land closed, so one
+/// render publishes their targets before opening draws the ledger.
+fn open_first_group(app: &mut App) {
+    use crate::app::Target;
+    let _ = pointed(app, 80, 24, None);
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, Target::Group(_)).then_some(target))
+        .expect("the tool group");
+    app.open(group);
+}
+
+/// An app with a minimal completed turn, its group opened, and a
+/// `ledger_row` replacement carrying `badge` on its single ledger row.
+fn clicked_turn() -> App {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let mut app = empty();
+    minimal_tool_turn(&mut app);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["ledger_row"],
+        SlotScript::Replace(vec![vec![clicked_ledger()]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    open_first_group(&mut app);
+    app
+}
+
+/// The extension targets in `targets`.
+fn extensions(targets: &[crate::mouse::Target]) -> Vec<crate::mouse::Target> {
+    use crate::mouse::TargetId;
+    targets
+        .iter()
+        .filter(|target| matches!(target.id, TargetId::Extension(_)))
+        .cloned()
+        .collect()
+}
+
+/// The symbols in the `w` cells at `(x, y)`: cell-exact, so wide glyphs
+/// before the text cannot shift the column.
+fn cell_text(buf: &Buffer, y: u16, x: u16, w: u16) -> String {
+    (x..x.saturating_add(w))
+        .map(|cx| buf[(cx, y)].symbol().to_owned())
+        .collect()
+}
+
+/// The cell column where row `y` first shows `needle`.
+fn text_col(buf: &Buffer, y: u16, needle: &str) -> Option<u16> {
+    let w = u16::try_from(needle.len()).unwrap_or(u16::MAX);
+    (0..buf.area.width).find(|x| cell_text(buf, y, *x, w) == needle)
+}
+
+#[test]
+fn click_targets_draw_over_a_group_replacement() {
+    use crate::mouse::TargetId;
+    let mut app = clicked_turn();
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    let shown = text(&buf);
+    let row = shown
+        .lines()
+        .position(|line| line.contains("qzx-click"))
+        .expect("the replacement row paints");
+    let row16 = u16::try_from(row).expect("a visible row");
+    let ext = extensions(&targets);
+    assert_eq!(ext.len(), 1, "{targets:?}");
+    // The range sits on the row's own cells, past the gutter.
+    let text_x = text_col(&buf, row16, "qzx-click").expect("the replacement text draws");
+    assert_eq!(
+        ext[0].rect,
+        Rect::new(
+            text_x,
+            row16,
+            u16::try_from("qzx-click".len()).expect("a short test span"),
+            1
+        ),
+        "{targets:?}"
+    );
+    let TargetId::Extension(key) = ext[0].id else {
+        panic!("an extension target");
+    };
+    // The key names the selected extension, slot and id.
+    assert_eq!(
+        app.pages().ext.cache.click_target(key),
+        Some((
+            "slot-test".to_owned(),
+            "ledger_row".to_owned(),
+            "badge".to_owned()
+        ))
+    );
+    // The call's own line target stays under the extension range: the
+    // extension draws over the row, not instead of its target.
+    assert!(
+        targets.iter().any(|target| matches!(
+            target.id,
+            TargetId::Line(crate::app::Target::Call(_))
+        ) && target
+            .rect
+            .contains(ratatui::layout::Position::new(ext[0].rect.x, row16))),
+        "{targets:?}"
+    );
+}
+
+#[test]
+fn click_targets_clip_to_the_drawn_row() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    // A clickable span wider than the ledger row wraps: each drawn
+    // piece lends a target clipped to its own row.
+    let long = format!("qzx-click-{}", "x".repeat(100));
+    let mut app = empty();
+    minimal_tool_turn(&mut app);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["ledger_row"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: long.clone(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    open_first_group(&mut app);
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    assert!(text(&buf).contains(&long[..20]));
+    // The fit truncates the span to the row: one target, clipped to
+    // what draws, carrying the drawn prefix.
+    let ext = extensions(&targets);
+    assert_eq!(ext.len(), 1, "{targets:?}");
+    assert_eq!(ext[0].rect.height, 1);
+    assert!(usize::from(ext[0].rect.width) < long.len(), "{targets:?}");
+    assert_eq!(
+        cell_text(&buf, ext[0].rect.y, ext[0].rect.x, ext[0].rect.width),
+        long[..usize::from(ext[0].rect.width)],
+        "{targets:?}"
+    );
+}
+
+#[test]
+fn click_targets_hide_with_their_row() {
+    let mut app = clicked_turn();
+    // One row sheds the replacement: no text, no target, no stop text.
+    let (buf, targets) = pointed(&mut app, 80, 1, None);
+    assert!(!text(&buf).contains("qzx-click"));
+    assert!(extensions(&targets).is_empty(), "{targets:?}");
+}
+
+#[test]
+fn click_replacement_without_ids_draws_no_extension_target() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let mut app = empty();
+    minimal_tool_turn(&mut app);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["ledger_row"],
+        SlotScript::Replace(vec![vec![raw("qzx-click")]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    open_first_group(&mut app);
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    // The row draws, but ranges without ids lend no target.
+    assert!(text(&buf).contains("qzx-click"));
+    assert!(extensions(&targets).is_empty(), "{targets:?}");
+}
+
+#[test]
+fn click_search_overlay_drops_extension_targets() {
+    let mut app = clicked_turn();
+    let (_, before) = pointed(&mut app, 80, 24, None);
+    assert_eq!(extensions(&before).len(), 1);
+    // Finding opens the results view over the conversation: the
+    // covered ranges leave with the rows that drew them.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlF, now);
+    assert!(app.find_bar().is_some(), "the bar is open");
+    let _ = pointed(&mut app, 80, 24, None);
+    app.on_key(Key::CtrlF, now);
+    assert!(app.results_open(), "the results view is open");
+    let (_, targets) = pointed(&mut app, 80, 24, None);
+    assert!(extensions(&targets).is_empty(), "{targets:?}");
+    // Closing the results repaints the conversation: the same stop
+    // publishes again with its key intact.
+    app.on_key(Key::Esc, now);
+    assert!(!app.results_open(), "the results view is closed");
+    let (_, targets) = pointed(&mut app, 80, 24, None);
+    assert_eq!(extensions(&targets).len(), 1, "{targets:?}");
+}
+
+#[test]
+fn click_pinned_row_keeps_the_pin() {
+    // A pinned open group header paints its replacement but lends no
+    // target: the pin owns that row.
+    let (mut app, group, _, header, _) = pinned_call(30, true);
+    let fake = std::rc::Rc::new(crate::ext::tests::SlotRenderer::filling(
+        &["group_line"],
+        crate::ext::tests::SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "qzx-group-pin".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    // The call lands open, so jumping to its header pins the summary
+    // with the replacement text.
+    app.jump(header);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    let (buf, targets) = pointed(&mut app, 60, 12, None);
+    let pin = app.pinned_row().expect("a pinned call");
+    assert_eq!(pin.target, group, "the summary pins, not the call");
+    // The pin covers the area's top row.
+    let pin_y = 0;
+    let pin_text = row_text(&buf, pin_y);
+    assert!(
+        pin_text.contains("qzx-group-pin"),
+        "the pin copies the replacement text: {pin_text:?}"
+    );
+    assert!(
+        extensions(&targets)
+            .iter()
+            .all(|target| target.rect.y != pin_y),
+        "no extension target on the pinned row: {targets:?}"
+    );
+    // Following unpins: with the header back in view and nothing above
+    // it covered, the same row lends its target again.
+    app.on_key(Key::End, fakes::clock::FakeClock::new().now());
+    assert!(app.pinned_row().is_none(), "no pin while following");
+    app.jump(header.saturating_sub(5));
+    assert!(app.pinned_row().is_none(), "no pin above the group");
+    let (_, targets) = pointed(&mut app, 60, 12, None);
+    assert_eq!(extensions(&targets).len(), 1, "{targets:?}");
+}
+
+#[test]
+fn click_hint_gap_shifts_extension_targets_with_the_rows() {
+    use crate::mouse::TargetId;
+    use serde_json::json;
+    // A focused link opens the hint gap: rows below it draw one lower,
+    // and their extension targets move with them.
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        1_000,
+        json!({"text": "see [docs](https://example.com)"}),
+    ));
+    app.on_line(turn_completed(S_A, "completed"));
+    let replacement = std::rc::Rc::new(crate::ext::tests::SlotRenderer::filling(
+        &["ledger_row"],
+        crate::ext::tests::SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "qzx-ledger-hint".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = replacement;
+    app.install_renderer(renderer);
+    // Completed groups land closed: open the call's group so the row draws.
+    open_first_group(&mut app);
+    // No focus, no gap: the baseline row.
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    let shown = text(&buf);
+    let plain_y = shown
+        .lines()
+        .position(|line| line.contains("qzx-ledger-hint"))
+        .expect("the replacement row paints");
+    assert_eq!(extensions(&targets).len(), 1);
+    assert!(
+        targets
+            .iter()
+            .any(|target| matches!(target.id, TargetId::Link { .. })),
+        "a link target"
+    );
+    // BackTab into the focus order, publish the stops, then step down
+    // to the link: focusing it opens the hint gap, and the target
+    // tracks its row.
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::BackTab, now);
+    for _ in 0..64 {
+        if matches!(app.focused(), Some(TargetId::Link { .. })) {
+            break;
+        }
+        app.on_key(Key::Down, now);
+    }
+    assert!(
+        matches!(app.focused(), Some(TargetId::Link { .. })),
+        "a focused link"
+    );
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    // The gap lives in the conversation area, not the full screen.
+    let area = app.conversation_area();
+    assert!(app.hint_layout(area).gap.is_some(), "the hint gap opens");
+    let shown = text(&buf);
+    let gap_y = shown
+        .lines()
+        .position(|line| line.contains("qzx-ledger-hint"))
+        .expect("the replacement row still paints");
+    let ext = extensions(&targets);
+    assert_eq!(ext.len(), 1, "{targets:?}");
+    assert_eq!(ext[0].rect.y as usize, gap_y, "the target tracks its row");
+    assert!(gap_y >= plain_y, "the gap only moves rows down");
+}
+
+#[test]
+fn click_notice_replacement_targets_sit_over_dismiss() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use crate::mouse::TargetId;
+    use std::rc::Rc;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "go".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    let (_, targets) = pointed(&mut app, 80, 24, None);
+    let dismiss = targets
+        .iter()
+        .position(|target| matches!(target.id, TargetId::DismissNotice(_)))
+        .expect("the replacement's dismiss target");
+    let ext = targets
+        .iter()
+        .position(|target| matches!(target.id, TargetId::Extension(_)))
+        .expect("the replacement's extension target");
+    assert!(
+        ext > dismiss,
+        "the extension draws over dismiss: {targets:?}"
+    );
+    let TargetId::Extension(key) = targets[ext].id else {
+        panic!("an extension target");
+    };
+    assert_eq!(
+        app.pages().ext.cache.click_target(key),
+        Some((
+            "slot-test".to_owned(),
+            "notice".to_owned(),
+            "badge".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn click_working_line_replacement_targets_sit_over_interrupt() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use crate::mouse::TargetId;
+    use std::rc::Rc;
+    let mut app = running(80, 24);
+    let fake = Rc::new(SlotRenderer::filling(
+        &["working_line"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "go".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    let (_, targets) = pointed(&mut app, 80, 24, None);
+    let interrupt = targets
+        .iter()
+        .position(|target| matches!(target.id, TargetId::Interrupt))
+        .expect("the working line's interrupt target");
+    let ext = targets
+        .iter()
+        .position(|target| matches!(target.id, TargetId::Extension(_)))
+        .expect("the replacement's extension target");
+    assert!(
+        ext > interrupt,
+        "the extension draws over interrupt: {targets:?}"
+    );
+}
+
+#[test]
+fn click_input_status_replacement_draws_at_its_row() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use std::rc::Rc;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    let fake = Rc::new(SlotRenderer::filling(
+        &["input_status"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "qzx-badge-token".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    let shown = text(&buf);
+    let row = shown
+        .lines()
+        .position(|line| line.contains("qzx-badge-token"))
+        .expect("the status replacement paints");
+    let ext = extensions(&targets);
+    assert_eq!(ext.len(), 1, "{targets:?}");
+    // The status row draws at the text column, past the indicator.
+    assert_eq!(ext[0].rect.y as usize, row);
+    assert_eq!(ext[0].rect.x, 2);
+    assert_eq!(
+        ext[0].rect.width,
+        u16::try_from("qzx-badge-token".len()).expect("a short test span")
+    );
+}
+
+#[test]
+fn click_status_rows_replacement_draws_at_the_status_offset() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use std::rc::Rc;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    let fake = Rc::new(SlotRenderer::filling(
+        &["status_rows"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "qzx-status".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    let shown = text(&buf);
+    let row = shown
+        .lines()
+        .position(|line| line.contains("qzx-status"))
+        .expect("the status replacement paints");
+    let row16 = u16::try_from(row).expect("a visible row");
+    let ext = extensions(&targets);
+    assert_eq!(ext.len(), 1, "{targets:?}");
+    assert_eq!(ext[0].rect.y as usize, row);
+    // The range sits on the row's own cells, at the status offset.
+    let text_x = text_col(&buf, row16, "qzx-status").expect("the replacement text draws");
+    assert_eq!(ext[0].rect.x, text_x);
+    assert_eq!(
+        ext[0].rect.width,
+        u16::try_from("qzx-status".len()).expect("a short test span")
+    );
+}
+
+#[test]
+fn click_steering_replacement_draws_its_ranges() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use std::rc::Rc;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(session_line(
+        S_A,
+        "steering_queue",
+        serde_json::json!({"messages": [{
+            "content": [{"type": "text", "text": "use x"}],
+            "source": "driver",
+            "command_id": "c_1",
+        }]}),
+        None,
+    ));
+    let fake = Rc::new(SlotRenderer::filling(
+        &["steering_queue"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "qzx-steer".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    let shown = text(&buf);
+    let row = shown
+        .lines()
+        .position(|line| line.contains("qzx-steer"))
+        .expect("the steering replacement paints");
+    let row16 = u16::try_from(row).expect("a visible row");
+    let ext = extensions(&targets);
+    assert_eq!(ext.len(), 1, "{targets:?}");
+    assert_eq!(ext[0].rect.y as usize, row);
+    // The range sits on the row's own cells, at the card's text offset.
+    let text_x = text_col(&buf, row16, "qzx-steer").expect("the replacement text draws");
+    assert_eq!(ext[0].rect.x, text_x);
+    assert_eq!(
+        ext[0].rect.width,
+        u16::try_from("qzx-steer".len()).expect("a short test span")
     );
 }

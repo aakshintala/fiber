@@ -221,6 +221,7 @@ impl Band {
                         RowText {
                             tail: line.pad,
                             links: line.links.clone(),
+                            clicks: line.clicks.clone(),
                             spin: writing.then_some(0),
                             anim: line.anim.clone(),
                             ..RowText::plain()

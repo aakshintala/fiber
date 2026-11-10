@@ -24,7 +24,7 @@ fn dropping_a_keeper_log_unlinks_its_socket_and_releases_its_lock() {
     };
     assert!(socket.exists());
     assert_eq!(log::lock_label(&dir).as_deref(), Some("keeper 4242"));
-    // docs/state.md, "What each part holds": the writer unlinks its socket at exit.
+    // `docs/state.md`, "What each part holds": the writer unlinks its socket at exit.
     // Keep the listener alive: dropping it alone would not unlink the path.
     drop(held);
     assert!(!socket.exists());
@@ -404,7 +404,7 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
     crash(&mut keeper);
 
     // No hook is set, so the watcher parks exactly one production bound past the crash.
-    // docs/tools.md, "The keeper": the keeper waits 2 hours.
+    // `docs/tools.md`, "The keeper": the keeper waits 2 hours.
     assert_eq!(
         super::KEEPER_BOUND,
         Duration::from_secs(7_200),
@@ -454,7 +454,7 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     let payload = &completed[0].payload;
@@ -543,7 +543,7 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     assert_eq!(completed[0].payload["error"]["code"], "keeper_timeout");
@@ -574,7 +574,7 @@ fn keeper_prewound_reap_keeps_the_normal_completion() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
-    // docs/tools.md, "The keeper": a job_completed for each job that ends.
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     let expected = tools::kept_end(
         JobId("j_quick".into()),

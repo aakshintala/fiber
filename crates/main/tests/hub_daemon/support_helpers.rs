@@ -1555,7 +1555,7 @@ fn platform_watch_catches_write_before_first_wait() {
         done_tx.send(exit).unwrap_or(());
     });
     // The verdict comes from `ParkExit`, never from elapsed time: 20 s is a
-    // hang guard under `docs/testing.md, "Testing"`, not a timing assertion.
+    // hang guard under `docs/testing.md`, "Testing", not a timing assertion.
     let exit = Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075
         .recv_or_fail(
             &done,
@@ -1601,8 +1601,7 @@ fn wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left() {
     // Stop and join the reader before draining wakes: the publish
     // releases the shared lock before its wake is sent, so a
     // nonblocking drain can run before the wake lands and the expired
-    // wait below would consume it and check twice (`docs/testing.md`,
-    // "Races are forced, not waited for"). After the join no more
+    // wait below would consume it and check twice (`docs/testing.md`, "Invariants"). After the join no more
     // wakes arrive, so the drain leaves none pending and the wait
     // times out on its first receive.
     let reader = run.reader.take().expect("the run has a reader");
@@ -1982,13 +1981,13 @@ fn a_click_found_before_a_row_is_inserted_lands_on_the_target_row() {
         click_bytes(target),
         "the helper clicks the target's row in frame B"
     );
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(
         *finds.lock().unwrap(),
         2,
         "the changed attempt and the settled retry each find"
     );
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(
         *founds.lock().unwrap(),
         2,
@@ -2040,11 +2039,11 @@ fn a_style_only_change_between_find_and_click_is_a_change() {
             }
         },
     );
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(finds, 2, "the changed attempt and the retry each find");
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(founds, 2, "the changed attempt and the retry each pause");
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(dispatched, 1, "the retry dispatches once");
     assert_eq!(
         drain_terminal(&terminal_side),
@@ -2090,11 +2089,11 @@ fn an_unchanged_frame_clicks_once_without_a_retry() {
             }
         },
     );
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(finds, 1, "the settled frame finds once");
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(founds, 1, "the settled frame pauses once");
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(dispatched, 1, "the settled frame dispatches once");
     assert_eq!(
         drain_terminal(&terminal_side),
@@ -2456,13 +2455,13 @@ fn an_open_synchronized_frame_waits_for_its_close_then_refinds() {
         click_bytes((0, 5)),
         "the helper clicks the target's row in frame B"
     );
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(
         *finds.lock().unwrap(),
         2,
         "the open-block attempt and the fresh attempt each find"
     );
-    // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
+    // `docs/testing/screens.md`, "Screens": the re-find runs under the call's one wait.
     assert_eq!(
         *founds.lock().unwrap(),
         2,

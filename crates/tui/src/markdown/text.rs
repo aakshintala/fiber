@@ -35,6 +35,9 @@ impl Track {
             tail,
             decoration,
             links,
+            // Markdown draws no click target: clicks come only from
+            // extension renderers.
+            clicks: Vec::new(),
             scopes: Vec::new(),
             spin: None,
             anim: None,

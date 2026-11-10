@@ -24,14 +24,14 @@ use support::*;
 /// (`docs/testing.md`, "Event streams"): the general set-with-counts rule,
 /// plus the one-`clients`-line-per-attach promise for the counted `clients`
 /// line.
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails; docs/testing.md:109-111: Where its count is fixed, such as one `clients` line per attach, the test asserts the count, so a duplicate or a missing line still fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails; `docs/testing.md`, "Event streams": Where its count is fixed, such as one `clients` line per attach, the test asserts the count, so a duplicate or a missing line still fails"#;
 
 /// Verbatim lifecycle sources for the session-boundary assertions below.
 const SESSION_FIRST_DOC: &str =
-    "docs/events.md:339: Durable. The first line of every session's log.";
-const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+    r#"`docs/events.md`, "`session_started`": Durable. The first line of every session's log."#;
+const PROCESS_START_DOC: &str = r#"`docs/events.md`, "`fiber_started`": Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line."#;
 const PROCESS_END_DOC: &str =
-    "docs/events.md:296: Durable. The last line a process writes for a session.";
+    r#"`docs/events.md`, "`fiber_exited`": Durable. The last line a process writes for a session."#;
 
 /// The durable log of session `id`, wherever its project is.
 fn session_log(setup: &Setup, id: &str) -> Vec<Value> {

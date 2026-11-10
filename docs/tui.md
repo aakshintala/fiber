@@ -3460,7 +3460,6 @@ line is a list of spans:
 - `link` makes the span a link, opened on click as "Links" says.
 - `click` makes the span's cells a click target with that id ("Input and
   focus").
-Not built yet (click targets): see #2720.
 
 The terminal builds the cells and the plain text from the same spans, so what
 is drawn and what is selected, copied or searched cannot differ. It measures
@@ -3554,7 +3553,7 @@ it, every rebuild of the conversation would call Lua for every row. The timings
 do not carry over to Linux; the call counts do.
 
 ### Input and focus
-**Not built yet (focused-slot keys, clicks, focus, and extension slash commands): see #2720.**
+**Not built yet (focused-slot keys, focus, and extension slash commands): see #2720.**
 
 One slot has focus at a time: the input box, an open view, or the overlay on
 top. An extension's view or overlay takes focus when it opens.
@@ -3663,7 +3662,7 @@ and a timeout switches the extension off as a still one does.
   extension off until `/reload`, with one `extension_failed` notice, as a
   still renderer does.
 
-Not built yet (focused-slot key and click handlers): see #2720.
+Not built yet (focused-slot key handlers): see #2720.
 
 - **A timeout** switches the extension off in this terminal until `/reload`
   (the terminal command; the `reload` driver command acts on the session
