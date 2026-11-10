@@ -3790,7 +3790,7 @@ fn command_error_is_one_hook_failed_then_silent() {
     assert!(notices.is_empty(), "{notices:?}");
     for _ in 0..2 {
         assert_eq!(
-            renderer.run_tui_command(&ctx(None), "ledger-diff", ""),
+            renderer.run_tui_command(&ctx(None), "ledger-diff", "fast"),
             KeyOutcome::NotHandled
         );
     }
@@ -3799,12 +3799,15 @@ fn command_error_is_one_hook_failed_then_silent() {
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "hook_failed", "{pending:?}");
     assert!(
-        pending[0].1.contains('a') && pending[0].1.contains("ledger-diff"),
+        pending[0].1.contains('a')
+            && pending[0].1.contains("ledger-diff")
+            && pending[0].1.contains("wrong shape")
+            && pending[0].1.contains("fast"),
         "{pending:?}"
     );
     // A wrong shape leaves the extension on: the failure repeats silently.
     assert_eq!(
-        renderer.run_tui_command(&ctx(None), "ledger-diff", ""),
+        renderer.run_tui_command(&ctx(None), "ledger-diff", "fast"),
         KeyOutcome::NotHandled
     );
     assert!(renderer.take_pending().is_empty());

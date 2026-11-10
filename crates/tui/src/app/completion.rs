@@ -38,15 +38,16 @@ pub(super) struct Completion {
     /// commands refresh.
     pub(super) session_answer: Vec<CommandInfo>,
     /// The TUI extension commands from the installed renderer: refreshed
-    /// on install, attach, `extensions_loaded` and reload, never by
-    /// `ask_commands`, and never cleared by `reset_session`.
+    /// on install, attach, `extensions_loaded`, reload and `reset_session`
+    /// with the home context, never by `ask_commands`, and never cleared
+    /// by `reset_session`.
     pub(super) tui_commands: Vec<TuiCommand>,
     /// Extension-against-extension conflict names from the latest merge:
     /// no row on either side, and dispatch consumes the name.
     pub(super) tui_conflicts: BTreeSet<String>,
-    /// Conflict names already noticed: one `command_conflict` per name
-    /// until `/reload`.
-    pub(super) conflict_noticed: BTreeSet<String>,
+    /// Conflict contenders already noticed: one `command_conflict` per
+    /// name and set of contenders until `/reload`.
+    pub(super) conflict_noticed: BTreeSet<(String, String, String)>,
     /// Esc closed the `/` panel for this draft.
     slash_closed: bool,
     /// Esc closed the `/theme ` panel for this draft.
@@ -124,14 +125,20 @@ impl Completion {
         let (merged, conflicts) = slash::without_conflicts(&session_rows, &tui_rows);
         let mut fresh = Vec::new();
         for name in &conflicts {
-            if self.conflict_noticed.insert(name.clone()) {
-                let owner = |rows: &[slash::Row]| {
-                    rows.iter()
-                        .find(|row| &row.name == name)
-                        .map(|row| row.tag.clone())
-                        .unwrap_or_default()
-                };
-                fresh.push((name.clone(), owner(&session_rows), owner(&tui_rows)));
+            let owner = |rows: &[slash::Row]| {
+                rows.iter()
+                    .find(|row| &row.name == name)
+                    .map(|row| row.tag.clone())
+                    .unwrap_or_default()
+            };
+            let session_owner = owner(&session_rows);
+            let tui_owner = owner(&tui_rows);
+            if self.conflict_noticed.insert((
+                name.clone(),
+                session_owner.clone(),
+                tui_owner.clone(),
+            )) {
+                fresh.push((name.clone(), session_owner, tui_owner));
             }
         }
         self.tui_conflicts = conflicts;
@@ -176,8 +183,9 @@ impl App {
 
     /// Refreshes the TUI commands from the installed renderer against
     /// the session on screen and its halves, then re-merges the `/`
-    /// list. Runs on install, attach, `extensions_loaded` and reload:
-    /// never from `ask_commands`, and never cleared by `reset_session`.
+    /// list. Runs on install, attach, `extensions_loaded`, reload and
+    /// `reset_session` with the home context: never from `ask_commands`,
+    /// and never cleared by `reset_session`.
     pub(super) fn refresh_tui_commands(&mut self) {
         let Some(renderer) = self.handle.get() else {
             return;

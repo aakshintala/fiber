@@ -986,8 +986,12 @@ impl App {
         self.completion.session_answer.clear();
         self.completion.extensions.clear();
         self.completion.commands_id = None;
-        // The session rows go with the session; the TUI rows stay for home.
-        self.merge_slash_rows();
+        // The session rows go with the session; the TUI rows refresh for
+        // home, which holds every loaded winner with no half gate.
+        self.refresh_tui_commands();
+        if self.handle.get().is_none() {
+            self.merge_slash_rows();
+        }
         self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true

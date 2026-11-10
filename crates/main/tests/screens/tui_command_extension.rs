@@ -160,6 +160,8 @@ fn tui_command_wrong_shape_notice_carries_args() {
             && grid.contents.contains("ledger-bad")
             && grid.contents.contains("cmds")
             && grid.contents.contains("wrong shape")
+            && grid.contents.contains("fast")
+            && grid.contents.contains("with args `fast`")
             && !grid.contents.contains("wire mismatch")
     });
     quit(run, "/ledger-bad fast");

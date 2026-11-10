@@ -1575,7 +1575,8 @@ A TUI extension adds a slash command with `fiber.command(name, {
 description, timeout, run })` in `tui/init.lua`, and `run` runs in the
 terminal's VM. It receives `{ session_id = "…", args = "…" }`: the session
 on screen, with no `session_id` key on home, and the text after the name,
-`""` when there is none. Its return value is ignored. `run` makes no host
+`""` when there is none. Only a `true`, `false` or `nil` return is ignored;
+any other value is a wrong-shape failure. `run` makes no host
 call, as the key handler's does not. The terminal shows one
 `/` list, and a name registered twice, by either half of any extensions,
 follows the rule above: neither gets it, a `notice` names both, and the

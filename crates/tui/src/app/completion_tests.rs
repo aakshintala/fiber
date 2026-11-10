@@ -1303,6 +1303,42 @@ fn command_extension_clash_keeps_no_row() {
 }
 
 #[test]
+fn command_conflict_recurrence_notices_once_per_contender_set() {
+    fn conflict_count(app: &App) -> usize {
+        app.notices()
+            .iter()
+            .filter(|notice| {
+                matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+            })
+            .count()
+    }
+    fn deploy_row(tag: &str) -> Value {
+        json!({"name": "deploy", "description": "Deploys.", "tag": tag, "extension": true})
+    }
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "other",
+    )])));
+    answer_rows(&mut app, json!([deploy_row("acme")]));
+    // `docs/tui.md`, "When two extensions want one slot": one notice for each slot and set of contenders until `/reload`.
+    assert_eq!(conflict_count(&app), 1);
+    assert!(has_conflict(&app, &["deploy", "acme", "other"]));
+    // The clash disappears: no row returns, and no new notice follows.
+    answer_rows(&mut app, json!([]));
+    assert!(app.completion.tui_conflicts.is_empty());
+    assert_eq!(conflict_count(&app), 1);
+    // The clash returns with the same owners: still one notice total.
+    answer_rows(&mut app, json!([deploy_row("acme")]));
+    assert_eq!(conflict_count(&app), 1);
+    // The clash returns with changed owners: one notice per contender set.
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "third",
+    )])));
+    assert_eq!(conflict_count(&app), 2);
+    assert!(has_conflict(&app, &["deploy", "acme", "third"]));
+}
+
+#[test]
 fn command_tui_name_shadows_skill_template_and_prompt_rows() {
     for tag in ["skill", "template", "github"] {
         let mut app = attached();
@@ -1371,6 +1407,61 @@ fn command_tui_rows_persist_across_reset_session() {
     assert!(!names.contains(&"tdd".to_owned()));
     assert!(names.contains(&"ledger-diff".to_owned()));
     assert!(app.completion.extensions.is_empty());
+    assert_eq!(app.completion.tui_commands.len(), 1);
+}
+
+/// A renderer gating its command to home: a version-gated command the
+/// session excludes, while home holds every loaded winner.
+#[derive(Debug)]
+struct HomeGated;
+
+impl Renderer for HomeGated {
+    fn name(&self) -> &str {
+        "home-gated"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, ctx: &SessionCtx) -> Vec<TuiCommand> {
+        if ctx.session_id.is_none() {
+            vec![tui_cmd("ledger-diff", "acme")]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+#[test]
+fn command_session_gated_exclusion_returns_at_home_after_reset() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(HomeGated));
+    // The session gates the command out: no TUI row on the session.
+    assert!(!slash_names(&app).contains(&"ledger-diff".to_owned()));
+    assert!(app.completion.tui_commands.is_empty());
+    answer_commands(&mut app, &["tdd"]);
+    assert!(slash_names(&app).contains(&"tdd".to_owned()));
+    app.reset_session();
+    // Home holds every loaded winner: the gated command lists again.
+    let names = slash_names(&app);
+    assert!(!names.contains(&"tdd".to_owned()));
+    assert!(names.contains(&"ledger-diff".to_owned()));
     assert_eq!(app.completion.tui_commands.len(), 1);
 }
 

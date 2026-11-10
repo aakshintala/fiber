@@ -1070,7 +1070,7 @@ impl Renderer for Composite {
                     self.pending.borrow_mut().push((
                         "hook_failed".into(),
                         format!(
-                            "extension {}'s command `{name}` failed: {error}",
+                            "extension {}'s command `{name}` with args `{args}` failed: {error}",
                             winner.extension
                         ),
                     ));
