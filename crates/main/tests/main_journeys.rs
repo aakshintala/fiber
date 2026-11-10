@@ -1011,7 +1011,12 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
                 &json!({"model": "test/m1", "diagnostics": {"level": "debug"}, "hub": {"idle_exit_ms": 200}}),
             );
             let bin = journey_bin();
-            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &support::TRUECOLOUR);
+            let env: Vec<(&str, &str)> = support::TRUECOLOUR
+                .iter()
+                .copied()
+                .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
+                .collect();
+            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &env);
             run.ready();
             dismiss_first_run_offer(&mut run);
             let from = run.output().len();
@@ -2220,7 +2225,12 @@ fn byte_form_drawn(grid: &Grid) -> bool {
 /// home's first-run import offer declined, so regression bytes go out
 /// only once the binary is ready for input.
 fn start_byte_journey(setup: &Setup, bin: &Path) -> Run {
-    let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &support::TRUECOLOUR);
+    let env: Vec<(&str, &str)> = support::TRUECOLOUR
+        .iter()
+        .copied()
+        .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
+        .collect();
+    let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &env);
     run.ready();
     run.wait_bytes(0, support::pty::KITTY_PUSH, "kitty keyboard flags pushed");
     dismiss_first_run_offer(&mut run);
@@ -2753,6 +2763,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
                 &[
                     ("DATABRICKS_TOKEN", "dapi-test"),
                     ("DATABRICKS_HOST", host.as_str()),
+                    ("FIBER_TEST_FAKE_KEY", "sk-test"),
                 ],
             );
             run.ready();
@@ -2944,6 +2955,7 @@ fn replay_bedrock_converse_text_turn() {
                 &[
                     ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
                     ("AWS_REGION", host.as_str()),
+                    ("FIBER_TEST_FAKE_KEY", "sk-test"),
                 ],
             );
             run.ready();
