@@ -2662,7 +2662,13 @@ polite: the old session's request waits in the queue for an answer.
 `/login` logs in from the terminal with the same flow as `fiber login`. It
 opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers under
 "Providers", each tagged `browser` for OAuth or `key` for an API key, then
-the extension credentials under "Secrets", the first row focused.
+the extension credentials under "Secrets", the first row focused. Providers
+with a usable credential come first, each marked "✓ <label>" in `success`
+with its default label, or the variable's name for a key read from the
+environment. The rest follow in the text colour. Every row can be picked,
+so a signed-in provider can be signed in again or under another label.
+Footer on the list: "↑↓ move · Enter log in · Esc close"; Esc or the ✕
+closes the overlay.
 
 On a remote terminal, login runs on the hub and stores its credential in the
 hub's Fiber home. OAuth always uses the device-code step below; Esc cancels
