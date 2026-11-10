@@ -10,7 +10,7 @@ use contract::events::SessionState;
 use contract::{Envelope, RequestId, SessionId};
 use serde_json::{Map, Value, json};
 
-use super::{App, Effect, Phase, mint};
+use super::{App, Effect, Phase};
 use crate::focus::Area;
 use crate::home::{Left, Row, State};
 use crate::keys::{Edit, Event, Key, default_event};
@@ -848,7 +848,7 @@ impl App {
             return Effect::None;
         }
         let session = row.id.clone();
-        let id = mint();
+        let id = support::mint("c_");
         let line = json!({"id": id, "command": "dismiss", "args": {"session": session.0}});
         self.outbox
             .wait(&id, super::outbox::Waiting::Dismiss(session));

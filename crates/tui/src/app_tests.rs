@@ -853,8 +853,8 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
 
 #[test]
 fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
-    let first = super::mint();
-    let second = super::mint();
+    let first = support::mint("c_");
+    let second = support::mint("c_");
     for id in [&first, &second] {
         let hex = id.strip_prefix("c_").unwrap_or_default();
         assert_eq!(hex.len(), 16, "{id}");

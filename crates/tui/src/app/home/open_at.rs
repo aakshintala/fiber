@@ -8,7 +8,8 @@ use contract::SessionId;
 use super::super::App;
 use super::open::subscribe_line;
 use crate::OpenAt;
-use crate::home::{Level, opening};
+use crate::home::opening;
+use contract::commands::SubscribeLevel;
 
 impl App {
     /// Opens `session` the way a row opens (`docs/tui.md`, "Home"):
@@ -26,7 +27,7 @@ impl App {
     pub(in crate::app) fn open_session(
         &mut self,
         session: SessionId,
-        expected: Option<Level>,
+        expected: Option<SubscribeLevel>,
         credential: Option<String>,
         held: bool,
     ) -> Vec<String> {

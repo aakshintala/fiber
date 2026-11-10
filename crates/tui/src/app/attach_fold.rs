@@ -6,6 +6,7 @@
 
 use contract::ErrorCode;
 use contract::HubEventKind;
+use contract::commands::HistoryArgs;
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandResult};
 use contract::{Envelope, Seq, SessionId};
@@ -66,7 +67,7 @@ impl App {
     /// unfollowed parent still asks once an ancestor is held. The pass
     /// counts the lines above a filled display, so the open holds only
     /// the filled run plus each seam crossing.
-    pub(crate) fn tail_next(&mut self) -> Option<Value> {
+    pub(crate) fn tail_next(&mut self) -> Option<HistoryArgs> {
         if self.preview.is_none() {
             self.fold_preview();
         }
@@ -194,7 +195,7 @@ impl App {
     /// The args of the post-frame count's next read: none once the walk
     /// reached the chain root or ended, or when no count runs. Never
     /// folds: the count folds once at its end, above the preview.
-    pub(crate) fn tail_count_next(&self) -> Option<Value> {
+    pub(crate) fn tail_count_next(&self) -> Option<HistoryArgs> {
         let tail = self.count.as_ref()?;
         if tail.chain_done() {
             return None;
