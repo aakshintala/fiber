@@ -391,16 +391,8 @@ fn archive_refuses_a_running_session_without_appending() {
     });
     let id = only_session(&setup);
     let log = sessions_dir(&setup).join(&id).join("events.jsonl");
-    // The turn appends nothing more once the shell blocks: waiting for
-    // its start marker settles the log before the snapshot.
-    let watch = log.clone();
-    fakes::wait_until("the shell tool call to start", setup.deadline, move || {
-        fs::read_to_string(&watch).is_ok_and(|text| {
-            text.lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .any(|line| line["kind"] == "tool_call_started")
-        })
-    });
+    // The "1 running" screen above is the readiness signal: the shell job
+    // runs, so the session is held without waiting for its log line.
     let refused = headless(&setup, &["sessions", "archive", &id]);
     assert_eq!(refused.status.code(), Some(1));
     let (_, err) = text(&refused);
@@ -575,5 +567,54 @@ fn archive_refuses_a_held_lock_without_appending() {
     );
     drop(release_tx);
     holder.join().unwrap();
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+#[test]
+fn sessions_list_reports_a_missing_hub_instead_of_success() {
+    // Pins the failing exit of the `sessions_list` wrapper: a missing
+    // listed hub fails instead of succeeding. Fails when the wrapper
+    // always returns `0`.
+    let setup = Setup::new();
+    let output = headless(&setup, &["sessions", "--hub", "missing"]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a missing hub fails: {:?}",
+        text(&output)
+    );
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+#[test]
+fn sessions_all_lists_every_project_through_the_wrapper() {
+    // Pins `all || is_listed()` in the `sessions_list` wrapper: from a
+    // repository, the default lists only this project's session while
+    // `--all` lists every project. Fails when `||` reads as `&&`.
+    let setup = Setup::new();
+    let _server = installed(&setup, vec![hello(), hello()]);
+    support::git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
+    let first = exited(&setup, "hi");
+    let other = setup.root.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    let mut second = setup.fiber(&["ask", "second"]);
+    second.current_dir(&other);
+    let second_out = run_to_exit(setup.deadline, "the second ask", second);
+    assert_eq!(second_out.status.code(), Some(0), "{:?}", text(&second_out));
+    let mut ids = stored_ids(&setup);
+    let mut other_ids: Vec<String> = fs::read_dir(sessions_dir_in(&setup, &other))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    ids.append(&mut other_ids);
+    ids.sort();
+    assert_eq!(ids.len(), 2, "two sessions: {ids:?}");
+    let default = listed(&setup, &[]);
+    assert_eq!(default, vec![first.clone()], "default lists one project");
+    let mut all = listed(&setup, &["--all"]);
+    all.sort();
+    ids.sort();
+    assert_eq!(all, ids, "--all lists every project");
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }

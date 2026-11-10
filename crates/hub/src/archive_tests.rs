@@ -149,12 +149,13 @@ impl Temp {
 impl Drop for Temp {
     fn drop(&mut self) {
         // Sockets close before the feed stops, so no follow outlives the
-        // home; the stop itself runs under its own deadline.
+        // home; the owning fixture stops the feed directly, joining its
+        // workers on this thread.
         for session in self.sessions.drain(..) {
             session.close();
         }
         if let Some(feed) = self.feed.take() {
-            testkit::stop_within(&feed);
+            feed.stop();
         }
     }
 }
@@ -241,7 +242,8 @@ fn an_exited_session_archives_with_the_next_seq_and_empty_payload() {
             .unwrap()
             .is_none()
     );
-    // The log gains exactly one line: the marker with the next seq.
+    // The log gains exactly one line: the marker with the next seq
+    // (`docs/events.md`, "`archived`": appended "with the next `seq`").
     let after = temp.log_text(1);
     assert!(after.starts_with(&before_log), "{after}");
     let added = &after[before_log.len()..];
@@ -308,6 +310,47 @@ fn a_crashed_session_without_a_row_archives_from_its_opening() {
     assert_eq!(rows[0]["workspace"], "/w");
     assert_eq!(rows[0]["name"], "");
     assert_eq!(rows[0]["status"], Value::Null);
+}
+
+#[test]
+fn an_exited_waiting_session_without_a_row_archives_with_the_feed_status() {
+    // Pins the feed-status path of `missing_row`: with a waiting `Left`
+    // entry and no derived row, the archived row copies the feed's status
+    // instead of the opening. Fails when `status_of` reads as `None`.
+    let mut temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(11, &["fiber_exited"]);
+    let session = FakeSession::bind(&temp.dir, &testkit::id(11));
+    session.say(&status_line(
+        &testkit::id(11),
+        &status("feed-name", "/feed-ws", "waiting", None),
+    ));
+    temp.sessions.push(session);
+    temp.start_feed(&hub);
+    temp.await_running(&hub, 11);
+    temp.sessions.pop().unwrap().close();
+    let feed = Arc::clone(&hub.feed);
+    let id = testkit::id(11);
+    testkit::await_true("the waiting session to leave", move || {
+        feed.live().iter().all(|(live, _)| live != &id) && feed.status_of(&id).is_some()
+    });
+    assert!(
+        call(&hub, serde_json::json!({"session": testkit::id(11)}))
+            .unwrap()
+            .is_none()
+    );
+    let rows: Vec<Value> = temp
+        .recent_text()
+        .lines()
+        .map(|row| serde_json::from_str(row).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1, "{}", temp.recent_text());
+    assert_eq!(rows[0]["how"], "crashed");
+    assert_eq!(rows[0]["archived"], true);
+    assert_eq!(rows[0]["workspace"], "/feed-ws");
+    assert_eq!(rows[0]["name"], "feed-name");
+    assert_eq!(rows[0]["status"]["workspace"], "/feed-ws");
+    assert_eq!(rows[0]["status"]["name"], "feed-name");
 }
 
 #[test]

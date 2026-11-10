@@ -636,6 +636,14 @@ impl Feed {
         // Before the recent mutex: the rewind callback can enter other
         // hub paths, so it never runs under this lock.
         crate::rewind::notify_left(&self.on_rewound, id, &found);
+        #[cfg(test)]
+        fire_before_recent_mutex(&self.home);
+        // Ordered against hub `archive` from the archive-state recheck
+        // through the transition: a late close neither appends a stale
+        // row nor recreates a forgotten entry. The `how` decision reads
+        // the log under the mutex, after the archive-state recheck, so a
+        // marker committed while waiting cannot slip between them.
+        let _recent = lock(&self.recent_mutation);
         let how = found
             .as_ref()
             .filter(|(_, dir, _)| log::dir_exists(dir))
@@ -662,12 +670,6 @@ impl Feed {
                     }
                 }
             });
-        #[cfg(test)]
-        fire_before_recent_mutex(&self.home);
-        // Ordered against hub `archive` from the archive-state recheck
-        // through the transition: a late close neither appends a stale
-        // row nor recreates a forgotten entry.
-        let _recent = lock(&self.recent_mutation);
         let archived = found
             .as_ref()
             .is_some_and(|(_, dir, _)| log::is_archived(dir));

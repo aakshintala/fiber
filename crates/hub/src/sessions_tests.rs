@@ -221,6 +221,20 @@ fn project_scopes_live_and_exited_alike() {
 }
 
 #[test]
+fn project_scopes_live_with_active() {
+    // Pins the active branch's project filter: with `active`, only this
+    // project's live sessions list. Fails when `==` reads as `!=`.
+    let mut temp = Temp::new();
+    temp.running(7, "p");
+    temp.running(3, "q");
+    temp.exited(1, "p", "one", None, true);
+    temp.exited(2, "q", "two", None, true);
+    let feed = temp.feed();
+    let got = answered(&feed, &temp.dir, json!({"project": "p", "active": true}));
+    assert_eq!(ids_of(&got), (vec![id(7)], vec![id(1)]));
+}
+
+#[test]
 fn a_running_sessions_row_is_listed_live_only() {
     let mut temp = Temp::new();
     temp.exited(7, "p", "earlier run", None, true);

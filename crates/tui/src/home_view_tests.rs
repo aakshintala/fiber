@@ -419,6 +419,8 @@ fn home_with_an_archived_session_shows_only_ordinary_rows() {
     assert!(frame.contains("fix the parser"), "{frame}");
     assert!(frame.contains("old work"), "{frame}");
     assert!(frame.contains("dead work"), "{frame}");
+    // The count derives from the scoped `recent` total (`docs/tui.md`, "The
+    // session list": each project's "exited · N" counts from that `total`).
     assert!(frame.contains("exited · 2"), "{frame}");
     assert!(!frame.contains("filed work"), "{frame}");
     assert!(!frame.contains("settled crash"), "{frame}");
