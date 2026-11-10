@@ -232,10 +232,11 @@ fn a_named_recent_row_seeds_the_sender_label_and_a_statusless_row_keeps_it() {
     let out = app.on_line(accepted(&recent, json!({"sessions": [named_row]})));
     let scoped: Vec<Value> = commands(out)
         .into_iter()
-        .filter(|line| line["command"] == "recent")
+        .filter(|line| line["command"] == "recent" && !is_archived(line))
         .collect();
     // A project that first appears earns one scoped `recent` ask
-    // (`docs/tui.md`, "Home", "The session list").
+    // (`docs/tui.md`, "Home", "The session list"); the archived ask
+    // rides beside it.
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
@@ -328,10 +329,11 @@ fn an_unnamed_home_row_with_a_display_name_still_labels_by_sender_id() {
     let out = app.on_line(accepted(&recent, json!({"sessions": [unnamed_row]})));
     let scoped: Vec<Value> = commands(out)
         .into_iter()
-        .filter(|line| line["command"] == "recent")
+        .filter(|line| line["command"] == "recent" && !is_archived(line))
         .collect();
     // A project that first appears earns one scoped `recent` ask
-    // (`docs/tui.md`, "Home", "The session list").
+    // (`docs/tui.md`, "Home", "The session list"); the archived ask
+    // rides beside it.
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
@@ -665,7 +667,12 @@ fn a_status_after_hello_queues_one_scoped_ask() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask's shape.
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md`, "What the hub speaks" (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -733,9 +740,14 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     // The status folds into the rows, and passes through to the
-    // conversation below, queuing its project's scoped ask beside it.
+    // conversation below, queuing its project's scoped asks beside it.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask.
+    let queued: Vec<Value> = queued
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(queued.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(queued[0]["args"]["project"], "-w");
@@ -859,7 +871,8 @@ fn a_closing_row_shows_closing_with_no_number() {
             ListLine::Head { .. }
             | ListLine::ExitedHead { .. }
             | ListLine::Exited { .. }
-            | ListLine::More { .. } => None,
+            | ListLine::More { .. }
+            | ListLine::ArchivedHead { .. } => None,
         });
     assert_eq!(
         live.next(),
@@ -931,7 +944,8 @@ fn more_key(app: &App, project: &str) -> Option<u64> {
             ListLine::Head { .. }
             | ListLine::Live { .. }
             | ListLine::ExitedHead { .. }
-            | ListLine::Exited { .. } => None,
+            | ListLine::Exited { .. }
+            | ListLine::ArchivedHead { .. } => None,
         })
 }
 
@@ -2311,8 +2325,12 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
         exited_in("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
         exited_in("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
     ];
-    // The unscoped answer fans out one scoped ask per project.
-    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    // The unscoped answer fans out one scoped ask of each kind per
+    // project; this test pins the exited asks.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 3);
     let (_, targets) = drawn_frame(&app);
@@ -2859,7 +2877,8 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
                 | crate::home::ListLine::Live { .. }
                 | crate::home::ListLine::ExitedHead { .. }
                 | crate::home::ListLine::Exited { .. }
-                | crate::home::ListLine::More { .. } => None,
+                | crate::home::ListLine::More { .. }
+                | crate::home::ListLine::ArchivedHead { .. } => None,
             })
         })
         .unwrap_or_else(|| panic!("the other project's plus target"));
@@ -3138,8 +3157,12 @@ fn a_click_on_more_expands_the_same_project_only() {
     .into_iter()
     .map(|(id, name, workspace, project)| exited_in(id, name, workspace, project))
     .collect::<Vec<_>>();
-    // The unscoped answer fans out one scoped ask per project.
-    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    // The unscoped answer fans out one scoped ask of each kind per
+    // project; this test follows the exited asks.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 2);
     let first_hidden = more_key(&app, "-w").expect("first project has more");
@@ -3153,7 +3176,8 @@ fn a_click_on_more_expands_the_same_project_only() {
             crate::home::ListLine::Head { .. }
             | crate::home::ListLine::Live { .. }
             | crate::home::ListLine::ExitedHead { .. }
-            | crate::home::ListLine::More { .. } => None,
+            | crate::home::ListLine::More { .. }
+            | crate::home::ListLine::ArchivedHead { .. } => None,
             crate::home::ListLine::Exited { key, .. } => Some(*key),
         })
         .collect::<Vec<_>>();
@@ -3167,7 +3191,8 @@ fn a_click_on_more_expands_the_same_project_only() {
                 crate::home::ListLine::Head { .. }
                 | crate::home::ListLine::Live { .. }
                 | crate::home::ListLine::ExitedHead { .. }
-                | crate::home::ListLine::Exited { .. } => None,
+                | crate::home::ListLine::Exited { .. }
+                | crate::home::ListLine::ArchivedHead { .. } => None,
                 crate::home::ListLine::More { key, .. } => Some(*key),
             })
             .collect::<Vec<_>>(),
@@ -4197,7 +4222,8 @@ fn unreadable_rows_have_no_x() {
             crate::home::ListLine::Exited { .. } => Some(false),
             crate::home::ListLine::Head { .. }
             | crate::home::ListLine::ExitedHead { .. }
-            | crate::home::ListLine::More { .. } => None,
+            | crate::home::ListLine::More { .. }
+            | crate::home::ListLine::ArchivedHead { .. } => None,
         })
         .collect();
     assert_eq!(rows.len(), 3);
@@ -5415,10 +5441,15 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
     app.on_line(hello());
     // An unknown session names no row: no trigger.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // A live session's status queues its scoped ask, drained at once
-    // (`docs/tui.md`, "The session list": one ask in flight per project).
+    // A live session's status queues its scoped asks, drained at once
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project); this test follows the exited ask.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per project).
+    let queued: Vec<Value> = queued
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(queued.len(), 1);
     let first = line_id(&queued[0]).to_owned();
     // While in flight, the left marks dirty and sends nothing, keeping
@@ -5491,11 +5522,12 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     assert!(kinds.contains(&"recent"));
     assert!(kinds.contains(&"sessions"));
     // The scoped refetches cover both projects; request order is open.
+    // The archived refetch lines carry a project too, and filter out.
     let scoped: Vec<Value> = lines
         .iter()
         .filter(|line| {
             line.get("args")
-                .is_some_and(|args| args.get("project").is_some())
+                .is_some_and(|args| args.get("project").is_some() && args.get("archived").is_none())
         })
         .cloned()
         .collect();
@@ -5503,11 +5535,27 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     projects.sort_unstable();
     // `docs/tui.md`, "The session list" (one ask per project).
     assert_eq!(projects, ["-other", "-w"]);
+    // The reconnect refetches the archived count beside the exited one
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project).
+    let mut archived: Vec<&str> = lines
+        .iter()
+        .filter(|line| is_archived(line))
+        .map(|line| {
+            line["args"]["project"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a scoped archived ask: {line}"))
+        })
+        .collect();
+    archived.sort_unstable();
+    assert_eq!(archived, ["-other", "-w"]);
     // Totals are empty but rows stay for the refetch.
     // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-other"), None);
+    assert_eq!(archived_stored(&app, "-w"), None);
+    assert_eq!(archived_stored(&app, "-other"), None);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
     let mut rows = listed(&app);
@@ -5740,9 +5788,14 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
     app.on_line(hello());
     // `home_line` returns `None`, so the status reaches the session.
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
-    // `home_outgoing` drains the queued scoped ask.
+    // `home_outgoing` drains the queued scoped asks, one of each kind.
     let lines = commands(app.home_outgoing());
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask's shape.
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md`, "What the hub speaks" (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -5777,6 +5830,9 @@ fn list_shapes(app: &App) -> Vec<String> {
                     ListLine::Head { name, .. } => format!("section {name}"),
                     ListLine::ExitedHead { count } => format!("head {count}"),
                     ListLine::More { count, .. } => format!("more {count}"),
+                    ListLine::ArchivedHead { count, .. } => {
+                        format!("archived {count}")
+                    }
                     ListLine::Exited { .. } | ListLine::Live { .. } => "row".to_owned(),
                 })
                 .collect()
@@ -5786,7 +5842,9 @@ fn list_shapes(app: &App) -> Vec<String> {
 
 /// Answers each scoped ask in `lines` with `total` and no rows.
 fn answer_scoped_empty(app: &mut App, lines: &[Value], total: usize) {
-    for line in lines {
+    // Only the exited asks answer: the archived asks stay in flight, so
+    // no archived head draws in these exited-shape tests.
+    for line in lines.iter().filter(|line| !is_archived(line)) {
         assert!(
             app.on_line(accepted(
                 line_id(line),
@@ -6623,8 +6681,9 @@ fn answer_value(app: &mut App, id: &str, result: Value) -> Vec<Value> {
 fn fanout_projects(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
+        .filter(|line| !is_archived(line))
         .map(|line| {
-            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`).
+            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`; the archived asks ride beside these).
             assert_eq!(line["command"], "recent");
             line["args"]["project"]
                 .as_str()
@@ -6643,6 +6702,20 @@ fn line_id(line: &Value) -> &str {
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
     app.home.sessions.total_for(project)
+}
+
+/// The stored archived scoped total for `project`.
+fn archived_stored(app: &App, project: &str) -> Option<usize> {
+    app.home.sessions.archived_total_for(project)
+}
+
+/// Whether `line` is an archived scoped `recent` ask.
+fn is_archived(line: &Value) -> bool {
+    line["command"] == "recent"
+        && line["args"]
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 #[test]
@@ -6666,8 +6739,12 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
         assert!(line["args"].get("before").is_none());
     }
     // `docs/tui.md`, "The session list" (one ask per project): the two new projects'
-    // asks carry distinct ids; request order is open.
-    let mut ids: Vec<&str> = lines.iter().map(line_id).collect();
+    // exited asks carry distinct ids; request order is open.
+    let mut ids: Vec<&str> = lines
+        .iter()
+        .filter(|line| !is_archived(line))
+        .map(line_id)
+        .collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 2);
@@ -7624,4 +7701,290 @@ fn a_failed_feed_fold_settles_by_its_carried_id() {
     failed[at] = tampered;
     app.write_failed(&failed);
     assert!(app.closing_sessions().contains(&"s_9".to_owned()));
+}
+
+/// The archived scoped ask's id among outgoing `recent` lines.
+fn archived_ask_id(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .find(|line| is_archived(line))
+        .map(line_id)
+        .unwrap_or_else(|| panic!("an archived ask: {lines:?}"))
+        .to_owned()
+}
+
+/// The exited scoped ask's id among outgoing `recent` lines.
+fn exited_ask_id(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .filter(|line| !is_archived(line) && line["args"].get("project").is_some())
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("an exited scoped ask: {lines:?}"))
+        .to_owned()
+}
+
+/// Home with one archived row ("filed work") in `-w` and both counts
+/// held: the unscoped answer carries one exited row, the exited scoped
+/// answer is empty, and the archived scoped answer carries the
+/// archived row.
+fn home_with_archived_row() -> App {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    );
+    let scoped = exited_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "filed work")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    app
+}
+
+#[test]
+fn archived_status_unarchives_the_row_without_duplicating_it() {
+    let mut app = home_with_archived_row();
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(app.home.sessions.is_archived(&id));
+    // A live status for the archived id unarchives it locally: the row
+    // leaves the archived map and folds live, keeping its key, so no id
+    // ever shows in both lists.
+    assert!(
+        app.on_line(live(
+            "s_bbbbbbbbbbbbbbbb",
+            "resumed work",
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ))
+        .is_empty()
+    );
+    // Deleting the archived-map eviction lists the row twice, once live
+    // and once archived: the archived half fails this assertion.
+    assert!(!app.home.sessions.is_archived(&id));
+    let row = app
+        .home
+        .sessions
+        .row(&id)
+        .unwrap_or_else(|| panic!("the unarchived row"));
+    assert!(row.left.is_none());
+    assert!(
+        app.home
+            .sessions
+            .feed_row(&id)
+            .is_some_and(|row| row.left.is_none()),
+        "the row folds live"
+    );
+    assert_eq!(listed(&app), ["✓  resumed work", "○  old work"]);
+}
+
+#[test]
+fn archived_opening_an_archived_row_sends_the_subscribe_sequence() {
+    let mut app = home_with_archived_row();
+    // Opening an archived row resumes it the same way as an exited one:
+    // the same subscribe sequence goes out (`docs/tui.md`, "The session
+    // list"), with no pointer coordinates anywhere.
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(lines[0]["args"]["level"], "summary");
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    accept_summary(&mut app, "s_bbbbbbbbbbbbbbbb", ack);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_bbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
+fn archived_resumed_exit_returns_the_row_under_exited() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    accept_summary(&mut app, "s_bbbbbbbbbbbbbbbb", ack);
+    // The resumed session exits: both counts refetch, and its exit
+    // appends a row without `archived`, so the next scoped answers move
+    // it back under "exited" (`docs/invocation.md`, "Archiving").
+    let retrigger: Vec<Value> = commands(app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited")));
+    assert_eq!(retrigger.len(), 2);
+    let scoped = exited_ask_id(&retrigger);
+    let archived = archived_ask_id(&retrigger);
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "filed work")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(&archived, json!({"sessions": [], "total": 0})))
+            .is_empty()
+    );
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    assert_eq!(stored(&app, "-w"), Some(1));
+    assert_eq!(archived_stored(&app, "-w"), Some(0));
+    assert!(
+        !app.home
+            .sessions
+            .is_archived(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+    );
+    // The scoped page appends the returned row past the loaded one.
+    assert_eq!(listed(&app), ["○  old work", "○  filed work"]);
+}
+
+#[test]
+fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            ack,
+            "io_failed",
+            message
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    // A resume the hub refuses because the workspace is gone shows the
+    // ruled sentence, keeps the row, and adds no rail card
+    // (`docs/tui.md`, "The session list").
+    let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
+    assert_eq!(app.notice(), Some(ruled), "{message}");
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(
+        app.home.sessions.is_archived(&id),
+        "the archived row stays: {message}"
+    );
+    let row = app
+        .home
+        .sessions
+        .row(&id)
+        .unwrap_or_else(|| panic!("the row stays: {message}"));
+    assert_eq!(
+        row.note.as_deref(),
+        Some(ruled),
+        "the row's note: {message}"
+    );
+    assert!(
+        app.home.sessions.cards().is_empty(),
+        "no rail card: {message}"
+    );
+}
+
+#[test]
+fn archived_head_keys_and_text_follow_their_own_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_1111111111111111", "w1", "/w", "-w"),
+            exited_in("s_2222222222222222", "w2", "/w", "-w"),
+            exited_in("s_3333333333333333", "o1", "/other", "-other"),
+        ]}),
+    );
+    // One scoped and one archived ask per project.
+    let ask_id = |project: &str, archived: bool| {
+        fanout
+            .iter()
+            .filter(|line| is_archived(line) == archived)
+            .find(|line| line["args"]["project"] == project)
+            .map(line_id)
+            .unwrap_or_else(|| panic!("an ask for {project} archived={archived}"))
+            .to_owned()
+    };
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-w", false),
+            json!({"sessions": [], "total": 2})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-other", false),
+            json!({"sessions": [], "total": 1})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-w", true),
+            json!({"sessions": [exited_in("s_4444444444444444", "aw", "/w", "-w")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-other", true),
+            json!({"sessions": [
+                exited_in("s_5555555555555555", "ao1", "/other", "-other"),
+                exited_in("s_6666666666666666", "ao2", "/other", "-other"),
+            ], "total": 2}),
+        ))
+        .is_empty()
+    );
+    // The archived rows took fresh keys past the three unscoped rows,
+    // so neither head key is 0 or 1: replacing the head key with 0 or 1
+    // fails the equalities below.
+    let heads: Vec<(u64, String)> = app
+        .home_screen()
+        .unwrap_or_else(|| panic!("a screen"))
+        .list
+        .into_iter()
+        .filter_map(|line| match line {
+            ListLine::ArchivedHead { key, .. } => {
+                let project = app.home.sessions.by_key(key)?.project.clone();
+                Some((key, project))
+            }
+            ListLine::Head { .. }
+            | ListLine::Live { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::Exited { .. }
+            | ListLine::More { .. } => None,
+        })
+        .collect();
+    assert_eq!(heads.len(), 2);
+    for (key, project) in &heads {
+        // `==` keeps each head on its own project: `!=` swaps the
+        // sections and fails the count below.
+        let expected = if project == "-w" { 1 } else { 2 };
+        assert_eq!(
+            app.home_text(Spot::Archived(*key)).as_deref(),
+            Some(&format!("archived · {expected}")[..]),
+            "text for {project}",
+        );
+        let first = if project == "-w" {
+            "s_4444444444444444"
+        } else {
+            "s_5555555555555555"
+        };
+        assert_eq!(*key, row_key(&app, first), "head key for {project}");
+    }
 }

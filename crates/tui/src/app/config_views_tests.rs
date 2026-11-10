@@ -171,6 +171,46 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
 }
 
 #[test]
+fn settings_has_no_screen_reader_row() {
+    // settled: slash_settings returns Effect::None, config_view_open()
+    // holds, and draw_with renders synchronously, so the snapshotted
+    // grid is the settled frame.
+    // The pinned order and count are the contract for this fixture, not
+    // incidental: the open tab holds its keys in the order read, then
+    // its screen rows (`settings_view.rs`, `items`), Key bindings ends
+    // Appearance (`docs/tui.md`, `/settings`, "Rows"; `SCREEN_ROWS`
+    // order), and the fake reads two Appearance keys in fixed order.
+    for on_home in [true, false] {
+        let mut app = if on_home {
+            home(fake())
+        } else {
+            attached(fake())
+        };
+        assert_eq!(slash_settings(&mut app), Effect::None);
+        assert!(app.config_view_open());
+        let painted = painted(&mut app, crate::ThemeSetting::Follow);
+        let text = painted_text(&painted);
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows.iter().any(|row| row.contains("Settings")), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("compaction.tokens")),
+            "{rows:?}"
+        );
+        for needle in ["Screen reader", "tui.screen_reader"] {
+            assert!(
+                rows.iter().all(|row| !row.contains(needle)),
+                "/settings draws no {needle} row: {rows:?}"
+            );
+        }
+        if on_home {
+            insta::assert_snapshot!("settings_has_no_screen_reader_row", text);
+        } else {
+            insta::assert_snapshot!("settings_has_no_screen_reader_row_attached", text);
+        }
+    }
+}
+
+#[test]
 fn the_default_seam_opens_settings_with_no_configure_call() {
     // `App::new` installs a seam of its own: opening `/settings`
     // without any `set_configure` call reads through that default,

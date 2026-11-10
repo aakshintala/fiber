@@ -250,6 +250,9 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
         exit.timed_out.then_some(super::Limit {
             ms: 0,
             monitor: false,
+            // The keeper wire carries no command text: a completion the
+            // keeper writes after a restart keeps today's notice.
+            has_pipe: false,
         }),
         None,
     );

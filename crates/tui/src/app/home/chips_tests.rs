@@ -674,6 +674,9 @@ fn down_walks_live_then_exited_rows_across_sections_and_more() {
                 Some((Spot::Entry(key), name))
             }
             ListLine::More { key, count } => Some((Spot::More(key), format!("… {count} more"))),
+            ListLine::ArchivedHead { key, count } => {
+                Some((Spot::Archived(key), format!("archived · {count}")))
+            }
             ListLine::Head { .. } | ListLine::ExitedHead { .. } => None,
         })
         .unzip();
@@ -699,7 +702,8 @@ fn down_walks_live_then_exited_rows_across_sections_and_more() {
                 | ListLine::Live { .. }
                 | ListLine::ExitedHead { .. }
                 | ListLine::Exited { .. }
-                | ListLine::More { .. } => None,
+                | ListLine::More { .. }
+                | ListLine::ArchivedHead { .. } => None,
             })
         })
         .expect("workspace-bearing project header");

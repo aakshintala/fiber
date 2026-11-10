@@ -175,18 +175,23 @@ program or waiting on a test.
   crate may depend on, so what it shows is that layer alone. It may use
   `fakes`, as a test-only dependency. It reads its arguments with
   `std::env::args`.
-- **A test runs the jig's built binary.** `cargo test` builds the crate's
-  examples, so a jig test starts `target/<profile>/examples/<jig>` (found
-  from `std::env::current_exe`) directly. It never runs `cargo run`, which
-  would wait on the build directory's lock inside the test's deadline. Its
-  first start runs through the shared helper's start bound
-  (`fakes::warm_up`), because the first exec of a freshly linked binary can
-  stall for seconds on macOS (`docs/testing.md`, the first-run stall). The
-  path helper returns `fakes::WarmedJig`, which warms before returning, and
-  exec sites take it, so an unwarmed jig path does not compile.
-  `fakes::warm_up` is for an already-built `CARGO_BIN_EXE_*` product binary
-  and the checked-in MCP fixture script (see `fakes::mcp_fixture`);
-  a jig example binary starts through `WarmedJig::warm`.
+- **A test runs the jig's built binary.** A jig test starts
+  `target/<profile>/examples/<jig>` (found from `std::env::current_exe`)
+  directly. It never runs `cargo run`, which would wait on the build
+  directory's lock inside the test's deadline. Its first start runs through
+  the shared helper's start bound (`fakes::warm_up`), because the first
+  exec of a freshly linked binary can stall for seconds on macOS
+  (`docs/testing.md`, the first-run stall). The path helper returns
+  `fakes::WarmedJig`, which warms before returning, and exec sites take
+  it, so an unwarmed jig path does not compile. `WarmedJig::warm` first
+  compares the binary against every file its sibling `<binary>.d` dep-info
+  file lists and refuses a binary older than any of them, so a narrowed
+  build that skipped the examples fails loud naming the stale binary and
+  `cargo build --examples` instead of running stale bytes. A binary with no
+  sibling dep-info file warms unchecked. `fakes::warm_up` is for an
+  already-built `CARGO_BIN_EXE_*` product binary and the checked-in MCP
+  fixture script (see `fakes::mcp_fixture`); a jig example binary starts
+  through `WarmedJig::warm`.
 - **Its own logic is tested from shared support.** Code in a jig that a
   test checks without running the binary, such as its argument parsing,
   lives in a support file under the crate's `tests/support/`. The jig

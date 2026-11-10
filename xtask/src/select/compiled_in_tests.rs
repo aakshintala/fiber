@@ -584,3 +584,32 @@ fn an_include_str_in_a_comment_is_ignored() {
         Vec::<String>::new()
     );
 }
+
+/// The rows the fold tests compile in: the loop review support they read
+/// through `#[path]`, plus one row per fixture session those tests
+/// compile in. Each stays listed while the tests include it, so a row
+/// deleted without its include must fail the gate.
+fn pinned_rows() -> [(&'static str, &'static str); 4] {
+    [
+        ("crates/loop/tests/support/review.rs", "main"),
+        (
+            "crates/loop/tests/fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl",
+            "main",
+        ),
+        (
+            "crates/loop/tests/fixtures/reviewer_consent/field-1-typed-restart-and-run/events.jsonl",
+            "main",
+        ),
+        (
+            "crates/loop/tests/fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl",
+            "main",
+        ),
+    ]
+}
+
+#[test]
+fn the_pinned_rows_survive_unlisted_or_removed() {
+    for p in pinned_rows() {
+        assert!(COMPILED_IN.contains(&p));
+    }
+}

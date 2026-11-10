@@ -9,7 +9,10 @@
 -- `reasoning_effort`. A service ending `-image`, or matching an
 -- `image_generation` row, is left out, as is one with no window: a model
 -- without one is left out with `model_invalid` (docs/model-routing.md,
--- "What a provider extension declares"). Gateway metadata comes only from
+-- "What a provider extension declares"). A kept service whose bare name no
+-- serving-endpoint name matches is left out too, named once in the
+-- diagnostic log with its id and the reason (docs/model-routing.md,
+-- "Model discovery"). Gateway metadata comes only from
 -- the external-provider catalog, matched by `modelKey` and `metadataFor`;
 -- the context-window pair 922000/128000 reads as 1,050,000. Discovery
 -- pages each endpoint's `next_page_token` back as `page_token`, at most 20
@@ -30,6 +33,9 @@ local SERVICES_FIELD = "model_services"
 local CATALOG_PATH = "/api/ai-gateway/v2/external-provider-models"
 local CATALOG_QUERY = "?page_size=1000"
 local CATALOG_FIELD = "models"
+local ENDPOINTS_PATH = "/api/2.0/serving-endpoints"
+local ENDPOINTS_QUERY = ""
+local ENDPOINTS_FIELD = "endpoints"
 
 -- Every byte outside A-Z, a-z, 0-9 and -_.~ becomes %XX.
 local function encode(text)
@@ -67,7 +73,8 @@ local function pages(workspace, key, path, query, field)
   for _ = 1, MAX_PAGES do
     local url = SCHEME .. workspace .. path .. query
     if token ~= nil then
-      url = url .. "&page_token=" .. encode(token)
+      local sep = query == "" and "?" or "&"
+      url = url .. sep .. "page_token=" .. encode(token)
     end
     local reply = host.http({
       method = "GET",
@@ -432,6 +439,13 @@ fiber.provider("databricks", {
       end
       local services = pages(workspace, arg.key, SERVICES_PATH, SERVICES_QUERY, SERVICES_FIELD)
       local catalog = pages(workspace, arg.key, CATALOG_PATH, CATALOG_QUERY, CATALOG_FIELD)
+      local endpoints = pages(workspace, arg.key, ENDPOINTS_PATH, ENDPOINTS_QUERY, ENDPOINTS_FIELD)
+      local endpoint_keys = {}
+      for _, row in ipairs(endpoints) do
+        if type(row) == "table" and type(row.name) == "string" then
+          endpoint_keys[model_key(row.name)] = true
+        end
+      end
       local image_keys = {}
       for _, row in ipairs(catalog) do
         if
@@ -450,11 +464,21 @@ fiber.provider("databricks", {
         thinking = module
       end
       local list = {}
+      local omitted = {}
       for _, service in ipairs(services) do
         local entry = entry_for(service, catalog, image_keys, thinking)
         if entry ~= nil then
-          list[#list + 1] = entry
+          local bare = service.name:gsub("^model%-services/system%.ai%.", "")
+          if endpoint_keys[model_key(bare)] then
+            list[#list + 1] = entry
+          else
+            omitted[#omitted + 1] = entry.id
+          end
         end
+      end
+      table.sort(omitted)
+      for _, id in ipairs(omitted) do
+        host.log("databricks models: " .. id .. " left out: no serving endpoint with a matching name")
       end
       table.sort(list, function(a, b)
         return a.id < b.id

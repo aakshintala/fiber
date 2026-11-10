@@ -243,6 +243,20 @@ pub(crate) fn session_line_in_turn(
     envelope(session, kind, Some(turn), payload, action)
 }
 
+/// Seeds the attached screen's pages with `seed` after the launch
+/// clear, so an ended install has a kept screen to preserve: the
+/// event-loop open tests call it through the post-`Connected` hook,
+/// since no in-test-file hook reaches the screen state (the screen is
+/// private, its accessors are `pub(super)`, `load_inner` misses the
+/// cleared index, and `on_line` gates the opening session's lines
+/// away).
+pub(crate) fn seed_after_launch(app: &mut App, seed: &[contract::Envelope]) {
+    for envelope in seed {
+        app.attached_screen_mut().pages_mut().apply(envelope);
+    }
+    app.attached_screen_mut().follow();
+}
+
 /// Feeds `count` completed one-line driver turns into `app`, oldest
 /// first, with sequence numbers from `seq`, so the conversation grows
 /// taller than the window and scrolls. A wheel test scrolls up from the
