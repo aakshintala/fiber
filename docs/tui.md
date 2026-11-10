@@ -69,7 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete, Backspace and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete, Backspace and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -303,9 +303,13 @@ each row.
 Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project, and "archived · N" from the `total` of one with `archived`. The terminal asks for them when the project first appears, after a reconnect, and when one of the project's sessions leaves, is deleted or is archived, with one ask of each in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
-the hub. A resume the hub refuses because the workspace is gone shows
-"Cannot resume: <path> no longer exists. Delete removes the session.": it
-adds no rail card, and the row stays under "exited". Opening an archived row resumes it the same way, which unarchives it. A ✕ on a live row stops that session ("Quit"). Delete on a
+the hub. A session whose workspace is gone and cannot be made again opens
+read only: the hub replays its log (`docs/invocation.md`, "Lifecycle"), and
+the conversation shows as it would live, paging as any session does. A
+one-row bar replaces the input box: "<path> no longer exists. Read only.",
+dim, with the path in `attention`. It adds no rail card, takes no prompt,
+and Esc or ⌥0 go back home; the row stays where it was, archived or
+exited. Opening an archived row resumes it the same way, which unarchives it. A ✕ on a live row stops that session ("Quit"). Delete on a
 focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. A ✕ on an exited row, or Backspace on it, archives that session through the hub and asks nothing, since opening it undoes that. Backspace on a live, unreadable or archived row does nothing, and an archived row has no ✕. Delete or Shift+Backspace on a
 selected exited or archived row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
@@ -461,15 +465,14 @@ The default cards, in order:
   MCP server that is down. Every number has a plain label that says what it
   measures, such as "tokens in / out", "cache hits" or "output speed, last
   reply", never a bare abbreviation. The branch slot, every figure row, the
-  context bar and the two lines under it are drawn from the session's first
+  context bar and the line under it are drawn from the session's first
   frame. The branch slot stays blank until status supplies a branch name, and
   remains blank outside a repository. A figure not known yet, such as the
   speed before the first timed reply, shows a dim "—", so no row moves when
   its data arrives. The bar is drawn empty with 17 cells
   in rule and a dim "—" for context size until its figures are known. Zero is
-  shown as zero. The compaction marker carries one line saying
-  what a compaction is: when the context fills, Fiber writes a summary and the
-  work continues in a fresh context (`docs/compaction.md`).
+  shown as zero. "turns" counts every turn the session has started, the
+  running one included, as `session_status` counts them (`docs/events.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one six-row card, running first, with finished delegates
   folded and whole-entry scrolling. Detail rows retain each delegate's
@@ -494,7 +497,6 @@ cut with "…". The cards draw:
   anthropic/claude-opus      high ∴
   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│          268k
   compacts at 400k    26% of window
-  then a summary, fresh context
   tokens in / out     412k / 18.2k
   cache hits                   91%
   cache resets in              42m
@@ -531,9 +533,8 @@ cut with "…". The cards draw:
   The context bar is 17 cells of ▆, filled in `info` toward the compaction point
   and `rule` for the rest, then the compaction marker, │ in `attention`, and the
   context size right-aligned ("268k"). Under it, "compacts at 400k" dim, and
-  the share of the window right-aligned, dim; then the one line saying what a
-  compaction is, dim. Clicking the bar or the lines under it opens the context
-  breakdown. Each figure after that is a row: its plain label dim, and the
+  the share of the window right-aligned, dim. Clicking the bar or the line
+  under it opens the context breakdown. Each figure after that is a row: its plain label dim, and the
   figure right-aligned in the text colour; a down MCP server is "✗ <server>
   down" right-aligned in `error`. "cache resets in" is the time left before
   the prompt cache expires, counted from the end of the last model request,
@@ -1198,6 +1199,7 @@ install still running.
       | `retry.max_delay_ms` | 10 s, 30 s, 1 min, 2 min, 5 min |
       | `hub.idle_exit_ms`, `session.idle_exit_ms` | 5 min, 15 min, 30 min, 1 h, 2 h |
       | `model_lists.refresh_after` | 1 h, 6 h, 12 h, 24 h, 3 d, 7 d |
+      | `session.keep_exited` | Keep all, 5, 10, 20, 50 sessions |
 
       Each list holds the key's default. A value a file sets that is not
       in the list shows with "(custom)" after it, and the next step goes
@@ -2389,6 +2391,7 @@ through the `input_status` slot ("Extension seams").
 | Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
 | Move focus from the input box into the conversation | `navigate` | Shift+Tab | click an item |
 | Move focus to the next or previous item | `focus_next_prev` | ↓ ↑, j k | click an item |
+| Move to the first row of the next or previous project in the session list | `focus_project` | Shift+↓ Shift+↑ | click a row |
 | Open the focused item | `open_focused` | Enter | click it |
 | Copy the focused item | `copy_focused` | y | select it |
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
@@ -2666,7 +2669,13 @@ polite: the old session's request waits in the queue for an answer.
 `/login` logs in from the terminal with the same flow as `fiber login`. It
 opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers under
 "Providers", each tagged `browser` for OAuth or `key` for an API key, then
-the extension credentials under "Secrets", the first row focused.
+the extension credentials under "Secrets", the first row focused. Providers
+with a usable credential come first, each marked "✓ <label>" in `success`
+with its default label, or the variable's name for a key read from the
+environment. The rest follow in the text colour. Every row can be picked,
+so a signed-in provider can be signed in again or under another label.
+Footer on the list: "↑↓ move · Enter log in · Esc close"; Esc or the ✕
+closes the overlay.
 
 On a remote terminal, login runs on the hub and stores its credential in the
 hub's Fiber home. OAuth always uses the device-code step below; Esc cancels
