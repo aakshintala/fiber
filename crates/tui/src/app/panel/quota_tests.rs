@@ -273,12 +273,12 @@ fn no_queries_without_a_card_session_or_live_link() {
 fn sent(effect: crate::app::Effect) -> Vec<Value> {
     match effect {
         crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit

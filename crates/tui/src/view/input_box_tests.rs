@@ -1132,12 +1132,12 @@ fn item_opened(app: &mut App) {
         .on_click(crate::mouse::TargetId::Home(crate::home::Spot::Entry(key)))
     {
         crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit

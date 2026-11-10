@@ -152,12 +152,12 @@ fn opened(app: &mut App) {
         .unwrap_or_else(|| panic!("a row"));
     let out: Vec<Value> = match app.on_click(TargetId::Home(crate::home::Spot::Entry(key))) {
         crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
@@ -634,12 +634,12 @@ fn clicking_stop_sends_job_stop_to_the_parent() {
     );
     let lines: Vec<Value> = match app.on_click(TargetId::Item(Spot::Stop)) {
         crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
@@ -693,12 +693,12 @@ fn the_stop_target_is_reached_from_the_keyboard() {
     assert!(reached, "Shift+Tab then ↑ reaches the stop target");
     let lines: Vec<Value> = match app.on_key(Key::Enter, clock.now()) {
         crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
@@ -1652,12 +1652,12 @@ fn click_open(app: &mut App) -> String {
         .on_click(TargetId::Panel(crate::app::panel::Spot::Delegate(serial)))
     {
         crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
         crate::app::Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit

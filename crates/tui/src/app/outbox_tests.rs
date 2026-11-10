@@ -172,13 +172,7 @@ fn send_holds_the_line_until_hello_when_waiting() {
         ),
         None
     );
-    assert_eq!(
-        outbox.held,
-        [crate::app::Sent {
-            id: contract::CommandId("c_1".to_owned()),
-            line,
-        }]
-    );
+    assert_eq!(outbox.held, [line]);
     assert!(outbox.pending.contains_key("c_1"));
 }
 
@@ -438,7 +432,7 @@ fn a_held_start_is_pending_and_goes_out_on_hello() {
     assert!(app.outbox.held.is_empty());
     assert_eq!(app.outbox.link, Link::Up);
     assert!(
-        lines.contains(&held[0].line),
+        lines.contains(&held[0]),
         "the held start goes out: {lines:?}"
     );
     // `start` carries no `session_id`, so it is never kept.

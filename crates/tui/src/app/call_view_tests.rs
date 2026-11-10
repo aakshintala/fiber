@@ -130,12 +130,12 @@ fn open_inline(app: &mut App, id: usize) {
 fn sent(effect: Effect) -> Vec<Value> {
     match effect {
         Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
         Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_default())
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
         Effect::None => Vec::new(),
         Effect::Quit

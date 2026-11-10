@@ -348,12 +348,12 @@ fn open_first(app: &mut App) -> Vec<Value> {
         .unwrap_or_else(|| panic!("a row"));
     match app.home_click(HomeSpot::Entry(key)) {
         Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
         Effect::SendTracked(sents) => sents
             .iter()
             .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
         Effect::None
         | Effect::Quit
