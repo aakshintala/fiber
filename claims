@@ -226,3 +226,6 @@ crates/main/tests/extension_host/review_sweep.rs	fiber-4538	plan	2026-11-10T10:1
 crates/tui/tests/paging_open.rs	fiber-4546	plan	2026-11-10T10:48:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/databricks/tests/models-endpointless-service-left-out.json	fiber-4257	plan	2026-11-10T10:59:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/databricks/tests/models-endpoints-follow-the-token.json	fiber-4257	plan	2026-11-10T10:59:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-10T11:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/fixtures/reviewer_eval/seeded.jsonl	fiber-477	plan	2026-11-10T11:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-477	plan	2026-11-10T11:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
