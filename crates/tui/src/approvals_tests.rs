@@ -1895,3 +1895,51 @@ fn an_approval_rewrite_reraise_without_keys_restores_the_requested_summary() {
     no_tool_mark(&shown);
     assert_eq!(row(&queue, 5), "▸ 2 Deny  note");
 }
+
+#[test]
+fn an_approval_rewrite_without_a_requested_call_draws_no_tool_row() {
+    let queue = folded(&[rewrite_ask(
+        S_A,
+        "a_1",
+        "r_1",
+        "read",
+        serde_json::json!({"arguments": {"path": "b.txt"}, "changed_by": ["fiber.test/guard"]}),
+    )]);
+    let shown = rendered(&queue);
+    assert_eq!(
+        shown.lines[1],
+        "runs a command · asked by the global rule read"
+    );
+}
+
+#[test]
+fn an_approval_rewrite_keeps_the_dim_mark_after_a_long_summary() {
+    let long = "a/very/long/path/that/keeps/going/on/and/on/file.txt";
+    let queue = folded(&rewritten_read(
+        "a.txt",
+        long,
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    let shown = rendered(&queue);
+    let line = format!("read {long} · via fiber.test/guard");
+    assert_eq!(shown.lines[1], line);
+    assert!(
+        shown.marks.contains(&mark(1, 0..4, tool_style())),
+        "the bold tool, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown
+            .marks
+            .contains(&mark(1, 5..5 + long.len(), bold_style())),
+        "the bold rewritten summary, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown
+            .marks
+            .contains(&mark(1, 5 + long.len()..line.len(), dim_style())),
+        "the dim via mark ending the row, in {:?}",
+        shown.marks
+    );
+}

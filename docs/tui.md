@@ -1821,6 +1821,12 @@ A review that offers a rule shows the remembering choices:
   " · irreversible" in `error` when the call declares itself so, and "Esc
   puts it aside" dim, right-aligned.
 - Then the tool's name bold in `info` and its main argument bold, wrapped.
+  When a `before_tool` hook rewrote the call, the row ends with " · via
+  <names>", dim, naming the extensions that took attribution; a rewrite no
+  extension took attribution for draws no mark. The summary is the arguments
+  that will run, not the ones the model sent.
+- A request raised again keeps what the person typed, and shows the
+  arguments of the latest raise.
 - Then one dim facts line: the call's declared effects joined by ", ",
   " · " and the paths it names, and
   " · " and why it asked: "asked by the <scope> rule <prefix>", "a standing

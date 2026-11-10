@@ -2,7 +2,7 @@
 //! the panel text it draws (`docs/tui.md`, "An approval").
 
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
-use contract::events::{AskStep, Decision, Escalation, RuleOffer, RuleScope};
+use contract::events::{AskStep, Decision, Escalation, PermissionRequested, RuleOffer, RuleScope};
 use contract::shapes::Effect;
 use ratatui::style::{Modifier, Style};
 
@@ -27,9 +27,15 @@ pub(super) enum Choice {
 /// An approval: the call it asks about and the person's choice so far.
 #[derive(Debug, Clone)]
 pub(super) struct Approval {
-    /// The asking call's tool and main argument, when its
-    /// `tool_call_requested` was seen.
+    /// The asking call's tool and main argument: the rewrite while the
+    /// latest raise carries one, else the requested summary.
     pub(super) call: Option<(String, String)>,
+    /// The first raise's requested tool and summary, kept beside the
+    /// card: a re-raise that omits the rewrite restores it.
+    pub(super) requested: Option<(String, String)>,
+    /// The latest raise's rewrite attribution, empty when none: the tool
+    /// row draws the dim via mark only when it names someone.
+    pub(super) changed_by: Vec<String>,
     pub(super) reversible: bool,
     pub(super) effects: Vec<Effect>,
     pub(super) paths: Vec<String>,
@@ -124,6 +130,18 @@ fn marked(line: usize, bytes: Range<usize>, style: Style) -> Option<Mark> {
 }
 
 impl Approval {
+    /// The same request raised again: the latest raise's rewrite wins,
+    /// and a raise without one restores the kept requested summary. What
+    /// the person typed stays.
+    pub(super) fn reraise(&mut self, call: Option<(String, String)>, asked: &PermissionRequested) {
+        if self.requested.is_none() {
+            self.requested = call;
+        }
+        let (display, changed_by) = super::retargeted(&self.requested, asked);
+        self.call = display;
+        self.changed_by = changed_by;
+    }
+
     /// The rule an allow can remember, offered only at review.
     fn rule(&self) -> Option<&RuleOffer> {
         match &self.step {
@@ -310,10 +328,18 @@ impl Approval {
         }
         marks.extend(marked(0, right_from..last, DIM));
         // Then the tool's name bold in `info` and its main argument bold,
-        // or the tool alone when the summary is empty.
+        // or the tool alone when the summary is empty. A rewrite names
+        // who rewrote it after the summary, dim; a rewrite no extension
+        // took attribution for draws no mark.
         if let Some((tool, arguments)) = &self.call {
             let line = lines.len();
-            lines.push(format::label(tool, arguments));
+            let mut text = format::label(tool, arguments);
+            let label_end = text.len();
+            if let Some(mark) = format::via(&self.changed_by) {
+                text.push_str(" · ");
+                text.push_str(&mark);
+            }
+            lines.push(text);
             let end = lines.last().map(String::len).unwrap_or_default();
             let tool_end = tool.len().min(end);
             if tool_end > 0 {
@@ -325,8 +351,9 @@ impl Approval {
             }
             if !arguments.is_empty() {
                 let argument_from = tool_end.saturating_add(1).min(end);
-                marks.extend(marked(line, argument_from..end, ARGUMENT));
+                marks.extend(marked(line, argument_from..label_end.min(end), ARGUMENT));
             }
+            marks.extend(marked(line, label_end.min(end)..end, DIM));
         }
         // Then the dim facts line, a blank row, the numbered choices, a
         // blank row and the dim hint.

@@ -654,7 +654,9 @@ their contents.
 effects, its paths, and which step of the order above sent it here. It also
 says why a person is asked: on a standing ask, the rule that asked; on a
 review, the escalation's cause; and on a review, the rule an allow
-can remember.
+can remember. When a `before_tool` hook rewrote the call, it also carries
+the rewritten `arguments` with `changed_by`, so the person judges the call
+that will run.
 
 `permission_resolved` carries the decision, the reason, and **what decided it**:
 the credential deny, a human, a standing rule, a session grant or the
