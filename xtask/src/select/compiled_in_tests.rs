@@ -584,3 +584,63 @@ fn an_include_str_in_a_comment_is_ignored() {
         Vec::<String>::new()
     );
 }
+
+/// The rows #4510 added to [`COMPILED_IN`]: the loop review support the
+/// fold tests read through `#[path]`, plus one row per fixture session
+/// those tests compile in. Each stays listed while the tests include it,
+/// so a row deleted without its include must fail the gate.
+fn pinned_rows() -> [(&'static str, &'static str); 4] {
+    [
+        ("crates/loop/tests/support/review.rs", "main"),
+        (
+            "crates/loop/tests/fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl",
+            "main",
+        ),
+        (
+            "crates/loop/tests/fixtures/reviewer_consent/field-1-typed-restart-and-run/events.jsonl",
+            "main",
+        ),
+        (
+            "crates/loop/tests/fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl",
+            "main",
+        ),
+    ]
+}
+
+/// The pinned rows `list` does not name.
+fn missing_pinned_rows<'a>(list: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    pinned_rows()
+        .into_iter()
+        .filter(|pinned| !list.contains(pinned))
+        .collect()
+}
+
+#[test]
+fn the_pinned_rows_survive_unlisted_or_removed() {
+    assert_eq!(
+        missing_pinned_rows(COMPILED_IN),
+        Vec::<(&str, &str)>::new(),
+        "a pinned row left the compiled-in list while the fold tests still compile it in"
+    );
+}
+
+#[test]
+fn the_pinning_check_names_each_row_removed_singly() {
+    for pinned in pinned_rows() {
+        let kept: Vec<(&str, &str)> = COMPILED_IN
+            .iter()
+            .copied()
+            .filter(|kept| *kept != pinned)
+            .collect();
+        assert_eq!(
+            missing_pinned_rows(&kept),
+            vec![pinned],
+            "removing {pinned:?} must fail the pinning check on that row alone"
+        );
+    }
+    assert_eq!(
+        missing_pinned_rows(&[]),
+        pinned_rows().to_vec(),
+        "removing every pinned row must fail the pinning check on all four"
+    );
+}
