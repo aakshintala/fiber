@@ -2219,6 +2219,7 @@ fn reopened_history(older_ending: bool) {
     let (hand_tx, hand_rx) = mpsc::channel();
     let link = WireLink::new(Arc::clone(&wire), hand_tx);
     let count = Arc::clone(&link.count);
+    let count_for_taken = Arc::clone(&link.count);
     let (mut lp, theirs, tx, rx) = opened();
     let session_id = lp.app.session().unwrap().clone();
     let feed = Feed::new(tx.clone(), lp.hub.credits());
@@ -2381,6 +2382,17 @@ fn reopened_history(older_ending: bool) {
         wait.recv_or_fail(&histories, "the initial history request"),
         0
     );
+    // Its own bound, made when this wait starts: the replay drain is a slow
+    // step of its own, and must not use up the late-answer wait's time
+    // (`docs/testing.md`, "Waits and timeouts"). The count is the existing
+    // hand-out signal the server's late-answer wait reads.
+    let drained = Deadline::after(DEADLINE);
+    while count_for_taken.load(Ordering::SeqCst) < prefix + script_len {
+        if drained.left().is_zero() {
+            panic!("waited {DEADLINE:?} for the replay to drain");
+        }
+        std::thread::yield_now();
+    }
     Deadline::after(DEADLINE).recv_or_fail(&taken, "the reader to take the late answer");
     // The fold held page zero, so the top owes nothing: a few pages down
     // reach the page after it, which the landing dropped.
@@ -2407,6 +2419,8 @@ fn reopened_history(older_ending: bool) {
     tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
+    // (`docs/tui.md`, "History and paging": a pass blocks `history`, so the
+    // reopened fold's history waits until the pass ends; scrolling waits too).
     assert!(
         second >= prefix + script_len,
         "history before the last fold line: {second}, prefix {prefix}, replay {script_len}"
@@ -2420,6 +2434,8 @@ fn reopened_history(older_ending: bool) {
     let seen = Deadline::after(DEADLINE).recv_or_fail(&server_done, "the command server to end");
     server.join().unwrap();
     command_reader.join().unwrap();
+    // (`docs/tui.md`, "History and paging": the late answer is discarded by
+    // its id, and the page loads in a frame after the pass ends).
     assert!(seen > 1, "pages load after the pass ends");
 }
 
