@@ -43,6 +43,8 @@ pub enum HubCommand {
     Sessions(SessionsArgs),
     /// Starts a session in the workspace.
     Start(Start),
+    /// Archives an exited session.
+    Archive(Archive),
     /// Deletes an exited session.
     Delete(Delete),
     /// Prunes the hub's machine.
@@ -143,6 +145,10 @@ pub struct Recent {
     /// The project's key; absent means every project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// With true, lists only archived sessions; absent or false leaves
+    /// them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 /// The `args` of `sessions`.
@@ -156,6 +162,10 @@ pub struct SessionsArgs {
     /// without opening any session log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
+    /// With true, lists only archived sessions; absent or false leaves
+    /// them out, as for `recent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 /// The `args` of `start`.
@@ -183,6 +193,14 @@ pub struct Start {
     /// The session's first prompt, sent after the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<SentPart>>,
+}
+
+/// The `args` of `archive`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Archive {
+    /// The exited session to archive.
+    pub session: SessionId,
 }
 
 /// The `args` of `delete`.

@@ -18,6 +18,7 @@
 //! client has been connected for `hub.idle_exit_ms`
 //! (`docs/configuration.md`); an installed hub never exits for being idle.
 
+mod archive;
 mod attention;
 mod closed;
 mod connection;

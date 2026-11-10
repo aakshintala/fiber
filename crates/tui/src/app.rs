@@ -2270,6 +2270,7 @@ impl App {
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
@@ -2380,6 +2381,7 @@ impl App {
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
@@ -2604,6 +2606,7 @@ impl App {
             | EventKind::TurnCompleted
             | EventKind::SteeringApplied
             | EventKind::DirectoryAdded
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded
@@ -2766,6 +2769,7 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded

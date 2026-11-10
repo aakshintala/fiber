@@ -1152,6 +1152,12 @@ fn on_command(
                 ),
             )
         }
+        "archive" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::archive::archive(hub, &line.args),
+        ),
         "delete" => match crate::delete::delete(hub, &line.args) {
             Ok(result) => answer(writer, hub, &line.id, Ok(result)),
             Err(refused) => {

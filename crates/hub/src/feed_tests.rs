@@ -743,6 +743,29 @@ fn start_seeds_crashed_and_waiting_sessions_but_not_running_or_gone_ones() {
 }
 
 #[test]
+fn start_leaves_archived_crashes_and_waiting_exits_unseeded() {
+    let temp = Temp::new();
+    temp.session(1, "p", "turn_completed");
+    let mut crashed = row(1, "p", "crashed", Some("idle"));
+    crashed["archived"] = true.into();
+    temp.append(&crashed);
+    temp.session(2, "p", "fiber_exited");
+    let mut waiting = row(2, "p", "exited", Some("waiting"));
+    waiting["archived"] = true.into();
+    temp.append(&waiting);
+    temp.session(3, "p", "turn_completed");
+    temp.append(&row(3, "p", "crashed", Some("idle")));
+    let (feed, _) = new_feed(&temp.dir);
+    feed.start();
+    // Archived rows never seed, whatever their exit: only the ordinary
+    // crash does.
+    assert_eq!(entry_of(&feed, &id(1)), None);
+    assert_eq!(entry_of(&feed, &id(2)), None);
+    assert_eq!(entry_of(&feed, &id(3)), Some("crashed"));
+    stop_within(&feed);
+}
+
+#[test]
 fn dismiss_drops_only_a_crashed_session() {
     let temp = Temp::new();
     let (feed, _, _sub, _) = leave(&temp, "turn_completed", "idle", true);
@@ -784,6 +807,10 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         json!({"project": true}),
         json!({"limit": "x"}),
         json!({"before": id(5)}),
+        json!({"archived": 1}),
+        json!({"archived": "yes"}),
+        json!({"archived": null}),
+        json!({"archived": true, "limit": "x"}),
     ] {
         let refused = feed.recent(&args(bad.clone())).unwrap_err();
         assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
