@@ -852,14 +852,15 @@ pub(super) fn to_completed_reported(
     // `assemble` consumes the end.
     let moved_limit = match (finished.stop, limit) {
         (Some(StopKind::Timeout), Some(limit)) if !limit.monitor && !finished.indeterminate => {
-            Some(limit.ms)
+            Some((limit.ms, limit.has_pipe))
         }
         _ => None,
     };
     let mut output = assemble(limit, finished, None, None);
-    if let Some(ms) = moved_limit {
+    if let Some((ms, has_pipe)) = moved_limit {
         output.error = Some(Failure::from(&ToolError::from(ShellError::TimedOutMoved {
             ms,
+            has_pipe,
         })));
     }
     output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
