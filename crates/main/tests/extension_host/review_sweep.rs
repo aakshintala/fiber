@@ -15,14 +15,23 @@
 
 use crate::support;
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, mpsc};
+use std::thread;
 
-use contract::provider::Input;
+use contract::clock::Clock;
+use contract::events::CacheLifetime;
+use contract::provider::{Input, ModelRequest};
 use contract::shapes::{Effect, Failure, Tokens};
 use contract::{ErrorCode, ThinkingLevel};
-use fakes::{Scripted, ScriptedProvider, call_usage};
+use fakes::{
+    Deadline, MUST_SUCCEED_WITHIN, ProviderServer, Response, Scripted, ScriptedProvider,
+    call_usage, fingerprint,
+};
+use serde_json::json;
+use support::package::install_test_provider_with_headers;
 use support::review_sweep::*;
+use support::{Setup, hello, write_json};
 
 fn entry_json(id: &str, label: &str) -> String {
     format!(
@@ -1881,5 +1890,205 @@ fn drive_stops_at_170_real_requests() {
     assert!(
         last.contains("block block unrun unrun"),
         "the table marks the stopped cells unrun: {last}"
+    );
+}
+
+/// The sweep builds its reviewer provider exactly like a session builds
+/// it: a subscription credential's signing headers ride the sweep's
+/// requests, so the endpoint answers instead of rejecting the credential
+/// (`docs/model-routing.md`, "Keys, tokens and OAuth"). The sweep side
+/// goes through the shared constructor the example drives; the session
+/// side replays the startup lookup, reusing the session read for the
+/// reviewer's own provider.
+#[test]
+fn sweep_and_session_reviewer_requests_carry_the_same_subscription_headers() {
+    let server = ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/lua-models" | "/lua-token" => Response::status(200, "{}"),
+        "/v1/responses" => hello(),
+        _ => Response::status(500, "unrouted"),
+    })
+    .unwrap();
+    let setup = Setup::without_provider();
+    install_test_provider_with_headers(
+        &setup,
+        &server.url(),
+        &[("chatgpt-account-id", "acc-pin-test")],
+        &[("x-test-sign", "signed")],
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "test/m1"}),
+    );
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+
+    let request = || ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::OneHour,
+        cache_key: "s_pinreviewer".into(),
+        conversation: Vec::new().into(),
+        previous_end: None,
+        sent_tools: None,
+        max_output_tokens: None,
+        media: Default::default(),
+    };
+
+    // The sweep side: the shared constructor the example drives.
+    let (sweep_provider, _) =
+        reviewer_provider(&setup.home(), &setup.workspace(), "test/m1", &clock).unwrap();
+    let sweep_request = request();
+    let (sweep_tx, sweep_rx) = mpsc::channel();
+    let sweep_bound = Deadline::after(MUST_SUCCEED_WITHIN);
+    thread::spawn(move || {
+        sweep_tx
+            .send(sweep_provider.call(&sweep_request).run(&mut |_| {}))
+            .unwrap();
+    });
+    sweep_bound
+        .recv_or_fail(&sweep_rx, "the sweep reviewer call to answer")
+        .expect("the sweep reviewer call succeeds");
+
+    // The session side: the startup lookup, reusing the session read for
+    // the reviewer's own provider.
+    let config = config::Config::load(config::Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: config::ProjectKey::new("review-sweep").unwrap(),
+        overrides: vec!["reviewer.model=test/m1".to_owned()],
+    })
+    .unwrap();
+    let (mut providers, _notices) = extensions::Providers::load(&setup.home()).unwrap();
+    let loaded = extensions::SessionExtensions::load(
+        &setup.home(),
+        &config,
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
+        None,
+    );
+    let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        run_command(command, timeout, &clock)
+    };
+    let lookup = cli::placeholder_lookup(&setup.home(), &providers, clock.as_ref());
+    routing::lua_providers::add_lua(&loaded, &mut providers, &config, &run, &lookup).unwrap();
+    let session = providers.resolve("test/m1").unwrap();
+    let here = routing::connect::Here {
+        workspace: setup.workspace(),
+        clock: Arc::clone(&clock),
+        cache_diagnostics: false,
+        databricks_request_tags: None,
+    };
+    let failed = |error: config::ConfigError| Failure {
+        code: error.code(),
+        message: error.to_string(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    let mut credentials: BTreeMap<String, (String, routing::lua_providers::KeyAndSigner)> =
+        BTreeMap::new();
+    let label = config.credentials().credential_label(session.provider);
+    let read = routing::lua_providers::session_credential(
+        providers.lua(&session.provider.name),
+        session.provider,
+        &label,
+        || {
+            config
+                .credentials()
+                .credential_with(session.provider, &label, &run)
+                .map(|read| read.secret)
+                .map_err(failed)
+        },
+    )
+    .unwrap();
+    credentials.insert(session.provider.name.clone(), (label, read.clone()));
+    let mut lookup =
+        |provider: &config::ProviderData| -> Result<(String, routing::lua_providers::Access), Failure> {
+            let access = routing::scripted::access(provider, || {
+                if let Some((_, read)) = credentials.get(&provider.name) {
+                    return Ok(routing::lua_providers::Access::new(
+                        providers.lua(&provider.name),
+                        read.clone(),
+                    ));
+                }
+                let label = config.credentials().credential_label(provider);
+                let read = routing::lua_providers::session_credential(
+                    providers.lua(&provider.name),
+                    provider,
+                    &label,
+                    || {
+                        config
+                            .credentials()
+                            .credential_with(provider, &label, &run)
+                            .map(|read| read.secret)
+                            .map_err(failed)
+                    },
+                )?;
+                credentials.insert(provider.name.clone(), (label.clone(), read.clone()));
+                Ok(routing::lua_providers::Access::new(
+                    providers.lua(&provider.name),
+                    read,
+                ))
+            })?;
+            let label = credentials
+                .get(&provider.name)
+                .map(|(label, _)| label.clone())
+                .unwrap_or_else(|| config.credentials().credential_label(provider));
+            Ok((label, access))
+        };
+    let chosen = routing::reviewer::choose(&providers, &config, &session, &here, &mut lookup, None)
+        .unwrap()
+        .expect("reviewer.model=test/m1 names a reviewer");
+    let session_bound = Deadline::after(MUST_SUCCEED_WITHIN);
+    let session_request = request();
+    let (session_tx, session_rx) = mpsc::channel();
+    thread::spawn(move || {
+        session_tx
+            .send(chosen.provider.call(&session_request).run(&mut |_| {}))
+            .unwrap();
+    });
+    session_bound
+        .recv_or_fail(&session_rx, "the session reviewer call to answer")
+        .expect("the session reviewer call succeeds");
+
+    let calls: Vec<_> = server
+        .requests()
+        .into_iter()
+        .filter(|received| received.path == "/v1/responses")
+        .collect();
+    // The sweep call finishes before the session call starts, so the
+    // first two `/v1/responses` requests are the sweep's then the
+    // session's; every request must carry the subscription headers
+    // (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    let (sweep_call, session_call) = (&calls[0], &calls[1]);
+    assert_eq!(
+        session_call.header("authorization"),
+        Some(fingerprint("Bearer tok-pin-test").as_str()),
+        "the session sends the subscription bearer"
+    );
+    assert_eq!(
+        session_call.header("chatgpt-account-id"),
+        Some("acc-pin-test"),
+        "the session sends the credential's account header"
+    );
+    assert_eq!(
+        session_call.header("x-test-sign"),
+        Some("signed"),
+        "the session sends the sign header"
+    );
+    assert_eq!(
+        sweep_call.header("authorization"),
+        session_call.header("authorization"),
+        "the sweep sends the session's bearer, not the stored key"
+    );
+    assert_eq!(
+        sweep_call.header("chatgpt-account-id"),
+        session_call.header("chatgpt-account-id"),
+        "the sweep sends the session's account header"
+    );
+    assert_eq!(
+        sweep_call.header("x-test-sign"),
+        session_call.header("x-test-sign"),
+        "the sweep sends the session's sign header"
     );
 }

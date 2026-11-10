@@ -741,6 +741,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - `Timed out after N ms; Fiber stopped the whole process group.` for a timeout;
     a moved job's timeout adds the long-running-process hint ("When a
     command ends");
+    a foreground or moved timeout whose command text holds a `|` adds (``A pipeline
+    stage that prints only when it exits (such as `| tail`) lost its output
+    at the stop; rerun without it, or with `run_in_background`.``).
+    A completion the keeper writes after a restart carries no pipe sentence
+    ("The keeper").
   - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
   - `Cancelled and stopped.` for a cancellation;
   - `The command was stopped, and Fiber cannot tell whether it completed.` for

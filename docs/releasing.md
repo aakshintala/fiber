@@ -273,7 +273,12 @@ It:
 3. stages each installed extension in a fresh directory (`docs/state.md`,
    "What each part holds"): a first-party one from the extensions archive,
    and any other at its newest version whose manifest accepts the Fiber
-   version being installed
+   version being installed. A first-party extension is a top-level directory
+   of the extensions archive whose manifest names
+   `github.com/aakshintala/fiber/extensions/<dir>` or
+   `github.com/aakshintala/fiber/providers/<dir>` for that directory, so a
+   release can add one without the running binary knowing its name; the
+   update still stages only installed extensions
 4. renames the staged extensions into place, then the docs, then the binary
 
 Every download and check finishes before the first rename, so a failure up to
