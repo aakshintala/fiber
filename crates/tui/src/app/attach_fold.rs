@@ -401,6 +401,11 @@ impl App {
         };
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
         self.end_overlay();
+        // The pass end recounts once at the width in force: the newest
+        // width a mid-pass resize owed, if any.
+        if let Some(width) = self.recount_owed.take() {
+            self.attached_screen_mut().pages_mut().set_width(width);
+        }
         if let Some((session, seq, offset)) = anchor {
             let pages = self.attached_screen_mut().pages_mut();
             pages.hold_anchor(&session, seq, offset);
@@ -637,6 +642,9 @@ impl App {
                     };
                     self.land_inner(*fold, held);
                 }
+                // The pass ends without its boundary, so no landing
+                // recounts: an owed width ends with the pass.
+                self.recount_owed = None;
                 self.overlay = Overlay::Kept { last };
                 self.attached_screen_mut().set_frozen(false);
             }
