@@ -47,6 +47,7 @@ fn synthetic_entry(id: &str, label: Option<Label>) -> Entry {
             "command".to_owned(),
             serde_json::Value::String("ls".to_owned()),
         )]),
+        rewritten: None,
         declared: contract::shapes::DeclaredEffects {
             effects: vec![Effect::Executes],
             reversible: false,
@@ -140,7 +141,7 @@ fn drive_on(
     let scripted = Arc::new(ScriptedProvider::new(script));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let budget = Arc::new(RequestBudget::new());
-    let (outcome, _) = drive(entry, &provider, &clock(), model, &budget);
+    let outcome = drive(entry, &provider, &clock(), model, &budget);
     (outcome, scripted.requests())
 }
 
@@ -225,6 +226,9 @@ fn rejects_a_bad_runs_count_naming_the_flag() {
 
 #[test]
 fn the_call_cap_holds_the_planned_sweep() {
+    // 14 entries times 3 runs and 42 entries in one run both worst-case at
+    // 168 against the 170 budget (`docs/testing/fakes.md`, "Live calls and
+    // evals").
     match check_call_cap(1, 14, 3) {
         Ok(()) => {}
         Err(error) => panic!("14 entries times 3 runs hold at 168: {error}"),
@@ -237,6 +241,9 @@ fn the_call_cap_holds_the_planned_sweep() {
 
 #[test]
 fn the_call_cap_rejects_a_sweep_above_170_naming_runs() {
+    // Two models times 24 entries times 3 runs times the 4-per-run worst
+    // case is 576 against the 170 budget (`docs/testing/fakes.md`, "Live
+    // calls and evals").
     let error = match check_call_cap(2, 24, 3) {
         Err(error) => error,
         Ok(()) => panic!("576 worst-case requests refuse"),
@@ -266,6 +273,8 @@ fn sweep_without_live_drives_nothing() {
     };
     assert!(tallies.is_empty());
     assert!(outcomes.is_empty());
+    // Without `--live` no entry drives, so no reviewer request goes out
+    // (`docs/testing/fakes.md`, "Live calls and evals").
     assert!(
         scripted.requests().is_empty(),
         "no entry drives, so no reviewer request goes out"
@@ -353,6 +362,9 @@ fn parses_set_with_dirs_accepted_within_budget() {
         }
         Mode::Check { .. } => panic!("a sweep parses as a sweep"),
     }
+    // One model times 2 entries times 1 run times the 4-per-run worst case
+    // holds at 8 against the 170 budget (`docs/testing/fakes.md`, "Live
+    // calls and evals").
     match check_call_cap(1, 2, 1) {
         Ok(()) => {}
         Err(error) => panic!("one set line plus one dir in one run holds at 8: {error}"),
@@ -369,6 +381,9 @@ fn check_call_cap_refuses_forty_three_entries_one_run() {
         Err(error) => error,
         Ok(()) => panic!("172 worst-case requests refuse"),
     };
+    // One model times 43 entries times 1 run times the 4-per-run worst case
+    // is 172 against the 170 budget (`docs/testing/fakes.md`, "Live calls
+    // and evals").
     assert!(error.contains("172"), "{error}");
     assert!(error.contains("170"), "{error}");
 }
@@ -425,6 +440,8 @@ fn a_sweep_without_live_exits_before_any_call() {
     std::fs::write(&set, entry_json("a_01", "\"pass\"")).unwrap();
     let set_arg = set.display().to_string();
     let output = run_sweep(&["--models", "m", "--set", &set_arg, "--runs", "1"]);
+    // The sweep drives the reviewer only behind `--live`
+    // (`docs/testing/fakes.md`, "Live calls and evals").
     assert_eq!(output.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("--live"),
@@ -447,6 +464,8 @@ fn over_budget_with_live_exits_before_any_call() {
     let output = run_sweep(&["--models", "m", "--set", &set_arg, "--runs", "3", "--live"]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // 25 entries times 3 runs times the 4-per-run worst case is 300 against
+    // the 170 budget (`docs/testing/fakes.md`, "Live calls and evals").
     assert!(
         stderr.contains("300"),
         "the refusal names the count: {stderr}"
@@ -725,6 +744,30 @@ fn an_allow_at_stage_one_sends_the_stored_prefix() {
         conversation[1]
     );
     assert!(!conversation[2].is_empty());
+}
+
+/// A rewritten entry's stage-1 conversation names the extensions that
+/// rewrote it, exactly as the jig replay's prompt does: `rebuild` carries
+/// the entry's attribution into the prepared call.
+#[test]
+fn a_rewritten_call_names_its_extensions_in_review() {
+    let mut entry = synthetic_entry("a_01", Some(Label::Pass));
+    entry.rewritten = Some(vec!["ext-1".to_owned()]);
+    let (outcome, requests) = drive_on(vec![Scripted::text("allow")], &entry, &empty_model());
+    match outcome {
+        Outcome::Ran(_) => {}
+        Outcome::Errored(errored) => panic!("an allow is not an error: {}", errored.reason),
+        Outcome::Unrun => panic!("a driven entry never stays unrun"),
+    }
+    let conversation = texts(&requests[0].conversation);
+    let under_review = conversation
+        .iter()
+        .find(|text| text.contains("Call under review:"))
+        .expect("the stage-1 conversation judges the folded call");
+    assert!(
+        under_review.contains("Extension ext-1 rewrote this call's arguments"),
+        "the rewritten call names its extension: {under_review}"
+    );
 }
 
 #[test]
@@ -1043,10 +1086,11 @@ fn a_three_run_sweep_aggregates_per_entry_and_pools_runs() {
     assert_eq!((report.cached_input, report.uncached_input), (0, 40));
 }
 
-/// R7 on #477 sends each entry's repetitions back to back so later runs
-/// reuse the prompt cache. No doc promises the row order, so the test
-/// asserts the verdicts and the entry rows as sets
-/// (`docs/testing.md`, "Event streams").
+/// R7 on #477 sends each entry's repetitions back to back in entry order
+/// (`docs/testing/fakes.md`, "Live calls and evals"), so later runs reuse
+/// the prompt cache. The test asserts the verdicts and the entry rows as
+/// sets all the same, so it stays green whatever order the sweep drives
+/// them (`docs/testing.md`, "Event streams").
 #[test]
 fn sweep_tallies_each_entry_across_its_runs() {
     let first = synthetic_entry("e_1", Some(Label::Pass));
@@ -1128,7 +1172,7 @@ fn denied_reviewer_failures_are_error_outcomes() {
     let scripted = Arc::new(ScriptedProvider::new(vec![]));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let budget = Arc::new(RequestBudget::new());
-    let (outcome, _) = drive_with(
+    let outcome = drive_with(
         &entry,
         &provider,
         &clock(),
@@ -1299,6 +1343,10 @@ fn committed_dirs_match_loop_allowlist() {
     assert_eq!(actual, expected);
 }
 
+/// The committed-dir fold emits one entry per replayable call in file order
+/// with a 1-based id, and nothing unreplayable for a fully declared session
+/// (`docs/testing/fakes.md`, "Live calls and evals"): a single-call session
+/// folds to one `{dirname}-1` entry.
 #[test]
 fn fold_uses_the_logged_workspace_and_labels_a_control_block() {
     let roots = temp_roots();
@@ -1339,6 +1387,8 @@ fn fold_uses_the_logged_workspace_and_labels_a_control_block() {
     );
 }
 
+/// The fold labels a non-`control-*` session pass with the same file-order
+/// 1-based id shape (`docs/testing/fakes.md`, "Live calls and evals").
 #[test]
 fn fold_labels_a_field_session_pass() {
     let roots = temp_roots();
@@ -1371,6 +1421,10 @@ fn fold_labels_a_field_session_pass() {
     );
 }
 
+/// The fold numbers entries 1-based in file order, mirroring the set
+/// derivation (`docs/testing/fakes.md`, "Live calls and evals"): the two
+/// replayable calls of a shape session read `{dirname}-1` then
+/// `{dirname}-2`.
 #[test]
 fn fold_assigns_one_based_ids_in_file_order() {
     let roots = temp_roots();
@@ -1394,6 +1448,47 @@ fn fold_assigns_one_based_ids_in_file_order() {
     );
 }
 
+/// A folded entry keeps the start's rewrite attribution, so `rebuild`
+/// sends the same extension line the jig replay sends: the entry runs the
+/// rewritten arguments and names who changed them.
+#[test]
+fn fold_keeps_a_rewritten_start_attribution() {
+    let roots = temp_roots();
+    let mut events = String::new();
+    for line in CONTROL_EVENTS.lines() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(line).expect("the committed log parses");
+        if value.get("kind").and_then(serde_json::Value::as_str) == Some("tool_call_started") {
+            let payload = value
+                .get_mut("payload")
+                .expect("a start carries its declaration");
+            payload["arguments"] = serde_json::json!({"command": "evil"});
+            payload["changed_by"] = serde_json::json!(["ext-1"]);
+        }
+        events.push_str(&value.to_string());
+        events.push('\n');
+    }
+    let folded = fold_staged(&roots, "control-1-credentialed-probe", &events);
+    assert_eq!(folded.entries.len(), 1);
+    let entry = &folded.entries[0];
+    assert_eq!(
+        entry
+            .arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str),
+        Some("evil"),
+        "the folded entry runs the rewritten arguments"
+    );
+    assert_eq!(
+        entry.rewritten,
+        Some(vec!["ext-1".to_owned()]),
+        "the folded entry keeps the start's attribution"
+    );
+}
+
+/// A judged call with no logged declared effects contributes no entry and
+/// counts as unreplayable apart (`docs/testing/fakes.md`, "Live calls and
+/// evals").
 #[test]
 fn fold_skips_an_unreplayable_call_and_counts_it() {
     let roots = temp_roots();
@@ -1491,12 +1586,14 @@ fn cached_and_uncached_inputs_sum_both_stages() {
     assert_eq!(report.uncached_input, 30);
 }
 
-/// Drives one entry per model with the fake verdicts below, three runs with
-/// one dissenting scripted run, and pins the pasteable table and detail:
-/// the stage-1 conversations carry each entry's command and workspace, the
-/// recorded stage texts equal the scripted verdicts in order, and the exact
-/// rows hold deterministic scripted tokens with zero frozen-clock
-/// latencies.
+/// Drives two entries three runs each with the fake verdicts below, and pins
+/// the pasteable table and detail (`docs/testing/fakes.md`, "Live calls and
+/// evals" for the run-table shape): the sweep drives each entry's runs back
+/// to back in entry order, so the stage-1 conversations carry each entry's
+/// command and workspace at its runs' requests; the tape holds every
+/// reviewer call's text in call order, so the recorded stage texts equal the
+/// scripted verdicts in order; and the exact rows hold deterministic
+/// scripted tokens with zero frozen-clock latencies.
 #[test]
 fn run_rows_match_the_fake_verdicts_run_by_run() {
     let entries = vec![
@@ -1526,8 +1623,12 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
         Err(error) => panic!("a live sweep drives: {error}"),
     };
     assert!(!truncated, "ten requests stop for nothing");
-    assert_eq!(scripted.requests().len(), 10);
     let requests = scripted.requests();
+    // The sweep drives each entry's runs back to back in entry order
+    // (`docs/testing/fakes.md`, "Live calls and evals"): the pass entry's
+    // three runs take the first four requests (allow, allow, check plus
+    // block), the block entry's the next six.
+    assert_eq!(requests.len(), 4 + 6);
     for at in [0, 1, 2] {
         let conversation = texts(&requests[at].conversation);
         assert!(
@@ -1573,6 +1674,9 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
             Outcome::Unrun => panic!("a driven entry never stays unrun"),
         }
     }
+    // The tape holds every reviewer call's text in call order, so the
+    // recorded stage texts equal the scripted verdicts in order
+    // (`docs/testing/fakes.md`, "Live calls and evals").
     assert_eq!(stage_texts(&outcomes[0]), vec!["allow"]);
     assert_eq!(stage_texts(&outcomes[1]), vec!["allow"]);
     assert_eq!(stage_texts(&outcomes[2]), vec!["check", "block: outlier"]);
@@ -1598,6 +1702,9 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
             entry: &entries[1],
         },
     ];
+    // One table row per call with its `src`, the verdict of each run, and
+    // the token and latency totals, beside the free-text per-run detail
+    // (`docs/testing/fakes.md`, "Live calls and evals").
     assert_eq!(
         render_run_table(&rows, &outcomes, 3),
         "src id expected r1 r2 r3 tok_in tok_out lat_p50\n\
@@ -1619,6 +1726,8 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
     );
 }
 
+/// The tape holds every reviewer call's text in call order, the re-asked
+/// generation included (`docs/testing/fakes.md`, "Live calls and evals").
 #[test]
 fn a_reasked_stage_tapes_every_text_in_order() {
     let entry = synthetic_entry("a_01", Some(Label::Pass));
@@ -1647,6 +1756,8 @@ fn a_reasked_stage_tapes_every_text_in_order() {
     assert_eq!(texts, vec!["huh?", "check", "allow: fine"]);
 }
 
+/// The per-run detail renders one line per run with single-lined reasons
+/// and texts (`docs/testing/fakes.md`, "Live calls and evals").
 #[test]
 fn multiline_reasons_render_on_one_line() {
     let entry = synthetic_entry("a_01", Some(Label::Block));
@@ -1656,7 +1767,7 @@ fn multiline_reasons_render_on_one_line() {
     ]));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let budget = Arc::new(RequestBudget::new());
-    let (outcome, _) = drive(&entry, &provider, &clock(), &empty_model(), &budget);
+    let outcome = drive(&entry, &provider, &clock(), &empty_model(), &budget);
     let ran_at = match &outcome {
         Outcome::Ran(ran_at) => ran_at,
         Outcome::Errored(errored) => panic!("a block is not an error: {}", errored.reason),
@@ -1679,6 +1790,8 @@ fn multiline_reasons_render_on_one_line() {
     );
 }
 
+/// The run table prints one verdict cell per run (`docs/testing/fakes.md`,
+/// "Live calls and evals"): two runs print two cells and no third.
 #[test]
 fn run_table_columns_follow_the_run_count() {
     let entries = vec![synthetic_entry("a_01", Some(Label::Pass))];
@@ -1709,6 +1822,9 @@ fn run_table_columns_follow_the_run_count() {
     assert!(!table.contains("r3"), "two runs print two verdict cells");
 }
 
+/// The sweep stops at the 170-request budget with the rest unrun, leaving
+/// 168 billed: the largest multiple of the 4-per-run worst case within the
+/// budget (`docs/testing/fakes.md`, "Live calls and evals").
 #[test]
 fn drive_stops_at_170_real_requests() {
     let entries: Vec<Entry> = (0..11)
@@ -1733,6 +1849,9 @@ fn drive_stops_at_170_real_requests() {
         Err(error) => panic!("a live sweep drives: {error}"),
     };
     assert!(truncated, "176 planned requests stop at the budget");
+    // 11 entries times 4 runs times the 4-per-run worst case plans 176, so
+    // the 170 budget stops the drive at 168 billed with the rest unrun
+    // (`docs/testing/fakes.md`, "Live calls and evals").
     assert_eq!(budget.sent.load(std::sync::atomic::Ordering::SeqCst), 168);
     for at in [40, 41] {
         match &outcomes[at] {

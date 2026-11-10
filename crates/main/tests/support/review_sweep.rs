@@ -249,6 +249,11 @@ pub(crate) struct Entry {
     pub(crate) tool: String,
     /// Its arguments, always an object.
     pub(crate) arguments: Map<String, Value>,
+    /// The extensions that rewrote the arguments, in run order, when the
+    /// logged start carried rewritten arguments: the jig replay's
+    /// `rewritten`, so the reviewer prompt names them exactly as the jig's
+    /// does. Set lines carry none.
+    pub(crate) rewritten: Option<Vec<String>>,
     /// Its declared effects.
     pub(crate) declared: DeclaredEffects,
     /// The workspace label the reviewer judges against.
@@ -359,6 +364,7 @@ pub(crate) fn parse_set_line(line: &str) -> Result<Entry, String> {
         id: id.clone(),
         tool: line_str(&value, &id, "tool")?.to_owned(),
         arguments,
+        rewritten: None,
         declared,
         workspace: line_str(&value, &id, "workspace")?.to_owned(),
         added_folders,
@@ -489,7 +495,7 @@ pub(crate) fn fold_session_dir(
     let mut unreplayable = 0usize;
     let mut summary = false;
     for (position, item) in chain.iter().enumerate() {
-        let envelope = &item.envelope;
+        let envelope = item;
         let event = Event::from_envelope(envelope).map_err(|error| {
             format!(
                 "review_sweep: {} line {}: {error}",
@@ -557,8 +563,9 @@ pub(crate) fn fold_session_dir(
 
 /// Builds one folded entry: the call under review with the stored prefix
 /// as reviewer inputs, carrying the rewritten arguments from the start's
-/// changed-by exactly as the jig replay does. The added folders stay empty:
-/// the sweep loop applies none, which matches every committed entry.
+/// changed-by exactly as the jig replay does, with the attribution the
+/// reviewer prompt names. The added folders stay empty: the sweep loop
+/// applies none, which matches every committed entry.
 fn fold_entry(
     session: &str,
     seq: u64,
@@ -579,10 +586,15 @@ fn fold_entry(
             | Value::Array(_) => Map::new(),
         },
     };
+    let rewritten = started
+        .arguments
+        .clone()
+        .map(|_| started.changed_by.clone().unwrap_or_default());
     Entry {
         id: format!("{session}-{seq}"),
         tool: call.name.clone(),
         arguments,
+        rewritten,
         declared: started.declared.clone(),
         workspace: workspace.to_owned(),
         added_folders: Vec::new(),
@@ -624,16 +636,10 @@ fn project_item(item: &Reviewed) -> ReviewedItem {
     }
 }
 
-/// One source log line in chain order.
-struct FoldedLine {
-    /// The line itself.
-    envelope: contract::Envelope,
-}
-
 /// Reads the history chain's durable lines, oldest first, after checking
 /// the log parses and begins with `session_started`: the fold's port of the
 /// jig chain load through the log history.
-fn fold_chain(dir: &Path) -> Result<(String, Vec<FoldedLine>), String> {
+fn fold_chain(dir: &Path) -> Result<(String, Vec<contract::Envelope>), String> {
     let segments = log::history(dir).map_err(|error| {
         format!(
             "review_sweep: cannot read session {}: {error}",
@@ -649,7 +655,7 @@ fn fold_chain(dir: &Path) -> Result<(String, Vec<FoldedLine>), String> {
             )
         })?;
         for envelope in lines {
-            chain.push(FoldedLine { envelope });
+            chain.push(envelope);
         }
     }
     let Some(first) = chain.first() else {
@@ -658,13 +664,13 @@ fn fold_chain(dir: &Path) -> Result<(String, Vec<FoldedLine>), String> {
             dir.display()
         ));
     };
-    if first.envelope.kind() != EventKind::SessionStarted {
+    if first.kind() != EventKind::SessionStarted {
         return Err(format!(
             "review_sweep: {} holds no session: the log does not begin with session_started",
             dir.display()
         ));
     }
-    let event = Event::from_envelope(&first.envelope).map_err(|error| {
+    let event = Event::from_envelope(first).map_err(|error| {
         format!(
             "review_sweep: {} holds no session: its session_started does not parse: {error}",
             dir.display()
@@ -723,14 +729,14 @@ fn started_from(call: &ReviewedCall) -> ToolCallStarted {
 /// the fold's port of the jig index rules, so review requests, native
 /// decisions and startless judged calls classify exactly as the converter
 /// classifies them.
-fn fold_index(dir: &Path, chain: &[FoldedLine]) -> Result<FoldIndex, String> {
+fn fold_index(dir: &Path, chain: &[contract::Envelope]) -> Result<FoldIndex, String> {
     let mut index = FoldIndex {
         calls: HashMap::new(),
         review: HashSet::new(),
         nonreview: HashSet::new(),
     };
     for (position, item) in chain.iter().enumerate() {
-        let envelope = &item.envelope;
+        let envelope = item;
         let event = Event::from_envelope(envelope).map_err(|error| {
             format!(
                 "review_sweep: {} line {}: {error}",
@@ -987,7 +993,9 @@ impl std::fmt::Debug for Rebuilt {
 /// entry's own call item last, so the loop cuts after it and sends the
 /// whole prefix. Person items need their seq and item, call items their
 /// action; a reply's shown keeps the raw reply without its `The agent: `
-/// prefix while its input resends the stored words.
+/// prefix while its input resends the stored words. The prepared call
+/// carries the entry's rewrite attribution, so a rewritten call's prompt
+/// names the extensions exactly as the jig replay's does.
 pub(crate) fn rebuild(entry: &Entry) -> Result<Rebuilt, String> {
     let mut reviewed = Vec::with_capacity(entry.reviewed.len());
     for (position, item) in entry.reviewed.iter().enumerate() {
@@ -1065,7 +1073,7 @@ pub(crate) fn rebuild(entry: &Entry) -> Result<Rebuilt, String> {
                 review_when_confined: false,
                 hosts: None,
             },
-            rewritten: None,
+            rewritten: entry.rewritten.clone(),
         },
         reviewed,
     })
@@ -1380,17 +1388,6 @@ struct Tape {
 }
 
 impl Tape {
-    /// How many calls have ended through this tape.
-    fn count(&self) -> u64 {
-        u64::try_from(
-            self.calls
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .len(),
-        )
-        .unwrap_or(u64::MAX)
-    }
-
     /// Takes every taped record, in call order.
     fn drain(&self) -> Vec<StageRecord> {
         std::mem::take(&mut self.calls.lock().unwrap_or_else(PoisonError::into_inner))
@@ -1468,15 +1465,14 @@ impl Provider for Tape {
 
 /// Drives `entry` through `Loop::review` on the injected `provider` with
 /// the resolved reviewer `model`, timing it on the injected `clock` and
-/// counting its reviewer requests against `budget`. Returns the outcome
-/// with the entry-run's reviewer request count.
+/// counting its reviewer requests against `budget`.
 pub(crate) fn drive(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
     model: &SweepModel,
     budget: &Arc<RequestBudget>,
-) -> (Outcome, u64) {
+) -> Outcome {
     drive_with(
         entry,
         provider,
@@ -1505,15 +1501,14 @@ pub(crate) fn drive(
 /// resolves by cancel and the untouched generic arm below reports it as an
 /// error — excluded from both denominators and counted in `errors`. The
 /// seam exists so tests can install a failing reviewer; `drive` always
-/// installs its metadata reviewer as `Ok`. Returns the outcome with the
-/// entry-run's reviewer request count.
+/// installs its metadata reviewer as `Ok`.
 pub(crate) fn drive_with(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
     reviewer: Result<Reviewer, Failure>,
     budget: &Arc<RequestBudget>,
-) -> (Outcome, u64) {
+) -> Outcome {
     let errored = |reason: String| {
         Outcome::Errored(ErrorOutcome {
             id: entry.id.clone(),
@@ -1522,7 +1517,7 @@ pub(crate) fn drive_with(
     };
     let rebuilt = match rebuild(entry) {
         Ok(rebuilt) => rebuilt,
-        Err(error) => return (errored(error), 0),
+        Err(error) => return errored(error),
     };
     let home = fakes::TempDir::new("fiber-sweep");
     let log = match log::Log::create(
@@ -1532,10 +1527,7 @@ pub(crate) fn drive_with(
     ) {
         Ok(log) => log,
         Err(error) => {
-            return (
-                errored(format!("review_sweep: cannot start its loop: {error}")),
-                0,
-            );
+            return errored(format!("review_sweep: cannot start its loop: {error}"));
         }
     };
     let scratch = log.dir().to_path_buf();
@@ -1590,10 +1582,7 @@ pub(crate) fn drive_with(
     let mut looped = match Loop::start(session, None) {
         Ok(looped) => looped,
         Err(error) => {
-            return (
-                errored(format!("review_sweep: cannot start its loop: {error}")),
-                0,
-            );
+            return errored(format!("review_sweep: cannot start its loop: {error}"));
         }
     }
     .reviewer(tapped, BlockLimits::default())
@@ -1613,13 +1602,10 @@ pub(crate) fn drive_with(
     } = rebuilt;
     let start = clock.now();
     if let Err(error) = looped.review(&call, &id, &turn, prepared) {
-        return (
-            errored(format!(
-                "review_sweep: review of {} failed: {error}",
-                entry.id
-            )),
-            tape.count(),
-        );
+        return errored(format!(
+            "review_sweep: review of {} failed: {error}",
+            entry.id
+        ));
     }
     // Both instants come from the injected clock; saturating keeps a
     // backward wall-clock step from panicking the sweep.
@@ -1631,7 +1617,7 @@ pub(crate) fn drive_with(
         .unwrap_or(u64::MAX);
     let (decision, decided_by, reason) = match resolved_for(&scratch, &id.0) {
         Ok(resolved) => resolved,
-        Err(error) => return (errored(error), tape.count()),
+        Err(error) => return errored(error),
     };
     let verdict = match (decision, decided_by) {
         (Decision::Allow, _) => Verdict::Allow,
@@ -1639,39 +1625,32 @@ pub(crate) fn drive_with(
         (Decision::Deny, _) => {
             let cause = match escalation_for(&scratch, &id.0) {
                 Ok(cause) => cause,
-                Err(error) => return (errored(error), tape.count()),
+                Err(error) => return errored(error),
             };
-            return (
-                errored(format!(
-                    "review_sweep: review of {} never judged: {}",
-                    entry.id,
-                    cause
-                        .or(reason)
-                        .unwrap_or_else(|| "no reason recorded".to_owned())
-                )),
-                tape.count(),
-            );
+            return errored(format!(
+                "review_sweep: review of {} never judged: {}",
+                entry.id,
+                cause
+                    .or(reason)
+                    .unwrap_or_else(|| "no reason recorded".to_owned())
+            ));
         }
     };
     let (s1, s2, stage2) = match fold_usage(&scratch, &id.0) {
         Ok(fold) => fold,
-        Err(error) => return (errored(error), tape.count()),
+        Err(error) => return errored(error),
     };
     let stages = tape.drain();
-    let count = u64::try_from(stages.len()).unwrap_or(u64::MAX);
-    (
-        Outcome::Ran(RanOutcome {
-            label1: entry.label1,
-            verdict,
-            stage: u8::from(stage2) + 1,
-            reason,
-            stages,
-            s1,
-            s2,
-            latency_ms,
-        }),
-        count,
-    )
+    Outcome::Ran(RanOutcome {
+        label1: entry.label1,
+        verdict,
+        stage: u8::from(stage2) + 1,
+        reason,
+        stages,
+        s1,
+        s2,
+        latency_ms,
+    })
 }
 
 /// Token totals for one review stage.
@@ -1886,7 +1865,7 @@ pub(crate) fn sweep(
     runs: u32,
     live: bool,
     budget: &Arc<RequestBudget>,
-    drive_entry: impl Fn(&Entry) -> (Outcome, u64),
+    drive_entry: impl Fn(&Entry) -> Outcome,
 ) -> Result<(Vec<EntryTally>, Vec<Outcome>, bool), String> {
     if !live {
         return Ok((Vec::new(), Vec::new(), false));
@@ -1921,7 +1900,7 @@ pub(crate) fn sweep(
                 }
                 return Ok((tallies, outcomes, true));
             }
-            let (outcome, _) = drive_entry(entry);
+            let outcome = drive_entry(entry);
             match &outcome {
                 Outcome::Ran(ran_at) => match ran_at.verdict {
                     Verdict::Allow => {
@@ -1991,11 +1970,6 @@ fn run_cell(outcome: Option<&Outcome>) -> &'static str {
     }
 }
 
-/// Sums one call's cache-write classes into the token total.
-fn cache_write_sum(tokens: &Tokens) -> u64 {
-    tokens.cache_write.values().sum::<u64>()
-}
-
 /// Renders text on one line: newlines become spaces, cut at `max`
 /// characters.
 fn one_line(text: &str, max: usize) -> String {
@@ -2041,10 +2015,10 @@ pub(crate) fn render_run_table(rows: &[Sourced], outcomes: &[Outcome], runs: u32
                 tok_in = tok_in
                     .saturating_add(ran_at.s1.input)
                     .saturating_add(ran_at.s1.cache_read)
-                    .saturating_add(cache_write_sum(&ran_at.s1))
+                    .saturating_add(ran_at.s1.cache_write.values().sum::<u64>())
                     .saturating_add(ran_at.s2.input)
                     .saturating_add(ran_at.s2.cache_read)
-                    .saturating_add(cache_write_sum(&ran_at.s2));
+                    .saturating_add(ran_at.s2.cache_write.values().sum::<u64>());
                 tok_out = tok_out
                     .saturating_add(ran_at.s1.output)
                     .saturating_add(ran_at.s2.output);
