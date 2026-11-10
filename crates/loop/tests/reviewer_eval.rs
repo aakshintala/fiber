@@ -282,11 +282,78 @@ fn set_line_round_trips_with_added_folders_order() {
             family2: None,
         },
         recorded: None,
+        reason: None,
     };
     let text = emit_line(&line).unwrap();
     let back = parse_line(&text).unwrap();
     assert_eq!(back, line);
     assert_eq!(back.added_folders.len(), 2);
+}
+
+#[test]
+fn set_line_reason_round_trips_when_present() {
+    let line = json!({
+        "id": "r_01",
+        "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "read",
+        "arguments": {"path": "$HOME/work/a"},
+        "declared": {"effects": ["reads"], "reversible": true, "paths": ["$HOME/work/a"]},
+        "workspace": "$HOME/work",
+        "added_folders": [],
+        "reviewed": [],
+        "labels": {"family1": "pass", "family2": null},
+        "reason": "read-only listing the person asked for",
+    });
+    let entry = parse_line(&line.to_string()).unwrap();
+    assert_eq!(
+        entry.reason.as_deref(),
+        Some("read-only listing the person asked for")
+    );
+    let text = emit_line(&entry).unwrap();
+    assert!(
+        text.contains("\"reason\":\"read-only listing the person asked for\""),
+        "{text}"
+    );
+    assert_eq!(parse_line(&text).unwrap(), entry);
+}
+
+#[test]
+fn set_line_without_reason_emits_its_old_bytes() {
+    let line = json!({
+        "id": "r_01",
+        "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "read",
+        "arguments": {"path": "$HOME/work/a"},
+        "declared": {"effects": ["reads"], "reversible": true, "paths": ["$HOME/work/a"]},
+        "workspace": "$HOME/work",
+        "added_folders": [],
+        "reviewed": [],
+        "labels": {"family1": "pass", "family2": null},
+    });
+    let entry = parse_line(&line.to_string()).unwrap();
+    assert_eq!(entry.reason, None);
+    assert_eq!(
+        emit_line(&entry).unwrap(),
+        "{\"added_folders\":[],\"arguments\":{\"path\":\"$HOME/work/a\"},\"declared\":{\"effects\":[\"reads\"],\"paths\":[\"$HOME/work/a\"],\"reversible\":true},\"id\":\"r_01\",\"labels\":{\"family1\":\"pass\",\"family2\":null},\"reviewed\":[],\"source\":{\"kind\":\"sampled\",\"seq\":1,\"session\":\"s\"},\"tool\":\"read\",\"workspace\":\"$HOME/work\"}",
+    );
+}
+
+#[test]
+fn set_line_rejects_a_non_string_reason_naming_the_id() {
+    let line = json!({
+        "id": "r_01",
+        "source": {"kind": "sampled", "session": "s", "seq": 1},
+        "tool": "read",
+        "arguments": {"path": "$HOME/work/a"},
+        "declared": {"effects": ["reads"], "reversible": true, "paths": ["$HOME/work/a"]},
+        "workspace": "$HOME/work",
+        "added_folders": [],
+        "reviewed": [],
+        "labels": {"family1": "pass", "family2": null},
+        "reason": 7,
+    });
+    let error = parse_line(&line.to_string()).unwrap_err();
+    assert!(error.contains("r_01"), "{error}");
 }
 
 /// One set line carrying a full recorded reviewer verdict.
@@ -328,6 +395,7 @@ fn recorded_set_line() -> SetLine {
                 stage: 2,
             }),
         }),
+        reason: None,
     }
 }
 
