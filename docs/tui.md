@@ -962,28 +962,64 @@ install still running.
   each, what it was dim and its size; and the note that sizes are
   approximate, dim. Each category has its own colour; tool results are
   `error`.
-- **Changed files:** the files Fiber changed, with the chosen file's hunks.
-  The hunks are the workspace's current diff against `HEAD`, read when the
-  file is chosen, so they include changes Fiber did not make; the title says
-  "diff against HEAD". An untracked file shows as wholly added. Each file is
-  a row: the chosen file's path bold, then " · " dim, "+N" in `added` and
-  "−N" in `removed`; an untracked file's path, then "· untracked, wholly
-  added" dim. A row's figures are git's for that path, so they match its
-  hunks: one `git diff --numstat HEAD` limited to the listed paths, run when
-  the view opens, and, for a path git does not track, its line count as
-  added. Until that answers, the rows show the Changed files card's figures,
-  which sum Fiber's own edits (`docs/tools.md`, "write" and "edit"). Under
-  the chosen file, its hunks in the diff format an opened edit uses ("Tool
-  groups and the ledger"). On a local terminal, Ctrl+G opens the chosen file
-  in `$VISUAL` or `$EDITOR` with `+N`, where N is the first line of its first
-  hunk, or 1 when there is no hunk. The editor gets the whole screen, as
-  Ctrl+G on the draft does. On return, the view reads the file's diff and
-  numstat again. Its footer says "Ctrl+G edits", dim. On a remote terminal,
-  Ctrl+G fetches the hub file at the session's workspace and opens a temporary
-  copy in `$VISUAL` or `$EDITOR` at the same line, and on return writes the copy
-  back only while the hub file still has the fetched version. A hub-side edit in
-  between leaves the file unwritten with the changed-file notice, and the view
-  still reads the diff and numstat again. Its footer keeps the Ctrl+G hint.
+- **Changed files:** the files Fiber changed, grouped by folder, with the
+  chosen file's hunks. The hunks are the workspace's current diff against
+  `HEAD`, read when the file is chosen, so they include changes Fiber did
+  not make; the row under the top row says "N files · diff against HEAD",
+  dim.
+  - **Folders:** paths are relative to the workspace. Each folder holding a
+    listed file is one dim row ("delegate/src/session/"), in path order,
+    and its files follow it, indented four columns, in name order. A file
+    at the workspace's top level sits under a "./" row.
+  - **A file's row:** a letter, then the file name bold, then "+N" in
+    `added` and "−N" in `removed`, right-aligned in one column. The letter
+    is M in `attention` for a changed file, A in `added` for a new or
+    untracked one, and D in `removed` for a deleted one. An untracked file
+    counts its lines as added. The focused row takes "› " in `accent` in
+    the gutter and its file name bold in `accent` ("Swapped views").
+  - **A file with no diff:** a file Fiber changed whose diff against
+    `HEAD` is now empty, because its change was committed or undone, stays
+    listed, its row dim: "·" for the letter and "no changes" where the
+    figures go. Chosen, it shows "No changes against HEAD: committed or
+    undone since Fiber changed it.", dim, and no hunks.
+  - **Totals:** after the last file, a `rule` line, then "N files" dim and
+    the summed "+N" and "−N" in the figures' column.
+  - **Figures:** a row's figures are git's for that path, so they match its
+    hunks: one `git diff --numstat HEAD` limited to the listed paths, run
+    when the view opens, and, for a path git does not track, its line
+    count as added. Until that answers, the rows show the Changed files
+    card's figures, which sum Fiber's own edits (`docs/tools.md`, "write"
+    and "edit").
+  - **Hunks:** under the chosen file's row, its path bold, then "Open in
+    editor ›" in `secondary`, right-aligned, then its hunks in the diff
+    format an opened edit uses ("Tool groups and the ledger"), with git's
+    three lines of context.
+  - **Open in editor:** a click on "Open in editor ›", or Ctrl+G, opens the
+    chosen file in the editor ("The editor") at `+N`, where N is the first
+    line of its first hunk, or 1 when there is no hunk. The editor gets the
+    whole screen, as Ctrl+G on the draft does. On return, the view reads
+    the file's diff and numstat again. On a remote terminal it fetches the
+    hub file at the session's workspace and opens a temporary copy at the
+    same line, and on return writes the copy back only while the hub file
+    still has the fetched version. A hub-side edit in between leaves the
+    file unwritten with the changed-file notice, and the view still reads
+    the diff and numstat again.
+  - **Footer:** "↑↓ file · Ctrl+G open in editor", with the keys bold.
+
+  ```
+  Changed files  /diff                                         Esc returns
+  4 files · diff against HEAD
+
+  delegate/src/session/
+      M  supervisor.rs                                       +121    −7
+      M  state.rs                                             +62    −6
+  delegate/tests/
+  ›   M  session_engine.rs                                   +148    −3
+  delegate/tests/support/
+      A  muse_host_fake.py                                    +15    −3
+  ────────────────────────────────────────────────────────────────────
+                                                  4 files    +346   −19
+  ```
 - **The release notes,** `/release-notes`: the running binary's
   changelog section for its own version (`docs/releasing.md`, "The
   changelog"), embedded in the binary at build time, so the view asks
@@ -1125,8 +1161,19 @@ install still running.
       choice saves to the row's key.
     - A key whose valid values are known only at run time ends in " ›"
       and opens a pick list of them, with "Default" first: installed search
-      backends for `web_search.backend`, and the names under `hubs` for
-      `hub.default`. Enter picks and saves; Esc closes without a change.
+      backends for `web_search.backend`, the names under `hubs` for
+      `hub.default`, and the editors on `PATH` for `tui.editor`. Enter
+      picks and saves; Esc closes without a change.
+    - The Editor row's pick list holds, after "Default", each of `nvim`,
+      `vim`, `hx`, `nano`, `micro`, `emacs`, `code`, `cursor`, `zed` and
+      `subl` found on `PATH`, then "Other…". `code`, `cursor`, `zed` and
+      `subl` save with `--wait`: without it they return at once, and
+      Ctrl+G on the draft would read the file back before any edit.
+      "Other…" opens a field for a command line, holding the current value;
+      Enter saves it and Esc cancels. "Default" names the variable the
+      editor rule picks and its value, "Default ($VISUAL: vim)" or
+      "Default ($EDITOR: nvim)", or reads "Default (none set)" dim when
+      neither is set.
     - A number with a natural range is a slider, `▕████░░░░▏` in `info`
       followed by the value and its unit. ←→ on the focused row, and Enter,
       move it one step; Enter steps up and wraps from the top of the range to the bottom.
@@ -2207,8 +2254,8 @@ Shift+Tab moves focus to the newest item in the conversation.
 - Enter opens the focused item, as a click does: a group's ledger, a call
   inline under its row, a delegate's view. Enter on an opened call opens
   its swapped view.
-- y copies the focused item's text. Ctrl+G opens it in `$VISUAL` or
-  `$EDITOR`.
+- y copies the focused item's text. Ctrl+G opens it in the editor ("The
+  editor").
 - Tab moves focus to the panel, then the rail, then back to the
   conversation.
 - Esc returns focus to the input box, keeping the draft, except on home,
@@ -2220,6 +2267,15 @@ screen, the same targets hover highlights, and each turn, from top to bottom and
 right. Every mouse target, an extension widget's included, is therefore a
 focus stop with no extra work, and nothing the mouse can reach is out of the
 keyboard's reach.
+
+### The editor
+
+Every Ctrl+G, and "Open in editor", runs one editor command: `tui.editor`
+when set, else `$VISUAL` when set and not empty, else `$EDITOR`. The
+command runs on the person's terminal, so on a remote terminal it is the
+client's. With none of the three set, Ctrl+G opens nothing and shows the
+notice "No editor set. Choose one in /settings: Editor."; a click on it
+opens `/settings` with the Editor row focused.
 
 ### The input box
 
@@ -2332,7 +2388,7 @@ through the `input_status` slot ("Extension seams").
 | Delete a word | `delete_word` | ⌥Backspace, Ctrl+Backspace, Ctrl+W | |
 | Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
 | Start or end of the line | `line_start_end` | Ctrl+A Ctrl+E; ⌘← ⌘→ where the terminal passes them | |
-| Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
+| Open the draft, or a pasted token, in the editor | `open_in_editor` | Ctrl+G | click the token |
 | Paste an image | `paste_image` | Ctrl+V | |
 | Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
 | Move focus from the input box into the conversation | `navigate` | Shift+Tab | click an item |
@@ -2923,7 +2979,7 @@ The roles, in order, with each built-in theme's values:
 | `secondary` | the git branch, the compaction band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` | `#6f42c1` |
 | `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` | `#d0d7de` |
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
-| `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
+| `background` | every cell of the conversation and of a swapped view that no surface covers | `#0c0c11` | `#ffffff` |
 | `panel` | the rail's and the panel's regions | `#0c0c11` | `#f6f8fa` |
 | `surface` | the input box, the panel's cards, the steering card, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
@@ -2942,10 +2998,13 @@ The roles, in order, with each built-in theme's values:
 | `match` | a search match, its text white | `#5a4a1a` | `#fff1a8` |
 | `match_current` | the current search match, its text black | `#ff9f43` | `#ffd67e` |
 
-In the dark theme `text`, `code_text`, `operator` and `background` are the
-terminal's own default colours, and `muted` is the text colour drawn dim, so
-the conversation sits on the terminal's own background. They stay the
-default at 256 colours. A theme file may still give any of them a `#rrggbb`.
+In the dark theme `text`, `code_text` and `operator` are the terminal's
+own default foreground, and `muted` is the text colour drawn dim. They stay
+the default at 256 colours. The page is Fiber's own: `background` is
+`#0c0c11`, the `panel` colour, so the conversation, every swapped view, the
+rail and the panel read as one field, and the terminal's own background
+shows nowhere. At 256 colours `background` takes the same entry as `panel`.
+A theme file may still give any of them a `#rrggbb`.
 
 The light theme paints its own text and page: `text`, `code_text` and
 `operator` are `#1f2328` and `background` is `#ffffff`, so it looks the same

@@ -166,6 +166,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
 | `tui.panel.width` | 21 | no | The panel's share of the screen's width, in percent, kept from 30 to 60 columns; dragging its edge writes it. |
 | `tui.theme` | none | no | The theme's name: `auto`, `dark`, `light` or the name of a theme file in Fiber home's `themes/` or an installed, enabled extension's `themes/`. A switched-off extension's themes are not listed, and naming one reads as a missing file. With none or `auto`, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
+| `tui.editor` | none | no | The command Ctrl+G and "Open in editor" run, such as `nvim` or `code --wait`; with none, `$VISUAL`, then `$EDITOR` (`docs/tui.md`, "The editor"). |
 | `tui.reduced_motion` | false | no | Whether every animation takes its still form. Detection is not built yet (see #1506) (`docs/tui.md`, "Reduced motion"). |
 
 **Not built yet: see #1506.**
