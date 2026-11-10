@@ -8,6 +8,118 @@ use std::time::{Duration, Instant};
 use super::anim::{AnimKey, effective_interval};
 use super::spans::{self, FittedLine};
 use super::{Decision, Failure, FailureKind, Input};
+use crate::mouse::Target;
+use crate::rows::Join;
+use crate::turn::Row;
+
+/// An extension click target's opaque identity: the interned
+/// (session, extension, slot, click id) tuple's key. Copy so targets
+/// stay Copy; only the cache mints keys, so an input event or a
+/// handler cannot forge one (`docs/tui.md`, "Input and focus").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ClickKey(u64);
+
+/// What the cache interned a click key as: the tuple to dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClickTarget {
+    extension: String,
+    slot: String,
+    id: String,
+}
+
+/// The interning scope: the session the spans drew for, so a session
+/// switch never reuses another session's key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ClickScope {
+    session: contract::SessionId,
+    extension: String,
+    slot: String,
+    id: String,
+}
+
+/// The click identity registry: the interner with its reverse lookup.
+/// Keys are never reassigned, including after reload; clearing drops
+/// the lookup authority, not the allocation counter.
+#[derive(Debug, Default)]
+struct ClickRegistry {
+    next: u64,
+    by_scope: HashMap<ClickScope, ClickKey>,
+    by_key: HashMap<ClickKey, ClickTarget>,
+}
+
+impl ClickRegistry {
+    /// The key for the tuple, minting a fresh one the first time: the
+    /// same tuple keeps its key across redraws and cache hits.
+    fn intern(
+        &mut self,
+        session: &contract::SessionId,
+        extension: &str,
+        slot: &str,
+        id: &str,
+    ) -> ClickKey {
+        let scope = ClickScope {
+            session: session.clone(),
+            extension: extension.to_owned(),
+            slot: slot.to_owned(),
+            id: id.to_owned(),
+        };
+        if let Some(key) = self.by_scope.get(&scope) {
+            return *key;
+        }
+        let key = ClickKey(self.next);
+        self.next = self.next.saturating_add(1);
+        self.by_scope.insert(scope, key);
+        self.by_key.insert(
+            key,
+            ClickTarget {
+                extension: extension.to_owned(),
+                slot: slot.to_owned(),
+                id: id.to_owned(),
+            },
+        );
+        key
+    }
+
+    /// Drops the lookup authority, keeping the allocation counter: a
+    /// minted key is never reassigned to another tuple.
+    fn clear_authority(&mut self) {
+        self.by_scope.clear();
+        self.by_key.clear();
+    }
+
+    /// Keeps only the keys `live` still names: entries and painted
+    /// stops that went away release their identities.
+    fn retain(&mut self, live: &std::collections::HashSet<ClickKey>) {
+        self.by_key.retain(|key, _| live.contains(key));
+        self.by_scope.retain(|_, key| live.contains(key));
+    }
+}
+
+/// One painted click stop's drawn text on one screen row.
+#[derive(Debug, Clone)]
+struct ClickFragment {
+    /// The screen row the text drew on, for reading-order join.
+    y: u16,
+    /// How the row joins the one before.
+    join: Join,
+    /// The drawn text in the click's cells, decoration and pad
+    /// excluded, trailing spaces dropped.
+    text: String,
+}
+
+/// The last painted frame's click stops: each key's drawn fragments.
+/// Rebuilt every frame; only stops the frame's targets still name
+/// survive it.
+#[derive(Debug, Default)]
+struct ClickPainted {
+    fragments: HashMap<ClickKey, Vec<ClickFragment>>,
+}
+
+impl ClickPainted {
+    fn clear(&mut self) {
+        self.fragments.clear();
+    }
+}
 
 /// The drawn page, never a caller's current session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -79,6 +191,13 @@ pub(crate) struct Cache {
     pending: Arc<Mutex<Pending>>,
     owner: AtomicBool,
     anim: Mutex<AnimData>,
+    /// The click identity registry, shared with scratch draws: one
+    /// tuple keeps one key however many caches intern it. Only an
+    /// owner drops lookup authority.
+    clicks: Arc<Mutex<ClickRegistry>>,
+    /// The last painted frame's click stops: each key's drawn text
+    /// fragments. Per frame, never shared with scratch draws.
+    painted: Mutex<ClickPainted>,
 }
 
 /// One animated item's schedule state: its drawn frame, when that frame
@@ -132,12 +251,16 @@ impl Default for Cache {
             pending: Arc::default(),
             owner: AtomicBool::new(true),
             anim: Mutex::default(),
+            clicks: Arc::default(),
+            painted: Mutex::default(),
         }
     }
 }
 
 impl Cache {
-    /// A non-owning draw cache whose failures survive its disposal.
+    /// A non-owning draw cache whose failures survive its disposal. The
+    /// scratch draw shares identity allocation and lookup with its
+    /// parent, but never the parent's painted-frame state.
     pub(crate) fn scratch_sharing_pending(&self) -> Self {
         Self {
             entries: Mutex::default(),
@@ -148,6 +271,8 @@ impl Cache {
             // A scratch draw never opens the animation frame, so its
             // schedule stays shut: closed draws render still.
             anim: Mutex::default(),
+            clicks: Arc::clone(&self.clicks),
+            painted: Mutex::default(),
         }
     }
 
@@ -190,7 +315,8 @@ impl Cache {
                     return None;
                 }
                 match spans::fit(&lines, width, flat) {
-                    Ok(lines) => {
+                    Ok(mut lines) => {
+                        self.associate_clicks(&mut lines, &key.0.session, extension, slot);
                         let lines = Arc::new(lines);
                         support::lock(&self.entries).insert(entry, Arc::clone(&lines));
                         Some(lines)
@@ -739,7 +865,15 @@ impl Cache {
                     return None;
                 }
                 match spans::fit(&lines, width, flat) {
-                    Ok(lines) => Some((lines, continues)),
+                    Ok(mut lines) => {
+                        self.associate_clicks(
+                            &mut lines,
+                            &fail_key.0.session,
+                            extension,
+                            &fail_key.1,
+                        );
+                        Some((lines, continues))
+                    }
                     Err(error) => {
                         self.fail(
                             fail_key.clone(),
@@ -839,12 +973,16 @@ impl Cache {
         anim.painted_this.retain(|key| key.page() != &page);
         anim.painted_last.retain(|key| key.page() != &page);
         anim.changed_pages.remove(&page);
+        drop(anim);
         if self.owner.load(Ordering::Relaxed) {
             support::lock(&self.failed).retain(|key| key.0 != page);
             support::lock(&self.pending)
                 .failures
                 .retain(|(at, _, _)| *at != page);
         }
+        // The prune scans every store, so the animation guard above is
+        // already released: the mutex is not reentrant.
+        self.prune_clicks();
     }
 
     /// Drops every per-notice store for instances outside `live_ids`:
@@ -858,6 +996,7 @@ impl Cache {
             None => true,
             Some(id) => live_ids.contains(&id),
         };
+        let before = self.stored_line_count();
         let mut anim = support::lock(&self.anim);
         anim.states.retain(|key, _| live(key));
         anim.painted_this.retain(|key| live(key));
@@ -869,6 +1008,31 @@ impl Cache {
             .retain(|(_, notice_id, _), _| notice_id.is_none_or(|id| live_ids.contains(&id)));
         support::lock(&self.closed)
             .retain(|(_, notice_id, _), _| notice_id.is_none_or(|id| live_ids.contains(&id)));
+        // The retain runs every frame: only a dropped instance pays the
+        // registry scan.
+        if self.stored_line_count() != before {
+            self.prune_clicks();
+        }
+    }
+
+    /// How many fitted lines the stores hold: the prune guard above
+    /// reads it, not the lines.
+    // `*` for the first `+` is behaviorally identical: every closed
+    // entry pairs an entries entry under the same key (written together
+    // in `closed_draw`, dropped together), so a retain drops as many of
+    // each. With x dropped pairs and z dropped animated widths the `*`
+    // sum moves by -x(entries + closed - x) - z, which vanishes exactly
+    // when the `+` sum's -(2x + z) move vanishes, so no test can tell
+    // them apart. The dropped-notice prune tests pin the other moves.
+    #[cfg_attr(false, mutants::skip)]
+    fn stored_line_count(&self) -> usize {
+        support::lock(&self.entries).len()
+            + support::lock(&self.closed).len()
+            + support::lock(&self.anim)
+                .entries
+                .values()
+                .map(|widths| widths.len())
+                .sum::<usize>()
     }
 
     /// Whether any per-notice store retains `id`: animation state, either
@@ -898,16 +1062,20 @@ impl Cache {
 
     pub(crate) fn clear(&self) {
         self.drop_entries();
-        let mut anim = support::lock(&self.anim);
-        anim.at = None;
-        anim.painted_this.clear();
-        anim.painted_last.clear();
-        anim.states.clear();
-        anim.line_counts.clear();
-        anim.changed_pages.clear();
+        {
+            let mut anim = support::lock(&self.anim);
+            anim.at = None;
+            anim.painted_this.clear();
+            anim.painted_last.clear();
+            anim.states.clear();
+            anim.line_counts.clear();
+            anim.changed_pages.clear();
+        }
+        support::lock(&self.painted).clear();
         if self.owner.load(Ordering::Relaxed) {
             support::lock(&self.failed).clear();
             *support::lock(&self.pending) = Pending::default();
+            support::lock(&self.clicks).clear_authority();
         }
     }
 
@@ -920,6 +1088,160 @@ impl Cache {
 
     pub(crate) fn take_notices(&self) -> Vec<(String, String)> {
         std::mem::take(&mut support::lock(&self.pending).notices)
+    }
+
+    /// The key for the (session, extension, slot, click id) tuple,
+    /// minting a fresh one the first time: the same tuple keeps its
+    /// key across redraws and cache hits, and a later tuple never
+    /// reuses one.
+    pub(crate) fn intern_click(
+        &self,
+        session: &contract::SessionId,
+        extension: &str,
+        slot: &str,
+        id: &str,
+    ) -> ClickKey {
+        support::lock(&self.clicks).intern(session, extension, slot, id)
+    }
+
+    /// Replaces each line's raw click id ranges with keys interned for
+    /// the selected extension and slot. Runs after the renderer
+    /// returns, so no registry borrow survives a callback.
+    fn associate_clicks(
+        &self,
+        lines: &mut [FittedLine],
+        session: &contract::SessionId,
+        extension: &str,
+        slot: &str,
+    ) {
+        for line in lines {
+            let raw = std::mem::take(&mut line.click_raw);
+            line.clicks = raw
+                .into_iter()
+                .map(|(range, id)| {
+                    let key = self.intern_click(session, extension, slot, &id);
+                    (range, key)
+                })
+                .collect();
+        }
+    }
+
+    /// The tuple `key` names, for dispatch: none when eviction or
+    /// reload dropped the lookup authority.
+    pub(crate) fn click_target(&self, key: ClickKey) -> Option<(String, String, String)> {
+        support::lock(&self.clicks).by_key.get(&key).map(|target| {
+            (
+                target.extension.clone(),
+                target.slot.clone(),
+                target.id.clone(),
+            )
+        })
+    }
+
+    /// Starts a painted click frame: the last frame's fragments go,
+    /// before the paint registers this frame's.
+    pub(crate) fn begin_click_frame(&self) {
+        support::lock(&self.painted).clear();
+    }
+
+    /// Records one row of a painted click stop's drawn text, with how
+    /// the row joins the one before.
+    pub(crate) fn paint_click(&self, key: ClickKey, y: u16, join: Join, text: String) {
+        support::lock(&self.painted)
+            .fragments
+            .entry(key)
+            .or_default()
+            .push(ClickFragment { y, join, text });
+    }
+
+    /// Publishes the frame's click stops: only keys the frame's
+    /// surviving targets still name keep their fragments, so covered
+    /// targets leave no invisible focus stop or stale text.
+    pub(crate) fn finish_click_frame(&self, targets: &[Target]) {
+        let mut painted = support::lock(&self.painted);
+        painted.fragments.retain(|key, _| {
+            targets
+                .iter()
+                .any(|target| target.id == crate::mouse::TargetId::Extension(*key))
+        });
+    }
+
+    /// The stop's drawn text, joined by the selection rules: rows wrap
+    /// with no newline, a dropped wrap space returns, decoration never
+    /// entered, trailing spaces dropped. None for a stop with no text,
+    /// or one the frame no longer paints.
+    pub(crate) fn click_text(&self, key: ClickKey) -> Option<String> {
+        let painted = support::lock(&self.painted);
+        let mut fragments: Vec<&ClickFragment> = painted.fragments.get(&key)?.iter().collect();
+        fragments.sort_by_key(|fragment| fragment.y);
+        // Fragments sharing one screen row are one logical row: the
+        // paint registers one fragment per click range, so two spans
+        // with one id on one row would otherwise join with a newline.
+        let mut grouped: Vec<(u16, Join, String)> = Vec::new();
+        for fragment in fragments {
+            if let Some(last) = grouped.last_mut()
+                && last.0 == fragment.y
+            {
+                last.2.push_str(&fragment.text);
+            } else {
+                grouped.push((fragment.y, fragment.join, fragment.text.clone()));
+            }
+        }
+        let mut rows: Vec<Row> = Vec::with_capacity(grouped.len());
+        let mut texts: Vec<crate::rows::RowText> = Vec::with_capacity(grouped.len());
+        for (_, join, text) in grouped {
+            rows.push((ratatui::text::Line::raw(text), None));
+            texts.push(crate::rows::RowText {
+                join,
+                ..crate::rows::RowText::plain()
+            });
+        }
+        let text = crate::logical::logical(&rows, &texts)
+            .into_iter()
+            .map(|logical| logical.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// Every click key a stored line or a painted fragment still names.
+    /// The walk accumulates a set, so the maps' iteration order never
+    /// reaches the result.
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "accumulates a set; order never reaches output"
+    )]
+    fn live_click_keys(&self) -> std::collections::HashSet<ClickKey> {
+        fn extend(lines: &[FittedLine], live: &mut std::collections::HashSet<ClickKey>) {
+            for line in lines {
+                live.extend(line.clicks.iter().map(|(_, key)| *key));
+            }
+        }
+        let mut live = std::collections::HashSet::new();
+        for lines in support::lock(&self.entries).values() {
+            extend(lines, &mut live);
+        }
+        for closed in support::lock(&self.closed).values() {
+            extend(&closed.lines, &mut live);
+        }
+        for widths in support::lock(&self.anim).entries.values() {
+            for lines in widths.values() {
+                extend(lines, &mut live);
+            }
+        }
+        live.extend(support::lock(&self.painted).fragments.keys().copied());
+        live
+    }
+
+    /// Releases registry entries no stored line or painted fragment
+    /// names, keeping the allocation counter: only an owner prunes, so
+    /// a scratch draw never drops its parent's authority.
+    fn prune_clicks(&self) {
+        if !self.owner.load(Ordering::Relaxed) {
+            return;
+        }
+        let live = self.live_click_keys();
+        support::lock(&self.clicks).retain(&live);
     }
 }
 

@@ -52,6 +52,11 @@ pub struct RecentRow {
     /// it never wrote one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<SessionStatus>,
+    /// Whether the session is archived (`docs/invocation.md`,
+    /// "Archiving"): omitted when false, so ordinary rows read and write
+    /// as before, and a row from an older build reads as not archived.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 impl RecentRow {
@@ -161,14 +166,22 @@ pub(crate) fn listed(home: &Path, project: Option<&str>) -> Vec<RecentRow> {
 /// One page of exited sessions and the query's total, from one read of
 /// `recent.jsonl`: a row written mid-answer cannot make them disagree.
 /// The page starts after `before`'s row; the total counts every row the
-/// pages walk, whatever `before` and the page hold.
+/// pages walk, whatever `before` and the page hold. With `archived`, only
+/// archived rows are listed; without it, archived rows are left out. The
+/// filter applies to each session's newest row, so an older unarchived
+/// row never resurrects an archived session; `before` is resolved in the
+/// filtered list, so a filtered-out `before` is unknown.
 pub(crate) fn page_with_total(
     home: &Path,
     before: Option<&str>,
     project: Option<&str>,
     running: &BTreeSet<String>,
+    archived: bool,
 ) -> Result<(Vec<RecentRow>, usize), PageError> {
-    let listed = listed(home, project);
+    let listed: Vec<RecentRow> = listed(home, project)
+        .into_iter()
+        .filter(|row| row.archived == archived)
+        .collect();
     let start = match before {
         None => 0,
         Some(before) => {
@@ -194,7 +207,8 @@ pub(crate) fn page_with_total(
 
 /// The rows the hub seeds its feed from at start: of the newest
 /// [`RECENT_KEEP`] rows, each session's newest, when it is crashed or
-/// exited waiting, not a delegate, and its directory is still there.
+/// exited waiting, not a delegate, not archived, and its directory is
+/// still there.
 pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
     let rows = match fs::File::open(path(home)) {
         Ok(file) => tail_with(file),
@@ -203,6 +217,7 @@ pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
     newest_first(rows)
         .into_iter()
         .filter(|row| !row.delegate())
+        .filter(|row| !row.archived)
         .filter(|row| row.how == Left::Crashed || row.waiting())
         .filter(|row| row.dir_exists(home))
         .collect()
@@ -297,6 +312,7 @@ pub fn append_exited(
             .unwrap_or_default(),
         how: Left::Exited,
         status,
+        archived: false,
     };
     // A row that cannot be written loses only the listing, not the log.
     append(home, &row).map_err(|source| RecentError::Write {

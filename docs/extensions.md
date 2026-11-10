@@ -1563,6 +1563,8 @@ spans carry `click` ids, and `run` receives `{ session_id = "…", click =
 `run` does below. Enter on a click target that has focus in navigate mode
 calls `on_click` as a click does (`docs/tui.md`, "Input and focus").
 
+`on_key`, `on_click` and `fiber.key`'s `run` make no host call: the terminal needs each answer before the next input. A host call from one raises a Lua error.
+
 `fiber.on_focus({ timeout, run })` runs `run` when the session on screen
 changes, with `{ session_id = "…" }`, or no `session_id` key on home. It
 runs as an event handler does and may make host calls. Its return value is

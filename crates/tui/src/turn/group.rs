@@ -570,6 +570,7 @@ impl Group {
                         RowText {
                             tail: line.pad,
                             links: line.links.clone(),
+                            clicks: line.clicks.clone(),
                             spin,
                             anim: line.anim.clone(),
                             ..RowText::plain()
@@ -1242,11 +1243,24 @@ fn gutter_row(
                 )
             })
             .collect();
+        // The gutter precedes the line, so every click range moves right
+        // by the shift; no range lands on the gutter itself.
+        let clicks = line
+            .clicks
+            .iter()
+            .map(|(range, key)| {
+                (
+                    range.start.saturating_add(shift)..range.end.saturating_add(shift),
+                    *key,
+                )
+            })
+            .collect();
         (
             Line::from(spans),
             RowText {
                 tail: line.pad,
                 links,
+                clicks,
                 // The gutter precedes the line, so its item's tag rides
                 // along: a split row still marks its item visible.
                 anim: line.anim.clone(),

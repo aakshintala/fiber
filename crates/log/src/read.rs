@@ -183,6 +183,24 @@ pub fn kind_of(line: &[u8]) -> Option<String> {
     value.get("kind")?.as_str().map(str::to_owned)
 }
 
+/// Whether the session in `dir` is archived: its last `archived` line
+/// comes after its last `fiber_started` (`docs/events.md`, `archived`).
+/// Reads the log backwards from the end, stopping at the first complete
+/// `archived` or `fiber_started` line; anything else, including shell
+/// lines, is skipped. A missing or unreadable log, or one with neither
+/// marker, reads as not archived, so a broken log never hides a session.
+pub fn is_archived(dir: &Path) -> bool {
+    crate::last_line_where(dir, |line| {
+        let kind = kind_of(line)?;
+        match kind.as_str() {
+            "archived" => Some(true),
+            "fiber_started" => Some(false),
+            _ => None,
+        }
+    })
+    .unwrap_or(false)
+}
+
 /// The `kind` of the log's last line, read from at most [`TAIL`] bytes
 /// of its end. A final line without a trailing newline counts when it
 /// parses. `None` when the log is missing, unreadable, empty, the last

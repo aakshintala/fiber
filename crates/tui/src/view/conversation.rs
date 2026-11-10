@@ -92,7 +92,11 @@ fn conversation_rows(
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) -> (Option<crate::window::Pin>, Vec<crate::ext::anim::AnimKey>) {
+) -> (
+    Option<crate::window::Pin>,
+    Vec<crate::ext::anim::AnimKey>,
+    Vec<Target>,
+) {
     let height = usize::from(area.height);
     // The focused link's hint reserves the row under its line, laid out
     // with the targets: rows on and below it draw one lower, so hint
@@ -105,11 +109,15 @@ fn conversation_rows(
     let crate::window::Shown {
         first,
         lines,
+        texts,
         turns,
         spins,
         anims,
         pin,
     } = app.shown(top, height);
+    // The extension targets painted below: they draw over links in the
+    // same cells, so the caller pushes them after the marks pass.
+    let mut ext_targets: Vec<Target> = Vec::new();
     // Where this frame's turn targets splice in: after the targets
     // drawn before the conversation, before its line targets.
     let base = targets.len();
@@ -154,6 +162,28 @@ fn conversation_rows(
         let room = area.bottom().saturating_sub(y);
         let take = count.min(usize::from(room));
         let rect = Rect::new(area.x, y, area.width, to_u16(take));
+        // An extension's click range draws on exactly its cells: the
+        // fitted replacement lines never wrap, so a single-row line
+        // carries the whole range on its one painted row. A wrapped
+        // line lends no target rather than a wrong one. The pinned row
+        // keeps the pin's hit, the unread-messages row the pill's, and
+        // the copied row the confirmation's: none lends a target.
+        if rows == 1
+            && take == 1
+            && !(pinned && y == area.y)
+            && y < last
+            && copied_row(app, area) != Some(y)
+            && let Some(text) = texts.get(at)
+        {
+            marks::paint_clicks(
+                &app.pages().ext.cache,
+                &text.clicks,
+                &line,
+                text,
+                Rect::new(area.x, y, area.width, 1),
+                &mut ext_targets,
+            );
+        }
         // A short row and the wrapped rows of a long one fill the column
         // with the row's own background, so a card's surface tint reaches
         // the column's edge (`docs/tui.md`, "Look").
@@ -313,7 +343,7 @@ fn conversation_rows(
             buf.set_stringn(x, y, COPIED, usize::from(width), style(Role::Info));
         }
     }
-    (pin, painted)
+    (pin, painted, ext_targets)
 }
 
 /// Draws the conversation or item transcript through their shared row model.
@@ -324,16 +354,22 @@ pub(super) fn draw(
     targets: &mut Vec<Target>,
 ) -> Vec<crate::ext::anim::AnimKey> {
     if app.item_open() {
-        let (_, painted) = conversation_rows(app, area, buf, targets);
+        let (_, painted, ext) = conversation_rows(app, area, buf, targets);
         marks::draw(app, area, buf, targets, app.hint_layout(area).gap);
+        // The extension targets draw over links in the same cells, so
+        // they land after the marks pass.
+        targets.extend(ext);
         return painted;
     }
 
     let inset = crate::layout::past_gutter(area, app.chrome().gutter());
     let (rows, bar) = scroll_bar::split(inset);
-    let (pin, painted) = conversation_rows(app, rows, buf, targets);
+    let (pin, painted, ext) = conversation_rows(app, rows, buf, targets);
     scroll_bar::draw(app, bar, buf);
     marks::draw(app, inset, buf, targets, app.hint_layout(inset).gap);
+    // The extension targets draw over links in the same cells, so they
+    // land after the marks pass.
+    targets.extend(ext);
     if let Some(pin) = pin {
         let rect = Rect::new(rows.x, rows.y, rows.width, 1);
         draw_row(pin.line, rect, buf);
@@ -351,7 +387,11 @@ pub(super) fn test_conversation_rows(
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) -> (Option<crate::window::Pin>, Vec<crate::ext::anim::AnimKey>) {
+) -> (
+    Option<crate::window::Pin>,
+    Vec<crate::ext::anim::AnimKey>,
+    Vec<Target>,
+) {
     conversation_rows(app, area, buf, targets)
 }
 
