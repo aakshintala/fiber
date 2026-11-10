@@ -3577,7 +3577,7 @@ fn command_rename_applies() {
     .unwrap();
     let (renderer, notices) = loader.load();
     assert!(notices.is_empty(), "{notices:?}");
-    // `docs/configuration.md`, "Extensions": a new name for one of the extension's commands, when two extensions clash.
+    // `docs/configuration.md`, "Extension settings": a new name for one of the extension's commands, when two extensions clash.
     assert_eq!(
         renderer.tui_commands(&home_ctx()),
         vec![TuiCommand {
