@@ -295,3 +295,9 @@ crates/hub/src/archive_tests.rs	fiber-4562	plan	2026-11-10T16:02:22Z	Amoghs-MacB
 .github/workflows/ci.yml	fiber-4522	plan	2026-11-10T16:07:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-flake-report	fiber-4522	plan	2026-11-10T16:07:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-flake-report-gh	fiber-4522	plan	2026-11-10T16:07:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/commands.rs	fiber-4557	plan	2026-11-10T16:17:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/commands_tests.rs	fiber-4557	plan	2026-11-10T16:17:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/import.rs	fiber-4557	plan	2026-11-10T16:17:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/import_report.rs	fiber-4557	plan	2026-11-10T16:17:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/cli.rs	fiber-4557	plan	2026-11-10T16:17:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/machine.rs	fiber-4557	plan	2026-11-10T16:17:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
