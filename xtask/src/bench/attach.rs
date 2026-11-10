@@ -35,7 +35,7 @@ pub(super) fn fold_rates(id: &str, results: Option<&Results>) -> Result<FoldMedi
             .ok_or_else(|| format!("{id}: not an array"))
     })?;
     // The attach row always takes 5 samples per fixture
-    // (`docs/performance.md:184-185`): a declared count of 3 is malformed,
+    // (`docs/performance.md`, "Measuring"): a declared count of 3 is malformed,
     // even when the samples match it.
     let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
     if runs != 5 {
@@ -141,7 +141,7 @@ fn fold_bytes(id: &str, results: Option<&Results>) -> (u64, u64) {
 /// bound and the pass-end ordinary ceiling live in the table's cells, so
 /// no formula renders here. A malformed metric is one failure naming `id`.
 /// The attach row always takes 5 samples per fixture
-/// (`docs/performance.md:184-185`): any other declared count fails.
+/// (`docs/performance.md`, "Measuring"): any other declared count fails.
 pub(super) fn fixture_medians(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
     let entries = match metric(results, id).and_then(|value| {
         value
@@ -179,7 +179,7 @@ pub(super) fn fixture_medians(id: &str, results: Option<&Results>) -> (Vec<Strin
     // `metric` fails on `None`, so results exists past here.
     let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
     // The attach row always takes 5 samples per fixture
-    // (`docs/performance.md:184-185`): a declared count of 3 is malformed,
+    // (`docs/performance.md`, "Measuring"): a declared count of 3 is malformed,
     // even when the samples match it.
     if runs != 5 {
         return (

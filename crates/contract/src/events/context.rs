@@ -136,7 +136,7 @@ pub struct Notice {
 }
 
 /// Groups one pass's notices by code, so no emitter floods one pass with
-/// one row per item (`docs/errors.md`, "Notices"): one notice per code in
+/// one row per item (`docs/errors.md`, "Registry"): one notice per code in
 /// first-seen code order, each item kept in order. A code seen once passes
 /// through unchanged, without calling `lead`; a code seen more than once
 /// becomes one notice whose message is `lead`'s sentence for the group's

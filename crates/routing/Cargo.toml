@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 # `routing` depends on `contract`, `config`, `extensions` and `provider`
-# (docs/architecture.md, "The call rules"), and is the only crate that
+# (`docs/architecture.md`, "The call rules"), and is the only crate that
 # depends on both `extensions` and `provider`.
 [dependencies]
 config = { path = "../config" }

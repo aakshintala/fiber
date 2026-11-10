@@ -1,4 +1,4 @@
-//! Whether a ready run reuses a same-head mutants pass (docs/ci.md,
+//! Whether a ready run reuses a same-head mutants pass (`docs/ci.md`,
 //! "On every pull request that changes code").
 //!
 //! The runs file holds one page of the Actions runs list

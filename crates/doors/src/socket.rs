@@ -1,4 +1,4 @@
-//! A session's socket at `run/<session_id>` (`docs/state.md`, "Sockets"):
+//! A session's socket at `run/<session_id>` (`docs/state.md`, "What each part holds"):
 //! binding it, and telling a live one from a dead process's.
 
 use std::fs::{self, DirBuilder, Permissions};
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::SessionError;
 
 /// The longest socket path the platform binds: `sun_path` less its
-/// terminating byte (`docs/state.md`, "Sockets").
+/// terminating byte (`docs/state.md`, "What each part holds").
 pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
 /// Fails with the session's `FIBER_HOME` sentence when `run/<file_name>`
@@ -27,7 +27,7 @@ pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), SessionErro
 }
 
 /// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
-/// directory (`docs/state.md`, "Sockets"). A socket a connect reaches is
+/// directory (`docs/state.md`, "What each part holds"). A socket a connect reaches is
 /// live: fail `session_held` and leave it alone; a refusal, a missing path,
 /// or a regular file is removed before binding. Any other error
 /// may hide a live session, so the path stays and this fails `io_failed`.

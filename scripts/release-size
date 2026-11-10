@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the release profile for the target that ships,
 # x86_64-unknown-linux-musl, strips it, prints its size, and fails when the
-# stripped head binary is 26 MiB or more (docs/ci.md, "On every pull request
+# stripped head binary is 26 MiB or more (`docs/ci.md`, "On every pull request
 # that changes code"; docs/dependencies.md). The checkout's HEAD is the head.
 #
 # Usage: scripts/release-size [BASE_COMMIT]

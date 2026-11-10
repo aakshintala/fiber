@@ -39,7 +39,7 @@ fn left(id: &str, how: &str) -> serde_json::Value {
 
 #[test]
 fn only_the_10_mib_fixture_reports_terminal_memory() {
-    // docs/performance.md:74,77,227-229: only the 10 MiB fixture reports
+    // `docs/performance.md`, "Budgets": only the 10 MiB fixture reports
     // the two memory readings, terminal peak RSS and retained RssAnon.
     assert_eq!(MEMORY_FIXTURE, "10 MiB");
     for (label, _) in PLANS {
@@ -442,7 +442,7 @@ fn attach_stage_rows_maps_each_jig_run_onto_its_stage() {
 
 #[test]
 fn attach_stage_rows_without_the_jig_reports_terminal_and_hub_only() {
-    // docs/performance.md:231-237: terminal and hub_replay run outside
+    // `docs/performance.md`, "Measuring": terminal and hub_replay run outside
     // the paging jig; without it, only those two stages are measured.
     let rows = attach_stage_rows("1 MiB", 1_050_231, 31.0, 20.0, None);
     let names: Vec<&str> = rows
@@ -464,7 +464,7 @@ fn attach_stage_rows_without_the_jig_reports_terminal_and_hub_only() {
 
 #[test]
 fn a_failing_open_run_keeps_the_terminal_and_hub_rows_with_a_note() {
-    // docs/performance.md:231-237: terminal and hub_replay run outside
+    // `docs/performance.md`, "Measuring": terminal and hub_replay run outside
     // the paging jig. Its failure leaves those two measurements intact.
     let error = "the paging jig's open run exited 2; stderr: usage";
     let (rows, note) = open_error_samples("1 MiB", 1_050_231, 31.0, 20.0, error);
@@ -553,7 +553,7 @@ fn pass_end_returns_once_the_thumb_shows() {
 
 #[test]
 fn the_pass_end_entries_carry_the_fixture_and_log_size() {
-    // docs/performance.md:184-185,223-227: both attach observations use
+    // `docs/performance.md`, "Measuring": both attach observations use
     // the same fixture and run; each entry names that fixture and log size.
     for label in ["1 MiB", "10 MiB"] {
         let (metric, entry) = pass_entry(label, 1_050_231, 41.0);
@@ -595,7 +595,7 @@ fn span_op(op: &str, ms: u64) -> String {
 /// `attach_span_ms` row carrying the fixture, the sample, the operation
 /// and its milliseconds; other codes and blank lines are not spans. The
 /// terminal operation inventory and its per-process limits are in
-/// `docs/state.md:423-453`.
+/// `docs/state.md`, "What each part holds".
 #[test]
 fn span_samples_emit_one_row_per_op_timing_line() {
     let text = [
@@ -622,7 +622,7 @@ fn span_samples_emit_one_row_per_op_timing_line() {
             json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.tail_wait", "ms": 19}),
         ),
     ];
-    // `docs/state.md:423-453` promises counts and scopes, not log order,
+    // `docs/state.md`, "What each part holds" promises counts and scopes, not log order,
     // so the comparison sorts both sides: the exact rows and their count
     // still match, in any order.
     let key =
@@ -675,11 +675,11 @@ fn span_samples_attribute_each_pid_log_to_its_own_sample() {
     std::fs::write(logs.join("tui-200.log"), span_op("tui.tail_wait", 13)).expect("second log");
     let first = span_samples(dir.path(), 100, "1 MiB", 1_048_576, 0).expect("first spans");
     let second = span_samples(dir.path(), 200, "1 MiB", 1_048_576, 1).expect("second spans");
-    // docs/state.md:446-448,453 promises one tui.tail_wait line per process.
+    // `docs/state.md`, "What each part holds" promises one tui.tail_wait line per process.
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].1["sample"], json!(0));
     assert_eq!(first[0].1["ms"], json!(11));
-    // The same docs/state.md:446-448,453 promise applies to this process.
+    // The same `docs/state.md`, "What each part holds" promise applies to this process.
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].1["sample"], json!(1));
     assert_eq!(second[0].1["ms"], json!(13));

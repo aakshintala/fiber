@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prints the tests that passed after a retry, one per line, from nextest's
-# JUnit XML (docs/testing.md, "Flaky tests"). Each line is the test exactly
+# JUnit XML (`docs/testing.md`, "Flaky tests"). Each line is the test exactly
 # as nextest prints it (the binary id, a space, the test name), a TAB, then
 # the first failed attempt's failure text: the first flakyFailure child's
 # `message` attribute plus its element text (the stack or output), with

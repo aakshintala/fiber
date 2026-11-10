@@ -1,5 +1,5 @@
 //! The read/filter path behind the setup questions
-//! (`docs/user/install.md`, "Setup"): signed-in marking at any label,
+//! (`docs/user/install.md`, "Installing Fiber"): signed-in marking at any label,
 //! model choices from the filtered catalogue only, empty providers skipping
 //! steps 1 and 3, receipt short-circuiting, and the shell mapping.
 
@@ -620,8 +620,8 @@ fn steps_without_an_answer_print_their_skip_lines() {
 
 /// The re-run child's marker: the parent sets it to one case name, the
 /// child runs only that case's steps against the child's environment and
-/// prints the codes, so env-reading steps stay hermetic
-/// (`docs/testing/fakes.md`, "Re-running a test", and `login_tests.rs`).
+/// prints the codes, so env-reading steps stay hermetic (see
+/// `login_tests.rs`).
 const CHILD: &str = "FIBER_CLI_SETUP_CHILD";
 
 /// The bound on a re-run child: half of nextest's per-test timeout less

@@ -1,4 +1,4 @@
-//! The diagnostic writer (`docs/state.md`, "Diagnostic logs"): one JSON
+//! The diagnostic writer (`docs/state.md`, "What each part holds"): one JSON
 //! object per line in a process's own file in `logs/`.
 //!
 //! Each line is `ts`, `level`, `process`, `session_id` when one is known,
@@ -118,7 +118,7 @@ struct Resources {
 }
 
 /// The allocation metrics of an `op_timing` line in an `alloc-stats`
-/// build (`docs/state.md:306`): bytes allocated during the operation,
+/// build (`docs/state.md`, "What each part holds"): bytes allocated during the operation,
 /// the allocation count, and signed end-minus-start live bytes. The wire
 /// keeps the `alloc_bytes`, `allocs` and `live_delta_bytes` names.
 #[cfg(feature = "alloc-stats")]
@@ -714,7 +714,7 @@ fn append(file: &Path, logs: &Path, bytes: &[u8]) {
 }
 
 /// Files in `logs/` and `crashes/` older than this are deleted
-/// (`docs/state.md`, "Bounds").
+/// (`docs/state.md`, "What each part holds").
 const OLD_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Besides the old files, each directory keeps this many of its newest.

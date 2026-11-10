@@ -21,7 +21,7 @@ worktree = { path = "../worktree" }
 [dev-dependencies]
 fakes = { package = "fakes-contract", path = "../fakes-contract" }
 
-# The jig (docs/testing.md, "Jigs"); its tests run the built binary from `tests/connect_jig.rs`.
+# The jig (`docs/testing.md`, "Jigs"); its tests run the built binary from `tests/connect_jig.rs`.
 [[example]]
 name = "connect"
 

@@ -859,7 +859,7 @@ fn a_script_inside_svg_does_not_switch_to_raw_text() {
     assert_eq!(to_markdown("a<svg><script>x</svg>y</script>z"), "ayz\n");
 }
 
-/// The result of `run` with a deadline on the wall clock (docs/testing.md,
+/// The result of `run` with a deadline on the wall clock (`docs/testing.md`,
 /// "Waits and timeouts"): a mutant that hangs the conversion fails here
 /// naming what it waited for, instead of hanging CI.
 #[track_caller]

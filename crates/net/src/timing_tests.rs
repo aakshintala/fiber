@@ -1,5 +1,5 @@
 //! One actual connector attempt group timed through the installed
-//! callable (`docs/state.md`, "Diagnostic logs"): the observed agent
+//! callable (`docs/state.md`, "What each part holds"): the observed agent
 //! starts one `net.connect` scope around the addresses it really tries,
 //! while the plain agent, an empty address list, a stop before the first
 //! attempt and an already-built tunnel start none.

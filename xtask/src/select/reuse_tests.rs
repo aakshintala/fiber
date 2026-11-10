@@ -9,7 +9,7 @@ const HEAD: &str = "abc123";
 const BASE: &str = "def456";
 const RUN_ID: u64 = 100;
 /// 40 mutants derive 3 shards: one per 15, rounded up
-/// (docs/ci.md, "On every pull request that changes code").
+/// (`docs/ci.md`, "On every pull request that changes code").
 const MUTANT_COUNT: u64 = 40;
 const SHARD_TOTAL: usize = 3;
 
@@ -256,7 +256,7 @@ fn unselected_mutants_reruns() {
 #[test]
 fn partial_shards_rerun() {
     // One fewer shard than the derived total reruns
-    // (docs/ci.md, "On every pull request that changes code").
+    // (`docs/ci.md`, "On every pull request that changes code").
     let runs = json!({ "workflow_runs": [matching_candidate()] });
     assert!(!decide_with(
         &current(),
@@ -268,7 +268,7 @@ fn partial_shards_rerun() {
 #[test]
 fn count_off_by_one_reruns() {
     // One more shard than the derived total reruns
-    // (docs/ci.md, "On every pull request that changes code").
+    // (`docs/ci.md`, "On every pull request that changes code").
     let runs = json!({ "workflow_runs": [matching_candidate()] });
     assert!(!decide_with(
         &current(),
@@ -366,7 +366,7 @@ fn run_without_shard_jobs_reruns() {
 fn non_shard_jobs_never_count_toward_the_total() {
     // As many successful non-shard jobs as the derived total still reruns:
     // only `Mutants (shard N)` jobs count
-    // (docs/ci.md, "On every pull request that changes code").
+    // (`docs/ci.md`, "On every pull request that changes code").
     let jobs = Value::Array(
         (0..SHARD_TOTAL)
             .map(|index| json!({ "name": format!("Lint (leg {index})"), "conclusion": "success" }))

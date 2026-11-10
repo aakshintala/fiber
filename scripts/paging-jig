@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the tui crate's paging jig (docs/testing.md, "Jigs") in the release
+# Builds the tui crate's paging jig (`docs/testing.md`, "Jigs") in the release
 # profile for the target that ships, x86_64-unknown-linux-musl, so the
 # benchmark job's paging rows (docs/performance.md) measure the shipped
 # allocator and code generation. The checkout's HEAD is the head.

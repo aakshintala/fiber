@@ -1,6 +1,6 @@
 //! `scripts/cache-prune` run as a program against a small git repository,
 //! with the checked-in stub under `cache_prune_fixture/bin/` standing in
-//! for gh (`docs/ci.md`, "The backstop"). The fixture history is a linear
+//! for gh (`docs/ci.md`, "The backstop on `main`"). The fixture history is a linear
 //! main of 25 commits with one pull request head on top of c12, and the
 //! `origin` remote holds its `refs/pull/1/head`, so the reachable set is the
 //! 10 nearest first-parent commits of c25 and of c12.

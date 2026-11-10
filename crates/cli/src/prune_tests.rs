@@ -1857,7 +1857,7 @@ fn hub_prune_dry_run_prints_the_preview_and_deletes_nothing() {
     );
     assert_eq!(err, "");
     // One request: a dry run prints the preview and deletes nothing
-    // (docs/invocation.md:1474-1476), so it connects once and sends no confirm.
+    // (`docs/invocation.md`, "Deleting and pruning"), so it connects once and sends no confirm.
     assert_eq!(hub.connects, 1);
     let received = hub.received.lock().unwrap();
     assert_eq!(received.len(), 1, "a dry run sends no confirm");
@@ -1882,7 +1882,7 @@ fn hub_prune_confirm_sends_the_previewed_items_as_expect() {
     assert_eq!(err, "prune? [y/N] ");
     let received = hub.received.lock().unwrap();
     // Two requests in order, dry run then confirm
-    // (docs/invocation.md:1479-1483: without `--yes` the command first
+    // (`docs/invocation.md`, "Deleting and pruning": without `--yes` the command first
     // asks for the dry run, prints it and asks, then sends those items
     // back as `expect`).
     assert_eq!(received.len(), 2);
@@ -1911,7 +1911,7 @@ fn hub_prune_decline_deletes_nothing() {
     assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
     assert_eq!(err, "prune? [y/N] nothing deleted\n");
     let received = hub.received.lock().unwrap();
-    // A decline stops after the dry run (docs/invocation.md:1479-1480),
+    // A decline stops after the dry run (`docs/invocation.md`, "Deleting and pruning"),
     // so it sends no confirm.
     assert_eq!(received.len(), 1, "a decline sends no confirm");
 }
@@ -1935,9 +1935,9 @@ fn hub_prune_yes_sends_one_confirm_without_expect() {
     assert_eq!(out, "freed 10 B\n");
     assert_eq!(err, "");
     let received = hub.received.lock().unwrap();
-    // With `--yes` one confirm and no dry run (docs/invocation.md:1475-1476:
+    // With `--yes` one confirm and no dry run (`docs/invocation.md`, "Deleting and pruning":
     // `--yes` confirms without asking; the local `--yes` sends no `expect`,
-    // docs/invocation.md:1415).
+    // `docs/invocation.md`, "Deleting and pruning").
     assert_eq!(received.len(), 1, "--yes sends one confirm");
     // The exact line proves neither `dry_run` nor `expect` is sent.
     assert_eq!(
@@ -1977,7 +1977,7 @@ fn hub_prune_stale_preview_keeps_its_code() {
     assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
     assert_eq!(err, "prune? [y/N] ");
     let received = hub.received.lock().unwrap();
-    // Two requests, dry run then confirm (docs/invocation.md:1479-1484:
+    // Two requests, dry run then confirm (`docs/invocation.md`, "Deleting and pruning":
     // without `--yes` the dry run comes first, and the hub rejects the
     // confirm `stale_request` when the set changed, deleting nothing).
     assert_eq!(received.len(), 2, "preview then one confirm");
@@ -1997,8 +1997,8 @@ fn hub_prune_without_a_terminal_never_connects() {
     assert!(matches!(&error, CliError::NobodyToAsk { .. }), "{error:?}");
     assert_eq!(error.code(), ErrorCode::Usage);
     // Nobody to ask fails before connecting
-    // (docs/invocation.md:1475-1476: prune asks as delete does, and
-    // docs/invocation.md:1418-1420: with no terminal to ask on, asking is
+    // (`docs/invocation.md`, "Deleting and pruning": prune asks as delete does, and
+    // `docs/invocation.md`, "Deleting and pruning": with no terminal to ask on, asking is
     // a usage error), so the hub is never reached.
     assert_eq!(hub.connects, 0);
 }
@@ -2030,7 +2030,7 @@ fn hub_prune_unreadable_duration_surfaces_the_hub_refusal() {
     assert_eq!(out, "");
     let received = hub.received.lock().unwrap();
     // A refused preview yields no items to confirm
-    // (docs/invocation.md:1480-1483: the confirm sends the dry run's items
+    // (`docs/invocation.md`, "Deleting and pruning": the confirm sends the dry run's items
     // back as `expect`), so nothing follows it.
     assert_eq!(received.len(), 1, "nothing follows a refused preview");
     assert_eq!(received[0]["args"]["older_than"], "soon");

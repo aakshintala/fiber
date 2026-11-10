@@ -1,5 +1,5 @@
 //! `fiber setup`: one guided run through the install questions
-//! (`docs/user/install.md`, "Setup"): each answered step runs its command
+//! (`docs/user/install.md`, "Installing Fiber"): each answered step runs its command
 //! as the flags do, and each unanswered step names its command. On a
 //! terminal the five questions are asked in the documented order with the
 //! current answers preselected; without one only the flags apply.
@@ -152,7 +152,7 @@ pub(crate) fn import_offered(home_env: &Path, home: &Path, source: ImportSource)
 
 /// Whether Fiber home holds a completed receipt for `source`: the
 /// documented file parses as JSON and its `source` names the source
-/// (`docs/configuration.md`, "Importing another agent's setup").
+/// (`docs/configuration.md`, "Importing").
 pub(crate) fn receipt_completed(home: &Path, source: ImportSource) -> bool {
     let file = home.join(format!("import-{}.json", source.name()));
     let Ok(text) = std::fs::read_to_string(&file) else {
