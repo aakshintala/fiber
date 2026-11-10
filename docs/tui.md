@@ -3039,7 +3039,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   If the own segment fills first, the count phase adds ancestors above the
   preview without refolding its visible pages. On one segment the preview
   holds the filled run and the pass counts the rest, so the landing adds the
-  rows above it.
+  rows above it. A tail or count read that is rejected or abandoned installs
+  nothing: the previous transcript stays and the busy indicator is left to
+  the live session, with a notice when the read was rejected.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
