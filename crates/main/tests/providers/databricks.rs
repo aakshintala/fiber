@@ -2,7 +2,8 @@
 //! (`docs/testing.md`, "Model calls"): the built `fiber` runs in its own
 //! process group with its own `FIBER_HOME`, holding the package copied with
 //! its origin rewritten to the fake server. Discovery answers the two Unity
-//! Catalog endpoints, then each turn runs on its protocol's stream.
+//! Catalog endpoints and the serving-endpoint list, then each turn runs on
+//! its protocol's stream.
 
 #![allow(
     clippy::unwrap_used,
@@ -130,11 +131,21 @@ fn catalog_body() -> Value {
     ]})
 }
 
-/// The discovery's two answers, in the order `models()` asks for them.
-fn discovery() -> [Response; 2] {
+/// The serving endpoints backing each discovered service.
+fn endpoints_body() -> Value {
+    json!({"endpoints": [
+        {"name": "claude-opus-5"},
+        {"name": "gpt-6-sol"},
+        {"name": "glm-5.3"},
+    ]})
+}
+
+/// The discovery's three answers, in the order `models()` asks for them.
+fn discovery() -> [Response; 3] {
     [
         Response::status(200, services_body().to_string()),
         Response::status(200, catalog_body().to_string()),
+        Response::status(200, endpoints_body().to_string()),
     ]
 }
 
@@ -197,11 +208,11 @@ fn tags_header(request: &Request) -> Value {
     serde_json::from_str(raw).unwrap()
 }
 
-/// A turn's three requests: the two discovery answers, then the model's.
-/// Both discovery requests carry the source-only header; the model's
+/// A turn's four requests: the three discovery answers, then the model's.
+/// All three discovery requests carry the source-only header; the model's
 /// carries `model_tags`, parsed.
 fn assert_tagged_turn(requests: &[Request], model_path: &str, model_tags: &Value) {
-    assert_eq!(requests.len(), 3, "{requests:?}");
+    assert_eq!(requests.len(), 4, "{requests:?}");
     assert_eq!(
         requests[0].path,
         "/api/2.1/unity-catalog/model-services?parent=schemas%2Fsystem.ai&page_size=100"
@@ -210,21 +221,22 @@ fn assert_tagged_turn(requests: &[Request], model_path: &str, model_tags: &Value
         requests[1].path,
         "/api/ai-gateway/v2/external-provider-models?page_size=1000"
     );
-    assert_eq!(requests[2].path, model_path);
-    for request in &requests[..2] {
+    assert_eq!(requests[2].path, "/api/2.0/serving-endpoints");
+    assert_eq!(requests[3].path, model_path);
+    for request in &requests[..3] {
         assert_eq!(
             tags_header(request),
             json!({"source": "fiber"}),
             "{request:?}"
         );
     }
-    assert_eq!(tags_header(&requests[2]), *model_tags, "{:?}", requests[2]);
+    assert_eq!(tags_header(&requests[3]), *model_tags, "{:?}", requests[3]);
     for request in requests {
         assert_fingerprint(request, "authorization", "Bearer dapi-test");
     }
 }
 
-/// A turn's three requests with the default, source-only model header.
+/// A turn's four requests with the default, source-only model header.
 fn assert_turn(requests: &[Request], model_path: &str) {
     assert_tagged_turn(requests, model_path, &json!({"source": "fiber"}));
 }
@@ -255,8 +267,8 @@ fn claude_completes_a_turn_on_the_anthropic_route() {
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
-    assert!(requests[2].header("x-api-key").is_none());
-    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert!(requests[3].header("x-api-key").is_none());
+    let body: Value = serde_json::from_slice(&requests[3].body).unwrap();
     assert!(body.get("reasoning_effort").is_none(), "{body}");
 }
 
@@ -333,7 +345,7 @@ fn models_lists_exactly_the_three_discovered_references() {
         ]
     );
     let requests = server.requests();
-    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests.len(), 3, "{requests:?}");
 }
 
 #[test]
@@ -464,6 +476,10 @@ fn a_thousand_row_catalog_page_fits_the_memory_cap() {
             .to_string(),
         ),
         Response::status(200, json!({"models": rows}).to_string()),
+        Response::status(
+            200,
+            json!({"endpoints": [{"name": "bulk-model"}]}).to_string(),
+        ),
     ])
     .unwrap();
     let host = install(
@@ -481,7 +497,7 @@ fn a_thousand_row_catalog_page_fits_the_memory_cap() {
         .map(|line| line["model"].as_str().unwrap())
         .collect();
     assert_eq!(models, ["databricks/databricks-bulk-model"]);
-    assert_eq!(server.requests().len(), 2);
+    assert_eq!(server.requests().len(), 3);
 }
 
 /// A `:level` suffix on a discovered Claude model reaches the Anthropic
@@ -512,7 +528,7 @@ fn claude_thinking_suffix_sends_adaptive_thinking() {
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
-    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let body: Value = serde_json::from_slice(&requests[3].body).unwrap();
     assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     assert_eq!(body["output_config"], json!({"effort": "high"}));
 }
@@ -545,7 +561,7 @@ fn discovered_default_level_sends_without_a_suffix() {
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
-    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let body: Value = serde_json::from_slice(&requests[3].body).unwrap();
     assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     assert_eq!(body["output_config"], json!({"effort": "medium"}));
 }
@@ -692,6 +708,8 @@ fn request_tags_hub_overrides_are_session_local() {
             .starts_with("/api/ai-gateway/v2/external-provider-models")
         {
             Response::status(200, catalog_body().to_string())
+        } else if request.path.starts_with("/api/2.0/serving-endpoints") {
+            Response::status(200, endpoints_body().to_string())
         } else {
             completions_hello()
         }
@@ -757,4 +775,120 @@ fn request_tags_hub_overrides_are_session_local() {
         .take()
         .expect("the hub ran")
         .kill_and_wait();
+}
+
+/// Every diagnostic line under the home's `logs/`, parsed: the witness for
+/// an omission is the session's diagnostic log, read after the child exits
+/// (`crates/main/tests/extension_host/extension_diagnostics.rs`).
+fn log_lines(setup: &Setup) -> Vec<Value> {
+    let mut lines = Vec::new();
+    let logs = setup.home().join("logs");
+    if !logs.exists() {
+        return lines;
+    }
+    let mut files: Vec<_> = std::fs::read_dir(&logs)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    files.sort();
+    for path in files {
+        let text = std::fs::read_to_string(&path).unwrap();
+        for line in text.lines() {
+            lines.push(serde_json::from_str(line).unwrap());
+        }
+    }
+    lines
+}
+
+/// A service with no serving endpoint is left out of discovery and named
+/// once in the diagnostic log: three services, two backed endpoints, and
+/// the turn runs on a backed model.
+#[test]
+fn service_without_an_endpoint_is_left_out_and_logged() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(
+        [
+            Response::status(200, services_body().to_string()),
+            Response::status(200, catalog_body().to_string()),
+            Response::status(
+                200,
+                json!({"endpoints": [{"name": "claude-opus-5"}, {"name": "gpt-6-sol"}]})
+                    .to_string(),
+            ),
+        ]
+        .into_iter()
+        .chain([hello()]),
+    )
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    let run = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(&host),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let kinds: Vec<&str> = run
+        .kinds()
+        .into_iter()
+        .filter(|kind| *kind != "extension_log")
+        .collect();
+    assert_eq!(kinds, HELLO_KINDS);
+    assert_eq!(run.text_completed(), "Hello.");
+    assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
+    let lines = log_lines(&setup);
+    let omissions: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "extension_log")
+        .collect();
+    assert_eq!(omissions.len(), 1, "{lines:?}");
+    let message = omissions[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains(
+            "databricks models: databricks-glm-5.3 left out: \
+             no serving endpoint with a matching name"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("dapi-test"), "{message}");
+    assert!(!message.contains("authorization"), "{message}");
+}
+
+/// Every service backed by an endpoint turns with no omission line in the
+/// diagnostic log.
+#[test]
+fn all_services_backed_logs_no_omission() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start(discovery().into_iter().chain([completions_hello()])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    let run = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-glm-5.3", "hi"],
+        &credentials(&host),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.text_completed(), "Hello.");
+    assert_turn(&server.requests(), "/ai-gateway/mlflow/v1/chat/completions");
+    let lines = log_lines(&setup);
+    let omissions: Vec<&Value> = lines
+        .iter()
+        .filter(|line| {
+            line["code"] == "extension_log"
+                && line["message"].as_str().unwrap().contains("left out")
+        })
+        .collect();
+    assert!(omissions.is_empty(), "{lines:?}");
 }
