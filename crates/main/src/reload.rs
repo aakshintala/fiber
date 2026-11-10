@@ -542,7 +542,7 @@ impl State {
         // make the synchronous join below miss and the catalogue would
         // keep the old list for a cache older than `refresh_after`.
         notices.extend(providers.add_session(extensions, config, &run, &lookup));
-        let discovery_failures = providers.take_discovery_failures();
+        let mut discovery_failures = providers.take_discovery_failures();
         match providers.fill_placeholders(config, &lookup) {
             Ok(fill_notices) => notices.extend(fill_notices),
             Err(error) => {
@@ -577,6 +577,18 @@ impl State {
                     if let Some(old) = before.get(&name) {
                         notices.extend(providers.set_models(&name, old.clone()));
                     }
+                    // One entry per failed join, mirroring the notice
+                    // below, with no name-skip.
+                    discovery_failures.push(contract::events::ExtensionFailure {
+                        provider: name.clone(),
+                        extension: providers.extension_of(&name).map(str::to_owned),
+                        error: Failure {
+                            code: error.code(),
+                            message: error.to_string(),
+                            retry_after_ms: None,
+                            provider: None,
+                        },
+                    });
                     notices.push(contract::events::Notice {
                         code: error.code(),
                         message: error.to_string(),
@@ -587,9 +599,22 @@ impl State {
                     if let Some(old) = before.get(&name) {
                         notices.extend(providers.set_models(&name, old.clone()));
                     }
+                    // One entry per failed join, mirroring the notice
+                    // below, with no name-skip.
+                    let message = format!("reloading `{name}` models did not finish");
+                    discovery_failures.push(contract::events::ExtensionFailure {
+                        provider: name.clone(),
+                        extension: providers.extension_of(&name).map(str::to_owned),
+                        error: Failure {
+                            code: contract::ErrorCode::ExtensionFailed,
+                            message: message.clone(),
+                            retry_after_ms: None,
+                            provider: None,
+                        },
+                    });
                     notices.push(contract::events::Notice {
                         code: contract::ErrorCode::ExtensionFailed,
-                        message: format!("reloading `{name}` models did not finish"),
+                        message,
                         extension: providers.extension_of(&name).map(str::to_owned),
                     });
                 }
@@ -697,7 +722,7 @@ impl State {
         // fresh snapshot feeds the stored tools and both rebuilt tools.
         // A rebuild that cannot be read keeps the old pair, and the
         // notices say so.
-        let (delegate_resolve, delegate_notices, _) =
+        let (delegate_resolve, delegate_notices, discovery_failures) =
             self.rebuild_delegate_resolve(&extensions, &config, route, delegate_loaded);
         let owners = extensions
             .lua_providers()
@@ -1155,7 +1180,14 @@ impl State {
             tools,
             extensions: loaded,
             notices,
-            extension_failures: Vec::new(),
+            // The late preparation publishes no `reloaded`, so it
+            // carries no failures: the rebuild above already ran, and
+            // this branch drops what it drained.
+            extension_failures: if preparation == Preparation::Late {
+                Vec::new()
+            } else {
+                discovery_failures
+            },
             server_sync: match synced {
                 Some(synced) => r#loop::ServerSync {
                     servers: synced.servers,

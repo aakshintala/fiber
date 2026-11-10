@@ -991,6 +991,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             "failed": [{"server": "m", "reason": "died", "error": error}]}),
         ),
         (
+            "reloaded",
+            json!({"servers": {"kept": [], "restarted": [], "started": [],
+            "stopped": []}, "extensions": ["e"],
+            "extension_failures": [{"provider": "acme", "extension": "acme-ext",
+            "error": {"code": "extension_failed", "message": "boom"}}]}),
+        ),
+        (
             "extensions_loaded",
             json!({"extensions": [{"name": "e", "version": "0.1.0"}]}),
         ),

@@ -348,12 +348,13 @@ impl Loop {
             extensions,
             notices,
             sync,
-            extension_failures: _,
+            extension_failures,
         } = installed;
         for record in &sync.server_records {
             self.write(&record_event(record), None, None)?;
         }
         let failed = (!sync.server_failures.is_empty()).then_some(sync.server_failures);
+        let extension_failures = (!extension_failures.is_empty()).then_some(extension_failures);
         self.write(
             &Event::Reloaded(Reloaded {
                 servers: sync.servers,
@@ -362,7 +363,7 @@ impl Loop {
                     .map(|extension| extension.name.clone())
                     .collect(),
                 failed,
-                extension_failures: None,
+                extension_failures,
             }),
             None,
             None,
