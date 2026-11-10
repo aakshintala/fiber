@@ -1089,6 +1089,9 @@ fn applied_reload_publishes_extension_failures_without_server_failures() {
     // No server failed, so the server field stays as it is today.
     assert_eq!(reloaded.failed, None);
     let failures = reloaded.extension_failures.as_ref().unwrap();
+    // One prepared failing registration is one entry (`docs/events.md`,
+    // "`reloaded`"), so the count is promised (`docs/testing.md`,
+    // "Event streams").
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].provider, "acme");
     assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
@@ -1164,14 +1167,21 @@ fn applied_reload_publishes_extension_failures_beside_server_failures() {
     }
     let reloaded = found.unwrap();
     let failed = reloaded.failed.as_ref().unwrap();
+    // The single prepared server failure is one `failed` entry
+    // (`docs/events.md`, "`reloaded`"), so the count is promised
+    // (`docs/testing.md`, "Event streams").
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].server, "flaky");
     let failures = reloaded.extension_failures.as_ref().unwrap();
+    // Two prepared failing registrations are two entries (`docs/events.md`,
+    // "`reloaded`"), so the count is promised (`docs/testing.md`,
+    // "Event streams"); the doc promises no order, so the entries are
+    // asserted as a set.
     assert_eq!(failures.len(), 2);
-    assert_eq!(failures[0].provider, "acme");
-    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
-    assert_eq!(failures[1].provider, "bare");
-    assert_eq!(failures[1].extension, None);
+    let acme = failures.iter().find(|f| f.provider == "acme").unwrap();
+    assert_eq!(acme.extension.as_deref(), Some("acme-ext"));
+    let bare = failures.iter().find(|f| f.provider == "bare").unwrap();
+    assert_eq!(bare.extension, None);
 }
 
 #[test]
