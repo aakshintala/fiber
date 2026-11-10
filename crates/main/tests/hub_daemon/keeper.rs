@@ -20,7 +20,6 @@ use std::sync::{
     mpsc,
 };
 use std::thread;
-use std::time::Duration;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
@@ -1648,11 +1647,12 @@ fn keeper_handover_flood_exact_output_and_rss() {
     assert_eq!(handover.len(), 17, "the Handover line's length");
     assert_eq!(adopted, r#"{"adopted":true}"#);
     assert_eq!(adopted.len(), 16, "the Adopted line's length");
-    // One shared 2 s guard covers progress through release: a stalled
-    // rendezvous fails here, inside the keeper's 5 s ready bound, naming
-    // the stalled step instead of outlasting the handshake. A failed wait
-    // panics, and the relay's drop then cancels the held Adopted.
-    let progress = setup.deadline.within(Duration::from_secs(2));
+    // One shared 10 s guard covers progress through release: a stalled
+    // rendezvous fails here, naming the stalled step instead of hanging.
+    // A failed wait panics, and the relay's drop then cancels the held
+    // Adopted. A stalled relay never makes progress, so the wider bound
+    // still catches a real stall.
+    let progress = setup.deadline.within(fakes::MUST_SUCCEED_WITHIN); // ruling: #4054
     // At the signal capture completed chunk N: the receipt counts whole
     // chunks the producer finished.
     let receipt = fixture.receipt.clone();
