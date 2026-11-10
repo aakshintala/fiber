@@ -140,7 +140,7 @@ fn endpoints_body() -> Value {
     ]})
 }
 
-/// The discovery's three answers, in the order `models()` asks for them.
+/// The discovery's three answers: one per listing the provider fetches.
 fn discovery() -> [Response; 3] {
     [
         Response::status(200, services_body().to_string()),
@@ -208,35 +208,55 @@ fn tags_header(request: &Request) -> Value {
     serde_json::from_str(raw).unwrap()
 }
 
-/// A turn's four requests: the three discovery answers, then the model's.
-/// All three discovery requests carry the source-only header; the model's
-/// carries `model_tags`, parsed.
+/// The recorded request to `path`. The fake records every request and tests
+/// assert on the path, the headers and the body (`docs/testing/fakes.md`,
+/// "Model calls"); no doc promises discovery's order or count, so tests find
+/// requests by path rather than pinning indices (`docs/testing.md`, "Event
+/// streams").
+fn find_request<'a>(requests: &'a [Request], path: &str) -> &'a Request {
+    requests
+        .iter()
+        .find(|request| request.path.as_str() == path)
+        .unwrap_or_else(|| panic!("no request to {path}: {requests:?}"))
+}
+
+/// Discovery's listing paths: the service list, the catalog, and the
+/// serving-endpoint list.
+const DISCOVERY_PATHS: [&str; 3] = [
+    "/api/2.1/unity-catalog/model-services?parent=schemas%2Fsystem.ai&page_size=100",
+    "/api/ai-gateway/v2/external-provider-models?page_size=1000",
+    "/api/2.0/serving-endpoints",
+];
+
+/// Every discovery listing was fetched. Presence, not order or count: no doc
+/// promises either (`docs/testing.md`, "Event streams").
+fn assert_discovery_fetched(requests: &[Request]) {
+    for path in DISCOVERY_PATHS {
+        find_request(requests, path);
+    }
+}
+
+/// A turn's requests: discovery's answers, then the model's. All three
+/// discovery requests carry the source-only header; the model's carries
+/// `model_tags`, parsed.
 fn assert_tagged_turn(requests: &[Request], model_path: &str, model_tags: &Value) {
-    assert_eq!(requests.len(), 4, "{requests:?}");
-    assert_eq!(
-        requests[0].path,
-        "/api/2.1/unity-catalog/model-services?parent=schemas%2Fsystem.ai&page_size=100"
-    );
-    assert_eq!(
-        requests[1].path,
-        "/api/ai-gateway/v2/external-provider-models?page_size=1000"
-    );
-    assert_eq!(requests[2].path, "/api/2.0/serving-endpoints");
-    assert_eq!(requests[3].path, model_path);
-    for request in &requests[..3] {
+    assert_discovery_fetched(requests);
+    let model = find_request(requests, model_path);
+    for path in DISCOVERY_PATHS {
+        let request = find_request(requests, path);
         assert_eq!(
             tags_header(request),
             json!({"source": "fiber"}),
             "{request:?}"
         );
     }
-    assert_eq!(tags_header(&requests[3]), *model_tags, "{:?}", requests[3]);
+    assert_eq!(tags_header(model), *model_tags, "{model:?}");
     for request in requests {
         assert_fingerprint(request, "authorization", "Bearer dapi-test");
     }
 }
 
-/// A turn's four requests with the default, source-only model header.
+/// A turn's requests with the default, source-only model header.
 fn assert_turn(requests: &[Request], model_path: &str) {
     assert_tagged_turn(requests, model_path, &json!({"source": "fiber"}));
 }
@@ -267,8 +287,9 @@ fn claude_completes_a_turn_on_the_anthropic_route() {
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
-    assert!(requests[3].header("x-api-key").is_none());
-    let body: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let model = find_request(&requests, "/ai-gateway/anthropic/v1/messages");
+    assert!(model.header("x-api-key").is_none());
+    let body: Value = serde_json::from_slice(&model.body).unwrap();
     assert!(body.get("reasoning_effort").is_none(), "{body}");
 }
 
@@ -345,7 +366,7 @@ fn models_lists_exactly_the_three_discovered_references() {
         ]
     );
     let requests = server.requests();
-    assert_eq!(requests.len(), 3, "{requests:?}");
+    assert_discovery_fetched(&requests);
 }
 
 #[test]
@@ -497,7 +518,7 @@ fn a_thousand_row_catalog_page_fits_the_memory_cap() {
         .map(|line| line["model"].as_str().unwrap())
         .collect();
     assert_eq!(models, ["databricks/databricks-bulk-model"]);
-    assert_eq!(server.requests().len(), 3);
+    assert_discovery_fetched(&server.requests());
 }
 
 /// A `:level` suffix on a discovered Claude model reaches the Anthropic
@@ -528,7 +549,8 @@ fn claude_thinking_suffix_sends_adaptive_thinking() {
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
-    let body: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let model = find_request(&requests, "/ai-gateway/anthropic/v1/messages");
+    let body: Value = serde_json::from_slice(&model.body).unwrap();
     assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     assert_eq!(body["output_config"], json!({"effort": "high"}));
 }
@@ -561,13 +583,14 @@ fn discovered_default_level_sends_without_a_suffix() {
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
-    let body: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let model = find_request(&requests, "/ai-gateway/anthropic/v1/messages");
+    let body: Value = serde_json::from_slice(&model.body).unwrap();
     assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     assert_eq!(body["output_config"], json!({"effort": "medium"}));
 }
 
 /// One `fiber ask` turn on `model` with `-c providers.databricks.request_tags=<tags>`:
-/// the run and the three requests the fake server saw.
+/// the run and the requests the fake server saw.
 fn tagged_ask(model: &str, reply: Response, tags: &str) -> (Run, Vec<Request>) {
     let setup = Setup::new();
     let server = ProviderServer::start(discovery().into_iter().chain([reply])).unwrap();
@@ -846,6 +869,9 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
         .iter()
         .filter(|line| line["code"] == "extension_log")
         .collect();
+    // The script backs two of the three services, so `glm-5.3` is the one
+    // deliberate omission, and each deliberate omission is named in the
+    // diagnostic log (`docs/model-routing.md`, "Model discovery"): one line.
     assert_eq!(omissions.len(), 1, "{lines:?}");
     let message = omissions[0]["message"].as_str().unwrap();
     assert!(
@@ -890,5 +916,7 @@ fn all_services_backed_logs_no_omission() {
                 && line["message"].as_str().unwrap().contains("left out")
         })
         .collect();
+    // Every service is backed, so there is no deliberate omission to name
+    // (`docs/model-routing.md`, "Model discovery"): no line.
     assert!(omissions.is_empty(), "{lines:?}");
 }
