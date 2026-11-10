@@ -1,7 +1,8 @@
-use std::path::PathBuf;
-use std::time::Duration;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-use super::{START_BOUND, WarmedJig, warm_up, warm_up_within};
+use super::{START_BOUND, WarmedJig, stale_evidence, warm_up, warm_up_within};
 use crate::{MUST_SUCCEED_WITHIN, TempDir, fifo};
 
 #[test]
@@ -113,6 +114,137 @@ fn path_yields_the_warmed_path() {
         warmed.path(),
         binary.as_path(),
         "the accessor yields the path the warm covered"
+    );
+}
+
+fn binary_mtime() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+}
+
+fn set_mtime(path: &Path, mtime: SystemTime) {
+    fs::File::open(path).unwrap().set_modified(mtime).unwrap();
+}
+
+/// A non-executable binary stand-in with an explicit mtime: the freshness
+/// tests assert the refusal, so the stand-in never runs.
+fn stand_in(dir: &TempDir, mtime: SystemTime) -> PathBuf {
+    let binary = dir.path().join("jig");
+    fs::write(&binary, "not a binary").unwrap();
+    set_mtime(&binary, mtime);
+    binary
+}
+
+fn dep_info_path(binary: &Path) -> PathBuf {
+    let mut name = binary.file_name().unwrap().to_owned();
+    name.push(".d");
+    binary.with_file_name(name)
+}
+
+fn write_dep_info(binary: &Path, deps: &[String]) {
+    let rule = format!("{}: {}\n", binary.display(), deps.join(" "));
+    fs::write(dep_info_path(binary), rule).unwrap();
+}
+
+fn wrote_source(dir: &TempDir, name: &str, mtime: SystemTime) -> PathBuf {
+    let source = dir.path().join(name);
+    fs::write(&source, "source").unwrap();
+    set_mtime(&source, mtime);
+    source
+}
+
+fn escaped(path: &Path) -> String {
+    path.display().to_string().replace(' ', "\\ ")
+}
+
+#[test]
+fn inputs_older_than_the_binary_pass_the_check() {
+    let dir = TempDir::new("fiber-jig-fresh");
+    let binary = stand_in(&dir, binary_mtime());
+    let spaced = wrote_source(&dir, "my src.rs", binary_mtime() - Duration::from_secs(60));
+    let older = wrote_source(&dir, "older.rs", binary_mtime() - Duration::from_secs(3600));
+    write_dep_info(&binary, &[escaped(&spaced), escaped(&older)]);
+    assert!(
+        stale_evidence(&binary).is_none(),
+        "a binary newer than every listed input is fresh"
+    );
+}
+
+#[test]
+fn a_newer_source_fails_naming_the_binary_the_source_and_the_rebuild() {
+    let dir = TempDir::new("fiber-jig-stale");
+    let binary = stand_in(&dir, binary_mtime());
+    let source = wrote_source(&dir, "source.rs", binary_mtime() + Duration::from_secs(60));
+    write_dep_info(&binary, &[escaped(&source)]);
+    let shown = binary.display().to_string();
+    let failed = std::panic::catch_unwind(|| {
+        WarmedJig::warm(binary, &["--bogus"], 2);
+    })
+    .expect_err("a warm with a stale binary fails before it spawns");
+    let message = panic_message(failed);
+    assert!(
+        message.contains(&shown),
+        "the failure names the stale binary: {message}"
+    );
+    assert!(
+        message.contains("source.rs"),
+        "the failure names the newer source: {message}"
+    );
+    assert!(
+        message.contains("cargo build --examples"),
+        "the failure names the rebuild command: {message}"
+    );
+}
+
+#[test]
+fn a_source_from_the_same_second_as_the_binary_fails_closed() {
+    let dir = TempDir::new("fiber-jig-equal");
+    let binary = stand_in(&dir, binary_mtime());
+    let source = wrote_source(&dir, "source.rs", binary_mtime());
+    write_dep_info(&binary, &[escaped(&source)]);
+    let stale = stale_evidence(&binary).expect("an equal mtime is stale");
+    assert_eq!(
+        stale, source,
+        "a source no older than the binary fails closed"
+    );
+}
+
+#[test]
+fn a_missing_source_fails_naming_it() {
+    let dir = TempDir::new("fiber-jig-missing-source");
+    let binary = stand_in(&dir, binary_mtime());
+    let missing = dir.path().join("gone.rs");
+    write_dep_info(&binary, &[escaped(&missing)]);
+    let stale = stale_evidence(&binary).expect("a missing source is stale");
+    assert_eq!(stale, missing, "the refusal names the missing source");
+}
+
+#[test]
+fn a_dep_info_with_no_rule_fails_naming_the_dep_info() {
+    let dir = TempDir::new("fiber-jig-malformed");
+    let binary = stand_in(&dir, binary_mtime());
+    let dep_info = dep_info_path(&binary);
+    fs::write(&dep_info, "no colon here\n").unwrap();
+    let stale = stale_evidence(&binary).expect("a malformed dep-info is stale");
+    assert_eq!(stale, dep_info, "the refusal names the dep-info file");
+}
+
+#[test]
+fn an_unreadable_dep_info_fails_naming_the_dep_info() {
+    let dir = TempDir::new("fiber-jig-unreadable");
+    let binary = stand_in(&dir, binary_mtime());
+    let dep_info = dep_info_path(&binary);
+    fs::create_dir(&dep_info).unwrap();
+    let stale = stale_evidence(&binary).expect("an unreadable dep-info is stale");
+    assert_eq!(stale, dep_info, "the refusal names the dep-info file");
+}
+
+#[test]
+fn a_missing_dep_info_skips_the_check() {
+    let dir = TempDir::new("fiber-jig-no-dep-info");
+    let binary = stand_in(&dir, binary_mtime());
+    assert!(
+        stale_evidence(&binary).is_none(),
+        "no dep-info file means unchecked, never stale"
     );
 }
 
