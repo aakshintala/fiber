@@ -293,3 +293,4 @@ crates/tui/src/app/home/recent.rs	fiber-4491	plan	2026-11-10T13:35:57Z	Amoghs-Ma
 crates/main/tests/session_turns/resume.rs	fiber-4313	plan	2026-11-10T13:42:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/extension_host/extension_state_resume.rs	fiber-4313	plan	2026-11-10T13:42:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/bug-red	fiber-4313	plan	2026-11-10T13:42:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/hub_daemon/feed.rs	fiber-4494	plan	2026-11-10T13:43:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
