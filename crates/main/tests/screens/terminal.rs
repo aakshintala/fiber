@@ -3729,6 +3729,7 @@ fn first_run_completed_setup_skips_login_and_model_picker() {
     let mut run = terminal(&setup, 120, 32, &[], &[]);
     let grid = run.wait_screen("configured home", |grid| grid.contents.contains("›"));
     assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    // settled: `grid` is the grid the wait above returned.
     assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
     run.write(b"\x03\x03\r");
     let output = run.wait();
@@ -3777,6 +3778,70 @@ fn first_run_remote_ignores_client_environment_key() {
         grid.contents.contains("Log in")
     });
     assert!(grid.contents.contains("Log in"), "{grid:?}");
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
+fn first_run_remote_esc_on_login_draws_no_client_blocker() {
+    let hub = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&hub, &server);
+    let served = installed_hub(&hub);
+    let client = paired_client(&hub, &served, false);
+    let mut run = terminal(
+        &client,
+        120,
+        32,
+        &["--hub", "box"],
+        &[("FIBER_TEST_FAKE_KEY", "")],
+    );
+    // The remote reads the hub's import receipts, which the seeded
+    // client home does not cover, so the first-run import offer opens:
+    // say not now.
+    run.wait_screen("the first-run import offer", |grid| {
+        grid.contents.contains("Import settings")
+    });
+    run.write(b"\x1b[27u");
+    // The hub holds the credential, so the keyless client opens no
+    // overlay of its own: the remote terminal never reads the client's
+    // blocker. The workspace picker opened at startup (a remote home
+    // carries no workspace) and keeps the draft's keys: choose the
+    // hub's workspace first. Its `~/` listing was queued at startup,
+    // so typing `w` focuses the completion and Enter chooses it.
+    run.wait_screen("the workspace picker", |grid| {
+        grid.contents.contains("Workspaces")
+    });
+    // The hub listing lands after the keystroke when it was not
+    // cached: Enter only resolves once the `w` row focuses, so wait
+    // for the focused row before choosing it.
+    run.write(b"w");
+    run.wait_screen("the focused hub workspace", |grid| {
+        grid.contents.contains("› w")
+    });
+    run.write(b"\r");
+    let grid = run.wait_screen("the chosen hub workspace", |grid| {
+        grid.contents.contains("›") && !grid.contents.contains("[no workspace]")
+    });
+    // settled: `grid` is the grid the workspace wait above returned.
+    assert!(!grid.contents.contains("Workspaces"), "{grid:?}");
+    // settled: `grid` chose a workspace with no login overlay of its own.
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.ready();
+    run.write(b"/login\r");
+    run.wait_screen("the hub login view", |grid| {
+        grid.contents.contains("Log in")
+    });
+    run.write(b"\x1b[27u");
+    // Esc closes the login view without restoring the client's line:
+    // the hub sends no blocker on the wire (RULING-4402-4).
+    let grid = run.wait_screen("the login view closed", |grid| {
+        grid.contents.contains("›") && !grid.contents.contains("Log in")
+    });
+    // settled: `grid` is the grid the close wait above returned.
+    assert!(!grid.contents.contains("no key for fake"), "{grid:?}");
     run.write(b"\x03\x03\r");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));

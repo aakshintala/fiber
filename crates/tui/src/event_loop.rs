@@ -187,9 +187,16 @@ pub(crate) fn run_with(
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
     let router = crate::remote::Router::new();
-    let seams = crate::remote::seams(&launch.location, launch.configure.take(), models, &router);
+    let seams = crate::remote::seams(
+        &launch.location,
+        launch.configure.take(),
+        models,
+        std::mem::take(&mut launch.doctor_blocker),
+        &router,
+    );
     let extensions = launch.extensions.clone();
     let models = seams.models;
+    let doctor_blocker = seams.doctor_blocker;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
     } else if let Some(seam) = seams.seam {
@@ -202,7 +209,7 @@ pub(crate) fn run_with(
     // The doctor report reader `main` injected: taken out beside the
     // writer, for the same reason.
     app.set_doctor(std::mem::take(&mut launch.doctor));
-    app.set_doctor_blocker(std::mem::take(&mut launch.doctor_blocker));
+    app.set_doctor_blocker(doctor_blocker);
     // With no model configured the picker opens on home, before the
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.
