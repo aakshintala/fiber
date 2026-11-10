@@ -7731,7 +7731,7 @@ fn forgot_for_an_unknown_session_still_reasks_its_project() {
         assert_eq!(line["args"]["project"], "-w");
     }
     assert!(sent.iter().any(|line| !is_archived(line)), "{sent:?}");
-    assert!(sent.iter().any(|line| is_archived(line)), "{sent:?}");
+    assert!(sent.iter().any(is_archived), "{sent:?}");
     assert!(rows(&app).is_empty());
 }
 
