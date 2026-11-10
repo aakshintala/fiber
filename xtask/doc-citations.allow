@@ -1,158 +1,11 @@
 # Code citations still allowed a line number, a missing heading, or a doc path not in backticks.
 # Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.
-crates/bench/examples/bench/attach_tests.rs	1	docs/performance.md:184-185,223-227
-crates/bench/examples/bench/attach_tests.rs	2	docs/performance.md:231-237
-crates/bench/examples/bench/attach_tests.rs	1	docs/performance.md:74,77,227-229
-crates/bench/examples/bench/attach_tests.rs	2	docs/state.md:423-453
-crates/bench/examples/bench/attach_tests.rs	2	docs/state.md:446-448,453
-crates/bench/examples/bench/debug_tests.rs	2	docs/state.md:423-453
-crates/bench/examples/bench/debug_tests.rs	1	docs/state.md:432-435
-crates/cli/src/approve.rs	1	docs/extensions.md`, "Approving outside a session"
-crates/cli/src/debug_writer.rs	1	docs/state.md`, "Diagnostic logs"
-crates/cli/src/extension/approve.rs	1	docs/state.md`, "Extension data"
-crates/cli/src/extension_tests.rs	1	docs/state.md, "Diagnostic logs"
-crates/cli/src/feedback.rs	1	docs/state.md`, "Diagnostic\n/// logs"
-crates/cli/src/login.rs	1	docs/invocation.md`, "Fiber itself"
-crates/cli/src/login_secret_tests.rs	1	docs/invocation.md`, "Fiber\n//! itself"
-crates/cli/src/models.rs	1	docs/errors.md`, "Notices"
-crates/cli/src/models_tests.rs	2	docs/errors.md`, "Notices"
-crates/cli/src/prune/worktrees_tests.rs	1	docs/invocation.md, "Isolation"
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1415
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1418-1420
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1474-1476
-crates/cli/src/prune_tests.rs	2	docs/invocation.md:1475-1476
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1479-1480
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1479-1483
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1479-1484
-crates/cli/src/prune_tests.rs	1	docs/invocation.md:1480-1483
-crates/cli/src/release_tests.rs	1	docs/state.md, "Diagnostic logs"
-crates/cli/src/sessions_list_tests.rs	5	docs/invocation.md:115
-crates/cli/src/sessions_tests.rs	2	docs/events.md:56-57
-crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1415
-crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1418-1420
-crates/cli/src/sessions_tests.rs	2	docs/invocation.md:1421-1424
-crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1421-1426
-crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1424-1426
-crates/cli/src/setup.rs	1	docs/configuration.md`, "Importing another agent's setup"
-crates/cli/src/setup.rs	1	docs/user/install.md`, "Setup"
-crates/cli/src/setup_tests.rs	1	docs/testing/fakes.md`, "Re-running a test"
-crates/cli/src/setup_tests.rs	1	docs/user/install.md`, "Setup"
 crates/cli/src/stop.rs	1	docs/invocation.md`, "Stopping\n//! everything"
-crates/cli/src/update_tests.rs	1	docs/state.md, "Diagnostic logs"
-crates/config/src/cache.rs	1	docs/state.md`, "Cache"
-crates/config/src/import_tests.rs	6	docs/configuration.md, "Importing"
-crates/config/src/keys_tests.rs	1	docs/model-routing.md:1015-16
-crates/config/src/mcp_tokens.rs	1	docs/state.md`, "Credentials"
-crates/config/src/write/notes.rs	1	docs/architecture.md, "Boundaries between modules"
-crates/config/tests/model_cache.rs	1	docs/state.md`,\n//! "Cache"
-crates/contract/src/commands_tests.rs	1	docs/invocation.md, "The command line"
-crates/contract/src/diag.rs	1	docs/state.md`,\n/// "Diagnostic logs"
-crates/contract/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
-crates/contract/src/diag_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/contract/src/events/context.rs	1	docs/errors.md`, "Notices"
 crates/contract/src/events_tests.rs	1	docs/events.md:1121
 crates/contract/src/inbox.rs	1	docs/invocation.md`, "Shell"
 crates/contract/src/keeper_tests.rs	1	docs/tools.md, "The keeper"
-crates/contract/src/notes_tests.rs	1	docs/permissions.md,\n    // "Setting up the notes"
-crates/diag/src/diag.rs	1	docs/state.md:306
-crates/diag/src/diag.rs	1	docs/state.md`, "Bounds"
-crates/diag/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
-crates/diag/src/diag/memory.rs	1	docs/state.md`,\n//! "Diagnostic logs"
-crates/diag/src/diag/memory_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/diag/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/diag/src/lib.rs	1	docs/state.md`, "Diagnostic logs"
-crates/doors/Cargo.toml	1	docs/testing.md, "Jigs"
-crates/doors/src/artifact_tests.rs	5	docs/invocation.md:462
-crates/doors/src/isolation/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/doors/src/notes.rs	1	docs/testing/mutants.md, "Code is written\n/// so a mutant fails fast"
-crates/doors/src/notes_tests.rs	1	docs/permissions.md, "Setting up the\n    // notes"
-crates/doors/src/notes_tests.rs	3	docs/permissions.md, "Setting up the notes"
-crates/doors/src/pasted.rs	1	docs/invocation.md`,\n//! "Commands"
-crates/doors/src/prompt_history.rs	1	docs/state.md`, "Prompt history"
-crates/doors/src/session.rs	1	docs/invocation.md`, "Shell"
-crates/doors/src/session.rs	1	docs/state.md`, "Prompt\n    /// history"
-crates/doors/src/session.rs	1	docs/state.md`, "Prompt history"
 crates/doors/src/shell.rs	1	docs/invocation.md`, "Shell"
-crates/doors/src/socket.rs	3	docs/state.md`, "Sockets"
-crates/doors/src/socket_timing_tests.rs	1	docs/state.md`,\n//! "Diagnostic logs"
 crates/doors/tests/socket.rs	5	docs/invocation.md:462
-crates/extensions/src/case/call_tests.rs	1	docs/extensions.md:211
-crates/extensions/src/case/run_tests.rs	3	docs/extensions.md:753-759
-crates/extensions/src/hooks.rs	1	docs/errors.md`, "Notices"
-crates/extensions/src/hooks/before.rs	1	docs/errors.md`, "Notices"
-crates/extensions/src/hooks/before_tests.rs	1	docs/errors.md`,\n/// "Notices"
-crates/extensions/src/hooks/lifecycle.rs	1	docs/errors.md`, "Notices"
-crates/extensions/src/hooks/lifecycle_tests.rs	1	docs/errors.md`,\n/// "Notices"
-crates/extensions/src/hooks/repository_tests.rs	2	docs/invocation.md:1160
-crates/extensions/src/hooks_tests.rs	3	docs/invocation.md:1160
-crates/extensions/src/host.rs	2	docs/extensions.md`, "A host call suspends the\n/// code that made it"
-crates/extensions/src/host/admission.rs	1	docs/state.md`, "Diagnostic logs"
-crates/extensions/src/host/ask.rs	1	docs/extensions.md`, "A host call suspends the code\n/// that made it"
-crates/extensions/src/host/delegate.rs	1	docs/extensions.md`, "A host call suspends the code that made it"
-crates/extensions/src/host/drive.rs	1	docs/extensions.md`, "A host call\n/// suspends the code that made it"
-crates/extensions/src/host/model.rs	1	docs/extensions.md`, "A host call suspends the\n/// code that made it"
-crates/extensions/src/host/tool.rs	1	docs/extensions.md`, "A host call suspends the\n/// code that made it"
-crates/extensions/src/installed.rs	1	docs/state.md`, "Extension\n/// data"
-crates/extensions/src/lua.rs	1	docs/configuration.md, "An extension's manifest"
-crates/extensions/src/lua.rs	1	docs/extensions.md,\n// "When several hooks share a point"
-crates/extensions/src/lua.rs	1	docs/extensions.md, "How an\n// extension runs"
-crates/extensions/src/lua.rs	2	docs/extensions.md, "How an extension runs"
-crates/extensions/src/manage.rs	1	docs/extensions.md`,\n/// "Pinning"
-crates/extensions/src/manage.rs	1	docs/extensions.md`, "Updating"
-crates/extensions/src/prepare_tests.rs	5	docs/state.md, "Diagnostic logs"
-crates/extensions/src/process_tests.rs	1	docs/extensions.md, "Process extensions"
-crates/extensions/src/process_tests.rs	1	docs/extensions.md:209
-crates/extensions/src/process_tests.rs	1	docs/extensions.md:211
-crates/extensions/src/process_tests.rs	6	docs/extensions.md:222
-crates/extensions/src/process_tests.rs	1	docs/extensions.md:31, 354
-crates/extensions/src/process_tests.rs	3	docs/invocation.md:368
-crates/extensions/src/process_tests.rs	2	docs/state.md, "Diagnostic logs"
-crates/extensions/src/providers.rs	1	docs/errors.md`,\n        // "Notices"
-crates/extensions/src/providers.rs	1	docs/model-routing.md`, "Model lists"
-crates/extensions/src/release_tests.rs	4	docs/state.md, "Diagnostic logs"
-crates/extensions/src/repository/declared.rs	1	docs/extensions.md`, "Pinning"
-crates/extensions/src/repository/hooks.rs	1	docs/extensions.md`, "Pinning"
-crates/extensions/src/repository/project.rs	1	docs/errors.md`, "Notices"
-crates/extensions/src/repository/servers.rs	1	docs/extensions.md`,\n//! "Pinning"
-crates/extensions/src/repository/store.rs	1	docs/extensions.md`, "Pinning"
-crates/extensions/src/repository/store_tests.rs	1	docs/state.md, "Diagnostic logs"
-crates/extensions/src/resolve_tests.rs	1	docs/extensions.md:1782, 1797, 1805-1807
-crates/extensions/src/resolve_tests.rs	1	docs/extensions.md:1782, 1805-1807
-crates/extensions/src/resolve_tests.rs	1	docs/extensions.md:1784-1785, 1805-1807
-crates/extensions/src/resolve_tests.rs	2	docs/extensions.md:1797, 1805-1807
-crates/extensions/src/resolve_tests.rs	3	docs/extensions.md:1805-1807
-crates/extensions/src/resolve_tests.rs	4	docs/releasing.md, "Versions"
-crates/extensions/src/timing_tests.rs	8	docs/state.md, "Diagnostic logs"
-crates/extensions/src/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/extensions/src/tui_vm.rs	1	docs/extensions.md, "How an\n// extension runs"
-crates/extensions/src/tui_vm_tests.rs	1	docs/extensions.md:1507-1509
-crates/extensions/src/tui_vm_tests.rs	13	docs/extensions.md:1526-1530
-crates/extensions/src/update_tests.rs	1	docs/state.md, "Diagnostic logs"
-crates/extensions/tests/lazy_commands.rs	2	docs/extensions.md:1356-57
-crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:1360-61
-crates/extensions/tests/lazy_commands.rs	3	docs/extensions.md:1375-79
-crates/extensions/tests/lazy_commands.rs	3	docs/extensions.md:1377-80
-crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:1379
-crates/extensions/tests/lazy_commands.rs	2	docs/extensions.md:1381-83
-crates/extensions/tests/lazy_commands.rs	4	docs/extensions.md:1520-22
-crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:313-16
-crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:70-71
-crates/extensions/tests/lua_provider.rs	1	docs/extensions.md`,\n/// "A host call suspends the code that made it"
-crates/extensions/tests/pinned_copy.rs	1	docs/extensions.md`, "Pinning"
-crates/extensions/tests/pinned_depends.rs	1	docs/extensions.md`, "Pinning"
-crates/extensions/tests/process_activation.rs	1	docs/extensions.md:246
-crates/extensions/tests/provider_diagnostics.rs	9	docs/state.md, "Diagnostic logs"
-crates/extensions/tests/provider_diagnostics.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/extensions/tests/release.rs	1	docs/state.md, "Diagnostic logs"
-crates/fakes-contract/src/scripted_provider_tests.rs	7	docs/testing/fakes.md, "Fakes"
-crates/fakes/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/fakes/Cargo.toml	1	docs/testing.md, "Jigs"
-crates/fakes/lua-fixture/init.lua	1	docs/extensions.md, "Lua extensions"
-crates/fakes/lua-fixture/init.lua	1	docs/extensions.md, "The hook points"
-crates/fakes/lua-fixture/init.lua	1	docs/model-routing.md, "Model discovery"
-crates/fakes/src/hold.rs	1	docs/testing.md:297-299
-crates/fakes/src/hold_tests.rs	1	docs/testing.md:297-299
-crates/fakes/src/jig_start.rs	1	docs/testing.md`:289
 crates/hub/src/connection.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
 crates/hub/src/lib.rs	1	docs/invocation.md`, "`rewind` starts a new session\n    /// process"
 crates/hub/src/lib_tests.rs	1	docs/state.md`, "Diagnostic logs"
@@ -185,77 +38,21 @@ crates/hub/src/relay_tests.rs	2	docs/invocation.md:1179
 crates/hub/src/relay_tests.rs	2	docs/invocation.md:1183
 crates/hub/src/relay_tests.rs	1	docs/invocation.md:467
 crates/hub/src/relay_tests.rs	1	docs/invocation.md:568
-crates/jobs/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/jobs/src/delegate/run_tests.rs	2	docs/delegates.md, "Lifetime"
-crates/jobs/src/delegate/run_tests.rs	1	docs/testing.md,\n    // "Waits and timeouts"
-crates/jobs/src/delegate/run_tests.rs	1	docs/testing.md,\n/// "Waits and timeouts"
-crates/jobs/src/delegate/run_tests.rs	1	docs/testing.md, "Waits\n/// and timeouts"
-crates/jobs/src/delegate/run_tests.rs	2	docs/testing.md, "Waits and\n    // timeouts"
-crates/jobs/src/delegate/run_tests.rs	13	docs/testing.md, "Waits and timeouts"
 crates/jobs/src/keeper_tests.rs	1	docs/events.md, "Writing"
 crates/jobs/src/keeper_tests.rs	19	docs/tools.md, "The keeper"
-crates/log/Cargo.toml	1	docs/testing.md, "Jigs"
-crates/log/src/artifact.rs	1	docs/code-quality.md`,\n//! "When more than one mechanism can enforce a rule, the strongest wins"
-crates/log/src/export.rs	1	docs/invocation.md`, "Exporting a session"
-crates/log/src/resolve.rs	1	docs/events.md`,\n/// "A directory is a session ..."
-crates/log/src/search.rs	1	docs/state.md`, "A slug\n    /// can collide"
 crates/log/src/write.rs	2	docs/events.md`, "Conventions"
 crates/log/src/write.rs	1	docs/testing.md`, "a test of how much work something does counts the\n/// work"
 crates/loop/Cargo.toml	1	docs/architecture.md, "The call rules"
 crates/loop/Cargo.toml	1	docs/testing.md, "Jigs"
-crates/loop/src/before_message.rs	2	docs/state.md`, "Prompt history"
-crates/loop/src/before_message_tests.rs	2	docs/errors.md`, "Notices"
-crates/loop/src/before_tool_tests.rs	1	docs/errors.md`,\n    // "Notices"
-crates/loop/src/calls.rs	2	docs/extensions.md`, "after_tool"
-crates/loop/src/calls_tests.rs	1	docs/events.md, "tool_call_completed"
-crates/loop/src/calls_tests.rs	1	docs/loop.md, "One step"
-crates/loop/src/compaction.rs	1	docs/errors.md`, "Notices"
-crates/loop/src/compaction/tests.rs	4	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/conversation_tests.rs	18	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
-crates/loop/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/loop/src/history_tests.rs	5	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/src/history_tests.rs	1	docs/loop.md, "What the model is sent"
-crates/loop/src/hooks.rs	1	docs/events.md`, "Conventions"
-crates/loop/src/hooks_tests.rs	2	docs/errors.md`, "Notices"
 crates/loop/src/inbox/queue_tests.rs	1	docs/invocation.md, "Lifecycle"
 crates/loop/src/inbox/queue_tests.rs	1	docs/mcp.md, "Servers, their state and the per-server commands"
 crates/loop/src/jobs_tests.rs	1	docs/delegates.md, "Events"
 crates/loop/src/jobs_tests.rs	1	docs/events.md, "Session and turn"
 crates/loop/src/jobs_tests.rs	1	docs/loop.md, "Starting a turn"
-crates/loop/src/lib.rs	1	docs/state.md`, "Prompt history"
-crates/loop/src/lifecycle.rs	1	docs/invocation.md`, "What is written"
-crates/loop/src/lifecycle_tests.rs	6	docs/errors.md`, "Notices"
-crates/loop/src/media.rs	1	docs/performance.md`, "Memory follows the context window"
 crates/loop/src/offer.rs	2	docs/extensions.md`, "Offering"
-crates/loop/src/reload_tests.rs	1	docs/errors.md`, "Notices"
-crates/loop/src/reload_tests.rs	1	docs/mcp.md, "Servers, their state and the per-server\n                // commands"
 crates/loop/src/resume.rs	1	docs/extensions.md`, "`before_tool`"
-crates/loop/src/reviewer/shown_tests.rs	4	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/src/rewind_tests.rs	6	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/status.rs	1	docs/prompt-cache.md`, "Reload"
-crates/loop/src/status_tests.rs	11	docs/events.md, "session_status"
-crates/loop/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/loop/src/timing_tests.rs	1	docs/testing.md, "Waits\n    // and timeouts"
-crates/loop/src/tool_timing_tests.rs	1	docs/permissions.md`, "What is recorded"
-crates/loop/src/tool_timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/loop/src/turn.rs	1	docs/errors.md`, "Notices"
-crates/loop/tests/approved_code.rs	1	docs/extensions.md`, "Offering"
-crates/loop/tests/before_compaction.rs	3	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/change_workspace.rs	1	docs/events.md:1606
-crates/loop/tests/changes.rs	1	docs/errors.md`,\n    // "Notices"
-crates/loop/tests/compaction.rs	14	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/inner_calls.rs	1	docs/extensions.md`, "When an extension calls a tool"
-crates/loop/tests/invariants.rs	1	docs/invocation.md`, "A prompt arriving\n    /// mid-turn is rejected `busy`"
-crates/loop/tests/resume.rs	3	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/resume.rs	1	docs/tools.md, "The keeper"
-crates/loop/tests/reviewer_compaction.rs	9	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/reviewer_compaction.rs	1	docs/permissions.md, "At a compaction"
-crates/loop/tests/rewind.rs	1	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/skills_resent.rs	8	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/skills_resent.rs	1	docs/errors.md`, "Notices"
-crates/loop/tests/status.rs	4	docs/events.md, "session_status"
-crates/loop/tests/tool_search.rs	1	docs/compaction.md, "What the model sees after a compaction"
 crates/main/src/builtin_tests.rs	1	docs/testing.md, "Waits and timeouts"
 crates/main/src/cli.rs	1	docs/invocation.md`, "Sessions"
 crates/main/src/cli.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
@@ -480,43 +277,9 @@ crates/main/tests/tool_calls/sandbox.rs	2	docs/sandbox.md:64-73
 crates/main/tests/tool_calls/tool_search.rs	1	docs/testing.md:95
 crates/main/tests/tool_calls/tools.rs	1	docs/state.md, "Diagnostic logs"
 crates/main/tests/tool_calls/watchers.rs	3	docs/extensions.md:1651-1657
-crates/mcp/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/mcp/src/cache.rs	1	docs/state.md`, "Cache"
-crates/mcp/src/http_tests.rs	7	docs/state.md, "Diagnostic logs"
-crates/mcp/src/login_tests.rs	1	docs/state.md, "Diagnostic logs"
-crates/mcp/src/login_tests.rs	1	docs/testing.md, "Running tests"
-crates/mcp/src/start_tests.rs	1	docs/mcp.md:82
-crates/mcp/src/sync/tests.rs	1	docs/mcp.md`, "Each death\n    // is recorded as `mcp_server_failed`"
-crates/mcp/src/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
-crates/net/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/net/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/provider/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/provider/Cargo.toml	1	docs/testing.md, "Jigs"
-crates/provider/src/anthropic_messages.rs	1	research/provider-harvest/anthropic-messages.md`, "Prompt-cache\n/// markers"
-crates/provider/src/anthropic_messages.rs	1	research/provider-harvest/anthropic-messages.md`, "TTL values"
-crates/provider/src/call_tests.rs	2	docs/state.md, "Diagnostic logs"
-crates/provider/src/openai_completions_tools.rs	1	docs/tools.md,\n/// "Deferral is a property of the model"
-crates/routing/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/support/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/support/src/clock.rs	1	docs/testing.md, "Values that change every run"
-crates/support/src/clock.rs	2	docs/testing.md, "Waits and timeouts"
-crates/tools/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/tools/Cargo.toml	1	docs/testing.md, "Jigs"
-crates/tools/src/error/web_fetch.rs	1	docs/errors.md`, "web_fetch"
 crates/tools/src/shell/command.rs	1	docs/code-quality.md, "Unsafe"
 crates/tools/src/shell/hosted_tests.rs	1	docs/tools.md, "Stopping a command"
 crates/tools/src/shell/hosted_tests.rs	1	docs/tools.md, "The keeper"
-crates/tools/src/shell/sandbox/sandbox_tests.rs	4	docs/sandbox.md:94-100
-crates/tools/src/shell/sandbox/sandbox_tests.rs	1	docs/testing.md`, "No time-based\n    // assertions"
-crates/tools/src/shell/sandbox/sandbox_tests.rs	1	docs/testing.md`, "No time-based assertions"
-crates/tools/src/shell_tests.rs	1	docs/testing.md, "Waits and timeouts"
-crates/tools/src/web_fetch/markdown_tests.rs	1	docs/testing.md,\n/// "Waits and timeouts"
-crates/tools/src/web_fetch_tests.rs	9	docs/state.md, "Diagnostic logs"
-crates/tools/src/web_fetch_tests.rs	6	docs/tools.md, "Web fetch and web search"
-crates/tools/tests/shell.rs	1	docs/events.md:683
-crates/tools/tests/shell.rs	1	docs/events.md:697-701
-crates/tools/tests/shell.rs	1	docs/sandbox.md:100-102
-crates/tools/tests/shell.rs	2	docs/sandbox.md:64-73
 crates/tui/src/app.rs	1	docs/invocation.md`, "Sessions"
 crates/tui/src/app.rs	1	docs/testing.md`, "a test of how much work something does counts\n/// the work"
 crates/tui/src/app/commands_tests.rs	1	docs/testing.md, "Event streams"
@@ -609,78 +372,6 @@ crates/tui/src/view/rail_tests.rs	1	docs/invocation.md:1102
 crates/tui/src/view/steering_queue_tests.rs	8	docs/tui.md, "Steering"
 crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md, "The panel"
 crates/tui/src/view/steering_queue_tests.rs	20	docs/tui.md, "The slots"
-scripts/bug-red	1	docs/testing.md, "Proving a test\n# bites"
-scripts/cache-prune	1	docs/ci.md, "The backstop"
-scripts/check	1	docs/ci.md,\n      # "On every pull request that changes code"
-scripts/check	1	docs/ci.md,\n# "Selection"
-scripts/check	1	docs/ci.md, "On every pull request that changes code"
-scripts/check	1	docs/ci.md, "Selection"
-scripts/check	1	docs/code-quality.md, "Types"
-scripts/check	1	docs/dependencies.md, "Supply\n    # chain"
-scripts/check	1	docs/testing.md, "Levels"
-scripts/check	1	docs/testing/screens.md, "Screens"
-scripts/check	1	docs/workflow.md, "The gate"
-scripts/check-docs	1	docs/ci.md, "The docs check"
-scripts/class-data	2	docs/performance.md, "The class columns"
-scripts/flaky-tests	1	docs/testing.md, "Flaky tests"
-scripts/install-shells	1	docs/ci.md, "Job time limits"
-scripts/install.sh	1	docs/releasing.md, "Installing"
-scripts/leak-scan	1	docs/testing.md, "Running\n# tests"
-scripts/look-diff	1	docs/testing/screens.md, "Screens"
-scripts/paging-jig	1	docs/testing.md, "Jigs"
-scripts/release-pack	1	docs/releasing.md, "What a release publishes"
-scripts/release-size	1	docs/ci.md, "On every pull request\n# that changes code"
-scripts/stored-results	1	docs/ci.md, "On every pull request that changes code"
-scripts/test-flake-report	1	docs/ci.md, "On every pull request that changes code"
-scripts/test-flake-report	2	docs/testing.md, "Waits and timeouts"
-scripts/test-flake-report	11	docs/testing/running.md, "Flaky tests"
-scripts/test-flake-report	1	docs/testing/running.md, "Running\n# tests"
-scripts/test-journey-report	10	docs/ci.md:459-461
-scripts/test-journey-report	10	docs/testing.md:114-120
-scripts/test-leak-probe	1	docs/testing.md,\n# "Running tests"
-scripts/test-leak-scan	1	docs/testing.md, "Running tests"
-scripts/test-retry-filter	1	docs/testing/running.md,\n# "Flaky tests"
-scripts/test-stress-plan	1	docs/ci.md, "On every pull request that changes code"
-xtask/src/bench/attach.rs	3	docs/performance.md:184-185
-xtask/src/bench/judge.rs	2	docs/performance.md:184-185
-xtask/src/bench_tests.rs	4	docs/performance.md:184-185
-xtask/src/bench_tests.rs	4	docs/performance.md:302-306
-xtask/src/bench_tests.rs	2	docs/performance.md:308
-xtask/src/bench_tests.rs	1	docs/performance.md:326-330,334-335
-xtask/src/bench_tests.rs	2	docs/performance.md:326-330,334-335,336-339
-xtask/src/bench_tests.rs	1	docs/performance.md:326-330,338-339
-xtask/src/bench_tests.rs	1	docs/performance.md:326-332,334-335
-xtask/src/bench_tests.rs	1	docs/performance.md:330-332,334-335,338-339
-xtask/src/bench_tests.rs	1	docs/performance.md:336-339
-xtask/src/bench_tests.rs	1	docs/performance.md:72,184-185,223-227,303-310
-xtask/src/bench_tests.rs	1	docs/performance.md:72,184-185,303-307
-xtask/src/bench_tests.rs	1	docs/performance.md:72,303-310
-xtask/src/bench_tests.rs	1	docs/performance.md:72,308-310
-xtask/src/bench_tests.rs	1	docs/performance.md:72,326-328
-xtask/src/bench_tests.rs	1	docs/performance.md:73,184-185,223-227,309-310
-xtask/src/bench_tests.rs	1	docs/performance.md:73,184-185,309-310
-xtask/src/bench_tests.rs	2	docs/performance.md:73,309-310
-xtask/src/bench_tests.rs	2	docs/performance.md` line 274
-xtask/src/ci_needs.rs	1	docs/ci.md,\n/// "The merge gate"
-xtask/src/flake_report_tests.rs	6	docs/ci.md, "On every pull request that changes code"
-xtask/src/flake_report_tests.rs	1	docs/ci.md, "The one-week trial"
-xtask/src/flake_report_tests.rs	20	docs/testing/running.md, "Flaky tests"
-xtask/src/main.rs	1	docs/ci.md, "The user docs site"
-xtask/src/must_succeed_tests.rs	1	docs/ci.md`, "On Linux x86_64 alone"
-xtask/src/rules.rs	1	docs/dependencies.md`, "Crates\n/// used only by the image child"
 xtask/src/rules_tests.rs	2	docs/architecture.md:6
 xtask/src/rules_tests.rs	4	docs/architecture.md:7
 xtask/src/rules_tests.rs	2	docs/architecture.md:8
-xtask/src/screen_ratchet_tests.rs	1	docs/testing/screens.md:84
-xtask/src/screen_ratchet_tests.rs	1	docs/testing/screens.md:86
-xtask/src/select/plan_tests.rs	1	docs/ci.md:120
-xtask/src/select/reuse.rs	1	docs/ci.md,\n//! "On every pull request that changes code"
-xtask/src/select/reuse_tests.rs	4	docs/ci.md, "On every pull request that changes code"
-xtask/src/site/docs.css	1	docs/ci.md, "The user docs site"
-xtask/src/visibility.rs	1	docs/testing/mutants.md, "Proving a test\n    // bites"
-xtask/tests/cache_prune.rs	1	docs/ci.md`, "The backstop"
-xtask/tests/cli.rs	3	docs/ci.md, "On every pull request that changes code"
-xtask/tests/cli.rs	1	docs/testing.md, "Waits and timeouts"
-xtask/tests/cli.rs	1	docs/testing/running.md, "Flaky\n    // tests"
-xtask/tests/cli.rs	4	docs/testing/running.md, "Flaky tests"
-xtask/tests/release_size.rs	1	docs/ci.md`, "Release build and\n//! size"

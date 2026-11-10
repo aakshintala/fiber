@@ -2164,7 +2164,7 @@ fn a_non_blocking_turn_start_failure_writes_a_notice_and_the_turn_goes_on() {
 
 /// The single grouped notice in `all`: exactly one, with the count and
 /// the first item up front, every item with its extension in the list,
-/// and no extension on the group (`docs/errors.md`, "Notices": one
+/// and no extension on the group (`docs/errors.md`, "Registry": one
 /// notice per code, count and first item up front, no extension across
 /// extensions).
 fn grouped_notice(all: &[Envelope]) {
@@ -2219,7 +2219,7 @@ fn two_session_start_notices_arrive_as_one_grouped_notice() {
     // The session start runs at the first turn, after the opening: its
     // notice lands between the opening and the turn (`docs/loop.md`,
     // "Starting a turn": session_start after the opening, before
-    // turn_started; `docs/errors.md`, "Notices": one notice per code).
+    // turn_started; `docs/errors.md`, "Registry": one notice per code).
     assert_eq!(
         kinds(&all),
         [
@@ -2265,7 +2265,7 @@ fn two_turn_start_notices_arrive_as_one_grouped_notice() {
     grouped_notice(&all);
     // The turn-start notice lands after turn_started, before the first
     // step (`docs/loop.md`, "Starting a turn": turn_start before the
-    // first model request; `docs/errors.md`, "Notices": one per code).
+    // first model request; `docs/errors.md`, "Registry": one per code).
     assert_eq!(
         kinds(&all),
         [
@@ -2323,7 +2323,7 @@ fn two_before_model_call_notices_arrive_as_one_grouped_notice() {
     // The before-model-call notice lands after the step starts, before
     // the first delta (`docs/loop.md`, "One step" and "Spending budget":
     // before_model_call after the request is built, before it is sent;
-    // `docs/errors.md`, "Notices": one per code).
+    // `docs/errors.md`, "Registry": one per code).
     assert_eq!(
         kinds(&all),
         [
@@ -2350,7 +2350,7 @@ fn two_before_model_call_notices_arrive_as_one_grouped_notice() {
 fn repeated_turn_end_notices_arrive_as_one_grouped_notice() {
     // The turn-end chain's two `hook_failed` notices reach the log as one
     // grouped notice: the count and the first item up front, every item
-    // with its extension in the list (`docs/errors.md`, "Notices").
+    // with its extension in the list (`docs/errors.md`, "Registry").
     let hooks = Arc::new(FakeHooks::new());
     hooks.answer_turn_end(noticed_twice(
         ("fiber.test/a", "extension fiber.test/a failed softly"),
@@ -2373,7 +2373,7 @@ fn repeated_turn_end_notices_arrive_as_one_grouped_notice() {
     grouped_notice(&all);
     // The turn-end notice lands before turn_completed (`docs/loop.md`,
     // "Ending a turn": turn_end runs before turn_completed;
-    // `docs/errors.md`, "Notices": one per code).
+    // `docs/errors.md`, "Registry": one per code).
     assert_eq!(
         kinds(&all),
         [

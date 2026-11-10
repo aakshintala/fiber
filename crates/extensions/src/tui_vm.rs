@@ -83,7 +83,7 @@ pub struct Span {
 /// off at the callback's deadline as the callback is, and `fiber.slot`, which
 /// fills the tables the prelude returns. Lua's own `wrap` is a separate C
 /// function that would make an unarmed coroutine.
-// A callback's timeout is in milliseconds (docs/extensions.md, "How an
+// A callback's timeout is in milliseconds (`docs/extensions.md`, "How an
 // extension runs"), and an animated slot's `animate` holds its raw
 // `{ interval_ms }` table: the adapter normalizes it to the tick floor
 // at registration, while the VM stores the validated raw value.

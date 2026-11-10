@@ -194,7 +194,15 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
 /// leaves no row.
 fn session_segments(app: &App, countdown: &mut Option<usize>) -> Vec<Segment> {
     let panel = app.panel_state();
-    let status = panel.status();
+    // While a Fiber delegate's view is open the cost and cache read
+    // its fold, never the parent's; the branch and tools stay the
+    // parent's (`docs/tui.md`, "Swapped views").
+    let followed = app.delegate_session();
+    let parent_status = panel.status();
+    let status = match followed.as_ref() {
+        Some(session) => panel.delegate_status_for(session),
+        None => parent_status,
+    };
     let mut out = Vec::new();
     if let Some(waiting) = app.rail_waiting() {
         out.push(Segment::spotted(
@@ -205,7 +213,7 @@ fn session_segments(app: &App, countdown: &mut Option<usize>) -> Vec<Segment> {
             Spot::Waiting,
         ));
     }
-    if let Some(branch) = status.and_then(|_| branch_text(app)) {
+    if let Some(branch) = parent_status.and_then(|_| branch_text(app)) {
         let spans = vec![
             Span::styled("git", style(Role::Muted)),
             Span::raw(" ".to_owned()),
@@ -225,19 +233,32 @@ fn session_segments(app: &App, countdown: &mut Option<usize>) -> Vec<Segment> {
         });
     }
 
-    if let Some(spend) = app.attached_spend() {
-        // With a budget the segment reads billed spend against it, as
-        // the Session card does: a subscription bills nothing per call
-        // (`docs/loop.md`, "Spending budget").
-        // Without a parsed status there is no billed cost to compare,
-        // so the segment reads the attached spend plain.
-        let text = match app.panel_state().status() {
+    let spend = match followed.as_ref() {
+        Some(session) => panel.delegate_status_for(session).map(|status| {
+            // With a budget the segment reads billed spend against it,
+            // as the Session card does; an unknown billed cost without
+            // one reads unknown, never the parent's spend.
+            format::spend_against_budget(status.spend.cost, panel.delegate_budget_for(session))
+                .unwrap_or_else(|| match status.spend.cost {
+                    Some(cost) => format::money(cost),
+                    None => "unknown".to_owned(),
+                })
+        }),
+        None => app.attached_spend().map(|spend| match panel.status() {
             Some(status) => {
-                format::spend_against_budget(status.spend.cost, app.panel_state().budget())
+                // With a budget the segment reads billed spend against
+                // it, as the Session card does: a subscription bills
+                // nothing per call (`docs/loop.md`, "Spending budget").
+                // Without a parsed status there is no billed cost to
+                // compare, so the segment reads the attached spend
+                // plain.
+                format::spend_against_budget(status.spend.cost, panel.budget())
                     .unwrap_or_else(|| format::money(spend))
             }
             None => format::money(spend),
-        };
+        }),
+    };
+    if let Some(text) = spend {
         out.push(Segment::spotted(vec![Span::raw(text)], Spot::Usage));
     }
     if let Some(status) = status {
@@ -490,6 +511,21 @@ fn ranked_files(changes: &std::collections::BTreeMap<String, (u64, u64)>) -> Vec
         .collect()
 }
 
+/// The branch the Session card names while a delegate view is open:
+/// its status's git, never the attached branch query's answer.
+fn delegate_branch_name<'a>(
+    panel: &'a crate::app::panel::PanelState,
+    session: &contract::SessionId,
+) -> Option<BranchName<'a>> {
+    panel
+        .delegate_status_for(session)
+        .and_then(|status| status.git.as_ref())
+        .map(|git| match git.branch.as_deref() {
+            Some(name) => BranchName::Named(name),
+            None => BranchName::Detached,
+        })
+}
+
 /// The branch the Session card and the status line show: the last
 /// query's answer, else the status's git (`docs/tui.md`, "Git").
 fn branch_name(panel: &crate::app::panel::PanelState) -> Option<BranchName<'_>> {
@@ -511,33 +547,89 @@ fn branch_name(panel: &crate::app::panel::PanelState) -> Option<BranchName<'_>> 
 /// draws, folded the way its rows read them.
 fn status_input<'a>(app: &'a App, files: &'a [ChangedFile<'a>], flat: bool) -> StatusRows<'a> {
     let panel = app.panel_state();
-    let status = panel.status();
-    let known = app.session().and_then(|session| {
-        let window = panel.window_for(session).filter(|window| *window > 0)?;
-        let context = panel.status_for(session)?.context.as_ref()?;
-        Some((window, context))
-    });
+    // While a Fiber delegate's view is open the Session card reads the
+    // delegate's fold, never the parent's; every other row stays the
+    // parent's (`docs/tui.md`, "Swapped views").
+    let followed = app.delegate_session();
+    let delegate = followed
+        .as_ref()
+        .and_then(|session| panel.delegate_status_for(session));
+    // The selected status: the open delegate's while its view is open,
+    // unknown until its status lands and never the parent's.
+    let status = match followed.as_ref() {
+        Some(_) => delegate,
+        None => panel.status(),
+    };
+    let context = match followed.as_ref() {
+        Some(session) => panel
+            .delegate_window_for(session)
+            .filter(|window| *window > 0)
+            .and_then(|window| {
+                panel.delegate_status_for(session).and_then(|status| {
+                    status.context.as_ref().map(|context| SessionContext {
+                        tokens: context.tokens,
+                        window,
+                        trigger_at: panel.delegate_trigger_for(session),
+                    })
+                })
+            }),
+        None => app.session().and_then(|session| {
+            let window = panel.window_for(session).filter(|window| *window > 0)?;
+            let context = panel.status_for(session)?.context.as_ref()?;
+            Some(SessionContext {
+                tokens: context.tokens,
+                window,
+                trigger_at: panel.trigger_at(),
+            })
+        }),
+    };
     StatusRows {
         cards: app.panel_cards().to_vec(),
         session: SessionCard {
             workspace: status.map(|status| status.workspace.as_str()),
-            branch: status.and_then(|_| branch_name(panel)),
-            model: panel.session_model(),
-            thinking: panel.thinking(),
-            thinking_now: panel.thinking_now(),
-            context: known.map(|(window, context)| SessionContext {
-                tokens: context.tokens,
-                window,
-                trigger_at: panel.trigger_at(),
+            branch: status.and_then(|_| match followed.as_ref() {
+                Some(session) => delegate_branch_name(panel, session),
+                None => branch_name(panel),
             }),
-            spend: status
-                .map(|status| Spend::Status(&status.spend))
-                .or_else(|| app.attached_spend().map(|cost| Spend::Attached { cost })),
-            budget: panel.budget(),
-            cache_expires: None,
-            speed: panel.speed(),
-            turns: panel.turns(),
-            tools_down: panel.down(),
+            model: match followed.as_ref() {
+                Some(session) => panel.delegate_model_for(session),
+                None => panel.session_model(),
+            },
+            thinking: match followed.as_ref() {
+                Some(session) => panel.delegate_thinking_for(session),
+                None => panel.thinking(),
+            },
+            thinking_now: match followed.as_ref() {
+                Some(session) => panel.delegate_thinking_now_for(session),
+                None => panel.thinking_now(),
+            },
+            context,
+            spend: match followed.as_ref() {
+                Some(_) => delegate.map(|status| Spend::Status(&status.spend)),
+                None => status
+                    .map(|status| Spend::Status(&status.spend))
+                    .or_else(|| app.attached_spend().map(|cost| Spend::Attached { cost })),
+            },
+            budget: match followed.as_ref() {
+                Some(session) => panel.delegate_budget_for(session),
+                None => panel.budget(),
+            },
+            cache_expires: match followed.as_ref() {
+                Some(_) => delegate.and_then(|status| status.cache_expires),
+                None => None,
+            },
+            speed: match followed.as_ref() {
+                Some(session) => panel.delegate_speed_for(session),
+                None => panel.speed(),
+            },
+            turns: match followed.as_ref() {
+                Some(session) => panel.delegate_turns_for(session),
+                None => panel.turns(),
+            },
+            tools_down: match followed.as_ref() {
+                Some(session) => panel.delegate_tools_for(session),
+                None => panel.down(),
+            },
             // The input leaves waiting out at zero; the built-in row
             // keeps drawing whatever the rail reports.
             waiting: app.rail_waiting().filter(|waiting| *waiting > 0),

@@ -14,8 +14,8 @@ use mlua::{Lua, Table, Value as LuaValue};
 
 /// `host.ask` yields this tag, `"ask"` and the call's kind with its spec.
 /// The extension's thread raises the interaction and resumes the coroutine
-/// with the answer (`docs/extensions.md`, "A host call suspends the code
-/// that made it"). Refused in the entry script before it yields, like
+/// with the answer (`docs/extensions.md`, "How an extension runs"). Refused in
+/// the entry script before it yields, like
 /// `host.exec`.
 const ASK: &str = r#"
 local host, tag, in_entry, check = ...

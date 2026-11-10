@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reports this check run's leaked processes (docs/testing.md, "Running
+# Reports this check run's leaked processes (`docs/testing.md`, "Running
 # tests"). It only reports: it sends no signal.
 #
 # Usage: scripts/leak-scan NONCE [CHECK_START]

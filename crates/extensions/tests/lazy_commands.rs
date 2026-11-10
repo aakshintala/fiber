@@ -204,7 +204,7 @@ fn a_declared_command_is_listed_and_no_vm_starts() {
     let init = counting(&started, &register("export", ""));
     env.install("x", &export_declared(), &[("init.lua", &init)]);
     let session = env.load(&[], FakeClock::new());
-    // docs/extensions.md:1356-57: a lazy extension's declared commands list without starting its VM.
+    // `docs/extensions.md`, "Commands and screens": a lazy extension's declared commands list without starting its VM.
     assert_eq!(count(&started), 0, "load started the VM");
     assert_eq!(
         session.commands(),
@@ -247,7 +247,7 @@ fn a_neighbour_without_a_commands_key_starts_at_load_and_lists_no_hint() {
         )],
     );
     let session = env.load(&[], FakeClock::new());
-    // docs/extensions.md:313-16: a lazy extension's `init.lua` waits for a command; any other runs at session start.
+    // `docs/extensions.md`, "What a package holds": a lazy extension's `init.lua` waits for a command; any other runs at session start.
     assert_eq!(count(&lazy_started), 0);
     assert_eq!(count(&plain_started), 1);
     assert_eq!(
@@ -274,7 +274,7 @@ fn an_empty_commands_key_is_lazy_with_no_commands() {
         &[("init.lua", &counting(&started, &register("sneaky", "")))],
     );
     let session = env.load(&[], FakeClock::new());
-    // docs/extensions.md:70-71: a `commands` key, `{}` included, makes the extension lazy.
+    // `docs/extensions.md`, "What a package holds": a `commands` key, `{}` included, makes the extension lazy.
     assert_eq!(count(&started), 0, "an empty `commands` still starts it");
     assert!(session.commands().is_empty());
     assert_eq!(session.loaded_names(), ["fiber.test/x"]);
@@ -330,7 +330,7 @@ fn a_declared_name_another_extension_registers_goes_to_neither() {
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(notices[0].message.contains("fiber.test/lazy"));
     assert!(notices[0].message.contains("fiber.test/plain"));
-    // docs/extensions.md:1356-57: a lazy extension's declared commands list without starting its VM.
+    // `docs/extensions.md`, "Commands and screens": a lazy extension's declared commands list without starting its VM.
     assert_eq!(count(&lazy_started), 0);
 }
 
@@ -383,7 +383,7 @@ fn a_disabled_extension_lists_none() {
     );
     assert!(session.commands().is_empty());
     assert!(session.loaded().is_empty());
-    // docs/extensions.md:1360-61: a disabled extension lists no command, so nothing starts.
+    // `docs/extensions.md`, "Commands and screens": a disabled extension lists no command, so nothing starts.
     assert_eq!(count(&started), 0);
 }
 
@@ -396,7 +396,7 @@ fn a_status_event_reaches_the_emitter_after_the_first_run() {
     let session = env.load(&[], FakeClock::new());
     let (log, events) = fakes::EventLog::channel();
     session.emit_to(Arc::new(log));
-    // docs/extensions.md:1375-79: a command's first run starts the extension, and a start that fails rejects it.
+    // `docs/extensions.md`, "Commands and screens": a command's first run starts the extension, and a start that fails rejects it.
     assert_eq!(count(&started), 0);
     let release = run(&session, "export").unwrap_or_else(|r| panic!("rejected: {r:?}"));
     assert_eq!(count(&started), 1, "the run is accepted after the start");
@@ -416,7 +416,7 @@ fn a_status_event_reaches_the_emitter_after_the_first_run() {
             break;
         }
     }
-    // docs/extensions.md:1375-79: a command's first run starts the extension, and a start that fails rejects it.
+    // `docs/extensions.md`, "Commands and screens": a command's first run starts the extension, and a start that fails rejects it.
     assert_eq!(count(&started), 1);
 }
 
@@ -515,7 +515,7 @@ fn undeclared_registration_fails(extra: &str, kind: &str) {
         &[kind, "`fiber.test/x`"],
     );
     assert_failed(&lazy.rejected("export"), "export", &[kind]);
-    // docs/extensions.md:1377-80: a failed start stays failed for the session; the script does not run again.
+    // `docs/extensions.md`, "Commands and screens": a failed start stays failed for the session; the script does not run again.
     assert_eq!(lazy.started(), 1, "the entry script ran again");
     assert!(
         lazy.events.try_recv().is_err(),
@@ -581,7 +581,7 @@ fn a_declared_command_the_script_did_not_register_is_rejected_alone() {
         &["declares the command `b`", "did not register"],
     );
     assert_eq!(lazy.ran("a"), "a ran");
-    // docs/extensions.md:1381-83: concurrent first runs share one start, one `init.lua` run.
+    // `docs/extensions.md`, "Commands and screens": concurrent first runs share one start, one `init.lua` run.
     assert_eq!(lazy.started(), 1);
 }
 
@@ -620,14 +620,14 @@ fn a_lua_error_in_the_entry_script_is_sticky() {
     );
     assert_failed(&lazy.rejected("export"), "export", &["boom"]);
     assert_failed(&lazy.rejected("export"), "export", &["boom"]);
-    // docs/extensions.md:1377-80: a failed start stays failed for the session; the script does not run again.
+    // `docs/extensions.md`, "Commands and screens": a failed start stays failed for the session; the script does not run again.
     assert_eq!(lazy.started(), 1);
 }
 
 #[test]
 fn a_run_starts_the_extension_once_before_it_is_accepted() {
     let lazy = Lazy::new(|started| with_export(started, ""), &export_declared(), &[]);
-    // docs/extensions.md:1375-79: a command's first run starts the extension, and a start that fails rejects it.
+    // `docs/extensions.md`, "Commands and screens": a command's first run starts the extension, and a start that fails rejects it.
     assert_eq!(lazy.started(), 0);
     assert_eq!(lazy.ran("export"), "ran");
     assert_eq!(lazy.ran("export"), "ran");
@@ -675,7 +675,7 @@ fn concurrent_first_runs_share_one_start() {
     };
     let (lazy, answers) = both("");
     assert!(answers.iter().all(Result::is_ok));
-    // docs/extensions.md:1381-83: concurrent first runs share one start, one `init.lua` run.
+    // `docs/extensions.md`, "Commands and screens": concurrent first runs share one start, one `init.lua` run.
     assert_eq!(lazy.started(), 1);
     let (lazy, answers) = both(TOOL);
     for (answer, name) in answers.into_iter().zip(["a", "b"]) {
@@ -728,7 +728,7 @@ fn a_misplaced_provider_call_fails_the_extension_and_drops_its_data() {
     assert_failed(&lazy.rejected("export"), "export", &["providers/p.lua"]);
     assert_failed(&lazy.rejected("export"), "export", &["providers/p.lua"]);
     assert_eq!(lazy.session.rejected(), ["fiber.test/x"]);
-    // docs/extensions.md:1377-80: a failed start stays failed for the session; the script does not run again.
+    // `docs/extensions.md`, "Commands and screens": a failed start stays failed for the session; the script does not run again.
     assert_eq!(lazy.started(), 1);
 }
 
@@ -848,7 +848,7 @@ fn reload(env: &Env, old: &Arc<SessionExtensions>) -> Arc<SessionExtensions> {
 fn a_reload_leaves_a_lazy_extension_that_never_started_unstarted() {
     let lazy = Lazy::new(|started| with_export(started, ""), &export_declared(), &[]);
     let session = reload(&lazy.env, &lazy.session);
-    // docs/extensions.md:1520-22: a reload runs `init.lua` again, except for a lazy extension that never started.
+    // `docs/extensions.md`, "Loading, and cost when nothing is loaded": a reload runs `init.lua` again, except for a lazy extension that never started.
     assert_eq!(lazy.started(), 0);
     assert_eq!(names(&session), ["export"]);
 }
@@ -858,7 +858,7 @@ fn a_reload_starts_again_a_lazy_extension_that_had_started() {
     let lazy = Lazy::new(|started| with_export(started, ""), &export_declared(), &[]);
     assert_eq!(lazy.ran("export"), "ran");
     let session = reload(&lazy.env, &lazy.session);
-    // docs/extensions.md:1520-22: a reload runs `init.lua` again, except for a lazy extension that never started.
+    // `docs/extensions.md`, "Loading, and cost when nothing is loaded": a reload runs `init.lua` again, except for a lazy extension that never started.
     assert_eq!(lazy.started(), 2, "reload returns after the new start");
     let (release, events) = {
         let (log, events) = fakes::EventLog::channel();
@@ -875,7 +875,7 @@ fn a_reload_starts_again_a_lazy_extension_that_had_started() {
             break;
         }
     }
-    // docs/extensions.md:1520-22: a reload runs `init.lua` again, except for a lazy extension that never started.
+    // `docs/extensions.md`, "Loading, and cost when nothing is loaded": a reload runs `init.lua` again, except for a lazy extension that never started.
     assert_eq!(lazy.started(), 2, "the run started it again");
 }
 
@@ -891,7 +891,7 @@ fn a_failed_extension_stays_failed_until_a_reload_fixes_it() {
     write(&init, &with_export(&lazy.env.marker("started"), ""));
     assert_failed(&lazy.rejected("export"), "export", &["the tool `t`"]);
     let session = reload(&lazy.env, &lazy.session);
-    // docs/extensions.md:1379 and 1520-22: `reload` tries a failed start again.
+    // `docs/extensions.md`, "Commands and screens": `reload` tries a failed start again.
     assert_eq!(lazy.started(), 2, "reload starts a failed start again");
     assert!(run(&session, "export").is_ok());
     assert_eq!(lazy.started(), 2);
@@ -902,7 +902,7 @@ fn a_reload_starts_again_a_lazy_extension_a_provider_started() {
     let lazy = with_provider(|started| with_export(started, ""));
     let providers = lazy.session.lua_providers();
     assert_eq!(providers[0].1.functions().unwrap(), ["models"]);
-    // docs/extensions.md:1520-22: a lazy extension whose VM started, by a provider's first use too, starts again on reload.
+    // `docs/extensions.md`, "Loading, and cost when nothing is loaded": a lazy extension whose VM started, by a provider's first use too, starts again on reload.
     assert_eq!(lazy.started(), 1, "the provider's first use started it");
     reload(&lazy.env, &lazy.session);
     assert_eq!(lazy.started(), 2, "reload returns after the new start");

@@ -406,7 +406,7 @@ pub struct Loop {
     /// nothing: every end still runs. Set by [`Loop::released`].
     release: Option<ReleaseDelegates>,
     /// Reports a replaced prompt's replacement to the door, before the
-    /// prompt's acceptance (`docs/state.md`, "Prompt history").
+    /// prompt's acceptance (`docs/state.md`, "What each part holds").
     on_rewrite: Option<crate::before_message::OnRewrite>,
     /// Compaction: the settings, the context's measure and what its render
     /// carries (`docs/compaction.md`).

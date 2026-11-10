@@ -71,7 +71,7 @@ fn park_makes_a_fifo_and_on_opens_an_existing_one() {
 }
 
 /// A release written before the reader opens the FIFO is buffered and
-/// read when the reader opens it (`docs/testing.md:297-299`): the
+/// read when the reader opens it (`docs/testing.md`, "Waits and timeouts"): the
 /// release end stays open until the hold is dropped or stood down.
 /// The fake keeps the order the FIFO keeps: a release before the next
 /// hold (`docs/testing/fakes.md`, "Fakes").

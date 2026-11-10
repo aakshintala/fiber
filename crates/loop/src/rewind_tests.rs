@@ -1109,7 +1109,7 @@ fn a_compaction_before_the_point_applies_to_the_fork() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\ntwo")
@@ -1157,7 +1157,7 @@ fn a_point_on_the_compactions_completion_applies_it() {
     assert_eq!(folded.seed, seeded(&["one"], &own_log(&sessions, HB)));
     // The carried input and the note, with no opening message: that line
     // is past the point.
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation,
         [
@@ -1440,7 +1440,7 @@ fn a_compaction_in_a_middle_segment_applies_to_the_grandchild() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\nb-two")
@@ -1542,7 +1542,7 @@ fn of_two_compactions_only_the_one_at_or_before_the_point_applies() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the first opening renders first: {conversation:?}"
     );
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\ntwo")
@@ -1638,7 +1638,7 @@ fn a_hook_context_after_the_compactions_opening_is_inherited() {
         "the opening message renders first: {conversation:?}"
     );
     assert_eq!(conversation[1], user_input("the hook context"));
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[2],
         user_input("The person's new message:\ntwo")
@@ -1652,7 +1652,7 @@ fn a_hook_context_after_the_compactions_opening_is_inherited() {
         matches!(&earlier[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message still renders first: {earlier:?}"
     );
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(earlier[1], user_input("The person's new message:\ntwo"));
     assert_eq!(earlier[2], user_input("the compaction note"));
     assert!(

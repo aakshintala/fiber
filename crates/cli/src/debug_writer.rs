@@ -1,4 +1,4 @@
-//! The one-shot command writer (`docs/state.md`, "Diagnostic logs"): a
+//! The one-shot command writer (`docs/state.md`, "What each part holds"): a
 //! `Process::Cli` writer when the loaded configuration runs diagnostics
 //! at debug, else `None`. The writer names `logs/cli-<pid>.log` for the
 //! running process and carries no session id; building it never fails

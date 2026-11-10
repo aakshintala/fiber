@@ -2031,7 +2031,7 @@ fn models_groups_left_out_notices_by_code_in_order() {
     // One `model_unconfigured` notice for the run: the count and the
     // first group up front, every provider and setting listed in order
     // (`docs/model-routing.md`, "A per-account host": one grouped notice
-    // counting the models left out; `docs/errors.md`, "Notices").
+    // counting the models left out; `docs/errors.md`, "Registry").
     let setup = Setup::new();
     setup.install_templated(
         "zed-ext",
@@ -2071,7 +2071,7 @@ fn models_counts_models_not_notices_in_the_grouped_lead() {
     // Two `model_unconfigured` notices covering three models group to
     // one notice counting all three (`docs/model-routing.md`, "A
     // per-account host": the count is the models left out;
-    // `docs/errors.md`, "Notices": one notice per code).
+    // `docs/errors.md`, "Registry": one notice per code).
     let setup = Setup::new();
     setup.install_templated(
         "acme-ext",

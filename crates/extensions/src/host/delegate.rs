@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 /// `host.delegate` yields this tag, `"delegate"` and the call's spec, handle
 /// and per-call timeout. The extension's thread runs the delegate start off
 /// to the side and resumes the coroutine with the started job's id
-/// (`docs/extensions.md`, "A host call suspends the code that made it").
+/// (`docs/extensions.md`, "How an extension runs").
 /// Refused in the entry script before it yields, like `host.exec`. The
 /// `{ timeout, run }` pair is kept in the chunk-local `handles` table under
 /// a handle numbered from 1, stored before the yield so a start that

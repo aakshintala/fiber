@@ -220,7 +220,7 @@ fn a_restart_is_the_carried_input_then_the_note() {
         note: vec![ActionId("a_note".into())],
     }));
     let restarted = carry.restart(&done);
-    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in new-message blocks (item 5: "verbatim, in a block labelled as the person's new message"), then the note (item 6).
+    // `docs/compaction.md`, "What the model sees after a compaction": "In order:" — carried input in new-message blocks (item 5: "verbatim, in a block labelled as the person's new message"), then the note (item 6).
     assert_eq!(
         restarted,
         [
@@ -714,7 +714,7 @@ fn a_resend_appends_each_skill_after_the_note_in_event_order() {
         ]),
         None,
     );
-    // docs/compaction.md, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation,
         [
@@ -778,14 +778,14 @@ fn a_full_compaction_renders_the_opening_then_the_context_then_the_skills() {
     );
     assert_eq!(conversation.len(), 7);
     assert!(matches!(&conversation[1], Input::User { text, .. } if text == "hook context"));
-    // docs/compaction.md, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation[5],
         user(
             "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body."
         )
     );
-    // docs/compaction.md, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
+    // `docs/compaction.md`, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation[6],
         user("Skills reloaded from the previous context:\nbeta — /w/beta/SKILL.md\n\nBeta body.")

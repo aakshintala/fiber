@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the red commit's new and changed tests at the red commit, and passes
-# only if at least one of them fails there (docs/testing.md, "Proving a test
+# only if at least one of them fails there (`docs/testing.md`, "Proving a test
 # bites"). The red commit is the pull request's first commit after the merge
 # base: it holds the reproducing test and any new signature or test seam the
 # test needs, but not the fix. A test counts as changed when its test file

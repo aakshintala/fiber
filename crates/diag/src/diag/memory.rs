@@ -1,5 +1,5 @@
 //! The process's resources for a `resources` line (`docs/state.md`,
-//! "Diagnostic logs"): peak and current memory plus cumulative disk I/O.
+//! "What each part holds"): peak and current memory plus cumulative disk I/O.
 //! One sample reads every source, and any unreadable source drops the
 //! whole sample: Linux reads `/proc/self/status` (`VmHWM` and `VmRSS`)
 //! and `/proc/self/io` (`read_bytes` and `write_bytes`); macOS makes one

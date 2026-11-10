@@ -15,7 +15,7 @@ use crate::{Endpoint, strict};
 /// header is sent, and strips it otherwise
 /// (openrouter.ai/docs/guides/routing/provider-selection, "Anthropic beta
 /// features").
-/// A model without deferral declares every tool in full (docs/tools.md,
+/// A model without deferral declares every tool in full (`docs/tools.md`,
 /// "Deferral is a property of the model"); Chat Completions has no
 /// defer_loading. This is the tools Fiber builds.
 pub(crate) fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {

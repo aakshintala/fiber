@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 # `net` depends on `contract`, shared support mechanisms and ureq's TLS stack
-# (docs/architecture.md, "The call rules").
+# (`docs/architecture.md`, "The call rules").
 [dependencies]
 contract = { path = "../contract" }
 support = { path = "../support" }

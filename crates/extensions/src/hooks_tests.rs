@@ -3495,7 +3495,7 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
     let hooks = config::full_name("hooks");
     // (entries JSON, `None` for no `hooks` key; extension loaded; state)
     // Every `MissingBlocking` below names the sorted blockers it gates on
-    // (`docs/invocation.md:1160`).
+    // (`docs/invocation.md`, "What the hub speaks").
     let cases: &[(Option<&str>, bool, super::HooksState)] = &[
         // No declarations: nothing to gate.
         (None, false, super::HooksState::Ready),
@@ -3516,7 +3516,7 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
             ),
             false,
             super::HooksState::MissingBlocking {
-                // Blocker names arrive sorted (`docs/invocation.md:1160`).
+                // Blocker names arrive sorted (`docs/invocation.md`, "What the hub speaks").
                 names: vec!["guard".to_owned(), "plain".to_owned()],
             },
         ),
@@ -3573,7 +3573,7 @@ fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
     assert_eq!(key, "hooks.a");
     assert!(error.to_string().contains("hooks.a"), "{error}");
     let objects = r#"{"z":{"on_failure":"blocking"},"a":{"on_failure":"blocking"},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[]}}"#;
-    // Blocker names arrive sorted (`docs/invocation.md:1160`).
+    // Blocker names arrive sorted (`docs/invocation.md`, "What the hub speaks").
     assert_eq!(
         super::hooks_state(&hooks_config(&home, objects), &[]).unwrap(),
         super::HooksState::MissingBlocking {

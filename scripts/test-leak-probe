@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The probe for the leak scan's binary-level coverage (docs/testing.md,
+# The probe for the leak scan's binary-level coverage (`docs/testing.md`,
 # "Running tests"): `fiber ask` runs a shell command that leaves a
 # `python3` process behind on purpose, and this script requires
 # `scripts/leak-scan` to name its PID.

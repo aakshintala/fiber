@@ -1023,7 +1023,7 @@ fn gather_allows(home: &Path, key: &str, workspace: &Path, shell: &StubShell) ->
 
 #[test]
 fn five_reviewer_allows_propose_with_their_text_and_counts() {
-    // Five is the counting threshold (docs/permissions.md, "Setting up the
+    // Five is the counting threshold (`docs/permissions.md`, "Setting up the
     // notes": "A subject counts once it has at least 5 allows").
     let root = fakes::TempDir::new("doors-notes-query");
     let home = root.path().join("home");
@@ -1068,7 +1068,7 @@ fn five_reviewer_allows_propose_with_their_text_and_counts() {
 
 #[test]
 fn four_allows_stay_silent_while_five_count() {
-    // The five-allow minimum (docs/permissions.md, "Setting up the notes":
+    // The five-allow minimum (`docs/permissions.md`, "Setting up the notes":
     // "A subject counts once it has at least 5 allows").
     let root = fakes::TempDir::new("doors-notes-threshold");
     let home = root.path().join("home");
@@ -1402,7 +1402,7 @@ fn whitespace_variants_share_one_subject_tally() {
     let key = log::project_key(&worktree::project(&workspace));
     // Three allows with single spaces and two with doubled spaces: the
     // classifier names one subject, so all five count together
-    // (docs/permissions.md, "Setting up the notes": "Subjects are
+    // (`docs/permissions.md`, "Setting up the notes": "Subjects are
     // counted by their exact text").
     seed_calls(
         &home,
@@ -1723,7 +1723,7 @@ fn an_outside_classified_deny_spares_the_candidate() {
     let key = log::project_key(&worktree::project(&workspace));
     // A denied `echo` names the candidate words, but the entry would never
     // cover an `echo` call: only the command path and flags disqualify
-    // (docs/permissions.md, "Setting up the notes").
+    // (`docs/permissions.md`, "Setting up the notes").
     seed_calls(
         &home,
         &key,

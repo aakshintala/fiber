@@ -1,8 +1,7 @@
 //! The shared artifact path check (`docs/invocation.md`, "A session's
 //! files"): one function that `read_file` (hub) and `artifact_page`
 //! (doors) both call, so the lexical rule and the canonical-inside,
-//! regular-file check live in exactly one place (`docs/code-quality.md`,
-//! "When more than one mechanism can enforce a rule, the strongest wins").
+//! regular-file check live in exactly one place (`docs/code-quality/lints.md`, "Tools enforce the rules").
 
 use std::ffi::OsStr;
 use std::fs::{self, File};

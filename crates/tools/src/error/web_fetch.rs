@@ -10,7 +10,7 @@ use ureq::http::uri::InvalidUri;
 use super::ArgumentsError;
 
 /// A URL the tool does not accept. It has no code of its own: the case that
-/// carries it names one (`docs/errors.md`, "web_fetch").
+/// carries it names one (`docs/errors.md`, "Registry").
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum UrlError {
     /// The text is not a URL at all.
