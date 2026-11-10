@@ -804,7 +804,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .iter()
             .map(|sent| {
                 let line = &sent.line;
-                .map(|sent| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             })
             .collect(),
         Effect::None
