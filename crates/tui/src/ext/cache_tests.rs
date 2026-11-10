@@ -102,7 +102,7 @@ fn click_keys_are_stable_across_redraws_and_cache_hits() {
     let first = draw_clicks(&cache, page(0), "badge", &calls);
     let key = only_key(&first);
     // A redraw and a cache hit keep the same key with no new call
-    // (`docs/tui.md`, "How a TUI extension runs": one call per cache miss, none on a hit).
+    // (`docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit).
     let second = draw_clicks(&cache, page(0), "badge", &calls);
     assert_eq!(only_key(&second), key);
     assert_eq!(calls.get(), 1);
@@ -284,7 +284,7 @@ fn click_animated_store_associates_click_ranges_with_no_new_call() {
     cache.begin_anim_frame(Some(t0), false);
     // A cold count stores frame 0 with its ranges associated; the paint
     // promotes the stored frame instead of calling again, keeping the
-    // same keys (`docs/tui.md`, "How a TUI extension runs": one call per cache miss, none on a hit).
+    // same keys (`docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit).
     let counted = cache
         .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
         .expect("counted frame 0");
@@ -302,7 +302,7 @@ fn click_animated_store_associates_click_ranges_with_no_new_call() {
             draw,
         )
         .expect("painted frame 0");
-    // `docs/tui.md`, "How a TUI extension runs": the paint promotes the stored frame, none on a hit.
+    // `docs/tui.md`, "How a TUI extension runs": an unchanged frame calls no Lua — one call per cache miss or frame advance, none on a hit — so the paint promotes the stored frame.
     assert_eq!(calls.get(), 1, "paint promotes the count");
     assert_eq!(only_key(&painted), key);
 }

@@ -1912,8 +1912,9 @@ fn click_error_notice_once() {
         );
     }
     // One hook_failed notice per extension and slot until /reload
-    // (`docs/tui.md`, "When an extension fails": one notice per extension and slot; a key or
-    // click handler that errors counts as not handled).
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension, the slot
+    // and the Lua error, once for each extension and slot until `/reload`; a key or click
+    // handler that errors counts as not having handled the input).
     let pending = renderer.take_pending();
     assert_eq!(pending.len(), 2, "{pending:?}");
     for notice in &pending {
@@ -1975,7 +1976,7 @@ fn click_timeout_off() {
         KeyOutcome::NotHandled
     );
     let pending = renderer.take_pending();
-    // `docs/tui.md`, "When an extension fails": a click timeout switches the extension off with one extension_failed notice.
+    // `docs/tui.md`, "When an extension fails": a click handler that passes its timeout switches the extension off until `/reload`, with one `extension_failed` notice.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "extension_failed");
     assert!(pending[0].1.contains("slow"), "{pending:?}");
@@ -2031,7 +2032,7 @@ fn click_inert_and_conflict() {
         );
     }
     let pending = renderer.take_pending();
-    // `docs/tui.md`, "When two extensions want one slot": one notice per slot and set of contenders.
+    // `docs/tui.md`, "When two extensions want one slot": the notice comes once for each slot and set of contenders until `/reload`.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "command_conflict");
 }
