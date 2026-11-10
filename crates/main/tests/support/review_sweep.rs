@@ -2142,8 +2142,22 @@ pub(crate) fn reviewer_provider(
         overrides: vec![format!("reviewer.model={bare}")],
     })
     .map_err(|error| error.to_string())?;
-    let (providers, _notices) =
+    let (mut providers, _notices) =
         extensions::Providers::load(home).map_err(|error| error.to_string())?;
+    // The session's extensions load exactly like a session start, so a
+    // subscription credential's signing headers ride the sweep's requests
+    // (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    let loaded = extensions::SessionExtensions::load(
+        home,
+        &config,
+        Arc::clone(clock),
+        Arc::new(tools::PathLocks::new()),
+        None,
+    );
+    let run = |command: &mut Command, timeout: Duration| run_command(command, timeout, clock);
+    let lookup = cli::placeholder_lookup(home, &providers, clock.as_ref());
+    routing::lua_providers::add_lua(&loaded, &mut providers, &config, &run, &lookup)
+        .map_err(|error| format!("review_sweep: reviewer setup: {}", error.message))?;
     // The session is the candidate itself: `reviewer.model` is set, so the
     // lookup below returns before reading it.
     let session = providers
