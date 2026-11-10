@@ -555,6 +555,18 @@ fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
     }
 }
 
+/// Whether a read error closed the socket: a reset, broken pipe or
+/// aborted connection after the write reads as a close. Exempt: Linux
+/// reports a peer reset as EOF, so the Linux mutants run cannot reach
+/// the reset arm.
+#[cfg_attr(false, mutants::skip)]
+fn closed_by_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::ConnectionAborted
+    )
+}
+
 /// Stops one keeper: a fresh connection, the frozen stop line, then the
 /// socket's close. Only a closed socket after the write confirms, clean
 /// EOF or a reset, broken pipe or aborted connection alike: a refused or
@@ -592,19 +604,11 @@ fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
                     return SessionOutcome::Unconfirmed;
                 }
             }
-            // A closed socket confirms: a reset, broken pipe or
-            // aborted connection after the write, like a clean EOF.
-            // Any other read error is something a keeper never writes
+            // A closed socket confirms, like a clean EOF. Any other
+            // read error is something a keeper never writes
             // (`docs/events.md`, "Hub feed", "keepers"),
             // so it is unconfirmed at once, with no wait.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    ErrorKind::ConnectionReset
-                        | ErrorKind::BrokenPipe
-                        | ErrorKind::ConnectionAborted
-                ) =>
-            {
+            Err(error) if closed_by_error(&error) => {
                 return SessionOutcome::KeeperConfirmed;
             }
             Err(_) => return SessionOutcome::Unconfirmed,
