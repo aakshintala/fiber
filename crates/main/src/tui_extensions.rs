@@ -192,17 +192,17 @@ fn register_commands(
     // name keeps the first registration: the rename is dropped and the
     // command keeps its registered name. Registered names are distinct
     // per extension, so a reverted name is always free.
-    let mut claimed: BTreeMap<String, usize> = BTreeMap::new();
-    for (idx, command) in proposed.iter().enumerate() {
+    let mut claimed: BTreeSet<String> = BTreeSet::new();
+    for command in proposed.iter() {
         if !command.renamed {
-            claimed.insert(command.final_name.clone(), idx);
+            claimed.insert(command.final_name.clone());
         }
     }
-    for (idx, command) in proposed.iter_mut().enumerate() {
+    for command in proposed.iter_mut() {
         if !command.renamed {
             continue;
         }
-        if claimed.contains_key(&command.final_name) {
+        if claimed.contains(&command.final_name) {
             let dropped = command.registered.clone();
             let final_name = command.final_name.clone();
             notices.push((
@@ -214,7 +214,7 @@ fn register_commands(
             command.final_name.clone_from(&command.registered);
             command.renamed = false;
         }
-        claimed.insert(command.final_name.clone(), idx);
+        claimed.insert(command.final_name.clone());
     }
     for command in &proposed {
         if contract::commands::BUILT_IN_COMMANDS.contains(&command.final_name.as_str()) {

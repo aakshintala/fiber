@@ -1526,20 +1526,18 @@ fn command_description_defaults_to_empty() {
 }
 
 #[test]
-fn command_lists_commands_in_name_order() {
+fn command_lists_both_registered_commands() {
     let (commands, rejected) = command_regs(
         "fiber.command('zulu', { timeout = 100, run = function() end })\n\
          fiber.command('alpha', { timeout = 100, run = function() end })",
     );
     assert!(rejected.is_empty(), "{rejected:?}");
-    // Commands surface in name order, so the adapter's merge is deterministic.
-    assert_eq!(
-        commands
-            .iter()
-            .map(|command| command.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["alpha", "zulu"]
-    );
+    // `docs/extensions.md`, "Commands and screens": both registrations list.
+    let names: BTreeSet<&str> = commands
+        .iter()
+        .map(|command| command.name.as_str())
+        .collect();
+    assert_eq!(names, BTreeSet::from(["alpha", "zulu"]));
 }
 
 #[test]
@@ -1651,7 +1649,7 @@ fn command_accepts_builtin_names_at_this_layer() {
 
 #[test]
 fn command_second_registration_keeps_the_last() {
-    let (_, mut vm) = vm(
+    let (clock, mut vm) = vm(
         "fiber.command('ledger-diff', { timeout = 100, description = 'old', \
          run = function() ticked() end })\n\
          fiber.command('ledger-diff', { timeout = 200, description = 'new', \
@@ -1667,20 +1665,7 @@ fn command_second_registration_keeps_the_last() {
         }]
     );
     // The last timeout wins too: 150 ms finishes under the 200 ms timeout.
-    let clock = FakeClock::new();
-    vm.lua()
-        .globals()
-        .set(
-            "ticked",
-            vm.lua()
-                .create_function(move |_, ()| {
-                    tick(&clock, 150 * MS);
-                    Ok(())
-                })
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(vm.run_command("ledger-diff", Some("s1"), "").is_ok());
+    assert!(run_command_advancing(&mut vm, clock, "", 150 * MS).is_ok());
 }
 
 #[test]

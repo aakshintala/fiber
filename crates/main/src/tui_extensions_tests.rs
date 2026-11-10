@@ -3492,7 +3492,7 @@ fn command_surfaces_with_description() {
 }
 
 #[test]
-fn command_lists_in_final_name_order() {
+fn command_lists_both_final_names() {
     let (_dir, loader) = fixture();
     package(
         &loader,
@@ -3505,13 +3505,15 @@ fn command_lists_in_final_name_order() {
     );
     let (renderer, notices) = loader.load();
     assert!(notices.is_empty(), "{notices:?}");
+    // `docs/extensions.md`, "Commands and screens": both registered names list.
+    let names: std::collections::BTreeSet<String> = renderer
+        .tui_commands(&home_ctx())
+        .into_iter()
+        .map(|command| command.name)
+        .collect();
     assert_eq!(
-        renderer
-            .tui_commands(&home_ctx())
-            .iter()
-            .map(|command| command.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["alpha", "zulu"]
+        names,
+        std::collections::BTreeSet::from(["alpha".to_owned(), "zulu".to_owned()])
     );
 }
 
@@ -3609,13 +3611,17 @@ fn command_rename_resolves_a_clash() {
     let (renderer, notices) = loader.load();
     assert!(notices.is_empty(), "{notices:?}");
     // `docs/extensions.md`, "Commands and screens": configuration can rename one, so both list under distinct names.
+    let listed: std::collections::BTreeSet<(String, String)> = renderer
+        .tui_commands(&home_ctx())
+        .into_iter()
+        .map(|command| (command.name, command.extension))
+        .collect();
     assert_eq!(
-        renderer
-            .tui_commands(&home_ctx())
-            .iter()
-            .map(|command| (command.name.as_str(), command.extension.as_str()))
-            .collect::<Vec<_>>(),
-        vec![("ledger-a", "a"), ("ledger-diff", "b")]
+        listed,
+        std::collections::BTreeSet::from([
+            ("ledger-a".to_owned(), "a".to_owned()),
+            ("ledger-diff".to_owned(), "b".to_owned())
+        ])
     );
     assert!(renderer.take_pending().is_empty());
 }
@@ -3735,15 +3741,16 @@ fn command_incompatible_halves_are_excluded() {
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "extension_incompatible", "{pending:?}");
     assert!(pending[0].1.contains("v0.9.0"), "{pending:?}");
-    // Compatible: the ranged command lists beside the open one, in final-name order.
+    // Compatible: the ranged command lists beside the open one.
     let loaded = ctx(Some(vec![("ranged", "v1.0.0")]));
+    let listed: std::collections::BTreeSet<String> = renderer
+        .tui_commands(&loaded)
+        .into_iter()
+        .map(|command| command.name)
+        .collect();
     assert_eq!(
-        renderer
-            .tui_commands(&loaded)
-            .iter()
-            .map(|command| command.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["ledger-open", "ledger-ranged"]
+        listed,
+        std::collections::BTreeSet::from(["ledger-open".to_owned(), "ledger-ranged".to_owned()])
     );
     // Home lists every loaded winner with no half gate.
     assert_eq!(renderer.tui_commands(&home_ctx()).len(), 2);

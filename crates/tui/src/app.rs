@@ -2571,7 +2571,20 @@ impl App {
             // list (`docs/events.md`, "`extensions_loaded`"). A turn
             // start may change the runnable set, so `turn_started` asks
             // too (`docs/invocation.md`, "What each command does").
-            EventKind::Reloaded | EventKind::ExtensionsLoaded | EventKind::TurnStarted => {
+            // `docs/tui.md`, "When two extensions want one slot": the
+            // conflict notice comes once per contender set until
+            // `/reload`, so a reload clears the dedupe before re-merging.
+            EventKind::Reloaded => {
+                self.record_extensions(envelope);
+                self.completion.conflict_noticed.clear();
+                // The halves changed under the installed renderer:
+                // refresh TUI eligibility before re-querying the session.
+                self.refresh_tui_commands();
+                if self.outbox.is_up() {
+                    send.push(self.ask_commands(&envelope.session_id));
+                }
+            }
+            EventKind::ExtensionsLoaded | EventKind::TurnStarted => {
                 self.record_extensions(envelope);
                 // The halves changed under the installed renderer:
                 // refresh TUI eligibility before re-querying the session.

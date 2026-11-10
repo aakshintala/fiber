@@ -5,7 +5,7 @@ use super::super::commands::Rows;
 use super::super::commands::commands_testkit::{
     SESSION, answer_commands, answer_rows, attached, connected, enter, fold_file_answer, key, now,
     paste_image, paths, reloaded, remote_search_app, route_file_answer, selected, sent,
-    session_line, shown, table_lines, turn_starts, type_any, type_text,
+    session_line, shown, table_lines, turn_starts, turn_starts_with, type_any, type_text,
 };
 use crate::app::{App, Effect};
 use crate::ext::{
@@ -1323,12 +1323,12 @@ fn command_conflict_recurrence_notices_once_per_contender_set() {
     // `docs/tui.md`, "When two extensions want one slot": one notice for each slot and set of contenders until `/reload`.
     assert_eq!(conflict_count(&app), 1);
     assert!(has_conflict(&app, &["deploy", "acme", "other"]));
-    // The clash disappears: no row returns, and no new notice follows.
-    answer_rows(&mut app, json!([]));
+    // The clash disappears without a reload: no row returns, and no new notice follows.
+    turn_starts_with(&mut app, json!([]));
     assert!(app.completion.tui_conflicts.is_empty());
     assert_eq!(conflict_count(&app), 1);
-    // The clash returns with the same owners: still one notice total.
-    answer_rows(&mut app, json!([deploy_row("acme")]));
+    // The clash returns with the same owners and no reload in between: still one notice total.
+    turn_starts_with(&mut app, json!([deploy_row("acme")]));
     assert_eq!(conflict_count(&app), 1);
     // The clash returns with changed owners: one notice per contender set.
     app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
@@ -1336,6 +1336,57 @@ fn command_conflict_recurrence_notices_once_per_contender_set() {
     )])));
     assert_eq!(conflict_count(&app), 2);
     assert!(has_conflict(&app, &["deploy", "acme", "third"]));
+}
+
+#[test]
+fn command_conflict_reload_renotices_same_contenders() {
+    fn conflict_count(app: &App) -> usize {
+        app.notices()
+            .iter()
+            .filter(|notice| {
+                matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+            })
+            .count()
+    }
+    fn deploy_row(tag: &str) -> Value {
+        json!({"name": "deploy", "description": "Deploys.", "tag": tag, "extension": true})
+    }
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "other",
+    )])));
+    answer_rows(&mut app, json!([deploy_row("acme")]));
+    // `docs/tui.md`, "When two extensions want one slot": one notice for each slot and set of contenders until `/reload`.
+    assert_eq!(conflict_count(&app), 1);
+    // Dismiss the stacked row so a re-notice can stack again: the
+    // test never sweeps, so nothing joins the run's seen set.
+    let ids: Vec<usize> = app
+        .notices()
+        .iter()
+        .filter_map(|notice| match notice {
+            crate::app::NoticeLine::Notice { id, .. } => Some(*id),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    for id in ids {
+        app.dismiss_notice(id);
+    }
+    assert_eq!(conflict_count(&app), 0);
+    // A reload clears the dedupe before re-merging, so the same clash
+    // notices again: the reload's refresh re-merges the stale answer.
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    assert_eq!(conflict_count(&app), 1);
+    assert!(has_conflict(&app, &["deploy", "acme", "other"]));
+    // The re-queried answer resolves against the same TUI rows without a
+    // second notice.
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": [deploy_row("acme")]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    assert_eq!(conflict_count(&app), 1);
 }
 
 #[test]
