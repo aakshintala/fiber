@@ -29,9 +29,11 @@ impl WarmedJig {
     /// Warms `path` by running it with `args` and asserting its exit is
     /// `exit`, then holds the warmed path. A jig example binary starts
     /// through this; [`warm_up`] is for an already-built `CARGO_BIN_EXE_*`
-    /// product binary and the checked-in MCP fixture script.
+    /// product binary and the checked-in MCP fixture script. The freshness
+    /// refusal runs before the spawn, so a stale binary never executes.
     #[track_caller]
     pub fn warm(path: PathBuf, args: &[&str], exit: i32) -> Self {
+        assert_jig_fresh(&path);
         warm_up(&path, args, exit);
         Self { path }
     }
@@ -40,6 +42,123 @@ impl WarmedJig {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Refuses a jig example binary older than any file its sibling dep-info
+/// file lists. Cargo writes `<binary>.d` beside every built example naming
+/// each input the link depended on, so a source touched after a narrowed
+/// build that skipped the examples leaves a binary this names instead of
+/// running. A missing dep-info file skips the check, as foreign stand-ins
+/// such as the system shell have none; every other doubt fails closed,
+/// since a silent stale run misleads and a false refusal costs only a
+/// rebuild and a re-run.
+///
+/// # Panics
+///
+/// When the binary is stale. Names the binary, the evidence, and the
+/// rebuild command.
+#[allow(
+    clippy::panic,
+    reason = "a stale jig binary fails the test naming the binary and its rebuild"
+)]
+#[track_caller]
+fn assert_jig_fresh(binary: &Path) {
+    if let Some(stale) = stale_evidence(binary) {
+        panic!(
+            "stale jig binary {}: {} is not older than the binary, missing, or unreadable; rebuild the examples with `cargo build --examples`",
+            binary.display(),
+            stale.display()
+        );
+    }
+}
+
+/// The stale input for `binary`, or `None` when the binary is fresh or
+/// unchecked: no sibling dep-info file means unchecked, never stale. Any
+/// listed file missing or dated at or after the binary means stale, as does
+/// a dep-info file that cannot be read or parsed.
+fn stale_evidence(binary: &Path) -> Option<PathBuf> {
+    let dep_info = sibling_dep_info(binary);
+    let text = match std::fs::read_to_string(&dep_info) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => return Some(dep_info),
+    };
+    let deps = match dep_info_deps(&text) {
+        Some(deps) => deps,
+        None => return Some(dep_info),
+    };
+    let binary_mtime = std::fs::metadata(binary)
+        .and_then(|meta| meta.modified())
+        .ok()?;
+    for dep in deps {
+        let dep_path = PathBuf::from(dep);
+        let stale = match std::fs::metadata(&dep_path).and_then(|meta| meta.modified()) {
+            Ok(dep_mtime) => dep_mtime >= binary_mtime,
+            Err(_) => true,
+        };
+        if stale {
+            return Some(dep_path);
+        }
+    }
+    None
+}
+
+/// The dep-info file beside `binary`: `<binary>.d`.
+fn sibling_dep_info(binary: &Path) -> PathBuf {
+    let mut name = binary
+        .file_name()
+        .map(|name| name.to_owned())
+        .unwrap_or_default();
+    name.push(".d");
+    binary.with_file_name(name)
+}
+
+/// The dependencies in a dep-info file's first make rule (`target: deps`,
+/// backslash escapes), keeping every listed file: freshness follows cargo's
+/// own dirty rule, which is any input.
+fn dep_info_deps(text: &str) -> Option<Vec<String>> {
+    let rule = text
+        .lines()
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (target, deps) = rule.split_once(':')?;
+    if target.trim().is_empty() {
+        return None;
+    }
+    let deps = make_words(deps);
+    if deps.is_empty() {
+        return None;
+    }
+    Some(deps)
+}
+
+/// Split the escaped dependency words in cargo's first makefile rule.
+fn make_words(input: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut escaped = false;
+    for ch in input.chars() {
+        if escaped {
+            word.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch.is_whitespace() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(ch);
+        }
+    }
+    if escaped {
+        word.push('\\');
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
 }
 
 /// Runs `binary args` once under [`START_BOUND`] on every call and asserts

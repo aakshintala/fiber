@@ -763,8 +763,12 @@ fn result_lines_name_what_was_observed() {
     assert_eq!(exit_line(0), "Exit code 0.");
     assert_eq!(exit_line(3), "Exit code 3.");
     assert_eq!(
-        timeout_line(1000),
+        timeout_line(1000, false),
         "Timed out after 1000 ms; Fiber stopped the whole process group."
+    );
+    assert_eq!(
+        timeout_line(1000, true),
+        "Timed out after 1000 ms; Fiber stopped the whole process group. A pipeline stage that prints only when it exits (such as `| tail`) lost its output at the stop; rerun without it, or with `run_in_background`."
     );
     // Wiring: a signalled status reads its name through the shared helper.
     let mut cmd = Command::new("sh");
@@ -826,6 +830,8 @@ fn shell_details_describe_the_command_and_reaped_status() {
             Some(super::Limit {
                 ms: 1,
                 monitor: false,
+                // None of these test commands holds a `|`.
+                has_pipe: false,
             }),
             Finished {
                 output: Kept::Whole(Vec::new()),
@@ -847,6 +853,8 @@ fn shell_details_describe_the_command_and_reaped_status() {
         Some(super::Limit {
             ms: 1,
             monitor: false,
+            // None of these test commands holds a `|`.
+            has_pipe: false,
         }),
         "c",
     );
@@ -878,6 +886,8 @@ fn a_spawn_failure_is_tool_error_with_no_process() {
         Some(super::Limit {
             ms: 1,
             monitor: false,
+            // None of these test commands holds a `|`.
+            has_pipe: false,
         }),
         "c",
     );
@@ -1204,6 +1214,8 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
         Some(super::Limit {
             ms: 1,
             monitor: false,
+            // None of these test commands holds a `|`.
+            has_pipe: false,
         }),
         Finished {
             output: Kept::Spilled(Box::new(spill)),
@@ -1243,6 +1255,8 @@ fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
         Some(super::Limit {
             ms: 1,
             monitor: false,
+            // None of these test commands holds a `|`.
+            has_pipe: false,
         }),
         Finished {
             output: Kept::Spilled(Box::new(spill)),
@@ -1285,6 +1299,8 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
     let limit = Some(super::Limit {
         ms: 1,
         monitor: false,
+        // This test assembles with no command text.
+        has_pipe: false,
     });
     let line = "It could not move to the background: the jobs are full.";
     let spilled = super::assemble(

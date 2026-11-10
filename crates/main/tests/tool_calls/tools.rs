@@ -4063,3 +4063,98 @@ fn a_timeouts_receipt_names_the_process_group() {
     );
     watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
+
+/// The text of a named tool's completed call, matched through its action.
+fn named_result(run: &StdoutRun, name: &str) -> String {
+    let call = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == name)
+        .unwrap_or_else(|| panic!("tool call {name:?} was not requested"));
+    let action = &call["action_id"];
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == *action)
+        .expect("tool call completed");
+    completion_text(completed)
+}
+
+/// Runs one background command with a 1 ms timeout and returns the text of
+/// its `jobs wait` completion: the 1 ms deadline fires at once under the
+/// product's own clock, and the wait's bound is the run's wall-deadline
+/// guard, so the test waits on no timer. A command of more than one part
+/// names no subject, so no standing rule can match it (`docs/permissions.md`,
+/// "What a rule matches"): the session's reviewer allows it instead, as a
+/// first-stage `allow` does.
+fn waited_timeout_text(command: &'static str, watchdog: &str) -> String {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start_responding(move |request: &fakes::Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains("You review one tool call") {
+            return text_reply("allow");
+        }
+        if !text.contains("Started in the background") {
+            return stream(&[function_call(
+                "call_bg",
+                "shell",
+                &json!({"command": command, "run_in_background": true, "timeout_ms": 1}),
+            )]);
+        }
+        if text.contains("call_wait") {
+            return hello();
+        }
+        let marker = "Job j_";
+        let Some(start) = text.find(marker) else {
+            return hello();
+        };
+        let rest = &text[start + 4..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_hexdigit() || c == 'j' || c == '_'))
+            .unwrap_or(rest.len());
+        let job = rest[..end].to_owned();
+        stream(&[function_call(
+            "call_wait",
+            "jobs",
+            &json!({"action": "wait", "job_id": job, "timeout_ms": 30000}),
+        )])
+    })
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    with_reviewer(&setup);
+    let _guard = Watchdog::matching(watchdog);
+    let run = setup.tools_run(&["ask", "start the slow command and wait for it"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    named_result(&run, "jobs")
+}
+
+#[test]
+fn a_moved_pipeline_timeout_names_the_held_output_loss() {
+    // `sleep 601` is unique to this test, so the watchdog guard matches no
+    // other test's process.
+    let waited = waited_timeout_text("sh -c 'echo done; sleep 601' | tail -n 1", "sleep 601");
+    assert!(
+        waited.contains(
+            "A pipeline stage that prints only when it exits (such as `| tail`) lost its output at the stop; rerun without it, or with `run_in_background`."
+        ),
+        "the wait carries the full pipe sentence (loss and remedy): {waited}"
+    );
+}
+
+#[test]
+fn a_timeout_without_a_pipe_keeps_todays_notice() {
+    // `sleep 602` is unique to this test, so the watchdog guard matches no
+    // other test's process (`sleep 60` would also match `sleep 600`).
+    let waited = waited_timeout_text("sleep 602", "sleep 602");
+    assert!(
+        waited.contains(
+            "Timed out after 1 ms; Fiber stopped the whole process group. \
+             To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`."
+        ),
+        "a command with no pipe keeps today's notice byte for byte: {waited}"
+    );
+    assert!(
+        !waited.contains("lost its output"),
+        "a command with no pipe names no held output: {waited}"
+    );
+}

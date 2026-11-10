@@ -2575,7 +2575,7 @@ fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> 
 /// three services with full metadata), file-local. The row keeps what
 /// `entry_for` reads: the chat mode and name match, the ANTHROPIC type
 /// for the bearer route, and the window a model needs to count.
-fn replay_discovery() -> [Response; 2] {
+fn replay_discovery() -> [Response; 3] {
     [
         Response::status(
             200,
@@ -2590,6 +2590,13 @@ fn replay_discovery() -> [Response; 2] {
             json!({"models": [
                 {"model_name": "claude-opus-5", "mode": "chat", "provider_type": "ANTHROPIC",
                  "context_window": {"max_input": 200000, "max_output": 64000}},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"endpoints": [
+                {"name": "claude-opus-5"},
             ]})
             .to_string(),
         ),

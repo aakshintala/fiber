@@ -2657,13 +2657,26 @@ fn a_turn_longer_than_one_answer_reads_until_its_start() {
     );
 }
 
-/// A failed or abandoned read keeps whole turns or nothing: the preview
-/// is the turn-start lines when the first answer holds one, else an
-/// empty conversation, and no frame shows a cut turn.
+/// Seeds the attached screen with one driver turn replying `text`, for
+/// the kept screen an ended install must preserve.
+fn seed_screen(app: &mut App, text: &str) -> usize {
+    let mut seq = 0u64;
+    let seed = envelopes(&turn(&mut seq, "a_seed", text));
+    for envelope in &seed {
+        app.attached_screen_mut().pages_mut().apply(envelope);
+    }
+    app.attached_screen_mut().follow();
+    let total = app.attached_screen().pages().index().total();
+    assert!(total > 0, "the seed draws");
+    total
+}
+
+/// A failed read installs nothing: the ended tail drops its candidate,
+/// the seeded screen stays, the overlay shows for the raise, and the
+/// refusal still queues its notice.
 #[test]
-fn a_failed_read_keeps_whole_turns_or_nothing() {
-    use crate::app::overlay::Tail;
-    // A first answer holding a turn start keeps from that start.
+fn a_failed_read_installs_nothing_and_keeps_the_notice() {
+    // A first answer holding a turn start, then the rejection.
     let mut seq = 0u64;
     let mut lines = Vec::new();
     for n in 0..50 {
@@ -2680,39 +2693,53 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
     );
     assert!(first.len() < all.len(), "the first answer is a window");
     let mut app = reading();
+    let total = seed_screen(&mut app, "the seeded reply holds quails");
     assert!(app.tail_next().is_some());
-    app.tail_lines(first.clone());
+    app.tail_lines(first);
     app.tail_ended(Some("gone"));
     app.install_tail();
     assert!(
         matches!(app.overlay, Overlay::Shown { .. }),
-        "the preview shows"
+        // docs/tui.md ("History and paging"): the raise still goes out over the kept screen.
+        "the overlay shows for the raise"
     );
-    let cut = (all.len() - first.len()) / 6;
-    let mut tail = Tail::new();
-    tail.prepend(first)
-        .unwrap_or_else(|_| panic!("the first answer"));
-    let from = tail
-        .turn_lines()
-        .unwrap_or_else(|| panic!("a turn start in the window"));
-    let mut fresh = app.attached_screen().pages().fresh();
-    for line in from {
-        fresh.apply(line);
-    }
-    let expect: Vec<String> = fresh
-        .rows()
-        .iter()
-        .map(|(line, _)| line.to_string())
-        .collect();
-    assert_eq!(row_texts(&app), expect, "the preview is the whole turns");
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): a rejected tail read installs nothing.
+        "the seeded screen stays"
+    );
     assert!(
-        !row_texts(&app)
-            .iter()
-            .any(|row| row.contains(&format!("reply {cut}"))),
-        "no cut turn shows"
+        row_texts(&app).iter().any(|row| row.contains("quails")),
+        "the seed stays"
     );
-    // A first answer holding no turn start keeps nothing.
-    let all = plain(300);
+    assert!(
+        !row_texts(&app).iter().any(|row| row.contains("reply 49")),
+        "no partial-prefix row shows"
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: gone"),
+        "the refusal still queues its notice"
+    );
+    let text = crate::view::text(&rendered(&app));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(text.contains("quails"), "{text}");
+    assert!(!text.contains("reply 49"), "{text}");
+}
+
+/// An abandoned read with a partial prefix installs nothing: the
+/// reopening ends the tail without a notice, the seeded screen stays,
+/// and the overlay shows for the raise.
+#[test]
+fn an_abandoned_read_with_a_partial_prefix_installs_nothing() {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..50 {
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")));
+    }
+    let all = envelopes(&lines);
     let first = doors(
         &all,
         &HistoryArgs {
@@ -2721,19 +2748,204 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
             to_seq: None,
         },
     );
+    assert!(first.len() < all.len(), "the first answer is a window");
     let mut app = reading();
+    let total = seed_screen(&mut app, "the seeded reply holds quails");
+    assert!(app.tail_next().is_some());
     app.tail_lines(first);
-    app.tail_ended(Some("gone"));
+    app.tail_ended(None);
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        // docs/tui.md ("History and paging"): the raise still goes out over the kept screen.
+        "the overlay shows for the raise"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): an abandoned tail read installs nothing.
+        "the seeded screen stays"
+    );
+    assert!(
+        row_texts(&app).iter().any(|row| row.contains("quails")),
+        "the seed stays"
+    );
+    assert!(
+        !row_texts(&app).iter().any(|row| row.contains("reply 49")),
+        "no partial-prefix row shows"
+    );
+    assert_eq!(app.notice(), None, "an abandonment stays silent");
+    let text = crate::view::text(&rendered(&app));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(text.contains("quails"), "{text}");
+    assert!(!text.contains("reply 49"), "{text}");
+}
+
+/// An out-of-order answer ends the read and installs nothing: the gap
+/// fails the tail with its notice, the seeded screen stays, and the
+/// overlay shows for the raise.
+#[test]
+fn an_out_of_order_answer_ends_the_read_and_installs_nothing() {
+    let mut seq = 0u64;
+    let mut lines = envelopes(&turn(&mut seq, "a_m0", "reply 0"));
+    lines.extend(envelopes(&turn(&mut seq, "a_m1", "reply 1")));
+    // Drop a middle line: the gap fails the read.
+    lines.remove(7);
+    let mut app = reading();
+    let total = seed_screen(&mut app, "the seeded reply holds quails");
+    app.tail_lines(lines);
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: the answer was out of order"),
+        "the gap fails the read"
+    );
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        // docs/tui.md ("History and paging"): the raise still goes out over the kept screen.
+        "the overlay shows for the raise"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): a failed tail read installs nothing.
+        "the seeded screen stays"
+    );
+    assert!(
+        row_texts(&app).iter().any(|row| row.contains("quails")),
+        "the seed stays"
+    );
+    let text = crate::view::text(&rendered(&app));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(text.contains("quails"), "{text}");
+}
+
+/// A rejected first window installs nothing: with no answer folded the
+/// seeded screen stays, the overlay shows for the raise, and the refusal
+/// still queues its notice.
+#[test]
+fn a_rejected_first_window_installs_nothing() {
+    let mut app = reading();
+    let total = seed_screen(&mut app, "the seeded reply holds quails");
+    app.tail_ended(Some("boom"));
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        // docs/tui.md ("History and paging"): the raise still goes out over the kept screen.
+        "the overlay shows for the raise"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): a rejected tail read installs nothing.
+        "the seeded screen stays"
+    );
+    assert!(
+        row_texts(&app).iter().any(|row| row.contains("quails")),
+        "the seed stays"
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: boom"),
+        "the refusal still queues its notice"
+    );
+    let text = crate::view::text(&rendered(&app));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(text.contains("quails"), "{text}");
+}
+
+/// An ended install carries no busy: after a rejected read and after
+/// an abandoned one the overlay shows with no busy, so the live
+/// attached pass owns the indicator.
+#[test]
+fn an_ended_install_carries_no_busy() {
+    let mut app = reading();
+    seed_screen(&mut app, "the seeded reply holds quails");
+    app.tail_ended(Some("boom"));
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { busy: None, .. }),
+        // docs/tui.md ("History and paging"): the busy indicator is left to the live session.
+        "no busy after a rejected read"
+    );
+    let mut app = reading();
+    seed_screen(&mut app, "the seeded reply holds quails");
+    app.tail_ended(None);
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { busy: None, .. }),
+        // docs/tui.md ("History and paging"): the busy indicator is left to the live session.
+        "no busy after an abandoned read"
+    );
+}
+
+/// An ended count folds nothing: the installed preview stays past the
+/// count's rejection, with the refusal's notice and no ancestor rows.
+#[test]
+fn an_ended_count_folds_nothing() {
+    let ancestor = chain_segment(ANCESTOR, None, "root reply", 2);
+    let point = ancestor.len() as u64 - 1;
+    let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 60);
+    assert!(child.len() > 256, "the own run fills the display");
+    let mut app = reading();
+    // The pre-frame read fills the display on the own run, so the
+    // install keeps its preview and the count walks the rest.
+    while let Some(args) = app.tail_next() {
+        app.tail_lines(doors(&child, &args));
+    }
     app.install_tail();
     assert!(
         matches!(app.overlay, Overlay::Shown { .. }),
         "the preview shows"
     );
+    let total = app.attached_screen().pages().index().total();
+    assert!(total > 0, "the preview draws");
+    while let Some(args) = app.tail_count_next() {
+        if args
+            .session_id
+            .as_ref()
+            .is_some_and(|session| session.0 == ANCESTOR)
+        {
+            app.tail_count_lines(doors(&ancestor, &args));
+        } else {
+            app.tail_count_lines(doors(&child, &args));
+        }
+    }
+    app.tail_count_ended(Some("gone"));
+    app.finish_count();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview stays shown"
+    );
     assert_eq!(
         app.attached_screen().pages().index().total(),
-        0,
-        "an empty conversation"
+        total,
+        // docs/tui.md ("History and paging"): a rejected count read installs nothing.
+        "the installed preview stays"
     );
+    assert!(
+        row_texts(&app)
+            .iter()
+            .any(|row| row.contains("child reply 59")),
+        "the preview stays"
+    );
+    assert!(
+        !row_texts(&app).iter().any(|row| row.contains("root reply")),
+        "no count-fold row shows"
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: gone"),
+        "the refusal still queues its notice"
+    );
+    let text = crate::view::text(&rendered(&app));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(text.contains("child reply 59"), "{text}");
+    assert!(!text.contains("root reply"), "{text}");
 }
 
 /// Rebuilding a longer pre-install run discards the prior candidate.

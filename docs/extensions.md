@@ -1843,7 +1843,7 @@ new package adds one. `fiber extension install openrouter` means
 `github.com/aakshintala/fiber/providers/openrouter`. Today the provider short
 names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
 `databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `claude`,
-`cursor-agent`, `hooks`, `init`, `memory` and `export` are short names for
+`cursor-agent`, `hooks`, `init`, `memory`, `export` and `codemode` are short names for
 `github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
 the name it registers (`docs/delegates.md`, "Harness extensions").
 A short name also names the extension's directories in Fiber home

@@ -2814,6 +2814,8 @@ fn a_failed_job_open_preserves_the_guard_on_resume() {
         Some(super::super::Limit {
             ms: 60_000,
             monitor: false,
+            // The test command holds no `|`.
+            has_pipe: false,
         }),
         false,
         &cancel,
