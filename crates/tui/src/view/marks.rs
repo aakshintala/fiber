@@ -3,14 +3,18 @@
 //! bar, the selection's highlight, and the links' targets with their
 //! underline.
 
+use std::ops::Range;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 use crate::app::{App, FindBar};
+use crate::ext::cache::{Cache, ClickKey};
 use crate::look::{BAR_TEXT, TAB_BAR};
 use crate::mouse::{Target, TargetId};
+use crate::rows::RowText;
 use crate::theme::Role;
 
 /// The selection's highlight: the `selection` tint, with no modifier,
@@ -95,6 +99,74 @@ const FOCUSED: Style = Style::new()
 
 /// The hint under a focused link (`docs/tui.md`, "Links").
 pub(crate) const HINT: &str = "Enter opens · y copies";
+
+/// Paints one row's click ranges as targets and records their drawn
+/// text: each range's cells in the row with its interned key, clipped
+/// to the drawn width. Extension spans take the click over a link in
+/// the same cells, so the caller pushes these after the row's other
+/// targets; a click the handler declines falls back to the target
+/// under them (`docs/tui.md`, "Input and focus"). Zero-width ranges
+/// and decoration rows emit nothing: shed rows and columns lend no
+/// target.
+pub(super) fn paint_clicks(
+    cache: &Cache,
+    clicks: &[(Range<u16>, ClickKey)],
+    line: &Line<'static>,
+    text: &RowText,
+    x: u16,
+    y: u16,
+    width: u16,
+    targets: &mut Vec<Target>,
+) {
+    if text.decoration || clicks.is_empty() || width == 0 {
+        return;
+    }
+    for (range, key) in clicks {
+        let start = range.start.min(width);
+        let end = range.end.min(width);
+        if start >= end {
+            continue;
+        }
+        targets.push(Target {
+            id: TargetId::Extension(*key),
+            rect: Rect::new(x.saturating_add(start), y, end.saturating_sub(start), 1),
+        });
+        cache.paint_click(*key, y, text.join, range_text(line, text, start, end));
+    }
+}
+
+/// The drawn text in the row's `start..end` cells: cells before the
+/// row's skip and past its text tail are decoration, never text, and
+/// trailing spaces drop. A glyph counts whole, so a cut keeps
+/// graphemes: one starting before the window or ending past it stays
+/// out, and a cut span gives what is drawn.
+fn range_text(line: &Line<'static>, text: &RowText, start: u16, end: u16) -> String {
+    let total = u16::try_from(line.width()).unwrap_or(u16::MAX);
+    let lo = start.max(text.skip);
+    let hi = end.min(total.saturating_sub(text.tail));
+    if lo >= hi {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut cell = 0u16;
+    'spans: for span in &line.spans {
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let wide = u16::try_from(crate::format::width(grapheme.symbol)).unwrap_or(u16::MAX);
+            let span_end = cell.saturating_add(wide);
+            if cell >= lo && span_end <= hi {
+                out.push_str(grapheme.symbol);
+            }
+            cell = span_end;
+            if cell >= hi {
+                break 'spans;
+            }
+        }
+    }
+    while out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
 
 /// Paints the search bar on the conversation's top-right row, then the
 /// selection's cells, then pushes one click target per row each visible

@@ -654,6 +654,21 @@ fn paint_row(app: &App, area: Rect, bottom: &mut u16, buf: &mut Buffer, targets:
         id: TargetId::Panel(Spot::Status),
         rect: Rect::new(x, y, wide, 1),
     });
+    // The first replacement line's click ranges draw at their actual
+    // row and width, over the status target.
+    super::marks::paint_clicks(
+        &app.pages().ext.cache,
+        &first.clicks,
+        &first.line,
+        &crate::rows::RowText {
+            tail: first.pad,
+            ..crate::rows::RowText::plain()
+        },
+        x,
+        y,
+        wide,
+        targets,
+    );
 }
 
 /// Draws the rule above the status row: `─` in `rule` from the stripe's

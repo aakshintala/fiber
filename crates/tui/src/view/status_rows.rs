@@ -734,6 +734,21 @@ pub(super) fn paint(
     for (dy, line) in fitted.iter().take(keep).enumerate() {
         let row = bottom.saturating_add(to_u16(dy));
         buf.set_line(x, row, &line.line, wide);
+        // The replacement status rows' kept click ranges draw at the
+        // status offset; shed rows and columns emit nothing.
+        super::marks::paint_clicks(
+            &app.pages().ext.cache,
+            &line.clicks,
+            &line.line,
+            &crate::rows::RowText {
+                tail: line.pad,
+                ..crate::rows::RowText::plain()
+            },
+            x,
+            row,
+            wide,
+            targets,
+        );
     }
 }
 

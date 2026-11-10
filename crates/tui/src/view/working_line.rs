@@ -118,12 +118,14 @@ pub(super) fn draw(
         // An empty replacement hides the line: no rows and no targets.
         return;
     }
-    paint_replacement(area, buf, bottom, targets, &fitted);
+    paint_replacement(app, area, buf, bottom, targets, &fitted);
 }
 
 /// Paints a replacement's lines bottom-up, keeping one interrupt target
-/// over each line's full width.
+/// over each line's full width, then each kept line's click ranges
+/// over it: Esc still wins where no extension range draws.
 fn paint_replacement(
+    app: &App,
     area: Rect,
     buf: &mut Buffer,
     bottom: &mut u16,
@@ -145,6 +147,19 @@ fn paint_replacement(
             id: TargetId::Interrupt,
             rect: Rect::new(area.x, row, area.width, 1),
         });
+        super::marks::paint_clicks(
+            &app.pages().ext.cache,
+            &line.clicks,
+            &line.line,
+            &crate::rows::RowText {
+                tail: line.pad,
+                ..crate::rows::RowText::plain()
+            },
+            area.x,
+            row,
+            area.width,
+            targets,
+        );
     }
 }
 

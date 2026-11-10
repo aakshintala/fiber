@@ -102,6 +102,7 @@ fn push_text_keeps_its_text() {
         tail: 0,
         decoration: true,
         links: Vec::new(),
+        clicks: Vec::new(),
         scopes: Vec::new(),
         spin: None,
         anim: None,
@@ -328,6 +329,7 @@ fn on_surface_keeps_each_rows_text() {
             tail: 1,
             decoration: false,
             links: vec![(0..1, "https://x".to_owned())],
+            clicks: Vec::new(),
             scopes: Vec::new(),
             spin: None,
             anim: None,
@@ -364,6 +366,7 @@ fn pad_prefixes_blank_cells_and_shifts_text_marks() {
             tail: 0,
             decoration: true,
             links: vec![(3..7, "https://x".to_owned())],
+            clicks: Vec::new(),
             scopes: Vec::new(),
             spin: Some(0),
             join: Join::Break,
@@ -401,6 +404,8 @@ fn push_fitted_keeps_the_animated_tag_on_its_row() {
         links: Vec::new(),
         pad: 0,
         anim: Some(key.clone()),
+        click_raw: Vec::new(),
+        clicks: Vec::new(),
     };
     let mut rows = Rows::default();
     rows.push_fitted(&line, None);
@@ -1067,4 +1072,82 @@ fn fitted_count_cuts_hard_without_a_space() {
 #[test]
 fn fitted_count_cuts_a_word_longer_than_inner() {
     assert_eq!(super::fitted_count(&Line::raw("aa bbbbbbbb cc"), 4), 4);
+}
+
+/// A cache key minted for `id`, for carriage tests.
+fn key(id: &str) -> crate::ext::cache::ClickKey {
+    crate::ext::cache::Cache::default().intern_click(
+        &contract::SessionId("s".into()),
+        "test",
+        "ledger_row",
+        id,
+    )
+}
+
+#[test]
+fn click_push_fitted_carries_click_ranges_with_their_keys() {
+    let badge = key("badge");
+    let line = FittedLine {
+        line: Line::raw("go"),
+        links: Vec::new(),
+        pad: 8,
+        anim: None,
+        click_raw: Vec::new(),
+        clicks: vec![(0..2, badge)],
+    };
+    let mut rows = Rows::default();
+    rows.push_fitted(&line, None);
+    let (_, texts) = rows.into_parts();
+    let text = texts.first().expect("one row");
+    assert_eq!(text.clicks, vec![(0..2, badge)]);
+    // The pad is decoration, as with links: tail counts it, never text.
+    assert_eq!(text.tail, 8);
+    assert_eq!(text.links, Vec::new());
+}
+
+#[test]
+fn click_pad_split_intersects_and_rebases_click_ranges_as_links() {
+    let badge = key("badge");
+    let run = key("run");
+    let mut rows = Rows::default();
+    rows.push_text(
+        (Line::raw("hello world".to_owned()), None),
+        RowText {
+            tail: 0,
+            links: vec![(3..7, "https://x".to_owned())],
+            clicks: vec![(2..9, badge), (9..11, run)],
+            ..RowText::plain()
+        },
+    );
+    // The wrap drops the space: the first piece holds "hello", the
+    // second "world" joining with that space. The link straddles the
+    // cut, the first click range spans both pieces, the second sits
+    // wholly in the tail.
+    rows.pad(0, 0, 6);
+    let (_, texts) = rows.into_parts();
+    assert_eq!(texts.len(), 2);
+    assert_eq!(texts[0].clicks, vec![(2..5, badge)]);
+    assert_eq!(texts[1].clicks, vec![(0..3, badge), (3..5, run)]);
+    assert_eq!(texts[1].links, vec![(0..1, "https://x".to_owned())]);
+}
+
+#[test]
+fn click_prefix_row_shifts_click_ranges_with_skip_and_links() {
+    let badge = key("badge");
+    let mut rows = Rows::default();
+    rows.push_text(
+        row("hi"),
+        RowText {
+            skip: 1,
+            links: vec![(0..2, "https://x".to_owned())],
+            clicks: vec![(0..2, badge)],
+            ..RowText::plain()
+        },
+    );
+    rows.pad(0, 4, 20);
+    let (_, texts) = rows.into_parts();
+    let text = texts.first().expect("one row");
+    assert_eq!(text.skip, 5);
+    assert_eq!(text.links, vec![(4..6, "https://x".to_owned())]);
+    assert_eq!(text.clicks, vec![(4..6, badge)]);
 }

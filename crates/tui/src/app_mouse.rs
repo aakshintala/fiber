@@ -4,7 +4,7 @@
 use super::{App, Effect, Surface, Target};
 use crate::app::rail::Spot;
 use crate::keys::{Button, Key, Mouse, MouseKind};
-use crate::mouse::{Pointer, TargetId};
+use crate::mouse::{ClickRoute, Pointer, TargetId};
 use ratatui::layout::{Position, Rect};
 use std::time::Instant;
 
@@ -58,7 +58,29 @@ impl App {
         let selected = self.on_select(mouse, targets);
         let clicked = pointer.on_mouse(mouse, targets, hover);
         // A click's effect wins, then the wheel's, then the selection's.
-        let effect = clicked.map_or(Effect::None, |target| self.on_click_inner(target));
+        // An extension click resolves against the same frame's targets:
+        // a handled click consumes the route, anything else drains the
+        // handler's notices and resumes the built-in candidate saved
+        // under it. With no candidate the wheel and selection results
+        // stand as before.
+        let effect = match clicked {
+            Some(TargetId::Extension(key)) => {
+                match crate::mouse::click_route(targets, key, mouse.col, mouse.row) {
+                    Some(route) => {
+                        let (handled, effect) = self.extension_click(&route);
+                        if handled {
+                            return effect;
+                        }
+                        route
+                            .fallback
+                            .map_or(Effect::None, |id| self.on_click_inner(id))
+                    }
+                    None => Effect::None,
+                }
+            }
+            Some(target) => self.on_click_inner(target),
+            None => Effect::None,
+        };
         if effect != Effect::None {
             effect
         } else if wheel != Effect::None {
@@ -236,7 +258,54 @@ impl App {
             // The interrupt targets click like ⌥I: `cancel` of the turn on
             // screen, only while it runs and the terminal is connected.
             TargetId::Interrupt => self.interrupt_turn(),
+            TargetId::Extension(key) => {
+                // Only the mouse route pairs a press and release; any
+                // other path reaching here resolves the key against the
+                // last drawn frame and shares the route below.
+                let route = self
+                    .stops
+                    .iter()
+                    .find(|target| target.id == TargetId::Extension(key))
+                    .and_then(|target| {
+                        crate::mouse::click_route(&self.stops, key, target.rect.x, target.rect.y)
+                    });
+                match route {
+                    Some(route) => {
+                        let (_, effect) = self.extension_click(&route);
+                        effect
+                    }
+                    None => Effect::None,
+                }
+            }
         }
+    }
+
+    /// Routes one paired extension click through the slot's `on_click`
+    /// handler and drains its pending notices. The answer is whether
+    /// the handler handled it, independent of the effect: handled
+    /// consumes the route, and only not-handled enters the built-in
+    /// body. A released key, or a missing renderer, names nothing, so
+    /// the click stays unhandled.
+    pub(super) fn extension_click(&mut self, route: &ClickRoute) -> (bool, Effect) {
+        let Some((_, slot, id)) = self.screen.pages().ext.cache.click_target(route.id) else {
+            return (false, Effect::None);
+        };
+        let Some(renderer) = self.handle.get() else {
+            return (false, Effect::None);
+        };
+        let session = self.session().cloned();
+        let halves = session
+            .as_ref()
+            .and_then(|session| self.screen.pages().halves_for(session));
+        let ctx = crate::ext::SessionCtx {
+            session_id: session,
+            halves,
+        };
+        let handled = renderer.on_click(&ctx, &slot, &id) == crate::ext::KeyOutcome::Handled;
+        for (code, text) in renderer.take_pending() {
+            self.push_notice(contract::ErrorCode::from_name(&code), text);
+        }
+        (handled, Effect::None)
     }
 
     /// Puts the request the panel shows aside, as Esc does, so it waits on
@@ -494,3 +563,7 @@ impl App {
         self.set_home_list_scroll(next);
     }
 }
+
+#[cfg(test)]
+#[path = "app_mouse_tests.rs"]
+mod tests;

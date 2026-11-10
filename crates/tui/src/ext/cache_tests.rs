@@ -56,6 +56,238 @@ fn raw(text: &str) -> RawSpan {
     }
 }
 
+/// A span drawing `text` as the click id `id`.
+fn clicked(text: &str, id: &str) -> RawSpan {
+    RawSpan {
+        text: text.to_owned(),
+        click: Some(id.to_owned()),
+        ..RawSpan::default()
+    }
+}
+
+/// Draws one still line carrying the click id `id` on `page` at width
+/// 20, counting renderer calls in `calls`.
+fn draw_clicks(
+    cache: &Cache,
+    page: PageKey,
+    id: &str,
+    calls: &Cell<usize>,
+) -> std::sync::Arc<Vec<super::super::spans::FittedLine>> {
+    crate::work::take();
+    let arguments = serde_json::json!({"command": "ls"});
+    // The input names the id, so each id draws and stores on its own.
+    let row = input("shell", id, &arguments);
+    cache
+        .lines(page, "ledger_row", "test", None, &row, 20, || {
+            decision(|| {
+                calls.set(calls.get().saturating_add(1));
+                Ok(vec![vec![clicked("go", id)]])
+            })
+        })
+        .expect("a cached line")
+}
+
+/// The single click key `lines` carries.
+fn only_key(lines: &std::sync::Arc<Vec<super::super::spans::FittedLine>>) -> super::ClickKey {
+    let line = lines.first().expect("one fitted line");
+    assert!(line.click_raw.is_empty(), "stored lines keep no raw ids");
+    let (_, key) = line.clicks.first().expect("one click range");
+    *key
+}
+
+#[test]
+fn click_keys_are_stable_across_redraws_and_cache_hits() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let first = draw_clicks(&cache, page(0), "badge", &calls);
+    let key = only_key(&first);
+    // A redraw and a cache hit keep the same key with no new call.
+    let second = draw_clicks(&cache, page(0), "badge", &calls);
+    assert_eq!(only_key(&second), key);
+    assert_eq!(calls.get(), 1);
+    // The scope is the session, not the page: another page of the same
+    // session shares the key.
+    let sibling = draw_clicks(&cache, page(1), "badge", &calls);
+    assert_eq!(only_key(&sibling), key);
+}
+
+#[test]
+fn click_keys_separate_sessions_and_tuples() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let s = draw_clicks(&cache, page(0), "badge", &calls);
+    let key = only_key(&s);
+    let other_session = PageKey {
+        session: contract::SessionId("t".into()),
+        index: 0,
+    };
+    let t = draw_clicks(&cache, other_session, "badge", &calls);
+    assert_ne!(only_key(&t), key);
+    let other_id = draw_clicks(&cache, page(0), "run", &calls);
+    assert_ne!(only_key(&other_id), key);
+    // The reverse lookup names each tuple, whatever the scope.
+    assert_eq!(
+        cache.click_target(key),
+        Some((
+            "test".to_owned(),
+            "ledger_row".to_owned(),
+            "badge".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn click_reload_drops_click_lookup_but_mints_fresh_keys() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let key = only_key(&draw_clicks(&cache, page(0), "badge", &calls));
+    cache.clear();
+    // The reload drops the lookup authority: the released key names
+    // nothing, and the same tuple mints a fresh key, never the old one.
+    assert_eq!(cache.click_target(key), None);
+    let again = draw_clicks(&cache, page(0), "badge", &calls);
+    let fresh = only_key(&again);
+    assert_ne!(fresh, key);
+    assert_eq!(cache.click_target(key), None);
+    assert_eq!(
+        cache.click_target(fresh),
+        Some((
+            "test".to_owned(),
+            "ledger_row".to_owned(),
+            "badge".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn click_dropping_a_page_releases_only_its_keys() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let kept_page = PageKey {
+        session: contract::SessionId("t".into()),
+        index: 0,
+    };
+    let dropped = only_key(&draw_clicks(&cache, page(0), "badge", &calls));
+    let kept = only_key(&draw_clicks(&cache, kept_page, "badge", &calls));
+    cache.drop_page(page(0));
+    assert_eq!(cache.click_target(dropped), None);
+    assert_eq!(
+        cache.click_target(kept),
+        Some((
+            "test".to_owned(),
+            "ledger_row".to_owned(),
+            "badge".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn click_scratch_draw_shares_identity_but_not_painted_state() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let stored = draw_clicks(&cache, page(0), "badge", &calls);
+    let key = only_key(&stored);
+    let scratch = cache.scratch_sharing_pending();
+    let through_scratch = draw_clicks(&scratch, page(0), "badge", &calls);
+    assert_eq!(only_key(&through_scratch), key);
+    // The parent's painted stop is the parent's own: scratch sees no
+    // text, and clearing the scratch keeps the parent's authority.
+    use crate::rows::Join;
+    cache.paint_click(key, 3, Join::Break, "go".to_owned());
+    assert_eq!(cache.click_text(key).as_deref(), Some("go"));
+    assert_eq!(scratch.click_text(key), None);
+    scratch.clear();
+    assert_eq!(
+        cache.click_target(key),
+        Some((
+            "test".to_owned(),
+            "ledger_row".to_owned(),
+            "badge".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn click_text_joins_fragments_by_the_selection_rules() {
+    use crate::rows::Join;
+    let cache = Cache::default();
+    let key = cache.intern_click(
+        &contract::SessionId("s".into()),
+        "test",
+        "ledger_row",
+        "badge",
+    );
+    // A missing key names no text.
+    assert_eq!(cache.click_text(key), None);
+    cache.paint_click(key, 4, Join::Wrap, "world".to_owned());
+    cache.paint_click(key, 3, Join::Break, "hello  ".to_owned());
+    cache.paint_click(key, 5, Join::Break, "next".to_owned());
+    // Fragments join in row order: the wrapped row with no newline,
+    // the broken row on its own line, trailing spaces dropped.
+    assert_eq!(cache.click_text(key).as_deref(), Some("helloworld\nnext"));
+    let spaced = cache.intern_click(
+        &contract::SessionId("s".into()),
+        "test",
+        "ledger_row",
+        "spaced",
+    );
+    cache.paint_click(spaced, 3, Join::Break, "a".to_owned());
+    cache.paint_click(spaced, 4, Join::WrapSpace, "b".to_owned());
+    assert_eq!(cache.click_text(spaced).as_deref(), Some("a b"));
+    // A stop whose spans hold no text gives none.
+    let empty = cache.intern_click(
+        &contract::SessionId("s".into()),
+        "test",
+        "ledger_row",
+        "empty",
+    );
+    cache.paint_click(empty, 3, Join::Break, String::new());
+    assert_eq!(cache.click_text(empty), None);
+}
+
+#[test]
+fn click_animated_store_associates_click_ranges_with_no_new_call() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![clicked(&format!("f{frame}"), "badge")]],
+            },
+            true,
+        )
+    };
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    // A cold count stores frame 0 with its ranges associated; the paint
+    // promotes the stored frame instead of calling again, keeping the
+    // same keys.
+    let counted = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
+        .expect("counted frame 0");
+    assert_eq!(calls.get(), 1);
+    let key = only_key(&counted);
+    let painted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 0");
+    assert_eq!(calls.get(), 1, "paint promotes the count");
+    assert_eq!(only_key(&painted), key);
+}
+
 fn input<'a>(name: &'a str, output: &'a str, arguments: &'a serde_json::Value) -> Input<'a> {
     Input::LedgerRow(LedgerRow {
         changed_by: None,

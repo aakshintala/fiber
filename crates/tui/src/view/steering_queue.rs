@@ -277,15 +277,18 @@ pub(super) fn draw(
         // targets.
         return;
     }
-    paint_replacement(area, bottom, buf, &fitted);
+    paint_replacement(app, area, bottom, buf, targets, &fitted);
 }
 
-/// Paints a replacement's lines bottom-up, newest row lowest, with no
-/// target: keys still drop and pick rows.
+/// Paints a replacement's lines bottom-up, newest row lowest: keys
+/// still drop and pick rows, and each kept line's click ranges lend
+/// their targets. Shed rows emit nothing.
 fn paint_replacement(
+    app: &App,
     area: Rect,
     bottom: &mut u16,
     buf: &mut Buffer,
+    targets: &mut Vec<Target>,
     fitted: &[crate::ext::spans::FittedLine],
 ) {
     let count = fitted
@@ -299,6 +302,19 @@ fn paint_replacement(
     for (dy, line) in fitted.iter().take(count).enumerate() {
         let row = bottom.saturating_add(u16::try_from(dy).unwrap_or(u16::MAX));
         buf.set_line(area.x, row, &line.line, area.width);
+        super::marks::paint_clicks(
+            &app.pages().ext.cache,
+            &line.clicks,
+            &line.line,
+            &crate::rows::RowText {
+                tail: line.pad,
+                ..crate::rows::RowText::plain()
+            },
+            area.x,
+            row,
+            area.width,
+            targets,
+        );
     }
 }
 

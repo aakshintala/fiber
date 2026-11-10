@@ -1883,6 +1883,7 @@ fn an_item_views_transcript_draws_no_pin() {
             | crate::mouse::TargetId::FindCount
             | crate::mouse::TargetId::FindResult(_)
             | crate::mouse::TargetId::View(_)
+            | crate::mouse::TargetId::Extension(_)
             | crate::mouse::TargetId::MoreNotices => true,
         }),
         "no line target covers the transcript's first row"

@@ -234,6 +234,10 @@ pub(crate) struct Pin {
 pub(crate) struct Shown {
     pub(crate) first: usize,
     pub(crate) lines: Vec<(Line<'static>, usize, Option<Target>)>,
+    /// Each shown line's row text, one per line: skip, tail, join and
+    /// click ranges travel with the cells, so the paint reads drawn text
+    /// without rerendering. A page not loaded lends plain rows.
+    pub(crate) texts: Vec<RowText>,
     pub(crate) turns: TurnRanges,
     /// The spinning marks drawn, each a line's index and its cell's
     /// column (`docs/tui.md`, "The working line").
@@ -1748,6 +1752,7 @@ impl Pages {
         let end = top.saturating_add(height);
         let mut first = None;
         let mut lines = Vec::new();
+        let mut texts = Vec::new();
         let mut turns = Vec::new();
         let mut spins = Vec::new();
         let mut anims = Vec::new();
@@ -1769,12 +1774,13 @@ impl Pages {
                 pin_done = true;
                 match self.part(at) {
                     Some(part) => {
-                        let (rows, texts, _, page_turns) = self.draw_data(at, part, Draw::Shown);
+                        let (rows, row_texts, _, page_turns) =
+                            self.draw_data(at, part, Draw::Shown);
                         if top_page {
-                            pin = self.pin_on_page(part, &rows, &texts, start, top);
+                            pin = self.pin_on_page(part, &rows, &row_texts, start, top);
                         }
                         let base = lines.len();
-                        for (at, text) in texts.iter().enumerate() {
+                        for (at, text) in row_texts.iter().enumerate() {
                             if let Some(col) = text.spin {
                                 spins.push((base.saturating_add(at), col));
                             }
@@ -1787,7 +1793,7 @@ impl Pages {
                         // item is off screen, so it never advances or
                         // asks.
                         let mut off = start;
-                        for (at, text) in texts.iter().enumerate() {
+                        for (at, text) in row_texts.iter().enumerate() {
                             let count = lines
                                 .get(base.saturating_add(at))
                                 .map(|(_, count, _)| *count)
@@ -1800,13 +1806,19 @@ impl Pages {
                             }
                             off = off.saturating_add(count);
                         }
+                        texts.extend(row_texts);
                         turns.extend(
                             page_turns
                                 .into_iter()
                                 .map(|(turn, range)| (turn, base + range.start..base + range.end)),
                         );
                     }
-                    None => lines.push((Line::default(), page.rows, None)),
+                    None => {
+                        // A page not loaded draws one blank line for its
+                        // rows, with plain metadata: no click, no text.
+                        lines.push((Line::default(), page.rows, None));
+                        texts.push(RowText::plain());
+                    }
                 }
             }
             start = next;
@@ -1814,6 +1826,7 @@ impl Pages {
         Shown {
             first: first.unwrap_or(start),
             lines,
+            texts,
             turns,
             spins,
             anims,

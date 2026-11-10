@@ -2655,6 +2655,8 @@ fn gutter_row_keeps_the_animated_tag() {
         links: vec![],
         pad: 0,
         anim: Some(key.clone()),
+        click_raw: Vec::new(),
+        clicks: Vec::new(),
     };
     let (_, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 40);
     assert_eq!(text.anim, Some(key));
@@ -2732,6 +2734,8 @@ fn the_gutter_equal_width_keeps_the_fitted_line_and_its_link() {
         links: vec![(0..2, "https://example.com".to_owned())],
         pad: 0,
         anim: None,
+        click_raw: Vec::new(),
+        clicks: Vec::new(),
     };
     let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 7);
     assert_eq!(row.to_string(), "100000 ab");
@@ -3701,4 +3705,146 @@ fn hook_rewrite_mark_reaches_a_flat_extension_row_unstyled() {
         calls[0].2
     );
     assert!(calls[0].2.contains("flat: true"), "{}", calls[0].2);
+}
+
+/// A gutter row shifts click ranges past itself, as it shifts links:
+/// no range lands on the gutter's own cells.
+#[test]
+fn click_ranges_shift_past_the_gutter() {
+    let cache = crate::ext::cache::Cache::default();
+    let badge = cache.intern_click(
+        &contract::SessionId("s".into()),
+        "test",
+        "ledger_row",
+        "badge",
+    );
+    let line = crate::ext::spans::FittedLine {
+        line: ratatui::text::Line::from(vec![ratatui::text::Span::raw("ab")]),
+        links: vec![],
+        pad: 0,
+        anim: None,
+        click_raw: Vec::new(),
+        clicks: vec![(0..2, badge)],
+    };
+    let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 40);
+    assert_eq!(row.to_string(), "100000 ab");
+    assert_eq!(text.clicks, vec![(7..9, badge)]);
+}
+
+/// Both manual click-carriage paths — the group summary line and the
+/// ledger rows — shift ranges past narrow and wide gutters, keep the
+/// extension's identity, and cut what the row cannot draw.
+#[test]
+fn click_group_and_gutter_ranges() {
+    let group = Group {
+        sections: vec![
+            Section {
+                step: 1,
+                calls: vec![read_call(1, "a.rs")],
+                ..Section::default()
+            },
+            Section {
+                step: 100000,
+                calls: vec![read_call(2, "b.rs")],
+                ..Section::default()
+            },
+        ],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["group_line".to_owned(), "ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            RawSpan {
+                text: "go".to_owned(),
+                click: Some("badge".to_owned()),
+                ..RawSpan::default()
+            },
+            RawSpan {
+                text: " and a very long tail that the forty-column row cannot draw".to_owned(),
+                click: Some("long".to_owned()),
+                ..RawSpan::default()
+            },
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 40, Some(&bound));
+    assert_eq!(rows.len(), texts.len());
+    let mut slots = std::collections::BTreeSet::new();
+    let mut carried = 0;
+    let mut ledger_starts = std::collections::BTreeSet::new();
+    for (row, text) in rows.iter().zip(texts.iter()) {
+        let shown: Vec<char> = row.0.to_string().chars().collect();
+        for (range, key) in &text.clicks {
+            carried += 1;
+            let start = usize::from(range.start);
+            let end = usize::from(range.end);
+            // Inside the row in both paths; only the ledger rows stand
+            // past a gutter, whose width the step number sets.
+            assert!(end <= shown.len(), "no range runs past the row");
+            let (extension, slot, id) = bound.cache.click_target(*key).expect("a painted key");
+            assert_eq!(extension, "fake");
+            slots.insert(slot.clone());
+            if slot == "ledger_row" {
+                // Past the gutter, never on it; the wide step number
+                // pushes its row's ranges further right.
+                assert!(start > 0, "no range lands on the gutter");
+                ledger_starts.insert(start);
+            }
+            let drawn: String = shown[start..end].iter().collect();
+            let want = if id == "badge" { "go" } else { " and" };
+            assert!(
+                drawn.starts_with(want),
+                "the range sits on its span's text: {drawn:?}"
+            );
+        }
+    }
+    assert!(carried > 0, "both paths carried ranges");
+    // The summary path and the ledger path both drew.
+    assert!(slots.contains("group_line"), "the summary path: {slots:?}");
+    assert!(slots.contains("ledger_row"), "the ledger path: {slots:?}");
+    // Narrow and wide step numbers shift their ledger rows apart.
+    assert!(
+        ledger_starts.len() >= 2,
+        "both gutters drew: {ledger_starts:?}"
+    );
+}
+
+/// A group draw carries a replacement's click ranges onto its rows
+/// with the extension's identity behind the keys.
+#[test]
+fn a_group_draw_carries_click_ranges_with_their_identity() {
+    let group = Group {
+        sections: vec![Section {
+            step: 100000,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            RawSpan {
+                text: "hel".to_owned(),
+                click: Some("badge".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 20, Some(&bound));
+    assert_eq!(rows[1].0.to_string(), "100000 hello        ");
+    let (range, key) = texts[1].clicks.first().expect("one click range");
+    assert_eq!(*range, 7..10);
+    assert_eq!(
+        bound.cache.click_target(*key),
+        Some((
+            "fake".to_owned(),
+            "ledger_row".to_owned(),
+            "badge".to_owned()
+        ))
+    );
 }
