@@ -736,14 +736,9 @@ pub(super) fn paint(
         buf.set_line(x, row, &line.line, wide);
         // The replacement status rows' kept click ranges draw at the
         // status offset; shed rows and columns emit nothing.
-        super::marks::paint_clicks(
+        super::marks::paint_fitted_clicks(
             &app.pages().ext.cache,
-            &line.clicks,
-            &line.line,
-            &crate::rows::RowText {
-                tail: line.pad,
-                ..crate::rows::RowText::plain()
-            },
+            line,
             Rect::new(x, row, wide, 1),
             targets,
         );

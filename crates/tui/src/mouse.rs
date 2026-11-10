@@ -91,17 +91,14 @@ pub(crate) fn hit(targets: &[Target], col: u16, row: u16) -> Option<TargetId> {
 }
 
 /// A press and release paired on one extension target: the target's
-/// identity, the release cell it resolved at, and the built-in target
-/// under the same cell. A handled click runs nothing built in; any
-/// other click resumes the built-in candidate, so scrolling and
-/// selection keep working (`docs/tui.md`, "Input and focus").
+/// identity and the built-in target under the same release cell. A
+/// handled click runs nothing built in; any other click resumes the
+/// built-in candidate, so scrolling and selection keep working
+/// (`docs/tui.md`, "Input and focus").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClickRoute {
     /// The paired extension target's identity.
     pub(crate) id: ClickKey,
-    /// The release cell the route resolved at.
-    pub(crate) col: u16,
-    pub(crate) row: u16,
     /// The topmost non-extension, non-turn target at the release cell
     /// in the same frame, if any: turns are focus stops, never click
     /// targets.
@@ -131,12 +128,7 @@ pub(crate) fn click_route(
         .filter(|target| !matches!(target.id, TargetId::Extension(_) | TargetId::Turn(_)))
         .find(|target| target.rect.contains(at))
         .map(|target| target.id);
-    Some(ClickRoute {
-        id,
-        col,
-        row,
-        fallback,
-    })
+    Some(ClickRoute { id, fallback })
 }
 
 /// The pointer: where it last was, when hover records it, and the target

@@ -341,8 +341,8 @@ impl App {
             let route = self
                 .stops
                 .iter()
-                .rev()
-                .find(|target| target.id == TargetId::Extension(key))
+                .filter(|target| target.id == TargetId::Extension(key))
+                .min_by_key(|target| (target.rect.y, target.rect.x))
                 .and_then(|target| {
                     crate::mouse::click_route(&self.stops, key, target.rect.x, target.rect.y)
                 });

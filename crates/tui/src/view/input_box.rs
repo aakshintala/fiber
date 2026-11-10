@@ -656,14 +656,9 @@ fn paint_row(app: &App, area: Rect, bottom: &mut u16, buf: &mut Buffer, targets:
     });
     // The first replacement line's click ranges draw at their actual
     // row and width, over the status target.
-    super::marks::paint_clicks(
+    super::marks::paint_fitted_clicks(
         &app.pages().ext.cache,
-        &first.clicks,
-        &first.line,
-        &crate::rows::RowText {
-            tail: first.pad,
-            ..crate::rows::RowText::plain()
-        },
+        first,
         Rect::new(x, y, wide, 1),
         targets,
     );

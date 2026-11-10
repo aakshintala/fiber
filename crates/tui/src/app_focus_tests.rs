@@ -2143,6 +2143,37 @@ fn click_enter_on_a_declined_extension_stop_runs_its_fallback() {
 }
 
 #[test]
+fn click_enter_on_a_multi_rect_stop_uses_its_topmost_leftmost_cell() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    let (mut app, id) = clicked_focus(&clicked);
+    // One key painted in three cells: neither the first nor the last
+    // pushed cell is the topmost-leftmost one. Only the topmost-leftmost
+    // cell sits over a fallback, so a declined Enter opens the results
+    // only when the route resolves there.
+    app.stops = vec![
+        Hit {
+            id,
+            rect: Rect::new(5, 0, 1, 1),
+        },
+        Hit {
+            id,
+            rect: Rect::new(0, 0, 1, 1),
+        },
+        Hit {
+            id,
+            rect: Rect::new(0, 1, 1, 1),
+        },
+        Hit {
+            id: TargetId::FindCount,
+            rect: Rect::new(0, 0, 1, 1),
+        },
+    ];
+    assert_eq!(app.open_focused(id), Effect::None);
+    assert_eq!(clicked.calls.borrow().len(), 1);
+    assert!(app.results_open(), "the topmost-leftmost fallback opened");
+}
+
+#[test]
 fn click_enter_on_a_released_extension_key_clicks_nothing() {
     let clicked = std::rc::Rc::new(FocusClicked::default());
     clicked.handled.set(true);

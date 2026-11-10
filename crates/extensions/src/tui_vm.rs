@@ -602,6 +602,50 @@ impl TuiVm {
         &self.lua
     }
 
+    // The shared deadline/arm/resume/off/match for key and click
+    // callbacks: the caller looked up the handler and built the arg.
+    fn run_callback(
+        &mut self,
+        run: Function,
+        timeout: Duration,
+        arg: Table,
+        resume_msg: &'static str,
+        shape_msg: &'static str,
+    ) -> Result<bool, Error> {
+        let thread = self.lua.create_thread(run).map_err(lua_error)?;
+        self.deadline.arm(&thread).map_err(lua_error)?;
+        // `None` when the timeout is too large to add to an `Instant`: such
+        // a callback is never cut off.
+        let at = self.clock.now().checked_add(timeout);
+        self.deadline.restore(at);
+        let returned = resume(&self.deadline, &thread, arg, resume_msg);
+        self.deadline.restore(None);
+        // The conversion ran no Lua, but a finish is late when the clock
+        // says so, whichever path it took.
+        let result = if self.deadline.passed() {
+            Err(Error::TuiTimeout)
+        } else {
+            returned
+        };
+        if matches!(result, Err(Error::TuiTimeout)) {
+            self.off = true;
+        }
+        match result? {
+            mlua::Value::Boolean(handled) => Ok(handled),
+            mlua::Value::Nil => Ok(false),
+            mlua::Value::LightUserData(_)
+            | mlua::Value::Integer(_)
+            | mlua::Value::Number(_)
+            | mlua::Value::String(_)
+            | mlua::Value::Table(_)
+            | mlua::Value::Function(_)
+            | mlua::Value::Thread(_)
+            | mlua::Value::UserData(_)
+            | mlua::Value::Error(_)
+            | mlua::Value::Other(_) => Err(shape(shape_msg)),
+        }
+    }
+
     /// Runs the `raw` binding's `run` with `session_id`, and returns
     /// whether it handled the key. Only `true` handles; `false` and `nil`
     /// do not, and any other value is the existing wrong-shape failure.
@@ -631,43 +675,13 @@ impl TuiVm {
                 Ok(input)
             })
             .map_err(lua_error)?;
-        let thread = self.lua.create_thread(run).map_err(lua_error)?;
-        self.deadline.arm(&thread).map_err(lua_error)?;
-        // `None` when the timeout is too large to add to an `Instant`: such
-        // a callback is never cut off.
-        let at = self.clock.now().checked_add(timeout);
-        self.deadline.restore(at);
-        let returned = resume(
-            &self.deadline,
-            &thread,
+        self.run_callback(
+            run,
+            timeout,
             arg,
             "a key handler makes no host call",
-        );
-        self.deadline.restore(None);
-        // The conversion ran no Lua, but a finish is late when the clock
-        // says so, whichever path it took.
-        let result = if self.deadline.passed() {
-            Err(Error::TuiTimeout)
-        } else {
-            returned
-        };
-        if matches!(result, Err(Error::TuiTimeout)) {
-            self.off = true;
-        }
-        match result? {
-            mlua::Value::Boolean(handled) => Ok(handled),
-            mlua::Value::Nil => Ok(false),
-            mlua::Value::LightUserData(_)
-            | mlua::Value::Integer(_)
-            | mlua::Value::Number(_)
-            | mlua::Value::String(_)
-            | mlua::Value::Table(_)
-            | mlua::Value::Function(_)
-            | mlua::Value::Thread(_)
-            | mlua::Value::UserData(_)
-            | mlua::Value::Error(_)
-            | mlua::Value::Other(_) => Err(shape("a key handler returns only true, false or nil")),
-        }
+            "a key handler returns only true, false or nil",
+        )
     }
 
     /// Runs the `slot` click handler with the clicked `id` and `session_id`,
@@ -709,45 +723,13 @@ impl TuiVm {
                 Ok(input)
             })
             .map_err(lua_error)?;
-        let thread = self.lua.create_thread(run).map_err(lua_error)?;
-        self.deadline.arm(&thread).map_err(lua_error)?;
-        // `None` when the timeout is too large to add to an `Instant`: such
-        // a callback is never cut off.
-        let at = self.clock.now().checked_add(timeout);
-        self.deadline.restore(at);
-        let returned = resume(
-            &self.deadline,
-            &thread,
+        self.run_callback(
+            run,
+            timeout,
             arg,
             "a click handler makes no host call",
-        );
-        self.deadline.restore(None);
-        // The conversion ran no Lua, but a finish is late when the clock
-        // says so, whichever path it took.
-        let result = if self.deadline.passed() {
-            Err(Error::TuiTimeout)
-        } else {
-            returned
-        };
-        if matches!(result, Err(Error::TuiTimeout)) {
-            self.off = true;
-        }
-        match result? {
-            mlua::Value::Boolean(handled) => Ok(handled),
-            mlua::Value::Nil => Ok(false),
-            mlua::Value::LightUserData(_)
-            | mlua::Value::Integer(_)
-            | mlua::Value::Number(_)
-            | mlua::Value::String(_)
-            | mlua::Value::Table(_)
-            | mlua::Value::Function(_)
-            | mlua::Value::Thread(_)
-            | mlua::Value::UserData(_)
-            | mlua::Value::Error(_)
-            | mlua::Value::Other(_) => {
-                Err(shape("a click handler returns only true, false or nil"))
-            }
-        }
+            "a click handler returns only true, false or nil",
+        )
     }
 
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,

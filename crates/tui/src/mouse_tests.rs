@@ -217,8 +217,6 @@ fn click_route_pairs_the_extension_hit_with_what_lies_under_it() {
             click_route(&targets, badge, col, 3),
             Some(ClickRoute {
                 id: badge,
-                col,
-                row: 3,
                 fallback: Some(TargetId::Line(crate::app::Target::Group(1))),
             }),
             "col {col}"

@@ -1166,12 +1166,25 @@ impl Cache {
         let painted = support::lock(&self.painted);
         let mut fragments: Vec<&ClickFragment> = painted.fragments.get(&key)?.iter().collect();
         fragments.sort_by_key(|fragment| fragment.y);
-        let mut rows: Vec<Row> = Vec::with_capacity(fragments.len());
-        let mut texts: Vec<crate::rows::RowText> = Vec::with_capacity(fragments.len());
+        // Fragments sharing one screen row are one logical row: the
+        // paint registers one fragment per click range, so two spans
+        // with one id on one row would otherwise join with a newline.
+        let mut grouped: Vec<(u16, Join, String)> = Vec::new();
         for fragment in fragments {
-            rows.push((ratatui::text::Line::raw(fragment.text.clone()), None));
+            if let Some(last) = grouped.last_mut()
+                && last.0 == fragment.y
+            {
+                last.2.push_str(&fragment.text);
+            } else {
+                grouped.push((fragment.y, fragment.join, fragment.text.clone()));
+            }
+        }
+        let mut rows: Vec<Row> = Vec::with_capacity(grouped.len());
+        let mut texts: Vec<crate::rows::RowText> = Vec::with_capacity(grouped.len());
+        for (_, join, text) in grouped {
+            rows.push((ratatui::text::Line::raw(text), None));
             texts.push(crate::rows::RowText {
-                join: fragment.join,
+                join,
                 ..crate::rows::RowText::plain()
             });
         }

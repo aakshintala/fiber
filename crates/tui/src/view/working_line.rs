@@ -147,14 +147,9 @@ fn paint_replacement(
             id: TargetId::Interrupt,
             rect: Rect::new(area.x, row, area.width, 1),
         });
-        super::marks::paint_clicks(
+        super::marks::paint_fitted_clicks(
             &app.pages().ext.cache,
-            &line.clicks,
-            &line.line,
-            &crate::rows::RowText {
-                tail: line.pad,
-                ..crate::rows::RowText::plain()
-            },
+            line,
             Rect::new(area.x, row, area.width, 1),
             targets,
         );

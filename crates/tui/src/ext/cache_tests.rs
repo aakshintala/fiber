@@ -101,7 +101,8 @@ fn click_keys_are_stable_across_redraws_and_cache_hits() {
     let calls = Cell::new(0usize);
     let first = draw_clicks(&cache, page(0), "badge", &calls);
     let key = only_key(&first);
-    // A redraw and a cache hit keep the same key with no new call.
+    // A redraw and a cache hit keep the same key with no new call
+    // (`docs/tui.md:3517`: one call per cache miss, none on a hit).
     let second = draw_clicks(&cache, page(0), "badge", &calls);
     assert_eq!(only_key(&second), key);
     assert_eq!(calls.get(), 1);
@@ -246,6 +247,23 @@ fn click_text_joins_fragments_by_the_selection_rules() {
 }
 
 #[test]
+fn click_text_joins_same_row_fragments_without_a_newline() {
+    use crate::rows::Join;
+    let cache = Cache::default();
+    let key = cache.intern_click(
+        &contract::SessionId("s".into()),
+        "test",
+        "ledger_row",
+        "badge",
+    );
+    // Two spans with one id on one row are one logical row: with
+    // `Join::Break` they join on that row, never with a newline.
+    cache.paint_click(key, 3, Join::Break, "go".to_owned());
+    cache.paint_click(key, 3, Join::Break, "now".to_owned());
+    assert_eq!(cache.click_text(key).as_deref(), Some("gonow"));
+}
+
+#[test]
 fn click_animated_store_associates_click_ranges_with_no_new_call() {
     crate::work::take();
     let cache = Cache::default();
@@ -266,7 +284,7 @@ fn click_animated_store_associates_click_ranges_with_no_new_call() {
     cache.begin_anim_frame(Some(t0), false);
     // A cold count stores frame 0 with its ranges associated; the paint
     // promotes the stored frame instead of calling again, keeping the
-    // same keys.
+    // same keys (`docs/tui.md:3517`: one call per cache miss, none on a hit).
     let counted = cache
         .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
         .expect("counted frame 0");
@@ -284,6 +302,7 @@ fn click_animated_store_associates_click_ranges_with_no_new_call() {
             draw,
         )
         .expect("painted frame 0");
+    // `docs/tui.md:3517`: the paint promotes the stored frame, none on a hit.
     assert_eq!(calls.get(), 1, "paint promotes the count");
     assert_eq!(only_key(&painted), key);
 }

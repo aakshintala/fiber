@@ -302,14 +302,9 @@ fn paint_replacement(
     for (dy, line) in fitted.iter().take(count).enumerate() {
         let row = bottom.saturating_add(u16::try_from(dy).unwrap_or(u16::MAX));
         buf.set_line(area.x, row, &line.line, area.width);
-        super::marks::paint_clicks(
+        super::marks::paint_fitted_clicks(
             &app.pages().ext.cache,
-            &line.clicks,
-            &line.line,
-            &crate::rows::RowText {
-                tail: line.pad,
-                ..crate::rows::RowText::plain()
-            },
+            line,
             Rect::new(area.x, row, area.width, 1),
             targets,
         );

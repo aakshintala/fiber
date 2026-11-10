@@ -210,14 +210,9 @@ fn paint_replacement(
     // cell included.
     for (dy, line) in fitted.iter().take(count).enumerate() {
         let row = bottom.saturating_add(to_u16(dy));
-        super::marks::paint_clicks(
+        super::marks::paint_fitted_clicks(
             &bound.cache,
-            &line.clicks,
-            &line.line,
-            &crate::rows::RowText {
-                tail: line.pad,
-                ..crate::rows::RowText::plain()
-            },
+            line,
             Rect::new(area.x, row, area.width, 1),
             targets,
         );

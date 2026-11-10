@@ -108,6 +108,29 @@ pub(crate) const HINT: &str = "Enter opens · y copies";
 /// target under them (`docs/tui.md`, "Input and focus"). Zero-width
 /// ranges and decoration rows emit nothing: shed rows and columns
 /// lend no target. The paint covers the single row `rect.y`.
+/// Paints a fitted replacement line's click ranges at `rect`: the same
+/// as [`paint_clicks`] with the line's pad as the row's tail and no
+/// other decoration. Conversation rows keep the full-text call, since
+/// their row text carries skip, join and scopes.
+pub(super) fn paint_fitted_clicks(
+    cache: &Cache,
+    line: &crate::ext::spans::FittedLine,
+    rect: Rect,
+    targets: &mut Vec<Target>,
+) {
+    paint_clicks(
+        cache,
+        &line.clicks,
+        &line.line,
+        &RowText {
+            tail: line.pad,
+            ..RowText::plain()
+        },
+        rect,
+        targets,
+    );
+}
+
 pub(super) fn paint_clicks(
     cache: &Cache,
     clicks: &[(Range<u16>, ClickKey)],
