@@ -109,6 +109,36 @@ impl Model<'_> {
     }
 }
 
+/// Drains every entry a provider marked for deliberate omission into one
+/// `model_omitted` notice per entry, in model order, leaving kept models
+/// unchanged. Runs before [`leave_out_invalid`] at every call site, so a
+/// marked entry is never validated: an omission draws no `model_invalid`
+/// for whatever its declaration holds. The reason comes verbatim from the
+/// mark; parsing already rejects an empty one.
+pub fn leave_out_omitted(
+    provider: &str,
+    extension: &str,
+    models: &mut Vec<ModelData>,
+) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    let mut kept = Vec::new();
+    for model in models.drain(..) {
+        match model.omit_reason.as_deref() {
+            Some(reason) => notices.push(Notice {
+                code: ErrorCode::ModelOmitted,
+                message: format!(
+                    "The model `{provider}/{}` was left out of the model list: {reason}.",
+                    model.id
+                ),
+                extension: Some(extension.to_owned()),
+            }),
+            None => kept.push(model),
+        }
+    }
+    *models = kept;
+    notices
+}
+
 /// Removes every model that declares no `context_window`, whose `web_search`
 /// its protocol does not read or whose `extra_body` names a field Fiber
 /// builds, returning one
@@ -572,13 +602,15 @@ impl Providers {
         }
     }
 
-    /// Leaves out the models `extension` may not serve: first the invalid
-    /// ones, then the ones whose `base_url` the manifest's entry for
-    /// `provider` does not list. A missing entry admits no model. Every
-    /// extension-supplied model list passes through here before entering
-    /// the registry; only the built-in scripted provider's model does not.
+    /// Leaves out the models `extension` may not serve: first the
+    /// deliberately omitted ones, then the invalid ones, then the ones
+    /// whose `base_url` the manifest's entry for `provider` does not list.
+    /// A missing entry admits no model. Every extension-supplied model
+    /// list passes through here before entering the registry; only the
+    /// built-in scripted provider's model does not.
     fn admit(&self, provider: &str, extension: &str, models: &mut Vec<ModelData>) -> Vec<Notice> {
-        let mut notices = leave_out_invalid(provider, extension, models);
+        let mut notices = leave_out_omitted(provider, extension, models);
+        notices.extend(leave_out_invalid(provider, extension, models));
         let empty = Vec::new();
         let listed = self
             .declared
@@ -1112,7 +1144,8 @@ impl Providers {
             .map(|(extension, _)| extension.clone());
         let mut models = models;
         let Some(owner) = owner else {
-            let mut notices = leave_out_invalid(name, name, &mut models);
+            let mut notices = leave_out_omitted(name, name, &mut models);
+            notices.extend(leave_out_invalid(name, name, &mut models));
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
             return notices;
         };
