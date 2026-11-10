@@ -541,7 +541,7 @@ subscribes, at either level, is sent the latest.
 | `started` | integer | yes | when the session started, as `ts` |
 | `calls` | integer | yes | tool calls the session has made so far |
 | `repeats` | integer | no | how many tool calls in a row, ending with the latest, had the same name and the same arguments; absent when it is 1 |
-| `turns` | integer | no | turns the session has run so far, counted as the usage view counts them (`docs/tui.md`); a client draws no turn count when it is absent |
+| `turns` | integer | no | turns the session has started so far, the running one included; the usage view and the side panel show it (`docs/tui.md`); a client draws no turn count when it is absent |
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
