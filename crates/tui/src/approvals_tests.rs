@@ -1684,3 +1684,214 @@ fn queue_fold_reads_requests_through_the_borrowed_decoder() {
         assert!(panel(&folded(&[line])).is_empty(), "no panel opens");
     }
 }
+
+/// A standing ask on `prefix` whose request carries the rewrite `keys`
+/// (`arguments` and/or `changed_by`) beside the request id. The builders
+/// send raw JSON payloads, so the request decodes before the card reads
+/// the new keys.
+fn rewrite_ask(
+    session: &str,
+    action: &str,
+    id: &str,
+    prefix: &str,
+    rewrite: serde_json::Value,
+) -> contract::Envelope {
+    let mut keys = serde_json::json!({"step": "standing_ask",
+        "standing_rule": {"scope": "global", "prefix": prefix}});
+    if let (Some(into), Some(from)) = (keys.as_object_mut(), rewrite.as_object()) {
+        into.extend(from.clone());
+    }
+    request(session, action, id, keys)
+}
+
+/// A read of `path` the guard rewrote to `rewritten`, named by
+/// `changed_by`.
+fn rewritten_read(
+    path: &str,
+    rewritten: &str,
+    changed_by: serde_json::Value,
+) -> Vec<contract::Envelope> {
+    vec![
+        call(S_A, "a_1", "read", serde_json::json!({"path": path})),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"arguments": {"path": rewritten}, "changed_by": changed_by}),
+        ),
+    ]
+}
+
+/// No dim run on the tool row.
+fn no_tool_mark(shown: &Panel) {
+    assert!(
+        shown
+            .marks
+            .iter()
+            .all(|mark| mark.line != 1 || mark.style != dim_style()),
+        "no dim mark on the tool row, in {:?}",
+        shown.marks
+    );
+}
+
+#[test]
+fn an_approval_rewrite_shows_the_rewritten_summary() {
+    let queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    let shown = rendered(&queue);
+    let facts = "runs a command · asked by the global rule read";
+    assert_eq!(
+        shown.lines,
+        vec![
+            header_text(1, 1, S_A),
+            "read b.txt · via fiber.test/guard".to_owned(),
+            facts.to_owned(),
+            String::new(),
+            "▸ 1 Allow once".to_owned(),
+            "  2 Deny  type to add feedback".to_owned(),
+            String::new(),
+            HINT.to_owned(),
+        ]
+    );
+    assert!(!shown.alert);
+    assert_eq!(shown.caret, None);
+    assert_eq!(
+        shown.marks,
+        vec![
+            mark(0, 0..15, head_style()),
+            mark(0, 15..37, session_style()),
+            mark(0, 64..81, dim_style()),
+            mark(1, 0..4, tool_style()),
+            mark(1, 5..10, bold_style()),
+            mark(1, 10..34, dim_style()),
+            mark(2, 0..facts.len(), dim_style()),
+            mark(4, 0..4, focus_style()),
+            mark(4, 4..5, dim_style()),
+            mark(4, 6..16, bold_style()),
+            mark(5, 2..3, dim_style()),
+            mark(5, 8..30, dim_style()),
+            mark(7, 0..HINT.len(), dim_style()),
+        ]
+    );
+}
+
+#[test]
+fn an_approval_rewrite_ends_the_tool_row_with_the_dim_via_names() {
+    let queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    let shown = rendered(&queue);
+    let line = "read b.txt · via fiber.test/guard";
+    assert_eq!(shown.lines[1], line);
+    assert!(
+        shown.marks.contains(&mark(1, 0..4, tool_style())),
+        "the bold tool, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown.marks.contains(&mark(1, 5..10, bold_style())),
+        "the bold rewritten summary, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown.marks.contains(&mark(1, 10..line.len(), dim_style())),
+        "the dim via mark ending the row, in {:?}",
+        shown.marks
+    );
+}
+
+#[test]
+fn an_approval_rewrite_without_changed_by_draws_no_mark() {
+    for rewrite in [
+        serde_json::json!({"arguments": {"path": "b.txt"}}),
+        serde_json::json!({"arguments": {"path": "b.txt"}, "changed_by": []}),
+    ] {
+        let queue = folded(&[
+            call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+            rewrite_ask(S_A, "a_1", "r_1", "read", rewrite),
+        ]);
+        let shown = rendered(&queue);
+        assert_eq!(shown.lines[1], "read b.txt");
+        no_tool_mark(&shown);
+    }
+}
+
+#[test]
+fn an_approval_rewrite_changed_by_without_arguments_changes_nothing() {
+    let queue = folded(&[
+        call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"changed_by": ["fiber.test/guard"]}),
+        ),
+    ]);
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read a.txt");
+    no_tool_mark(&shown);
+}
+
+#[test]
+fn an_approval_rewrite_old_request_without_keys_shows_the_requested_summary() {
+    let queue = folded(&[
+        call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+        standing_ask(S_A, "a_1", "r_1", "read"),
+    ]);
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read a.txt");
+    no_tool_mark(&shown);
+}
+
+#[test]
+fn an_approval_rewrite_reraise_replaces_the_rewrite_and_keeps_typed_text() {
+    let mut queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    for ch in "note".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    queue.fold(&rewrite_ask(
+        S_A,
+        "a_1",
+        "r_1",
+        "read",
+        serde_json::json!({"arguments": {"path": "c.txt"}, "changed_by": ["fiber.test/other"]}),
+    ));
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read c.txt · via fiber.test/other");
+    assert!(
+        shown
+            .marks
+            .contains(&mark(1, 10..shown.lines[1].len(), dim_style())),
+        "the latest names, in {:?}",
+        shown.marks
+    );
+    assert_eq!(row(&queue, 5), "▸ 2 Deny  note");
+}
+
+#[test]
+fn an_approval_rewrite_reraise_without_keys_restores_the_requested_summary() {
+    let mut queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    for ch in "note".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    queue.fold(&standing_ask(S_A, "a_1", "r_1", "read"));
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read a.txt");
+    no_tool_mark(&shown);
+    assert_eq!(row(&queue, 5), "▸ 2 Deny  note");
+}
