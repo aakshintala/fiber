@@ -2383,7 +2383,7 @@ through the `input_status` slot ("Extension seams").
 | Delete a word | `delete_word` | ⌥Backspace, Ctrl+Backspace, Ctrl+W | |
 | Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
 | Start or end of the line | `line_start_end` | Ctrl+A Ctrl+E; ⌘← ⌘→ where the terminal passes them | |
-| Open the draft, or a pasted token, in the editor ("The editor") | `open_in_editor` | Ctrl+G | click the token |
+| Open the draft, or a pasted token, in the editor | `open_in_editor` | Ctrl+G | click the token |
 | Paste an image | `paste_image` | Ctrl+V | |
 | Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
 | Move focus from the input box into the conversation | `navigate` | Shift+Tab | click an item |
