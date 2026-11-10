@@ -28,13 +28,13 @@ struct Connection {
 }
 struct Pending {
     reply: mpsc::Sender<Result<Started, HostError>>,
-    events: mpsc::Sender<HostEvent>,
+    events: mpsc::SyncSender<HostEvent>,
 }
 struct Client {
     writer: Mutex<UnixStream>,
     _lifeline: Box<dyn Send + Sync>,
     pending: Mutex<HashMap<String, Pending>>,
-    waiters: Mutex<HashMap<String, mpsc::Sender<HostEvent>>>,
+    waiters: Mutex<HashMap<String, mpsc::SyncSender<HostEvent>>>,
     adopted: Mutex<HashMap<JobId, String>>,
     changed: Arc<support::clock::Parker>,
     dead: AtomicBool,
@@ -276,7 +276,9 @@ impl Host {
         let mut adopted = HashMap::new();
         let mut kept = Vec::new();
         for job in running {
-            let (events, received) = mpsc::channel();
+            // Bounded: a runner that falls behind makes the reader wait
+            // instead of queueing the flood in the session (see #4054).
+            let (events, received) = mpsc::sync_channel(contract::keeper::HOST_EVENT_QUEUE); // ruling: #4054
             if waiters.insert(job.id.clone(), events).is_some()
                 || adopted.insert(job.job_id.clone(), job.id.clone()).is_some()
             {
@@ -330,7 +332,7 @@ impl Host {
         &self,
         client: &Arc<Client>,
         spec: Spawn,
-        events: mpsc::Sender<HostEvent>,
+        events: mpsc::SyncSender<HostEvent>,
     ) -> Result<Started, HostError> {
         let id = spec.id.clone();
         let (reply, received) = mpsc::channel();
@@ -370,7 +372,11 @@ impl Host {
     }
 }
 impl CommandHost for Host {
-    fn start(&self, spec: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
+    fn start(
+        &self,
+        spec: Spawn,
+        events: mpsc::SyncSender<HostEvent>,
+    ) -> Result<Started, HostError> {
         let mut slot = lock(&self.slot);
         if slot
             .as_ref()
@@ -425,7 +431,7 @@ struct Parts {
     lifeline: Box<dyn Send + Sync>,
     child: Option<Child>,
     peer: Option<Pid>,
-    waiters: HashMap<String, mpsc::Sender<HostEvent>>,
+    waiters: HashMap<String, mpsc::SyncSender<HostEvent>>,
     adopted: HashMap<JobId, String>,
     done: Option<mpsc::Sender<()>>,
 }
@@ -544,14 +550,21 @@ impl Client {
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(bytes)
                     .map_err(io::Error::other)?;
-                if let Some(events) = lock(&self.waiters).get(&id) {
+                // Cloned out before sending: the send waits past a full
+                // queue, and must not hold the map's lock while it does, or
+                // a stalled job wedges every other start on this client.
+                let events = lock(&self.waiters).get(&id).cloned(); // ruling: #4054
+                if let Some(events) = events {
                     match events.send(HostEvent::Output { stream, bytes }) {
                         Ok(()) | Err(_) => {}
                     }
                 }
             }
             FromKeeper::Exit { id, exit } => {
-                if let Some(events) = lock(&self.waiters).remove(&id) {
+                // Taken out before sending, as above: the ending waits past
+                // a full queue while its runner drains it.
+                let events = lock(&self.waiters).remove(&id); // ruling: #4054
+                if let Some(events) = events {
                     match events.send(HostEvent::Exit(exit)) {
                         Ok(()) | Err(_) => {}
                     }

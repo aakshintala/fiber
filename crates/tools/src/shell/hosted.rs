@@ -201,7 +201,9 @@ pub(super) fn execute(
         drop(guard);
         return Ok(Ran::Declined);
     }
-    let (sender, events) = std::sync::mpsc::channel();
+    // Bounded like every handover queue: a drive that falls behind makes
+    // the keeper wait instead of buffering the call in the session.
+    let (sender, events) = std::sync::mpsc::sync_channel(contract::keeper::HOST_EVENT_QUEUE); // ruling: #4054
     let started = host
         .start(spec, sender)
         .map_err(|error| io::Error::other(error.to_string()))?;

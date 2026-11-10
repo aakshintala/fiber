@@ -2,16 +2,26 @@
 //! "The keeper").
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{JobId, SessionId};
 
+/// How many output frames and endings a hosted call may hold ahead of its
+/// driver: past this the keeper's reader waits instead of buffering the
+/// flood in the session (see #4054). 64 frames of at most 8 KiB are 512 KiB
+/// standing; the runner's burst copies triple that transiently, still under
+/// the handover's 4 MiB growth budget with room to spare. // ruling: #4054
+pub const HOST_EVENT_QUEUE: usize = 64;
+
 /// Runs shell processes outside the session process.
 pub trait CommandHost: Send + Sync {
     /// Starts a process and delivers its output and ending through `events`.
-    fn start(&self, spec: Spawn, events: Sender<HostEvent>) -> Result<Started, HostError>;
+    /// The channel holds [`HOST_EVENT_QUEUE`] frames: a driver that falls
+    /// behind applies backpressure to the keeper instead of queueing without
+    /// bound. // ruling: #4054
+    fn start(&self, spec: Spawn, events: SyncSender<HostEvent>) -> Result<Started, HostError>;
     /// Asks a running process to stop, returning whether it was known.
     fn stop(&self, id: &str) -> bool;
     /// Writes text into a process's terminal.

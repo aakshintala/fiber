@@ -11,7 +11,7 @@ use super::kept_end;
 use crate::Shell;
 
 struct Host {
-    calls: mpsc::Sender<(Spawn, mpsc::Sender<HostEvent>)>,
+    calls: mpsc::Sender<(Spawn, mpsc::SyncSender<HostEvent>)>,
     stops: Mutex<Vec<String>>,
     stopped: Option<mpsc::Sender<String>>,
     adopted: Option<mpsc::Sender<Adopted>>,
@@ -25,7 +25,11 @@ struct Adopted {
     lines: bool,
 }
 impl CommandHost for Host {
-    fn start(&self, spec: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
+    fn start(
+        &self,
+        spec: Spawn,
+        events: mpsc::SyncSender<HostEvent>,
+    ) -> Result<Started, HostError> {
         self.calls.send((spec, events)).expect("start observed");
         Ok(Started { pgid: u32::MAX })
     }
@@ -631,11 +635,11 @@ impl contract::emit::Emit for Probe {
 struct Noting {
     order: Order,
     refusal: Option<String>,
-    calls: mpsc::Sender<mpsc::Sender<HostEvent>>,
+    calls: mpsc::Sender<mpsc::SyncSender<HostEvent>>,
 }
 
 impl CommandHost for Noting {
-    fn start(&self, _: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
+    fn start(&self, _: Spawn, events: mpsc::SyncSender<HostEvent>) -> Result<Started, HostError> {
         self.order.lock().expect("order").push("start");
         if let Some(io) = &self.refusal {
             return Err(HostError {
@@ -669,7 +673,7 @@ impl CommandHost for Noting {
 struct Noted {
     order: Order,
     probe: Arc<Probe>,
-    started: mpsc::Receiver<mpsc::Sender<HostEvent>>,
+    started: mpsc::Receiver<mpsc::SyncSender<HostEvent>>,
     result: mpsc::Receiver<std::io::Result<super::Ran>>,
     _dir: fakes::TempDir,
 }

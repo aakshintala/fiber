@@ -66,7 +66,7 @@ fn start(
     let host = host.clone();
     let id = id.to_owned();
     let (send, result) = mpsc::channel();
-    let (events, output) = mpsc::channel();
+    let (events, output) = mpsc::sync_channel(contract::keeper::HOST_EVENT_QUEUE);
     let worker = thread::spawn(move || match send.send(host.start(spec(&id), events)) {
         Ok(()) | Err(_) => {}
     });
@@ -242,7 +242,7 @@ fn keeper_write_failure_uses_pending_retirement() {
         &host,
     )
     .unwrap();
-    let (events, _) = mpsc::channel();
+    let (events, _) = mpsc::sync_channel(contract::keeper::HOST_EVENT_QUEUE);
     assert!(host.start_on(&client, spec("broken"), events).is_err());
     assert!(lock(&client.pending).is_empty());
     drop(peer);
@@ -791,4 +791,77 @@ fn dropping_the_host_sends_no_shutdown_to_a_retained_keeper() {
     peer.shutdown(std::net::Shutdown::Write).unwrap();
     let rest = rest_of(&peer);
     assert!(rest.is_empty(), "Drop must not write a shutdown");
+}
+
+// ---- the bounded handover queue (see #4054: the flood's RSS) ----
+
+#[test]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "pins the shared queue bound against the RSS budget"
+)]
+fn handover_queue_fits_the_growth_budget() {
+    // 8 KiB is the keeper reader's largest frame; a full queue stands once
+    // and the runner's burst copies it twice (fresh, shown), so the bound
+    // keeps the worst case under the flood test's 4 MiB growth budget.
+    assert!(
+        contract::keeper::HOST_EVENT_QUEUE * 8 * 3 <= 4 * 1024,
+        "the queue bound outgrew the RSS budget"
+    );
+}
+
+#[test]
+fn a_full_handover_queue_applies_backpressure() {
+    let (_host, _clock, _peers, _peer, mut attached) =
+        attached_host(vec![kept("call_0", "j_one")], b"");
+    let jobs = attached.take_jobs();
+    assert_eq!(jobs.len(), 1);
+    // The test holds the only receiver and drains nothing: exactly a full
+    // queue fits, and one more frame waits instead of queueing without
+    // bound. An unbounded channel would take it.
+    let sender = lock(&attached.client.waiters)
+        .get("call_0")
+        .cloned()
+        .unwrap();
+    for _ in 0..contract::keeper::HOST_EVENT_QUEUE {
+        match sender.try_send(HostEvent::Output {
+            stream: Stream::Out,
+            bytes: vec![1],
+        }) {
+            Ok(()) => {}
+            Err(error) => panic!("room for a bounded burst: {error:?}"),
+        }
+    }
+    assert!(
+        matches!(
+            sender.try_send(HostEvent::Output {
+                stream: Stream::Out,
+                bytes: vec![1],
+            }),
+            Err(mpsc::TrySendError::Full(_))
+        ),
+        "the handover queue applies backpressure past its bound"
+    );
+}
+
+#[test]
+fn a_stalled_job_never_wedges_another_start() {
+    let (host, _, peers, _) = fixture(false);
+    let (_, first, _) = start(&host, "slow");
+    let mut peer = deadline().recv(&peers).unwrap();
+    assert_eq!(line(&peer)["start"]["id"], "slow");
+    started(&mut peer, "slow");
+    assert!(deadline().recv(&first).unwrap().is_ok());
+    // Stall the reader past the queue without draining: every later frame
+    // waits, while the map's lock stays free.
+    for _ in 0..=contract::keeper::HOST_EVENT_QUEUE {
+        reply(
+            &mut peer,
+            serde_json::json!({"output":{"id":"slow","stream":"out","bytes":"YQ=="}}),
+        );
+    }
+    // Admission never waits on the stalled job: its start line goes out at
+    // once, even though its answer waits for the reader to catch up.
+    let (_, _second, _) = start(&host, "next");
+    assert_eq!(line(&peer)["start"]["id"], "next");
 }
