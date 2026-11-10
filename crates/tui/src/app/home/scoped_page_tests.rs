@@ -947,6 +947,94 @@ fn archived_first_sends_nothing_without_a_project_or_the_link() {
 }
 
 #[test]
+fn archived_page_sends_nothing_without_a_project_the_link_or_while_in_flight() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let _fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    // An empty project sends nothing while the link is up, and a named
+    // project sends nothing with the link down: with `||` as `&&` the
+    // empty-but-up and named-but-down asks read as sendable and a line
+    // goes out.
+    assert!(app.archived_page("", None).is_empty());
+    let page = app.archived_page("-new", None);
+    assert_eq!(page.len(), 1);
+    let line: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "recent");
+    assert_eq!(line["args"]["project"], "-new");
+    assert!(is_archived(&line));
+    // While one is in flight for the project, paging sends nothing.
+    assert!(app.archived_page("-new", None).is_empty());
+    app.disconnected();
+    assert!(app.archived_page("-other", None).is_empty());
+}
+
+#[test]
+fn an_archived_answer_while_open_pages_only_while_rows_are_missing() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .filter(|line| !is_archived(line))
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("a scoped ask"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    let archived = archived_id(&fanout);
+    // One archived row loaded for a held total of two, fold still
+    // closed: no page goes out.
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    app.home.sessions.open_archived("-w");
+    // A fresh archived ask while open, answered with the same single
+    // row: one row is still missing, so exactly one next page goes out.
+    // With `<` as `==` or `>` the missing row never pages and the first
+    // assertion below fails.
+    let retry = app.archived_first("-w");
+    assert_eq!(retry.len(), 1);
+    let retry: Value = serde_json::from_str(&retry[0]).unwrap_or_else(|err| panic!("{err}"));
+    let paging = answer_value(
+        &mut app,
+        line_id(&retry),
+        json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")], "total": 2}),
+    );
+    assert_eq!(paging.len(), 1);
+    assert!(is_archived(&paging[0]));
+    assert_eq!(paging[0]["args"]["before"], "s_bbbbbbbbbbbbbbbb");
+    // The page fills the last row: loaded equals held, so nothing more
+    // goes out. With `<` as `<=` or `==` the full fold pages again and
+    // the assertion below fails.
+    let page_id = line_id(&paging[0]).to_owned();
+    assert!(
+        app.on_line(accepted(
+            &page_id,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "c", "/w", "-w")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    assert_eq!(app.home.sessions.archived_loaded("-w"), 2);
+}
+
+#[test]
 fn an_archived_answer_with_the_link_down_queues_no_follow_up() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());

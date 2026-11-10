@@ -1415,3 +1415,55 @@ fn archived_scoped_reconciles_a_feed_exited_row_into_the_archived_map() {
     assert_eq!(archived, key);
     assert!(sessions.is_archived(&SessionId("s_f".to_owned())));
 }
+
+#[test]
+fn remove_keeps_other_projects_archived_rows_and_drops_empty_maps() {
+    let mut sessions = Sessions::default();
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    let (second, _) = recent_rows(&json!({"sessions": [project_row("s_p2", PROJECT)]}));
+    let (other, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.archived_scoped(PROJECT, first);
+    sessions.archived_scoped(PROJECT, second);
+    sessions.archived_scoped(OTHER, other);
+    sessions.note_archived_total(PROJECT, 2);
+    sessions.note_archived_total(OTHER, 1);
+    // Removing one of two archived rows keeps the other and the other
+    // project: `==` would keep only the removed id and fail the
+    // assertions below.
+    sessions.remove(&SessionId("s_p1".to_owned()));
+    assert!(!sessions.is_archived(&SessionId("s_p1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_p2".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+    assert_eq!(sessions.archived_loaded(OTHER), 1);
+    // Removing the other project's last archived row drops its empty
+    // map but keeps this project's row: keeping only empty maps would
+    // drop `s_p2` and fail the last assertion.
+    sessions.remove(&SessionId("s_o1".to_owned()));
+    assert!(!sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_p2".to_owned())));
+    assert_eq!(sessions.archived_loaded(OTHER), 0);
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
+fn status_unarchiving_cleans_only_the_emptied_archived_map() {
+    let mut sessions = Sessions::default();
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    let (other, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.archived_scoped(PROJECT, first);
+    sessions.archived_scoped(OTHER, other);
+    // A live status for one archived id unarchives it: its project map
+    // empties and drops, while the other project's row stays. Keeping
+    // only empty maps would drop `s_o1` and fail the last assertion.
+    sessions.status(section_row("s_p1", PROJECT, 0));
+    assert!(!sessions.is_archived(&SessionId("s_p1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 0);
+    assert_eq!(sessions.archived_loaded(OTHER), 1);
+    assert!(
+        sessions
+            .feed_row(&SessionId("s_p1".to_owned()))
+            .is_some_and(|row| row.left.is_none())
+    );
+}

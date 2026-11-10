@@ -7807,3 +7807,96 @@ fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
         "no rail card: {message}"
     );
 }
+
+#[test]
+fn archived_head_keys_and_text_follow_their_own_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_1111111111111111", "w1", "/w", "-w"),
+            exited_in("s_2222222222222222", "w2", "/w", "-w"),
+            exited_in("s_3333333333333333", "o1", "/other", "-other"),
+        ]}),
+    );
+    // One scoped and one archived ask per project.
+    let ask_id = |project: &str, archived: bool| {
+        fanout
+            .iter()
+            .filter(|line| is_archived(line) == archived)
+            .find(|line| line["args"]["project"] == project)
+            .map(line_id)
+            .unwrap_or_else(|| panic!("an ask for {project} archived={archived}"))
+            .to_owned()
+    };
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-w", false),
+            json!({"sessions": [], "total": 2})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-other", false),
+            json!({"sessions": [], "total": 1})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-w", true),
+            json!({"sessions": [exited_in("s_4444444444444444", "aw", "/w", "-w")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-other", true),
+            json!({"sessions": [
+                exited_in("s_5555555555555555", "ao1", "/other", "-other"),
+                exited_in("s_6666666666666666", "ao2", "/other", "-other"),
+            ], "total": 2}),
+        ))
+        .is_empty()
+    );
+    // The archived rows took fresh keys past the three unscoped rows,
+    // so neither head key is 0 or 1: replacing the head key with 0 or 1
+    // fails the equalities below.
+    let heads: Vec<(u64, String)> = app
+        .home_screen()
+        .unwrap_or_else(|| panic!("a screen"))
+        .list
+        .into_iter()
+        .filter_map(|line| match line {
+            ListLine::ArchivedHead { key, .. } => {
+                let project = app.home.sessions.by_key(key)?.project.clone();
+                Some((key, project))
+            }
+            ListLine::Head { .. }
+            | ListLine::Live { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::Exited { .. }
+            | ListLine::More { .. } => None,
+        })
+        .collect();
+    assert_eq!(heads.len(), 2);
+    for (key, project) in &heads {
+        // `==` keeps each head on its own project: `!=` swaps the
+        // sections and fails the count below.
+        let expected = if project == "-w" { 1 } else { 2 };
+        assert_eq!(
+            app.home_text(Spot::Archived(*key)).as_deref(),
+            Some(&format!("archived · {expected}")[..]),
+            "text for {project}",
+        );
+        let first = if project == "-w" {
+            "s_4444444444444444"
+        } else {
+            "s_5555555555555555"
+        };
+        assert_eq!(*key, row_key(&app, first), "head key for {project}");
+    }
+}

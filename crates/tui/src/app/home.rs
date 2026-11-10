@@ -1521,8 +1521,11 @@ impl App {
                     .sections(home.launch_project())
                     .into_iter()
                     .find(|section| section.project == row.project)?;
+                // No `count > 0` guard: `home_screen` only emits the
+                // head when the held total else loaded rows is nonzero,
+                // so a drawn head always has a count to name.
                 let count = section.archived_total.unwrap_or(section.archived.len());
-                (count > 0).then(|| format!("archived · {count}"))
+                Some(format!("archived · {count}"))
             }
             Spot::Stop(_)
             | Spot::Start(_)
