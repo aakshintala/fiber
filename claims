@@ -319,3 +319,9 @@ crates/tui/src/app/outbox_tests.rs	fiber-4557	plan	2026-11-10T17:40:38Z	Amoghs-M
 scripts/test-flake-report	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/flake_report.rs	fiber-4522	plan	2026-11-10T17:56:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/shape-7-send-quotes-earlier-block/events.jsonl	fiber-4457	plan	2026-11-10T18:01:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/shape-8-issue-comment-asks-ruling/events.jsonl	fiber-4457	plan	2026-11-10T18:01:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/shape-9-send-quotes-reviewer-refusal/events.jsonl	fiber-4457	plan	2026-11-10T18:01:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/shape-10-posts-undecidable-decision/events.jsonl	fiber-4457	plan	2026-11-10T18:01:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/shape-11-state-change-beyond-brief/events.jsonl	fiber-4457	plan	2026-11-10T18:01:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/control-5-approval-claim/events.jsonl	fiber-4457	plan	2026-11-10T18:01:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
