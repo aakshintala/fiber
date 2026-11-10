@@ -1782,7 +1782,7 @@ mod tests;
 
 /// Ends a session process, however it ran: closes the door side, then
 /// appends the session's `recent.jsonl` row with what it stopped on, its
-/// last `session_status` (`docs/state.md`, "Recently exited sessions").
+/// last `session_status` (`docs/state.md`, "Fiber home").
 /// A session `close` deleted, never prompted, leaves nothing behind.
 pub(crate) fn close(
     session: Session,

@@ -347,14 +347,14 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     // The card: the title bold in attention with the dim count
     // right-aligned, each entry's mark in attention with full-colour
     // text and a dim ✕ at the text's right edge, and the key hint with
-    // bold keys (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
+    // bold keys (`docs/tui.md`, "Steering": card; `docs/tui.md`, "The slots": oldest-first).
     // The card spans the conversation column, so every column is read
     // off the grid: the panel takes the screen's right side here.
     let title = find_row(&grid.rows, "Steering").expect("the title");
     let stripe = col_of(&grid.rows[title], '▌').expect("the stripe");
-    let figure = "2 queued · joins at the next step"; // docs/tui.md, "Steering": N queued.
+    let figure = "2 queued · joins at the next step"; // `docs/tui.md`, "Steering": N queued.
     assert!(
-        // docs/tui.md, "Steering": N queued.
+        // `docs/tui.md`, "Steering": N queued.
         grid.rows[title].contains(figure),
         "the count on {}",
         grid.rows[title]

@@ -1,5 +1,5 @@
 //! Binary-level tests of a workspace move (`docs/events.md`, "Change
-//! workspace" and `docs/invocation.md`, "Change workspace"): the built
+//! workspace" and `docs/invocation.md`, "What each command does"): the built
 //! `fiber` runs `hub serve` in its own process group with its own
 //! `FIBER_HOME`, holding an ordinary provider whose base URL is the fake
 //! server. A `change_workspace` closes the old session with `moved`, the
@@ -802,7 +802,7 @@ fn two_successive_target_requests_keep_a_stable_prefix() {
 }
 
 /// Exit evidence precedes lock release: only an empty Hub `held` answer
-/// permits the real delete (docs/invocation.md, "Deleting a session").
+/// permits the real delete (`docs/invocation.md`, "Deleting and pruning").
 fn wait_for_leaf_unheld(
     hubbed: &mut Hubbed,
     leaf: &str,
@@ -1033,7 +1033,7 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
         .unwrap()
         .to_owned();
     // The old process's exit retries the recorded child once
-    // (`docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits), and the
+    // (`docs/invocation.md`, "What each command does": the hub retries the same child id once when the old process exits), and the
     // retry fails like the initial attempt: the second matching hub.log
     // line is the retry's, and no `session_left` wait decides it.
     watch
@@ -1270,8 +1270,7 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
     hubbed.prompt("c_three", &next, "three");
     hubbed.close("c_close_next", &next, None);
     // A second writer may retain the lock after exit evidence. The Hub
-    // refuses deletion while that writer holds it (docs/invocation.md,
-    // "Deleting a session").
+    // refuses deletion while that writer holds it (`docs/invocation.md`, "Deleting and pruning").
     let log = session_log_path(&setup, &next);
     let dir = log
         .parent()

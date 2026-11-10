@@ -193,7 +193,7 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
         |grid| {
             grid.rows
                 .first()
-                // 3 rows a step (docs/tui.md, "Turns").
+                // 3 rows a step (`docs/tui.md`, "Turns").
                 .is_some_and(|row| item_number(row) == Some(b - 120))
         },
     );
@@ -205,7 +205,7 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
         |grid| {
             grid.rows
                 .first()
-                // 3 rows a step (docs/tui.md, "Turns").
+                // 3 rows a step (`docs/tui.md`, "Turns").
                 .is_some_and(|row| item_number(row) == Some(b - 3))
         },
     );

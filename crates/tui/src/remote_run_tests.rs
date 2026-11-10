@@ -249,11 +249,13 @@ fn the_start_pick_lists_the_hubs_models() {
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
     );
-    // The start pick lists the hub's catalogue, but the loop parks
-    // after what it already drew: moving the selection redraws the
-    // rest without touching the rows.
+    // The start pick has no initial selection: the first Down selects
+    // the first row, the second selects the hub's second model
+    // (`docs/tui.md`, "The model picker": no row is focused until ↓ or a
+    // click puts it there). The loop parks after what it already drew;
+    // navigation redraws without touching the rows.
     pair.main
-        .write_all(b"\x1b[B")
+        .write_all(b"\x1b[B\x1b[B")
         .unwrap_or_else(|err| panic!("write: {err}"));
     let second = crate::pty_watch::watched(&frames, "the hub's second model", &wait);
     assert_eq!(

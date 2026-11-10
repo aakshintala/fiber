@@ -1398,7 +1398,7 @@ fn cancelling_does_not_turn_a_later_row_delete_into_a_stop() {
     assert!(frame(&app).contains("Delete session"));
     let lines = sent(app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()));
     // The session-list delete sends one delete and no stops
-    // (docs/tui.md, "The session list").
+    // (`docs/tui.md`, "The session list").
     assert!(closes(&lines).is_empty(), "{lines:?}");
     assert_eq!(deletes(&lines).len(), 1);
     assert_eq!(deletes(&lines)[0]["args"], json!({"session": A}));

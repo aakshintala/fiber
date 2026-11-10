@@ -2892,7 +2892,7 @@ fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
     // One notice per code, per pass: a home with 25 skills each shadowed
     // by the same name in the person's `~/.agents/skills` raises exactly
     // one `skill_shadowed` notice listing all 25 (`#3679`, "The rule";
-    // `docs/errors.md`, "Notices": one notice per code, count and items;
+    // `docs/tui.md`, "Notices": one notice per code, count and items;
     // `docs/system-prompt.md`, "Skills": one `skill_shadowed` notice per
     // pass). The notice lands at the opening flush, after
     // `opening_message` and before `turn_started`.

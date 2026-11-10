@@ -1,6 +1,6 @@
 //! Binary-level test that a hub `start` with `continues` runs the new
 //! session where the old one did, and the worktree stands in both exit
-//! orders (`docs/invocation.md`, "`start` `continues`" and "Isolation"):
+//! orders (`docs/invocation.md`, "What the hub speaks" and "Isolation"):
 //! the built `fiber` runs `hub serve` in its own process group with its
 //! own `FIBER_HOME`, the fake provider server, and a `support::git`
 //! temporary repository. The old session exits first while the new one

@@ -1,5 +1,5 @@
 //! `fiber session --rewound-from <old>`: starts the session a rewind named
-//! (`docs/invocation.md`, "`rewind` starts a new session process"). The old
+//! (`docs/invocation.md`, "What each command does"). The old
 //! log's last line must be `rewound` naming this session; the point is the
 //! session its `seq` counts in, the old session or the `from_session_id` an
 //! ancestor point names. The new session runs through `run_new` with the
@@ -9,8 +9,7 @@
 //! so the hub can start it again from `rewound`.
 //!
 //! When the old log's last line is `moved` naming this session, the same
-//! flag starts the moved child instead (`docs/invocation.md`, "Change
-//! workspace"): the hub starts the process in the old session's workspace,
+//! flag starts the moved child instead (`docs/invocation.md`, "What each command does"): the hub starts the process in the old session's workspace,
 //! and it moves to the `moved` target workspace itself before running
 //! through `run_new` with no worktree and no rewind note or summary.
 //!
@@ -361,7 +360,7 @@ pub(crate) fn session_rewound(
 
 /// The `--rewound-from` entry when the old log ends `moved` naming `new`:
 /// starts `new` as the continuation of `old` in the moved target workspace
-/// (`docs/invocation.md`, "Change workspace"). The hub starts this process
+/// (`docs/invocation.md`, "What each command does"). The hub starts this process
 /// in the old session's workspace; the target comes from the durable
 /// `moved` line alone. A `moved` naming another session, or one that does
 /// not parse, is `invalid_arguments`; a missing target is `io_failed`

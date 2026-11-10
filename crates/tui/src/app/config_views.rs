@@ -11,10 +11,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::ErrorCode;
+use contract::commands::{Command, McpServerArgs};
 use contract::events::UsageRecorded;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{App, Effect, doctor_view};
 use crate::ThemeSetting;
@@ -130,6 +131,10 @@ pub(in crate::app) struct ConfigViews {
     /// The doctor report reader `main` injected: the `/doctor` view
     /// shows its snapshot, and none opens the Unavailable shape.
     doctor: Option<contract::feedback::ReadDoctor>,
+    /// Reads only the first startup blocker and whether its fix is a key.
+    doctor_blocker: Option<contract::feedback::ReadDoctorBlocker>,
+    /// The login opened automatically while completing first-run setup.
+    automatic_login: bool,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -157,6 +162,8 @@ impl Default for ConfigViews {
             models: None,
             feedback: None,
             doctor: None,
+            doctor_blocker: None,
+            automatic_login: false,
             copy: None,
             open: None,
             theme: None,
@@ -169,6 +176,15 @@ impl Default for ConfigViews {
 }
 
 impl App {
+    /// Opens the login for first-run without changing the home draft.
+    pub(crate) fn open_first_run_login(&mut self) -> Effect {
+        let draft = std::mem::take(&mut self.draft);
+        let effect = self.open_config_view(ConfigView::Login);
+        self.draft = draft;
+        self.config_views.automatic_login = true;
+        effect
+    }
+
     /// Sets the seam the views read and write through.
     pub(crate) fn set_configure(&mut self, seam: Arc<dyn Configure>) {
         self.config_views.seam = seam;
@@ -187,6 +203,14 @@ impl App {
     /// Sets the doctor report reader the `/doctor` view shows.
     pub(crate) fn set_doctor(&mut self, reader: Option<contract::feedback::ReadDoctor>) {
         self.config_views.doctor = reader;
+    }
+
+    /// Sets the narrow reader for home startup blockers.
+    pub(crate) fn set_doctor_blocker(
+        &mut self,
+        reader: Option<contract::feedback::ReadDoctorBlocker>,
+    ) {
+        self.config_views.doctor_blocker = reader;
     }
 
     /// The feedback report writer, absent with nothing to write through.
@@ -394,7 +418,7 @@ impl App {
                 },
             },
             ConfigView::Credential => {
-                let Some((id, line)) = self.send_config_command("credentials", None) else {
+                let Some((id, line)) = self.send_config_command(Command::Credentials) else {
                     return Effect::None;
                 };
                 self.outbox.pending.insert(
@@ -424,10 +448,10 @@ impl App {
                 )))
             }
             ConfigView::Tools => {
-                return self.open_asking(seam, "tools", build_tools);
+                return self.open_asking(seam, Command::Tools, build_tools);
             }
             ConfigView::Skills => {
-                return self.open_asking(seam, "skills", build_skills);
+                return self.open_asking(seam, Command::Skills, build_skills);
             }
             ConfigView::Rules => {
                 let Some(workspace) = self.view_workspace() else {
@@ -436,7 +460,7 @@ impl App {
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             ConfigView::Mcp => {
-                return self.open_asking(seam, "mcp_servers", build_mcp);
+                return self.open_asking(seam, Command::McpServers, build_mcp);
             }
             ConfigView::Login => {
                 let Some(workspace) = self.view_workspace() else {
@@ -458,14 +482,10 @@ impl App {
     /// Sends `command` with `args` to the session on screen: the sent
     /// line and its id, for the caller to record and send. Nothing when
     /// no session is attached.
-    fn send_config_command(
-        &mut self,
-        command: &str,
-        args: Option<Value>,
-    ) -> Option<(String, String)> {
+    fn send_config_command(&mut self, command: Command) -> Option<(String, String)> {
         let (session, _) = self.command_session()?;
-        let id = super::mint();
-        let line = super::session_command(&id, command, &session, args).to_string();
+        let id = support::mint("c_");
+        let line = super::session_line(&contract::CommandId(id.clone()), &session, command);
         Some((id, line))
     }
 
@@ -475,10 +495,10 @@ impl App {
     fn open_asking(
         &mut self,
         seam: Arc<dyn Configure>,
-        command: &str,
+        command: Command,
         build: fn(String, &Ctx<'_>) -> Open,
     ) -> Effect {
-        let Some((id, line)) = self.send_config_command(command, None) else {
+        let Some((id, line)) = self.send_config_command(command) else {
             return Effect::None;
         };
         let Some(workspace) = self.view_workspace() else {
@@ -567,6 +587,14 @@ impl App {
         };
         self.settle_settings_picker();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let restore_blockers =
+            *key == Key::Esc && matches!(self.config_views.open, Some(Open::Login(_)));
+        let blocker = restore_blockers.then(|| {
+            self.config_views
+                .doctor_blocker
+                .as_ref()
+                .and_then(|read| read())
+        });
         let act = match &mut self.config_views.open {
             Some(Open::Settings(settings)) => settings.key(key, &ctx),
             Some(Open::Tools(tools)) => tools.key(key, &ctx),
@@ -580,6 +608,16 @@ impl App {
             Some(Open::Doctor(..)) => esc(key),
             Some(Open::Credential(_)) | None => esc(key),
         };
+        if restore_blockers && matches!(act, Act::Close) {
+            let mut lines = Vec::new();
+            let mut keys = Vec::new();
+            if let Some(Some((line, key))) = blocker {
+                lines.push(line);
+                keys.push(key);
+            }
+            self.set_home_blockers(lines, keys);
+            self.config_views.automatic_login = false;
+        }
         Some(self.config_act_then_requests(act))
     }
 
@@ -808,7 +846,20 @@ impl App {
     /// Carries out what the view asked.
     fn config_act(&mut self, act: Act) -> Effect {
         match act {
-            Act::Stay => Effect::None,
+            Act::Stay => {
+                let finished = self.config_views.automatic_login
+                    && self.login_view().is_some_and(Login::ended_successfully);
+                if finished {
+                    self.config_views.automatic_login = false;
+                    self.first_run_no_credential = false;
+                    self.config_views.open = None;
+                    if self.home.launch.model.is_none() {
+                        self.open_model_picker(crate::model_picker::Mode::Choose);
+                        self.model_picker.unselect_for_first_run();
+                    }
+                }
+                Effect::None
+            }
             Act::Close => {
                 self.config_views.open = None;
                 Effect::None
@@ -900,8 +951,20 @@ impl App {
                 }
                 Effect::None
             }
-            Act::McpReconnect(server) => self.send_mcp_driver("mcp_reconnect", &server, false),
-            Act::McpLogin(server) => self.send_mcp_driver("mcp_login", &server, true),
+            Act::McpReconnect(server) => self.send_mcp_driver(
+                Command::McpReconnect(McpServerArgs {
+                    server: server.clone(),
+                }),
+                &server,
+                false,
+            ),
+            Act::McpLogin(server) => self.send_mcp_driver(
+                Command::McpLogin(McpServerArgs {
+                    server: server.clone(),
+                }),
+                &server,
+                true,
+            ),
             Act::Copy(url) => {
                 // As a focused link's `y`: the copy goes through OSC 52
                 // and, on a local session, the system clipboard as well.
@@ -914,9 +977,8 @@ impl App {
     /// Sends a per-server driver command for the open MCP view and
     /// remembers its id as the server's wait: the answer clears the wait
     /// and queries the rows again. Nothing when no session is attached.
-    fn send_mcp_driver(&mut self, command: &str, server: &str, login: bool) -> Effect {
-        let Some((id, line)) = self.send_config_command(command, Some(json!({"server": server})))
-        else {
+    fn send_mcp_driver(&mut self, command: Command, server: &str, login: bool) -> Effect {
+        let Some((id, line)) = self.send_config_command(command) else {
             return Effect::None;
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
@@ -929,7 +991,7 @@ impl App {
     /// Re-sends `mcp_servers` for the open MCP view: its answer fills
     /// what `expect` names. Nothing when no session is attached.
     fn remcp_query(&mut self) -> Vec<String> {
-        let Some((id, line)) = self.send_config_command("mcp_servers", None) else {
+        let Some((id, line)) = self.send_config_command(Command::McpServers) else {
             return Vec::new();
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {

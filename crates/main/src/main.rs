@@ -1195,7 +1195,7 @@ fn terminal(
     let diag_home = home.clone();
     // The terminal's diagnostic writer: one process, one file. Built once
     // here and shared with the terminal, so the error path below writes to
-    // the same file a run would have (`docs/state.md`, "Diagnostic logs").
+    // the same file a run would have (`docs/state.md`, "What each part holds").
     let diag = Arc::new(log::diag::Diag::new(
         &diag_home,
         log::diag::Process::Tui,
@@ -1228,6 +1228,8 @@ fn terminal(
     // directory the terminal opens in: cloned before `launch` takes it.
     let feedback_home = home.clone();
     let feedback_workspace = workspace.clone();
+    let blocker_home = home.clone();
+    let blocker_workspace = workspace.clone();
     let feedback_version = cli::bare_version();
     let feedback_clock = Arc::clone(&clock);
     // The `doctor` output both the feedback writer and the `/doctor`
@@ -1299,6 +1301,15 @@ fn terminal(
     let doctor: contract::feedback::ReadDoctor =
         std::sync::Arc::new(move || report().map_err(|error| error.to_string()));
     launch.doctor = Some(doctor);
+    let doctor_blocker: contract::feedback::ReadDoctorBlocker = std::sync::Arc::new(move || {
+        ::cli::first_blocker(
+            &blocker_home,
+            &blocker_workspace,
+            &|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()),
+            &mcp::url_has_userinfo,
+        )
+    });
+    launch.doctor_blocker = Some(doctor_blocker);
     launch.open_at = open_at;
     match tui::run(
         tty,
@@ -1314,7 +1325,7 @@ fn terminal(
             let failure = failed(error.code(), error.to_string());
             // The terminal never started: one `error` line in
             // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
-            // startup failure does (`docs/state.md`, "Diagnostic logs").
+            // startup failure does (`docs/state.md`, "What each part holds").
             let code = serde_json::to_value(&failure.code)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))

@@ -275,7 +275,7 @@ fn process_hook_http_records_the_extension_line() {
         .iter()
         .filter(|line| line["data"]["purpose"] == "extension")
         .collect();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(extension.len(), 1, "one extension request: {requests:?}");
     let line = extension[0];
     assert_eq!(line["data"]["extension"], "fiber.test/probe");
@@ -602,7 +602,7 @@ fn process_resume_recomposes_under_the_resume_reason() {
         .lines()
         .map(|line| serde_json::from_str(line).expect("each hello is one JSON object"))
         .collect();
-    // docs/extensions.md:211 (`extension_hello` reasons) and :215 (every
+    // `docs/extensions.md`, "Process extensions" (`extension_hello` reasons) and (`docs/extensions.md`, "Process extensions") (every
     // session starts its own process extensions at session start): the
     // first run hellos once as `new`, the resume run hellos once as
     // `resume`, each carrying the resumed session's id.
@@ -641,7 +641,7 @@ fn process_hook_timeout_applies_on_failure_and_drops_the_late_reply() {
         .iter()
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
-    // docs/extensions.md:209 (every request is answered once; a reply to
+    // `docs/extensions.md`, "Process extensions" (every request is answered once; a reply to
     // a request that is no longer pending is rejected `stale_request` and
     // changes nothing): the fixture's single call completes exactly once,
     // and the late reply changes nothing.
@@ -681,10 +681,10 @@ fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
         .iter()
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
-    // docs/extensions.md:209 (tool calls are sent as they arrive, so
+    // `docs/extensions.md`, "Process extensions" (tool calls are sent as they arrive, so
     // several can be outstanding, and every request is answered): the
     // fixture's three calls each complete once, the last one failing
-    // after the restart (docs/extensions.md:222, a twice-dead extension
+    // after the restart (`docs/extensions.md`, "Process extensions", a twice-dead extension
     // stays dead and its calls fail).
     assert_eq!(
         completed.len(),
@@ -703,7 +703,7 @@ fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
     );
     assert_eq!(completed[2]["payload"]["status"], json!("failed"));
     // Exactly two generations spawned: one restart, never a third
-    // (docs/extensions.md:211, the hello is sent again after a restart;
+    // (`docs/extensions.md`, "Process extensions", the hello is sent again after a restart;
     // :222, one that dies is restarted once, and a second death stays
     // dead).
     let hellos = std::fs::read_to_string(&hello_marker).expect("the peer appends two hellos");
@@ -718,7 +718,7 @@ fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
                 .and_then(|body| body.get("tools").cloned())
         })
         .collect();
-    // docs/extensions.md:222 (a dead extension's tools stay declared, so
+    // `docs/extensions.md`, "Process extensions" (a dead extension's tools stay declared, so
     // the prompt cache holds): the declarations never move across the
     // deaths; three listings come from the fixture's three model steps.
     assert!(

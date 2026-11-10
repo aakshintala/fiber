@@ -6,12 +6,11 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
-
 use crate::catalogue::{Catalogue, ModelEntry, Price, Refresh};
 use crate::keys::Key;
 use crate::swapped::List;
 use crate::text::controls_to_space;
+use contract::commands::ModelArgs;
 
 mod filter;
 #[cfg(test)]
@@ -66,6 +65,8 @@ pub(crate) struct Open {
     pub(crate) mode: Mode,
     /// The selected row's catalogue index.
     pub(crate) selected: usize,
+    /// First-run starts without implicitly choosing the first row.
+    pub(crate) unselected: bool,
     /// Each row's chip, by catalogue index: its level's place in the
     /// entry's levels, or no chip for a model with no levels or no
     /// declared level to preselect.
@@ -565,6 +566,7 @@ impl ModelPicker {
         let mut open = Open {
             mode,
             selected: 0,
+            unselected: false,
             chips,
             touched,
             marks,
@@ -581,6 +583,13 @@ impl ModelPicker {
         self.open = Some(open);
         self.installs.reset();
         self.ask_stale();
+    }
+
+    /// Leaves the first-run picker without an implicit selected row.
+    pub(crate) fn unselect_for_first_run(&mut self) {
+        if let Some(open) = self.open.as_mut() {
+            open.unselected = true;
+        }
     }
 
     /// Closes the picker, sending nothing and saving nothing.
@@ -986,6 +995,9 @@ impl ModelPicker {
     /// toggles its marks with Enter and saves them with Ctrl+S, and
     /// never chooses.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
+        if self.open.as_ref().is_some_and(|open| open.unselected) {
+            return None;
+        }
         if self.is_scope() || matches!(self.focus(), Some(Stop::Install(_) | Stop::LoggedOut(_))) {
             return None;
         }
@@ -1539,10 +1551,10 @@ pub(crate) fn scoped_save(models: &[ModelEntry], marks: &[bool], old: &[String])
 
 /// A choice as the `model` command's args: `thinking` rides along
 /// exactly when the choice names a level.
-pub(crate) fn command_args(choice: &Choice) -> Value {
-    match &choice.level {
-        Some(level) => json!({"model": choice.reference, "thinking": level}),
-        None => json!({"model": choice.reference}),
+pub(crate) fn command_args(choice: &Choice) -> ModelArgs {
+    ModelArgs {
+        model: choice.reference.clone(),
+        thinking: choice.level.clone(),
     }
 }
 

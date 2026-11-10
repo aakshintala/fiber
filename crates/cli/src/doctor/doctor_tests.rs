@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::{Hub, Inputs, doctor, run};
+use super::{Hub, Inputs, doctor, first_blocker, run};
 use crate::CliError;
 use config::{Secret, store_credential};
 use contract::ErrorCode;
@@ -736,6 +736,36 @@ impl Setup {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("config.json"), value.to_string()).unwrap();
     }
+}
+
+#[test]
+fn doctor_blocker_reader_returns_only_line_and_key_flag() {
+    let setup = Setup::new();
+    let env = env_of(&[]);
+    let no_model = first_blocker(
+        &setup.home(),
+        &setup.workspace(),
+        &|name| env.get(name).cloned(),
+        &|url| url.contains('@'),
+    )
+    .expect("the unconfigured launch is blocked");
+    assert!(no_model.0.contains("No model was chosen"), "{:?}", no_model);
+    assert!(!no_model.1);
+
+    setup.place_fake(
+        "http://127.0.0.1:1/v1",
+        json!({"env": "FIBER_TEST_FAKE_KEY"}),
+    );
+    setup.write_config(&json!({"model": "fake/m"}));
+    let key = first_blocker(
+        &setup.home(),
+        &setup.workspace(),
+        &|name| env.get(name).cloned(),
+        &|url| url.contains('@'),
+    )
+    .expect("the missing credential blocks startup");
+    assert!(key.0.contains("key"), "{:?}", key);
+    assert!(key.1);
 }
 
 #[test]

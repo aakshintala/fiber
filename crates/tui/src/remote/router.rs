@@ -152,7 +152,7 @@ impl Router {
                 return Err(AskError::OtherConnection);
             }
             let stream = stream.try_clone().map_err(|_| AskError::Lost)?;
-            let id = crate::app::mint();
+            let id = support::mint("c_");
             state.requests.insert(id.clone(), answer);
             (id, stream, state.epoch)
         };

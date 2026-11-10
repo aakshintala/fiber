@@ -7,7 +7,7 @@ use contract::{ErrorCode, SessionId};
 
 use super::App;
 use super::outbox::Waiting;
-use crate::home::Level;
+use contract::commands::SubscribeLevel;
 
 impl App {
     /// Attaches a move's child only while its original session is on screen.
@@ -25,7 +25,10 @@ impl App {
             return None;
         }
         let new = new_session_id.clone();
-        let lines = vec![self.subscribe(&new, Level::Full), self.ask_commands(&new)];
+        let lines = vec![
+            self.subscribe(&new, SubscribeLevel::Full),
+            self.ask_commands(&new),
+        ];
         self.attach(new);
         Some(lines)
     }

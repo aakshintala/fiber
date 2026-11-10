@@ -25,6 +25,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 use serde_json::json;
 use support::hold::Hold;
+use support::journey::ctx_size_drawn;
 use support::pty::{Colour, Grid, Run};
 use support::{Deadline, Setup, TRUECOLOUR, connect_hub, until, write_json};
 
@@ -765,20 +766,6 @@ fn status_row(grid: &Grid) -> u16 {
         .0
 }
 
-/// Whether the status row's ctx segment shows a size: until the panel
-/// holds a window and a context figure it draws `— · —`, which leaves the
-/// working directory a different width. Only the text after `ctx` counts,
-/// so a digit in the directory is not a size.
-fn ctx_size_drawn(grid: &Grid) -> bool {
-    let Some((_, row)) = status_row_text(grid) else {
-        return false;
-    };
-    let Some((_, after)) = row.split_once("ctx") else {
-        return false;
-    };
-    !after.contains('—') && after.chars().any(|c| c.is_ascii_digit())
-}
-
 /// A narrow width cuts the working directory from the left first: the
 /// row keeps the tail behind an ellipsis with the mode, while the
 /// right side stays whole (`docs/tui.md`, "The input box").
@@ -799,7 +786,9 @@ fn narrow_width_cuts_the_working_directory_first() {
     run.ready();
     run.write(b"go\r");
     let grid = run.wait_screen("the cut status row", |grid| {
-        grid.contents.contains("1 delegate running") && ctx_size_drawn(grid)
+        grid.contents.contains("1 delegate running")
+            && status_row_text(grid).is_some()
+            && ctx_size_drawn(grid)
     });
     let status = status_row(&grid);
     let row: String = (1..68).map(|x| grid.cell(x, status).symbol).collect();

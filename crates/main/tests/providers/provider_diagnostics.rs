@@ -1,5 +1,5 @@
 //! Native provider requests and session memory at the binary level
-//! (`docs/state.md`, "Diagnostic logs"): the built `fiber` runs `ask`
+//! (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask`
 //! against fake provider servers. With the default nothing debug is
 //! written; a debug run writes one `http_request` per attempt and a
 //! `resources` per turn and at the orderly end.
@@ -179,7 +179,7 @@ fn ask_debug_writes_one_http_request_and_two_resources_lines() {
         .iter()
         .filter(|line| line["code"] == "resources")
         .collect();
-    // docs/state.md, "Diagnostic logs": a resources line after each turn's turn_completed and one more at the orderly end.
+    // `docs/state.md`, "What each part holds": a resources line after each turn's turn_completed and one more at the orderly end.
     assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
     let mut disk_read = 0;
     let mut disk_write = 0;
@@ -1027,7 +1027,7 @@ fn a_debug_turn_grows_the_session_events_file() {
         .iter()
         .filter(|line| line["code"] == "resources")
         .collect();
-    // docs/state.md, "Diagnostic logs": a resources line after each turn's turn_completed and one more at the orderly end.
+    // `docs/state.md`, "What each part holds": a resources line after each turn's turn_completed and one more at the orderly end.
     assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
     for peak in &peaks {
         for field in [

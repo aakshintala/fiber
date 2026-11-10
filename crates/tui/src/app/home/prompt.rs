@@ -7,15 +7,17 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use super::super::reconnect::UNANSWERED;
-use super::super::{App, Effect, Kind, mint, session_command};
+use super::super::{App, Effect, Kind, session_line};
 use super::{refusal, refusal_code};
-use crate::home::{Level, Spot, State, dependents};
+use crate::home::{Spot, State, dependents};
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::SubscribeLevel;
+use contract::commands::{CloseArgs, Command};
 use contract::events::CommandAccepted;
 
 mod exit;
@@ -282,10 +284,14 @@ impl App {
         let session = row.id.clone();
         let mut lines = Vec::new();
         if self.subscribed_level(&session).is_none() {
-            lines.push(self.subscribe(&session, Level::Summary));
+            lines.push(self.subscribe(&session, SubscribeLevel::Summary));
         }
-        let id = mint();
-        lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
+        let id = support::mint("c_");
+        lines.push(session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::Close(CloseArgs { now: true }),
+        ));
         self.home
             .questions
             .asks
@@ -431,7 +437,7 @@ impl App {
         // and a swallowed press would read as a dead key. The held
         // line goes out with the hello pass, and the answer folds as
         // usual; a rejection returns an empty draft, keeping the box.
-        let command = mint();
+        let command = support::mint("c_");
         let line = json!({
             "id": command,
             "command": "import",
@@ -641,7 +647,7 @@ impl App {
 
 /// Builds the existing delete command line and its correlation id.
 fn delete_line(id: &SessionId, expect: Option<&[SessionId]>) -> (String, String) {
-    let command = mint();
+    let command = support::mint("c_");
     let line = match expect {
         None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
         Some(expect) => json!({

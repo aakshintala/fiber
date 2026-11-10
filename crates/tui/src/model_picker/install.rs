@@ -270,6 +270,9 @@ impl ModelPicker {
         {
             return Some(Stop::Install(name.clone()));
         }
+        if open.unselected {
+            return None;
+        }
         let rows = self.shown_models();
         if rows.contains(&open.selected) {
             Some(Stop::Model(open.selected))
@@ -390,6 +393,7 @@ impl ModelPicker {
             Stop::Model(index) => {
                 if let Some(open) = self.open.as_mut() {
                     open.selected = index;
+                    open.unselected = false;
                 }
                 self.installs.focus = None;
             }

@@ -1001,9 +1001,9 @@ fn a_click_on_a_steering_row_selects_it_into_the_draft() {
     ]);
     // The queue's entries sit on rows 3 and 4, newest lowest, on the
     // card between its edges: striped, with the title above and the key
-    // hint below (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
-    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 3); // docs/tui.md, "The slots": oldest-first; docs/tui.md, "Steering".
-    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 4); // docs/tui.md, "The slots": oldest-first; docs/tui.md, "Steering".
+    // hint below (`docs/tui.md`, "Steering": card; `docs/tui.md`, "The slots": oldest-first).
+    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 3); // `docs/tui.md`, "The slots": oldest-first; `docs/tui.md`, "Steering".
+    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 4); // `docs/tui.md`, "The slots": oldest-first; `docs/tui.md`, "Steering".
     // The card's bottom edge row is no target.
     feed(&mut lp, vec![click(40, 6)]);
     assert_eq!(lp.app.input().expand(), "mine");
@@ -1327,10 +1327,10 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
     );
     // Rows 2 to 4 on the card, oldest on top: each droppable row's ✕
     // sits at its text's right edge, and Fiber's own row has none
-    // (docs/tui.md, "Steering": dim ✕; docs/tui.md, "The slots": oldest-first).
+    // (`docs/tui.md`, "Steering": dim ✕; `docs/tui.md`, "The slots": oldest-first).
     let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
-    assert!(rows[2].ends_with('✕') && rows[3].ends_with('✕'), "{rows:?}"); // docs/tui.md, "Steering": dim ✕; docs/tui.md, "The slots".
-    assert!(!rows[4].contains('✕'), "{rows:?}"); // docs/tui.md, "The slots": droppable; docs/tui.md, "Steering".
+    assert!(rows[2].ends_with('✕') && rows[3].ends_with('✕'), "{rows:?}"); // `docs/tui.md`, "Steering": dim ✕; `docs/tui.md`, "The slots".
+    assert!(!rows[4].contains('✕'), "{rows:?}"); // `docs/tui.md`, "The slots": droppable; `docs/tui.md`, "Steering".
     // Fiber's own row is a steering target with no ✕ on it.
     assert!(matches!(
         hit_at(&lp, 59, 4),

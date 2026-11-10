@@ -1,5 +1,7 @@
 # Signing in
 
+Run `fiber` and pick a provider: with nothing configured, the terminal opens sign-in itself, then the model picker (`docs/tui.md`, "First run"). For scripts and machines without a terminal, `fiber login` stays the scriptable route to the same sign-ins.
+
 Fiber signs in per provider. The two sign-ins in the friends release are **codex** (ChatGPT login) and **opencode-go** (Muse). How labels, stored credentials and the reviewer pick work is [Logging in](../model-routing.md), [Credentials](../model-routing.md), and [Keys, tokens and OAuth](../model-routing.md).
 
 ## codex
