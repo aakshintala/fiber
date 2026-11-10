@@ -83,6 +83,7 @@ fn turn(setup: &Setup) -> Run {
 
 /// The first cell of `needle` on the grid.
 fn locate(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
+    // settled: a finder run by `click_where` on the frame the click acts on.
     grid.rows.iter().enumerate().find_map(|(y, row)| {
         row.find(needle)
             .map(|x| (u16::try_from(x).unwrap(), u16::try_from(y).unwrap()))
@@ -95,27 +96,6 @@ fn replaced(run: &mut Run) {
     run.wait_screen("the click replacement", |grid| {
         grid.rows.iter().any(|row| row.contains("CLICKYES"))
     });
-}
-
-/// Types `marker` and waits for it: once the marker draws, every earlier
-/// byte was read, so the click or keys above took effect.
-fn marked(run: &mut Run, marker: &str) -> Grid {
-    run.write(marker.as_bytes());
-    run.wait_screen("the typed marker", |grid| {
-        grid.rows.iter().any(|row| row.contains(marker))
-    })
-}
-
-/// No extension failure drew: a handler that errored or a refused load
-/// would name itself on screen.
-fn assert_no_failures(grid: &Grid) {
-    for code in ["extension_failed", "hook_failed", "command_conflict"] {
-        assert!(
-            !grid.contents.contains(code),
-            "a {code} notice drew: {}",
-            grid.contents
-        );
-    }
 }
 
 fn quit(mut run: Run, marker: &str) {
@@ -143,22 +123,21 @@ fn click_and_navigate_reach_handler() {
     // The draft stays empty throughout, so a missed Enter is a no-op
     // rather than a submitted turn.
     run.click_where("the handled stop", |grid| locate(grid, "CLICKYES"));
-    // The marker proves the click took effect before these asserts run.
-    let grid = marked(&mut run, "zz");
-    assert!(
-        grid.rows.iter().any(|row| row.contains("CLICKYES")),
-        "the handled row still draws: {}",
-        grid.contents
-    );
-    assert!(
-        !grid
-            .rows
-            .iter()
-            .any(|row| row.contains("ledger-probe-9d2c")),
-        "the handled click opened the group: {}",
-        grid.contents
-    );
-    assert_no_failures(&grid);
+    // Once the marker draws, every earlier byte was read, so the click
+    // took effect: the wait checks the handled row still draws, the group
+    // stayed collapsed, and no extension failure drew, all on that frame.
+    run.write(b"zz");
+    run.wait_screen("the handled stop still drawn after the marker", |grid| {
+        grid.rows.iter().any(|row| row.contains("zz"))
+            && grid.rows.iter().any(|row| row.contains("CLICKYES"))
+            && !grid
+                .rows
+                .iter()
+                .any(|row| row.contains("ledger-probe-9d2c"))
+            && !grid.contents.contains("extension_failed")
+            && !grid.contents.contains("hook_failed")
+            && !grid.contents.contains("command_conflict")
+    });
     // Clear the draft: the draft stays empty below, so a missed Enter is
     // a no-op rather than a submitted turn.
     run.write(b"\x03");
@@ -175,12 +154,14 @@ fn click_and_navigate_reach_handler() {
     // it again. Extension stops carry no focused tint as links do, so
     // the routed effects prove each stop was focused.
     run.write(b"\x1b[Z\x1b[B\r\x1b[B\r");
-    let grid = run.wait_screen("the opened group", |grid| {
+    run.wait_screen("the opened group", |grid| {
         grid.rows
             .iter()
             .any(|row| row.contains("ledger-probe-9d2c"))
+            && !grid.contents.contains("extension_failed")
+            && !grid.contents.contains("hook_failed")
+            && !grid.contents.contains("command_conflict")
     });
-    assert_no_failures(&grid);
     quit(run, "zz");
 }
 
@@ -194,15 +175,19 @@ fn unhandled_click_opens_builtin_row() {
     let mut run = turn(&setup);
     replaced(&mut run);
     run.click_where("the unhandled stop", |grid| locate(grid, "CLICKNO"));
-    let grid = marked(&mut run, "zz");
-    assert!(
-        grid.rows
-            .iter()
-            .any(|row| row.contains("ledger-probe-9d2c")),
-        "the declined click opened the group: {}",
-        grid.contents
-    );
-    assert_no_failures(&grid);
+    // Once the marker draws, the declined click took effect: the wait
+    // checks the group opened on its real content, with no failure drew.
+    run.write(b"zz");
+    run.wait_screen("the declined click opened the group", |grid| {
+        grid.rows.iter().any(|row| row.contains("zz"))
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("ledger-probe-9d2c"))
+            && !grid.contents.contains("extension_failed")
+            && !grid.contents.contains("hook_failed")
+            && !grid.contents.contains("command_conflict")
+    });
     quit(run, "zz");
     // A fresh run: BackTab lands on the collapsed summary, two steps
     // down on the declined stop, and Enter follows the same route,
@@ -215,19 +200,14 @@ fn unhandled_click_opens_builtin_row() {
     run.write(b"\x1b[Z\x1b[B\x1b[B");
     run.write(b"\r");
     // Opening is its own proof: the wait only passes once Enter's
-    // fallback toggle drew the built-in content.
-    let grid = run.wait_screen("the opened group", |grid| {
+    // fallback toggle drew the built-in content, with no failure drew.
+    run.wait_screen("the opened group", |grid| {
         grid.rows
             .iter()
             .any(|row| row.contains("ledger-probe-9d2c"))
+            && !grid.contents.contains("extension_failed")
+            && !grid.contents.contains("hook_failed")
+            && !grid.contents.contains("command_conflict")
     });
-    assert!(
-        grid.rows
-            .iter()
-            .any(|row| row.contains("ledger-probe-9d2c")),
-        "Enter on the declined stop opened the group: {}",
-        grid.contents
-    );
-    assert_no_failures(&grid);
     quit(run, "zz");
 }
