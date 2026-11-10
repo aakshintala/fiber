@@ -69,6 +69,12 @@ pub(crate) struct Feed {
     clock: Arc<dyn Clock>,
     pub(crate) attention: Attention,
     state: Mutex<State>,
+    /// Serializes hub `archive` with `on_left`: archive holds it across
+    /// its live check, log open and appends and index publication, and
+    /// `on_left` across its archive-state recheck, crash-row append and
+    /// left transition. Never held across rewind notification, connection
+    /// shutdown or a thread join, and never into listing or answer writes.
+    recent_mutation: Mutex<()>,
     tick: Arc<Tick>,
     /// `tick` as the clock's subscriber: kept alive so advances wake the
     /// scanner.
@@ -165,6 +171,7 @@ impl Feed {
             clock,
             attention,
             state: Mutex::new(State::default()),
+            recent_mutation: Mutex::new(()),
             tick,
             _wake: wake,
             scanner: Mutex::new(None),
@@ -203,6 +210,15 @@ impl Feed {
         if let Ok(handle) = spawned {
             *lock(&self.scanner) = Some(handle);
         }
+    }
+
+    /// Tests only: the scanner thread's id once starting spawned it, so
+    /// a test can advance the clock to the scanner's next park.
+    #[cfg(test)]
+    pub(crate) fn scanner_thread(&self) -> Option<thread::ThreadId> {
+        lock(&self.scanner)
+            .as_ref()
+            .map(|handle| handle.thread().id())
     }
 
     /// Stops the scanner, stops every summary reader and shuts every
@@ -341,7 +357,24 @@ impl Feed {
         self.attention.forget(session);
     }
 
-    /// `recent`: a page of exited sessions, newest first.
+    /// The lock hub `archive` holds across its read, open, append and
+    /// forget sequence: the only recent-mutation access outside `on_left`.
+    pub(crate) fn recent_mutation(&self) -> &Mutex<()> {
+        &self.recent_mutation
+    }
+
+    /// `session`'s latest `session_status`, running or left, when the
+    /// feed still tracks it.
+    pub(crate) fn status_of(&self, session: &str) -> Option<SessionStatus> {
+        lock(&self.state)
+            .entries
+            .get(session)
+            .map(|(Entry::Running(status) | Entry::Left(status, _))| status.payload.clone())
+    }
+
+    /// `recent`: a page of exited sessions, newest first. With
+    /// `archived`, only archived sessions; without it, archived sessions
+    /// are left out.
     pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let text = |key: &str| match args.get(key) {
             None => Ok(None),
@@ -350,7 +383,15 @@ impl Feed {
         };
         let before = text("before")?;
         let project = text("project")?;
-        if args.keys().any(|key| key != "before" && key != "project") {
+        let archived = match args.get("archived") {
+            None => false,
+            Some(Value::Bool(wanted)) => *wanted,
+            Some(_) => return Err(invalid()),
+        };
+        if args
+            .keys()
+            .any(|key| key != "before" && key != "project" && key != "archived")
+        {
             return Err(invalid());
         }
         let running = lock(&self.state)
@@ -359,7 +400,7 @@ impl Feed {
             .filter(|(_, entry)| matches!(entry, Entry::Running(_)))
             .map(|(id, _)| id.clone())
             .collect();
-        match recent::page_with_total(&self.home, before, project, &running) {
+        match recent::page_with_total(&self.home, before, project, &running, archived) {
             Ok((rows, total)) => Ok(Some(
                 serde_json::json!({ "sessions": rows, "total": total }),
             )),
@@ -588,9 +629,21 @@ impl Feed {
     /// Session `id`'s socket closed: decides how it left, tells every
     /// subscriber, and appends a crashed session's row. A session whose
     /// directory is gone was never prompted: it exited, leaving nothing.
+    /// An archived log appends no row and reinserts no rail entry: an
+    /// archive that landed first owns the listing now.
     fn on_left(&self, id: &str, found: Option<(String, PathBuf, u64)>) {
         let _settle = Settle(self, id);
+        // Before the recent mutex: the rewind callback can enter other
+        // hub paths, so it never runs under this lock.
         crate::rewind::notify_left(&self.on_rewound, id, &found);
+        #[cfg(test)]
+        fire_before_recent_mutex(&self.home);
+        // Ordered against hub `archive` from the archive-state recheck
+        // through the transition: a late close neither appends a stale
+        // row nor recreates a forgotten entry. The `how` decision reads
+        // the log under the mutex, after the archive-state recheck, so a
+        // marker committed while waiting cannot slip between them.
+        let _recent = lock(&self.recent_mutation);
         let how = found
             .as_ref()
             .filter(|(_, dir, _)| log::dir_exists(dir))
@@ -617,6 +670,9 @@ impl Feed {
                     }
                 }
             });
+        let archived = found
+            .as_ref()
+            .is_some_and(|(_, dir, _)| log::is_archived(dir));
         // The row is written before `session_left` is sent, so a client
         // that sees the crash finds it in `recent`. `tracked` still holds
         // the session meanwhile, so no scan connects to it again.
@@ -630,7 +686,9 @@ impl Feed {
                 .get(id)
                 .map(|(Entry::Running(status) | Entry::Left(status, _))| status.payload.clone())
         };
-        if let (Some(Left::Crashed), Some((project, _, _))) = (how, &found) {
+        if let (Some(Left::Crashed), Some((project, _, _))) = (how, &found)
+            && !archived
+        {
             self.append_crashed(id, project, status.as_ref());
         }
         let mut state = lock(&self.state);
@@ -647,7 +705,7 @@ impl Feed {
                 Some(Left::Crashed) => true,
                 Some(Left::Exited) => recent::is_waiting(&status.payload),
                 None => false,
-            };
+            } && !archived;
             if stays {
                 state
                     .entries
@@ -670,6 +728,7 @@ impl Feed {
             name: status.map(|status| status.name.clone()).unwrap_or_default(),
             how: Left::Crashed,
             status: status.cloned(),
+            archived: false,
         };
         // Losing the row loses only the listing; the log stays.
         recent::append(&self.home, &row).unwrap_or(());
@@ -810,6 +869,22 @@ pub(crate) fn invalid() -> Refused {
 #[cfg(test)]
 static JOIN_PAUSE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 
+/// Test seam: armed by the archive race test; fires when `on_left`
+/// reaches the recent-mutation mutex, before acquiring it. Homes route
+/// each hook to its own test's `on_left`: every test home is a unique
+/// temporary directory, so parallel tests never observe each other's
+/// hooks. Compiles to nothing outside tests and never alters control
+/// flow. No outside seam observes the instant before the acquisition:
+/// without the signal the test cannot tell an `on_left` blocked on the
+/// mutex from one that has not arrived, and the weakened test would pass
+/// either way.
+/// One armed hook for a home's `on_left`, routed by that home.
+#[cfg(test)]
+type RecentMutexHook = (PathBuf, Box<dyn FnOnce() + Send>);
+
+#[cfg(test)]
+static BEFORE_RECENT_MUTEX: Mutex<Vec<RecentMutexHook>> = Mutex::new(Vec::new());
+
 /// Tests only: arms the `join` test's hook, firing when the joiner is
 /// inside [`join`] before it blocks: no outside seam observes that instant.
 #[cfg(test)]
@@ -823,6 +898,35 @@ fn paused_join() {
     // blocking hook must not stop another thread arming the seam.
     let hook = lock(&JOIN_PAUSE).take();
     if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// Tests only: arms the archive race test's hook for `home`, firing
+/// when that home's `on_left` reaches the recent-mutation mutex and
+/// before it acquires it.
+#[cfg(test)]
+pub(crate) fn pause_before_recent_mutex(home: &Path, hook: impl FnOnce() + Send + 'static) {
+    lock(&BEFORE_RECENT_MUTEX).push((home.to_path_buf(), Box::new(hook)));
+}
+
+#[cfg(test)]
+fn fire_before_recent_mutex(home: &Path) {
+    // Taken then run without the lock held: a blocking hook must not
+    // stop another thread arming the seam.
+    let mut hooks = lock(&BEFORE_RECENT_MUTEX);
+    let mut armed: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
+    let mut kept: Vec<(PathBuf, Box<dyn FnOnce() + Send>)> = Vec::new();
+    for (hook_home, hook) in hooks.drain(..) {
+        if hook_home == home {
+            armed.push(hook);
+        } else {
+            kept.push((hook_home, hook));
+        }
+    }
+    *hooks = kept;
+    drop(hooks);
+    for hook in armed {
         hook();
     }
 }

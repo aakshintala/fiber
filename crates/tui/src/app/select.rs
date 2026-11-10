@@ -478,9 +478,16 @@ impl App {
         }
         // A press on a link still starts a selection: the release
         // copies the text, and a click without a drag follows the
-        // link (`docs/tui.md`, "Selection and copy", "Links").
-        let target_ok = mouse::under(targets, col, row)
-            .is_none_or(|target| matches!(target.id, TargetId::Line(_) | TargetId::Link { .. }));
+        // link (`docs/tui.md`, "Selection and copy", "Links"). A press
+        // on an extension span anchors the same way, while a click
+        // without a drag goes to the slot's handler, never to
+        // selection-follow.
+        let target_ok = mouse::under(targets, col, row).is_none_or(|target| {
+            matches!(
+                target.id,
+                TargetId::Line(_) | TargetId::Link { .. } | TargetId::Extension(_)
+            )
+        });
         if let Some(point) = self.point_at(col, row)
             && self.session().is_some()
             && self.home_screen().is_none()

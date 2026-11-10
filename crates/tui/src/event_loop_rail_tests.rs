@@ -142,6 +142,100 @@ fn exited_card_keeps_wall_time_elapsed_in_the_loop() {
     assert!(frame.contains("16s"), "{frame}");
 }
 
+/// A live `session_status` for `session` named `name`, in `state`.
+fn named(session: &str, name: &str, state: serde_json::Value) -> Line {
+    let mut payload = serde_json::json!({
+        "name": name, "workspace": "/w", "project": "-w",
+        "state": "idle", "started": 0, "calls": 0, "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    for (key, value) in state.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    Line::Session(contract::Envelope {
+        kind: contract::events::EventKind::SessionStatus,
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// The durable archive marker for `session`, as a log replay delivers
+/// it: an inert event, never a card.
+fn archived(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: contract::events::EventKind::Archived,
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::Map::new(),
+    })
+}
+
+fn waiting() -> serde_json::Value {
+    serde_json::json!({"state": "waiting",
+        "waiting": {"request_id": "r_1", "kind": "approval", "summary": "x"}})
+}
+
+/// The rail's card session ids, in feed order.
+fn cards(lp: &super::Loop<TestBackend>) -> Vec<String> {
+    lp.app
+        .rail_cards()
+        .unwrap_or_else(|| panic!("home holds cards"))
+        .0
+        .iter()
+        .map(|row| row.id.0.clone())
+        .collect()
+}
+
+#[test]
+fn the_rail_excludes_archived_sessions_on_fresh_and_replayed_feed() {
+    const E: &str = "s_eeeeeeeeeeeeeeee";
+    const F: &str = "s_ffffffffffffffff";
+    const C: &str = "s_cccccccccccccccc";
+    const D: &str = "s_dddddddddddddddd";
+    let mut lp = wide();
+    // A fresh connection seeds the rail: two live sessions, an
+    // ordinary crashed one and an ordinary waiting one. The hub's
+    // store also holds a crashed archive (E) and a waiting archive
+    // (F); default queries withhold them, and their replayed markers
+    // stay inert: no card, no outgoing line.
+    let _ = lp.app.on_line(Line::Hub(hello()));
+    lp.app.on_line(named(A, "alpha", serde_json::json!({})));
+    lp.app.on_line(named(B, "beta", serde_json::json!({})));
+    lp.app.on_line(named(C, "gamma", serde_json::json!({})));
+    lp.app.on_line(left(C, "crashed"));
+    lp.app.on_line(named(D, "delta", waiting()));
+    assert!(lp.app.on_line(archived(E)).is_empty());
+    assert!(lp.app.on_line(archived(F)).is_empty());
+    feed(&mut lp, vec![Input::Resize]);
+    let fresh = shown(&lp);
+    assert_eq!(cards(&lp), [A, B, C, D]);
+    // A reconnect replays the same feed: the frame is unchanged, and
+    // the archived pair still draws nothing.
+    let _ = lp.app.on_line(Line::Hub(hello()));
+    lp.app.on_line(named(A, "alpha", serde_json::json!({})));
+    lp.app.on_line(named(B, "beta", serde_json::json!({})));
+    lp.app.on_line(named(C, "gamma", serde_json::json!({})));
+    lp.app.on_line(left(C, "crashed"));
+    lp.app.on_line(named(D, "delta", waiting()));
+    assert!(lp.app.on_line(archived(E)).is_empty());
+    assert!(lp.app.on_line(archived(F)).is_empty());
+    feed(&mut lp, vec![Input::Resize]);
+    assert_eq!(shown(&lp), fresh);
+    insta::assert_snapshot!("rail_excludes_archived_sessions", fresh);
+}
+
 #[test]
 fn the_wheel_over_the_rail_scrolls_it_in_the_loop() {
     let mut lp = wide();

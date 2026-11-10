@@ -3,6 +3,7 @@
 
 use ratatui::layout::{Position, Rect};
 
+use crate::ext::cache::ClickKey;
 use crate::keys::{Button, Mouse, MouseKind};
 
 /// What a click target does when clicked. Each surface that draws a
@@ -60,6 +61,11 @@ pub(crate) enum TargetId {
     Item(crate::app::items::Spot),
     /// A rail card, its ✕ or its project's "+": what a click there does.
     Rail(crate::app::rail::Spot),
+    /// An extension's click target: the interned identity of the
+    /// (extension, slot, click id) tuple whose spans drew the cells.
+    /// The cache owns the only lookup, so a key names a target the
+    /// frame actually drew.
+    Extension(ClickKey),
 }
 
 /// One click target as drawn: what it does and the cells it covers.
@@ -82,6 +88,47 @@ pub(crate) fn under(targets: &[Target], col: u16, row: u16) -> Option<&Target> {
 /// The id of the target drawn last whose cells hold `col`, `row`.
 pub(crate) fn hit(targets: &[Target], col: u16, row: u16) -> Option<TargetId> {
     under(targets, col, row).map(|target| target.id)
+}
+
+/// A press and release paired on one extension target: the target's
+/// identity and the built-in target under the same release cell. A
+/// handled click runs nothing built in; any other click resumes the
+/// built-in candidate, so scrolling and selection keep working
+/// (`docs/tui.md`, "Input and focus").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ClickRoute {
+    /// The paired extension target's identity.
+    pub(crate) id: ClickKey,
+    /// The topmost non-extension, non-turn target at the release cell
+    /// in the same frame, if any: turns are focus stops, never click
+    /// targets.
+    pub(crate) fallback: Option<TargetId>,
+}
+
+/// The route for a press and release paired on the extension target
+/// `id` at `col`, `row`: none when the frame holds no such target
+/// there, so a stale pair never dispatches. Both candidates come from
+/// the frame's one target list.
+pub(crate) fn click_route(
+    targets: &[Target],
+    id: ClickKey,
+    col: u16,
+    row: u16,
+) -> Option<ClickRoute> {
+    let at = Position::new(col, row);
+    let paired = targets
+        .iter()
+        .any(|target| target.id == TargetId::Extension(id) && target.rect.contains(at));
+    if !paired {
+        return None;
+    }
+    let fallback = targets
+        .iter()
+        .rev()
+        .filter(|target| !matches!(target.id, TargetId::Extension(_) | TargetId::Turn(_)))
+        .find(|target| target.rect.contains(at))
+        .map(|target| target.id);
+    Some(ClickRoute { id, fallback })
 }
 
 /// The pointer: where it last was, when hover records it, and the target

@@ -766,6 +766,55 @@ impl Renderer for Composite {
             }
         }
     }
+    fn on_click(&self, ctx: &SessionCtx, slot: &str, id: &str) -> tui::ext::KeyOutcome {
+        // The winner and compatibility gate are the drawable path's:
+        // a suppressed or absent slot keeps the built-in, and an inert
+        // session never reaches the VM. Home has no session, so the
+        // handler runs with the field omitted.
+        let SlotSelection::Draw { extension } = self.fills_for(ctx, slot) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        let Some(candidate) = self.candidates.get(&extension) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        match candidate.vm.borrow_mut().run_click(
+            slot,
+            id,
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+        ) {
+            Ok(true) => tui::ext::KeyOutcome::Handled,
+            Ok(false) => tui::ext::KeyOutcome::NotHandled,
+            Err(extensions::Error::TuiTimeout) => {
+                candidate.off.set(true);
+                self.pending.borrow_mut().push((
+                    "extension_failed".into(),
+                    format!(
+                        "extension {extension} passed its click timeout for `{slot}`; it is switched off until `/reload`"
+                    ),
+                ));
+                tui::ext::KeyOutcome::NotHandled
+            }
+            Err(extensions::Error::TuiOff) => tui::ext::KeyOutcome::NotHandled,
+            Err(error) => {
+                // Key slots carry the `key:` prefix a slot name cannot
+                // take, so clicks share the hook-failure set with no
+                // collision: one notice per extension and slot.
+                let seen = KeyNoticeKey {
+                    slot: slot.to_owned(),
+                    extension: extension.clone(),
+                };
+                if self.key_hooks.borrow_mut().insert(seen) {
+                    self.pending.borrow_mut().push((
+                        "hook_failed".into(),
+                        format!(
+                            "extension {extension}'s click handler for `{slot}` failed: {error}"
+                        ),
+                    ));
+                }
+                tui::ext::KeyOutcome::NotHandled
+            }
+        }
+    }
 }
 
 impl Composite {

@@ -1301,3 +1301,150 @@ fn a_fresh_load_works_after_a_timeout() {
     let (_, mut again) = vm(source);
     assert!(run_advancing(&mut again, FakeClock::new(), "ctrl+o", Duration::ZERO).unwrap());
 }
+
+/// A VM with the one slot `notice`, timeout 100 ms, whose click handler
+/// is `body`.
+fn clicking(body: &str) -> (Arc<FakeClock>, TuiVm) {
+    vm(&format!(
+        "fiber.slot('notice', {{ timeout = 100, render = function() return {{}} end, \
+         on_click = {{ timeout = 100, run = function(input) {body} end }} }})"
+    ))
+}
+
+/// Runs the `notice` click handler for session `s1`.
+fn click(vm: &mut TuiVm, id: &str) -> Result<bool, Error> {
+    vm.run_click("notice", id, Some("s1"))
+}
+
+/// Runs the `notice` click handler, moving the clock by `by` from inside
+/// `ticked`: the handler has started, and the clock moves only then.
+fn click_advancing(vm: &mut TuiVm, clock: Arc<FakeClock>, by: Duration) -> Result<bool, Error> {
+    vm.lua()
+        .globals()
+        .set(
+            "ticked",
+            vm.lua()
+                .create_function(move |_, ()| {
+                    tick(&clock, by);
+                    Ok(())
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    vm.run_click("notice", "badge", Some("s1"))
+}
+
+#[test]
+fn click_registration_matrix() {
+    // A click handler registers on any slot, with no key binding involved:
+    // clicks are not focus-gated.
+    for slot in ["notice", "home", "input_box", "ledger_row:shell"] {
+        let (_, mut vm) = vm(&format!(
+            "fiber.slot('{slot}', {{ timeout = 100, render = function() return {{}} end, \
+             on_click = {{ timeout = 50, run = function() return true end }} }})"
+        ));
+        assert!(vm.run_click(slot, "badge", Some("s1")).unwrap(), "{slot}");
+    }
+    // Every bad `on_click` shape refuses the load, naming the slot.
+    for (on_click, field) in [
+        ("'x'", "on_click"),
+        ("100", "on_click"),
+        ("{ timeout = 100 }", "run"),
+        ("{ run = function() end }", "timeout"),
+        ("{ timeout = 0, run = function() end }", "timeout"),
+        ("{ timeout = -1, run = function() end }", "timeout"),
+        ("{ timeout = 1.5, run = function() end }", "timeout"),
+        ("{ timeout = '100', run = function() end }", "timeout"),
+        ("{ timeout = 100, run = 'x' }", "run"),
+        ("{ timeout = 100, run = nil }", "run"),
+    ] {
+        let message = refused(&format!(
+            "fiber.slot('notice', {{ timeout = 100, render = function() end, on_click = {on_click} }})"
+        ));
+        assert!(
+            message.contains("notice") && message.contains(field),
+            "{on_click}: {message}"
+        );
+    }
+}
+
+#[test]
+fn click_returns_and_wire() {
+    for (body, handled) in [
+        ("return true", true),
+        ("return false", false),
+        ("return nil", false),
+        ("return", false),
+    ] {
+        let (_, mut vm) = clicking(body);
+        assert_eq!(click(&mut vm, "badge").unwrap(), handled, "{body}");
+    }
+    // The handler receives exactly the session and the click id.
+    let (_, mut vm) = clicking("return input.session_id == 's1' and input.click == 'badge'");
+    assert!(click(&mut vm, "badge").unwrap());
+    for body in ["return 5", "return 'handled'", "return {}"] {
+        let (_, mut vm) = clicking(body);
+        assert!(
+            matches!(click(&mut vm, "badge"), Err(Error::TuiShape(_))),
+            "{body}"
+        );
+        // A wrong shape leaves the VM on.
+        assert!(matches!(click(&mut vm, "badge"), Err(Error::TuiShape(_))));
+    }
+    let (_, mut vm) = clicking("error('boom')");
+    let Err(Error::TuiLua(message)) = click(&mut vm, "badge") else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("boom"), "{message}");
+    // An error leaves the VM on.
+    assert!(matches!(click(&mut vm, "badge"), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn click_deadline_boundary() {
+    let source = "fiber.slot('notice', { timeout = 100, render = function() return {} end, \
+         on_click = { timeout = 100, run = function() ticked() return true end } })";
+    let (clock, mut early) = vm(source);
+    assert!(click_advancing(&mut early, clock, 99 * MS).unwrap());
+    let (clock, mut timed) = vm(source);
+    let timed_out = click_advancing(&mut timed, clock, 100 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    let later = click(&mut timed, "badge");
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
+    let (clock, mut past) = vm(source);
+    let timed_out = click_advancing(&mut past, clock, 101 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+}
+
+#[test]
+fn click_unknown_slot() {
+    let (_, mut vm) = clicking("return true");
+    // An unknown slot, and a slot with no click handler, answer
+    // not-handled with no notice and no switch-off.
+    assert!(!vm.run_click("home", "badge", Some("s1")).unwrap());
+    let (_, mut bare) = notice("return {}");
+    assert!(!bare.run_click("notice", "badge", Some("s1")).unwrap());
+    assert!(click(&mut vm, "badge").unwrap());
+}
+
+#[test]
+fn click_none_omits_field() {
+    let (_, mut vm) = clicking("return input.session_id == nil and input.click == 'badge'");
+    assert!(vm.run_click("notice", "badge", None).unwrap());
+}
+
+#[test]
+fn click_host_call_rejected() {
+    let (_, mut vm) = vm(
+        "fiber.slot('notice', { timeout = 100, render = function() return {} end, \
+         on_click = { timeout = 100, run = function() coroutine.yield() end } })\n\
+         fiber.slot('home', { timeout = 100, render = function() return {} end, \
+         on_click = { timeout = 100, run = function() return true end } })",
+    );
+    let Err(Error::TuiLua(message)) = vm.run_click("notice", "badge", Some("s1")) else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("host call"), "{message}");
+    // A rejected host call is an error, not a switch-off: the VM stays on.
+    assert!(vm.run_click("home", "badge", Some("s1")).unwrap());
+}

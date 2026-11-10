@@ -12,6 +12,7 @@ mod extension_harness;
 #[path = "../support/mod.rs"]
 mod support;
 
+mod archive;
 mod change_workspace;
 mod changed_files_editor;
 mod clear;

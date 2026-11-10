@@ -308,6 +308,12 @@ pub trait Renderer: std::fmt::Debug {
     fn run_key(&self, _ctx: &SessionCtx, _key: &str, _person_bound: bool) -> KeyOutcome {
         KeyOutcome::NotHandled
     }
+    /// Whether the winning `on_click` handler for `slot` handled the
+    /// click with id `id` (`docs/tui.md`, "Input and focus"). The
+    /// default draws no click target.
+    fn on_click(&self, _ctx: &SessionCtx, _slot: &str, _id: &str) -> KeyOutcome {
+        KeyOutcome::NotHandled
+    }
 }
 
 impl Bound {

@@ -161,6 +161,84 @@ fn an_isolated_fork_adopts_before_reading_its_point() {
     assert!(!stdout.contains("session_not_found"), "{stdout}");
 }
 
+/// The session lock stays held from the door close through the exited
+/// row's publication: an archive racing the close is refused, and only
+/// after the row lands does the lock free, so the row cannot reset an
+/// archive that landed in between.
+#[test]
+fn close_keeps_the_session_lock_until_the_row_is_published() {
+    use super::{close, pause_before_row_arm};
+    use contract::SessionId;
+    use doors::Session;
+
+    let home = fakes::TempDir::new("fiber-close-row");
+    let sessions = home.path().join("projects/-p/sessions");
+    let clock = fakes::clock::FakeClock::new();
+    let timed: Arc<dyn contract::clock::Clock> = Arc::clone(&clock) as _;
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let log = Arc::new(log::Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    // A turn keeps the directory past the door close: an unprompted
+    // session leaves nothing behind, row included.
+    log.append(
+        &contract::events::Event::TurnStarted(contract::events::TurnStarted { input: Vec::new() }),
+        None,
+        None,
+    )
+    .unwrap();
+    let dir = sessions.join(&id.0);
+    let session = Session::open(
+        home.path(),
+        &dir,
+        &log,
+        Arc::clone(&timed),
+        Vec::new(),
+        Box::new(std::io::sink()),
+    )
+    .unwrap();
+    let keeper = crate::keeper::Host::idle(Arc::clone(&timed));
+    let (paused_tx, paused_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    pause_before_row_arm(move || {
+        paused_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    let workspace = std::path::PathBuf::from("/w");
+    let closer = std::thread::spawn({
+        let home = home.path().to_path_buf();
+        let dir = dir.clone();
+        move || {
+            close(session, log, &home, &dir, &workspace, &*clock, &keeper);
+            home
+        }
+    });
+    fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&paused_rx)
+        .expect("the close pauses before the row");
+    // The door is closed but the row is not published: the lock is
+    // still held, so an archive now would be refused as held.
+    let probe = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.join("session.lock"))
+            .unwrap()
+            .try_lock()
+            .is_err()
+    };
+    assert!(probe(), "the lock is held through the pause");
+    release_tx.send(()).unwrap();
+    let home = closer.join().expect("the close returns");
+    // The row is published exactly once, and the lock is free after it.
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(home.join("recent.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|row| serde_json::from_str(row).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["session_id"], "s_0123456789abcdef");
+    assert!(!probe(), "the lock frees after the row");
+}
+
 /// Installs the signals, records a real SIGTERM to this process when
 /// `signalled`, then reports an `io_failed` failure and exits with what
 /// `report` returns.
