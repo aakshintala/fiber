@@ -1593,13 +1593,13 @@ session (`docs/tui.md`, "The session list"):
   down with it, then sends `archive` for that one session. A stop the hub
   refuses archives nothing.
 - **The hub also archives on its own** when it answers `recent` or
-  `sessions` without `archived`, before it answers, so the answer and its
-  `total` already leave these out:
+  `sessions`, with or without `archived`, before it answers, so the answer
+  and its `total` already count these as archived:
   - an exited session whose workspace no longer exists, whether or not it
     could be made again. Opening it resumes it, which makes a recorded
     Fiber worktree again and unarchives it, or opens it read only
-    ("Lifecycle"). It costs one `stat` per exited row in the answer; an
-    archived row is not checked again.
+    ("Lifecycle"). It costs one `stat` per exited row not yet archived
+    in the project asked for; an archived row is not checked again.
   - in each project, every exited session past the `session.keep_exited`
     most recent (`docs/configuration.md`), 10 by default; 0 keeps them
     all. Live sessions do not count.
