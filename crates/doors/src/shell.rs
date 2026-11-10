@@ -7,7 +7,7 @@
 //! `shell_command_started` before the command starts, every attached client
 //! gets its output as `shell_command_delta` while it runs, and the thread
 //! sends the shaped result to the loop's inbox, which writes it as
-//! `shell_command` (`docs/invocation.md`, "Shell"; `docs/events.md`,
+//! `shell_command` (`docs/invocation.md`, "What each command does"; `docs/events.md`,
 //! "`shell_command_started`"). The loop never runs it.
 
 use contract::clock::Wake;
