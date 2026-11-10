@@ -115,6 +115,22 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+/// Reads a key that, when present, must name a reason: `null`, a
+/// non-string, an empty string or a whitespace-only string is an error,
+/// not the same as an absent key.
+fn present_non_empty<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reason = String::deserialize(deserializer)?;
+    if reason.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "`omit_reason` names the provider's reason when present",
+        ));
+    }
+    Ok(Some(reason))
+}
+
 /// Whether `name` is one `fiber.command` accepts: non-empty with no
 /// whitespace, `/` or `:`.
 fn is_command_name(name: &str) -> bool {
@@ -419,6 +435,11 @@ pub struct ModelData {
     /// (`docs/system-prompt.md`, "The model's addendum").
     #[serde(default)]
     pub prompt_addendum: Option<String>,
+    /// The omission mark on an entry left out on purpose — set by a
+    /// provider's `models()` return or carried by static provider data:
+    /// the provider's reason. Absent means kept.
+    #[serde(default, deserialize_with = "present_non_empty")]
+    pub omit_reason: Option<String>,
 }
 
 /// A wire protocol (`docs/model-routing.md`, "Protocols and providers").
