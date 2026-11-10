@@ -5477,6 +5477,14 @@ fn recount_waits_for_the_pass_end() {
     let last = replay - 1;
     app.on_line(hub("stream_reopened", SESSION, Some(last)));
     assert!(app.pass_open());
+    // Mid-pass resizes recount nothing: the live pages keep their
+    // count and the fresh fold counts nothing yet.
+    let live_before = app.attached_screen().pages().recounts;
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("the reopening opens a fold")
+    };
+    let fold_at_open = fold.recounts;
+    assert_eq!(fold_at_open, 0, "the fresh fold counts nothing yet");
     app.set_size(70, 24);
     assert_eq!(
         app.attached_screen().pages().wrap_width(),
@@ -5484,6 +5492,11 @@ fn recount_waits_for_the_pass_end() {
         "the first mid-pass resize recounts at once"
     );
     assert_eq!(total_of(&app), total, "rows never move mid-pass");
+    assert_eq!(
+        app.attached_screen().pages().recounts,
+        live_before,
+        "the first mid-pass resize recounts at once"
+    );
     app.set_size(60, 24);
     assert_eq!(
         app.attached_screen().pages().wrap_width(),
@@ -5491,9 +5504,25 @@ fn recount_waits_for_the_pass_end() {
         "the second mid-pass resize recounts at once"
     );
     assert_eq!(total_of(&app), total, "rows never move mid-pass");
-    for line in &lines {
+    assert_eq!(
+        app.attached_screen().pages().recounts,
+        live_before,
+        "the second mid-pass resize recounts at once"
+    );
+    let (last_line, rest) = lines.split_last().expect("the replay holds lines");
+    for line in rest {
         app.on_line(line.clone());
     }
+    assert_eq!(
+        app.attached_screen().pages().recounts,
+        live_before,
+        "replay folds into the second pages, never the live ones"
+    );
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("the pass lands on its boundary line")
+    };
+    let before = fold.recounts;
+    app.on_line(last_line.clone());
     assert!(
         matches!(app.overlay, Overlay::None),
         "the boundary lands the pass"
@@ -5503,6 +5532,17 @@ fn recount_waits_for_the_pass_end() {
         app.attached_screen().pages().wrap_width(),
         final_width,
         "the landing recounts at the final width"
+    );
+    // The landing recounts once: the boundary line folds once, the
+    // carry recounts each resident page once, and the owed width
+    // recounts each resident page once. A repeated width recount
+    // would add another resident count.
+    let after = app.attached_screen().pages().recounts;
+    let resident = app.attached_screen().pages().resident();
+    assert_eq!(
+        after - before,
+        1 + 2 * resident,
+        "the landing recounts once"
     );
 }
 
