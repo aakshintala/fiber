@@ -6249,10 +6249,18 @@ fn settled_pair(history: &History, job: &str) -> (contract::Envelope, contract::
             line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == job
         })
         .expect("the settle writes the finish");
-    let completed_pos = lines
+    let completed_positions: Vec<usize> = lines
         .iter()
-        .position(|line| line.kind() == EventKind::JobCompleted && line.payload["job_id"] == job)
-        .expect("the settle writes the completion");
+        .enumerate()
+        .filter(|(_, line)| line.kind() == EventKind::JobCompleted && line.payload["job_id"] == job)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        completed_positions.len(),
+        1,
+        "the settle writes exactly one completion for the job"
+    );
+    let completed_pos = completed_positions[0];
     assert!(
         finished_pos < completed_pos,
         "the finish precedes its completion"
