@@ -461,15 +461,14 @@ The default cards, in order:
   MCP server that is down. Every number has a plain label that says what it
   measures, such as "tokens in / out", "cache hits" or "output speed, last
   reply", never a bare abbreviation. The branch slot, every figure row, the
-  context bar and the two lines under it are drawn from the session's first
+  context bar and the line under it are drawn from the session's first
   frame. The branch slot stays blank until status supplies a branch name, and
   remains blank outside a repository. A figure not known yet, such as the
   speed before the first timed reply, shows a dim "—", so no row moves when
   its data arrives. The bar is drawn empty with 17 cells
   in rule and a dim "—" for context size until its figures are known. Zero is
-  shown as zero. The compaction marker carries one line saying
-  what a compaction is: when the context fills, Fiber writes a summary and the
-  work continues in a fresh context (`docs/compaction.md`).
+  shown as zero. "turns" counts every turn the session has started, the
+  running one included, as `session_status` counts them (`docs/events.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one six-row card, running first, with finished delegates
   folded and whole-entry scrolling. Detail rows retain each delegate's
@@ -494,7 +493,6 @@ cut with "…". The cards draw:
   anthropic/claude-opus      high ∴
   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│          268k
   compacts at 400k    26% of window
-  then a summary, fresh context
   tokens in / out     412k / 18.2k
   cache hits                   91%
   cache resets in              42m
@@ -531,9 +529,8 @@ cut with "…". The cards draw:
   The context bar is 17 cells of ▆, filled in `info` toward the compaction point
   and `rule` for the rest, then the compaction marker, │ in `attention`, and the
   context size right-aligned ("268k"). Under it, "compacts at 400k" dim, and
-  the share of the window right-aligned, dim; then the one line saying what a
-  compaction is, dim. Clicking the bar or the lines under it opens the context
-  breakdown. Each figure after that is a row: its plain label dim, and the
+  the share of the window right-aligned, dim. Clicking the bar or the line
+  under it opens the context breakdown. Each figure after that is a row: its plain label dim, and the
   figure right-aligned in the text colour; a down MCP server is "✗ <server>
   down" right-aligned in `error`. "cache resets in" is the time left before
   the prompt cache expires, counted from the end of the last model request,
