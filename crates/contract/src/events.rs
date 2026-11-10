@@ -34,12 +34,12 @@ pub use context::{
 pub use delegate_finished::FINAL_MESSAGE;
 pub use host::{
     CallResult, CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
-    DelegateFinished, DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage,
-    ExtensionStateSet, ExtensionStateUnset, ExtensionUi, ExtensionsLoaded, FinishedWorktree,
-    HookInfo, JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified, LoadedExtension,
-    McpServerFailed, McpServerLayer, McpServerReady, McpServerRow, McpServerState, OnFork,
-    PendingReason, QuotaCredit, QuotaInfo, QuotaWindow, ReloadFailure, Reloaded, ReloadedServers,
-    ServerFailure, SkillInfo, ToolInfo, ToolSource, ToolState, Ui,
+    DelegateFinished, DelegateStarted, ExtensionExec, ExtensionFailure, ExtensionLog,
+    ExtensionMessage, ExtensionStateSet, ExtensionStateUnset, ExtensionUi, ExtensionsLoaded,
+    FinishedWorktree, HookInfo, JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified,
+    LoadedExtension, McpServerFailed, McpServerLayer, McpServerReady, McpServerRow, McpServerState,
+    OnFork, PendingReason, QuotaCredit, QuotaInfo, QuotaWindow, ReloadFailure, Reloaded,
+    ReloadedServers, ServerFailure, SkillInfo, ToolInfo, ToolSource, ToolState, Ui,
 };
 /// The import answer's names and reasons, re-exported beside the other
 /// acknowledgement payloads.

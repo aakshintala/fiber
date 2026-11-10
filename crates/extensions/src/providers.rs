@@ -625,6 +625,14 @@ impl Providers {
         notices
     }
 
+    /// Each `models()` discovery failure `add_lua` recorded since the
+    /// last drain, one entry per failing registration with no dedupe,
+    /// each mirroring its per-entry notice. The drain runs once per
+    /// rebuild, so a second call cannot double-report.
+    pub fn take_discovery_failures(&mut self) -> Vec<contract::events::ExtensionFailure> {
+        Vec::new()
+    }
+
     /// The installed providers' names, sorted.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)

@@ -8,8 +8,8 @@ use std::time::Duration;
 use crate::{BlockLimits, CompactionSettings, Error, Loop, Retry, Reviewer};
 use contract::diag::Observe;
 use contract::events::{
-    CacheLifetime, CommandInfo, LoadedExtension, Notice, ReloadFailure, ReloadedServers,
-    group_notices, grouped_lead,
+    CacheLifetime, CommandInfo, ExtensionFailure, LoadedExtension, Notice, ReloadFailure,
+    ReloadedServers, group_notices, grouped_lead,
 };
 use contract::hook::Hooks;
 use contract::inbox::{Ack, Rejection};
@@ -144,6 +144,10 @@ pub struct ReloadPrepared {
     pub notices: Vec<Notice>,
     /// The reload's MCP server sync.
     pub server_sync: ServerSync,
+    /// Each provider whose model discovery failed, in registration
+    /// order; empty when none did. Published on `reloaded` beside the
+    /// server failures, with the old catalogue still standing.
+    pub extension_failures: Vec<ExtensionFailure>,
     /// Hooks over the session's one extension state registry.
     pub hooks: Option<Arc<dyn Hooks>>,
     /// The reviewer for the session's current model.
@@ -159,11 +163,13 @@ pub struct ReloadPrepared {
 }
 
 /// What an installation leaves for its caller to write: the prepared
-/// extensions and notices, with the reload's server sync for `reloaded`.
+/// extensions and notices, with the reload's server sync and discovery
+/// failures for `reloaded`.
 struct Installed {
     extensions: Vec<LoadedExtension>,
     notices: Vec<Notice>,
     sync: ServerSync,
+    extension_failures: Vec<ExtensionFailure>,
 }
 
 /// One server record as its log line: the reconnect driver and the reload
@@ -325,6 +331,7 @@ impl Loop {
             extensions: prepared.extensions,
             notices: prepared.notices,
             sync,
+            extension_failures: prepared.extension_failures,
         }
     }
 
@@ -341,6 +348,7 @@ impl Loop {
             extensions,
             notices,
             sync,
+            extension_failures: _,
         } = installed;
         for record in &sync.server_records {
             self.write(&record_event(record), None, None)?;
@@ -354,6 +362,7 @@ impl Loop {
                     .map(|extension| extension.name.clone())
                     .collect(),
                 failed,
+                extension_failures: None,
             }),
             None,
             None,

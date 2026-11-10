@@ -495,7 +495,11 @@ impl State {
         config: &config::Config,
         route: &r#loop::ReloadRoute,
         loaded: Result<(extensions::Providers, Vec<contract::events::Notice>), extensions::Error>,
-    ) -> (Option<jobs::Resolve>, Vec<contract::events::Notice>) {
+    ) -> (
+        Option<jobs::Resolve>,
+        Vec<contract::events::Notice>,
+        Vec<contract::events::ExtensionFailure>,
+    ) {
         let (mut providers, mut notices) = match loaded {
             Ok((providers, notices)) => (providers, notices),
             Err(error) => {
@@ -506,6 +510,7 @@ impl State {
                         message: error.to_string(),
                         extension: unreadable_provider_extension(&error),
                     }],
+                    Vec::new(),
                 );
             }
         };
@@ -537,6 +542,7 @@ impl State {
         // make the synchronous join below miss and the catalogue would
         // keep the old list for a cache older than `refresh_after`.
         notices.extend(providers.add_session(extensions, config, &run, &lookup));
+        let discovery_failures = providers.take_discovery_failures();
         match providers.fill_placeholders(config, &lookup) {
             Ok(fill_notices) => notices.extend(fill_notices),
             Err(error) => {
@@ -545,7 +551,7 @@ impl State {
                     message: error.to_string(),
                     extension: None,
                 });
-                return (None, notices);
+                return (None, notices, discovery_failures);
             }
         }
         crate::scripted::prepare(&mut providers, config, Some(route.model.as_str()));
@@ -596,6 +602,7 @@ impl State {
                 route.model.as_str(),
             )),
             notices,
+            discovery_failures,
         )
     }
 
@@ -690,7 +697,7 @@ impl State {
         // fresh snapshot feeds the stored tools and both rebuilt tools.
         // A rebuild that cannot be read keeps the old pair, and the
         // notices say so.
-        let (delegate_resolve, delegate_notices) =
+        let (delegate_resolve, delegate_notices, _) =
             self.rebuild_delegate_resolve(&extensions, &config, route, delegate_loaded);
         let owners = extensions
             .lua_providers()
@@ -1148,6 +1155,7 @@ impl State {
             tools,
             extensions: loaded,
             notices,
+            extension_failures: Vec::new(),
             server_sync: match synced {
                 Some(synced) => r#loop::ServerSync {
                     servers: synced.servers,

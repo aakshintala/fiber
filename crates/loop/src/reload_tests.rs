@@ -226,6 +226,7 @@ fn prepared() -> ReloadPrepared {
             server_failures: Vec::new(),
             new_prompts: None,
         },
+        extension_failures: Vec::new(),
         hooks: None,
         reviewer: Err(Failure {
             code: ErrorCode::NoModel,
@@ -1040,6 +1041,137 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].server, "flaky");
     assert_eq!(failed[0].reason, ServerFailure::StartFailed);
+}
+
+#[test]
+fn applied_reload_publishes_extension_failures_without_server_failures() {
+    use contract::events::ExtensionFailure;
+    let mut w = world();
+    w.looped = w.looped.reloader(Arc::new(|_| {
+        let mut next = prepared();
+        next.extension_failures = vec![ExtensionFailure {
+            provider: "acme".into(),
+            extension: Some("acme-ext".into()),
+            error: Failure {
+                code: ErrorCode::ExtensionFailed,
+                message: "boom".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        }];
+        Ok(next)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .is_ok()
+    );
+    let lines: Vec<_> = log::read(w.looped.log.dir())
+        .unwrap()
+        .into_iter()
+        .map(|line| {
+            contract::events::Event::from_envelope(&line)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let mut found = None;
+    for event in &lines {
+        if let contract::events::Event::Reloaded(reloaded) = event {
+            found = Some(reloaded);
+            break;
+        }
+    }
+    let reloaded = found.unwrap();
+    // No server failed, so the server field stays as it is today.
+    assert_eq!(reloaded.failed, None);
+    let failures = reloaded.extension_failures.as_ref().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[0].error.code, ErrorCode::ExtensionFailed);
+    assert_eq!(failures[0].error.message, "boom");
+}
+
+#[test]
+fn applied_reload_publishes_extension_failures_beside_server_failures() {
+    use contract::events::{ExtensionFailure, ReloadFailure, ServerFailure};
+    let mut w = world();
+    w.looped = w.looped.reloader(Arc::new(|_| {
+        let mut next = prepared();
+        next.server_sync.server_failures = vec![ReloadFailure {
+            server: "flaky".into(),
+            reason: ServerFailure::StartFailed,
+            error: Failure {
+                code: ErrorCode::McpServerUnavailable,
+                message: "the start failed".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        }];
+        // One entry naming its extension, one without: the publish
+        // keeps each entry as prepared, never null.
+        next.extension_failures = vec![
+            ExtensionFailure {
+                provider: "acme".into(),
+                extension: Some("acme-ext".into()),
+                error: Failure {
+                    code: ErrorCode::ExtensionFailed,
+                    message: "boom".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            },
+            ExtensionFailure {
+                provider: "bare".into(),
+                extension: None,
+                error: Failure {
+                    code: ErrorCode::ExtensionFailed,
+                    message: "refresh missed".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            },
+        ];
+        Ok(next)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .is_ok()
+    );
+    let lines: Vec<_> = log::read(w.looped.log.dir())
+        .unwrap()
+        .into_iter()
+        .map(|line| {
+            contract::events::Event::from_envelope(&line)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let mut found = None;
+    for event in &lines {
+        if let contract::events::Event::Reloaded(reloaded) = event {
+            found = Some(reloaded);
+            break;
+        }
+    }
+    let reloaded = found.unwrap();
+    let failed = reloaded.failed.as_ref().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].server, "flaky");
+    let failures = reloaded.extension_failures.as_ref().unwrap();
+    assert_eq!(failures.len(), 2);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[1].provider, "bare");
+    assert_eq!(failures[1].extension, None);
 }
 
 #[test]

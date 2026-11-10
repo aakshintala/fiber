@@ -982,6 +982,87 @@ fn provider_reload_models_error_keeps_the_old_catalogue() {
 }
 
 #[test]
+fn provider_reload_models_error_records_the_discovery_failure() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // A Lua provider file whose `models()` errors, with no cached copy:
+    // the failure is recorded beside its notice, and the provider keeps
+    // its data file's list.
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    let prepared = fixture.prepare();
+    let notices = prepared.notices.clone();
+    assert_eq!(prepared.extension_failures.len(), 1);
+    assert_eq!(prepared.extension_failures[0].provider, "fake");
+    assert_eq!(
+        prepared.extension_failures[0].extension.as_deref(),
+        Some("fake")
+    );
+    assert_eq!(
+        prepared.extension_failures[0].error.code,
+        contract::ErrorCode::ExtensionFailed
+    );
+    assert!(
+        prepared.extension_failures[0]
+            .error
+            .message
+            .contains("models boom"),
+        "{:?}",
+        prepared.extension_failures[0].error
+    );
+    assert!(prepared.server_sync.server_failures.is_empty());
+    // The failure reaches the session as a notice naming the extension.
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.extension.as_deref() == Some("fake")),
+        "no models() error notice for fake in {:?}",
+        notices
+            .iter()
+            .map(|notice| (&notice.code, &notice.extension, &notice.message))
+            .collect::<Vec<_>>()
+    );
+    (prepared.installed)();
+    // The provider keeps its old list: the old reference resolves.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
+}
+
+#[test]
+fn provider_reload_models_error_survives_a_failing_placeholder_fill() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // The data file's models name a placeholder host, and the extension
+    // settings file holding its value cannot be read: the placeholder
+    // fill fails, while `models()` fails first in the same rebuild.
+    fixture.rewrite_fake_models(json!([
+        {"id": "m", "protocol": "openai-responses", "base_url": "https://{host}/v1", "context_window": 1000},
+    ]));
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    std::fs::create_dir_all(fixture.rig.home.join("config")).unwrap();
+    std::fs::write(fixture.rig.home.join("config/fake.json"), "{").unwrap();
+    let prepared = fixture.prepare();
+    // The rebuild cannot be read, so the old catalogue stands, and the
+    // drained failure still names the provider.
+    assert_eq!(prepared.extension_failures.len(), 1);
+    assert_eq!(prepared.extension_failures[0].provider, "fake");
+    assert_eq!(
+        prepared.extension_failures[0].extension.as_deref(),
+        Some("fake")
+    );
+    (prepared.installed)();
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
+}
+
+#[test]
 fn provider_reload_removal_drops_the_providers_references() {
     let mut fixture = Fixture::new();
     fixture.install_fake(fake_models_without_levels());
