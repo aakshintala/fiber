@@ -329,6 +329,86 @@ fn keeper_that_never_closes_is_unconfirmed_past_the_bound() {
     assert!(UnixStream::connect(temp.run(&id)).is_ok());
 }
 
+/// A silent keeper holds the stop's read past the bound: the keeper leg
+/// waits it out instead of confirming at once. Pins the read's
+/// would-block wait through the leg itself: answering confirmed without
+/// the wait would close a keeper that never closed.
+#[test]
+fn stop_keeper_waits_out_a_silent_keeper_to_the_bound() {
+    let temp = Temp::new("ss-keeper-silent");
+    let id = SessionId(testkit::id(23));
+    let listener = UnixListener::bind(temp.run(&id)).unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // The stop line arrives first; then silence: the read below
+        // would block until the keeper exits, which never comes.
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, FROZEN_STOP);
+        thread::park();
+    });
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(stop_keeper(&hub, &id, end)).unwrap_or(());
+    });
+    // The park is the signal: only now may the clock move past the end.
+    assert!(
+        temp.clock.await_parked(end, Deadline::after(DEADLINE)),
+        "the stop waits for the silent keeper"
+    );
+    temp.clock.advance_when_parked(
+        Some(end),
+        None,
+        KEEPERS_STOP_WITHIN,
+        &Deadline::after(DEADLINE),
+    );
+    assert!(matches!(
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "the silent stop"),
+        SessionOutcome::Unconfirmed
+    ));
+}
+
+/// A garbage read after the stop is no wait: the keeper leg confirms
+/// the error at once instead of parking to its bound. Pins the read's
+/// error arm through the leg itself: waiting out every error would
+/// leave a stopped keeper unconfirmed past the bound.
+#[test]
+fn stop_keeper_confirms_an_overlong_read_without_waiting() {
+    let temp = Temp::new("ss-keeper-garbage");
+    let id = SessionId(testkit::id(24));
+    let listener = UnixListener::bind(temp.run(&id)).unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, FROZEN_STOP);
+        // Overlong with no newline: the stop's read fails outright, so
+        // it confirms without the bound moving. Tolerate the stop
+        // closing mid-write: it answers as soon as it has read past the cap.
+        let payload = vec![b'x'; support::framing::MAX_LINE + 8];
+        let _ = stream.write_all(&payload);
+    });
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(stop_keeper(&hub, &id, end)).unwrap_or(());
+    });
+    // No clock move: the error confirms at once. A mutant that waits
+    // out every error instead parks here past the wall deadline and fails.
+    assert!(matches!(
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "the overlong stop"),
+        SessionOutcome::KeeperConfirmed
+    ));
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
 #[test]
 fn keeper_gone_before_the_stop_write_is_gone_not_confirmed() {
     let temp = Temp::new("ss-keeper-vanish");

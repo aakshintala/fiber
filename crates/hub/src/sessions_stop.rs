@@ -85,6 +85,16 @@ struct Tally {
     gone: BTreeSet<String>,
 }
 
+/// Whether the rescan still has to stop `id`: the first scan neither
+/// confirmed nor keeper-confirmed its stop. Exempt: re-stopping an
+/// already-closed socket reads gone and leaves the outcome unchanged,
+/// so only redundant connects differ, which no consumer sees; no test
+/// can stage a visible difference.
+#[cfg_attr(false, mutants::skip)]
+fn rescan_still_stops(tally: &Tally, id: &SessionId) -> bool {
+    !tally.confirmed.contains(&id.0) && !tally.keepers.contains(&id.0)
+}
+
 /// Shuts down every running session the hub knows of in `run/`, each
 /// through its own shutdown (`close` with `now`), bounded by
 /// [`SESSIONS_STOP_WITHIN`]: zero-wait on `inflight_binds`, scan, zero-wait
@@ -128,7 +138,7 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     };
     let fresh: Vec<SessionId> = second
         .iter()
-        .filter(|id| !tally.confirmed.contains(&id.0) && !tally.keepers.contains(&id.0))
+        .filter(|id| rescan_still_stops(&tally, id))
         .cloned()
         .collect();
     fan_out(hub, &fresh, end, &mut tally);

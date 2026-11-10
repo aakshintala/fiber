@@ -93,16 +93,16 @@ pub fn classify_sockets(
         .collect())
 }
 
-/// Finishes a queued connect: waits out the bind, then reads the
-/// deferred error. Exempt: AF_UNIX connects never return EINPROGRESS on
+/// Whether a queued connect failed: the wait ran out or the deferred
+/// error says so. Exempt: AF_UNIX connects never return EINPROGRESS on
 /// Linux, so no test stages the wait (as in
 /// `hub::sessions_stop::transport::start_connect`).
 #[cfg_attr(false, mutants::skip)]
-fn finish_connect(fd: BorrowedFd, clock: &Arc<dyn Clock>, deadline: Instant) -> bool {
+fn connect_failed(fd: BorrowedFd, clock: &Arc<dyn Clock>, deadline: Instant) -> bool {
     if !crate::hub::wait_ready(fd, PollFlags::OUT, &**clock, deadline, &mut || {}) {
-        return false;
+        return true;
     }
-    matches!(rustix::net::sockopt::socket_error(fd), Ok(Ok(())))
+    !matches!(rustix::net::sockopt::socket_error(fd), Ok(Ok(())))
 }
 
 /// One entry's probe: the exchange shares one [`PROBE_DEADLINE`] on the
@@ -125,7 +125,7 @@ fn probe_socket(path: &Path, id: &SessionId, clock: &Arc<dyn Clock>) -> SocketCl
     match rustix::net::connect(&fd, &addr) {
         Ok(()) => {}
         Err(rustix::io::Errno::INPROGRESS) => {
-            if !finish_connect(fd.as_fd(), clock, deadline) {
+            if connect_failed(fd.as_fd(), clock, deadline) {
                 return SocketClass::Gone;
             }
         }

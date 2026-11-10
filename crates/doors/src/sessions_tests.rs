@@ -1646,6 +1646,50 @@ fn probe_marks_a_reset_peer_keeper_or_gone_without_waiting() {
     );
 }
 
+/// An overlong first line is no silent socket: the probe answers at
+/// once instead of parking to its bound. The line cap is the only
+/// failing read a probe can see without waiting (a reset reads as EOF
+/// once its bytes are consumed), so this pins the error arm a
+/// wait-everything mutant would park.
+#[test]
+fn probe_marks_an_overlong_line_keeper_or_gone_without_waiting() {
+    let home = Home::new();
+    let listener = home.listener(ID);
+    thread::spawn(move || {
+        // The probe always connects to its own listing: a blocking
+        // accept needs no bound.
+        let (mut stream, _) = listener.accept().unwrap();
+        // Read the probe's subscribe first, so the overlong line is the
+        // first thing the probe's read can see and no partial write races it.
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        // No newline: the probe's read fails outright at the cap, so
+        // the error answers without the bound moving. Hold the socket
+        // open past the write, so a wait-everything mutant parks instead
+        // of reading a close. Tolerate the probe closing mid-write: it
+        // answers as soon as it has read past the cap.
+        let payload = vec![b'x'; MAX_LINE + 8];
+        let _ = stream.write_all(&payload);
+        thread::park();
+    });
+    let wall = Deadline::after(fakes::deadline::WAIT);
+    let (done_tx, done_rx) = mpsc::channel();
+    let path = home.temp.path().to_owned();
+    let clock = home.clock.clone();
+    thread::spawn(move || {
+        done_tx.send(classify_sockets(&path, clock)).unwrap();
+    });
+    // No clock move: the error answers at once. A mutant that waits
+    // out every error instead parks here past the wall deadline and fails.
+    assert_eq!(
+        wall.recv_or_fail(&done_rx, "the probe past its overlong peer")
+            .unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
+    );
+}
+
 #[test]
 fn probe_marks_an_accept_never_answer_peer_gone_only_past_its_bound() {
     let home = Home::new();
