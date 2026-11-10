@@ -5313,3 +5313,232 @@ fn a_session_with_no_reopening_folds_live_lines_in_place() {
     }
     assert!(totals.windows(2).all(|pair| pair[0] < pair[1]));
 }
+
+/// PageUp and PageDown wait for the opening pass: the top row never
+/// moves mid-pass, and the pass stays open (`docs/tui.md`, "History
+/// and paging").
+#[test]
+fn page_keys_wait_for_the_opening_pass() {
+    let mut seq = 0u64;
+    let mut app = app();
+    for line in replies(&mut seq, 14) {
+        app.on_line(line);
+    }
+    app.on_line(hub("stream_reopened", SESSION, Some(100)));
+    assert!(app.pass_open());
+    // Off the bottom, so a page would move the top either way.
+    let rows = app.attached_screen().pages().rows().len();
+    app.attached_screen_mut().jump(rows / 2);
+    let top = app.attached_screen().top();
+    assert!(top.is_some_and(|top| top > 0), "scrolled up: {top:?}");
+    app.page_inner(true);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "PageUp waits for the pass"
+    );
+    app.page_inner(false);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "PageDown waits for the pass"
+    );
+    assert!(app.pass_open(), "the pass stays open");
+}
+
+/// The mouse wheel waits for the opening pass from both wheel sites:
+/// over the conversation and over an open item transcript. The top row
+/// never moves mid-pass, and the pass stays open (`docs/tui.md`,
+/// "History and paging").
+#[test]
+fn wheel_waits_for_the_opening_pass() {
+    let mut seq = 0u64;
+    let live = replies(&mut seq, 14);
+    let mut app = app();
+    for line in &live {
+        app.on_line(line.clone());
+    }
+    // Over the conversation's rows, below its top.
+    let area = app.conversation_area();
+    let col = area.left().saturating_add(1);
+    let row = area.bottom().saturating_sub(2);
+    let down = || Mouse {
+        kind: MouseKind::WheelDown,
+        col,
+        row,
+    };
+    let up = || Mouse {
+        kind: MouseKind::WheelUp,
+        col,
+        row,
+    };
+    app.attached_screen_mut().jump(0);
+    assert_eq!(app.on_wheel(&down()), Effect::None);
+    assert_ne!(
+        app.attached_screen().top(),
+        Some(0),
+        "the wheel scrolls with no pass open"
+    );
+    // An open fiber transcript over tall rows of its own: the wheel
+    // over its body scrolls the transcript, not the parent.
+    let stashed = std::mem::replace(
+        app.attached_screen_mut(),
+        super::super::screen::Screen::new(),
+    );
+    for line in &live {
+        if let Line::Session(envelope) = line {
+            app.screen.pages_mut().apply(envelope);
+        }
+    }
+    app.items.open = Some(crate::app::items::Open {
+        job_id: JobId("j_abc".to_owned()),
+        stashed: Some(stashed),
+        message: None,
+    });
+    assert!(app.item_transcript());
+    let body = app.conversation_area();
+    let body_col = body.left().saturating_add(1);
+    let body_row = body.bottom().saturating_sub(2);
+    let body_down = || Mouse {
+        kind: MouseKind::WheelDown,
+        col: body_col,
+        row: body_row,
+    };
+    let body_up = || Mouse {
+        kind: MouseKind::WheelUp,
+        col: body_col,
+        row: body_row,
+    };
+    app.screen.jump(0);
+    assert_eq!(app.on_wheel(&body_down()), Effect::None);
+    assert_ne!(
+        app.screen.top(),
+        Some(0),
+        "the transcript wheel scrolls with no pass open"
+    );
+    app.on_line(hub("stream_reopened", SESSION, Some(100)));
+    assert!(app.pass_open());
+    assert!(app.item_transcript(), "the transcript stays open");
+    let held = app.screen.top();
+    assert!(held.is_some(), "off the transcript bottom: {held:?}");
+    assert_eq!(app.on_wheel(&body_down()), Effect::None);
+    assert_eq!(
+        app.screen.top(),
+        held,
+        "the transcript wheel waits for the pass"
+    );
+    assert_eq!(app.on_wheel(&body_up()), Effect::None);
+    assert_eq!(
+        app.screen.top(),
+        held,
+        "the transcript wheel waits for the pass"
+    );
+    app.item_esc();
+    assert!(!app.item_open());
+    let top = app.attached_screen().top();
+    assert!(top.is_some(), "off the bottom: {top:?}");
+    assert_eq!(app.on_wheel(&down()), Effect::None);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "the conversation wheel waits for the pass"
+    );
+    assert_eq!(app.on_wheel(&up()), Effect::None);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "the conversation wheel waits for the pass"
+    );
+    assert!(app.pass_open(), "the pass stays open");
+}
+
+/// A resize during the opening pass records an owed recount instead of
+/// recounting: widths and row totals never move mid-pass, and the pass
+/// end recounts once at the final width (`docs/tui.md`, "History and
+/// paging").
+#[test]
+fn recount_waits_for_the_pass_end() {
+    // The width a plain resize to the final size wraps at: the pass end
+    // must recount exactly there.
+    let mut plain = app();
+    plain.set_size(60, 24);
+    let final_width = plain.attached_screen().pages().wrap_width();
+    let mut seq = 0u64;
+    let mut app = app();
+    for line in replies(&mut seq, 14) {
+        app.on_line(line);
+    }
+    let width = app.attached_screen().pages().wrap_width();
+    let total = total_of(&app);
+    let mut replay = 0u64;
+    let lines = replies(&mut replay, 2);
+    let last = replay - 1;
+    app.on_line(hub("stream_reopened", SESSION, Some(last)));
+    assert!(app.pass_open());
+    app.set_size(70, 24);
+    assert_eq!(
+        app.attached_screen().pages().wrap_width(),
+        width,
+        "the first mid-pass resize recounts at once"
+    );
+    assert_eq!(total_of(&app), total, "rows never move mid-pass");
+    app.set_size(60, 24);
+    assert_eq!(
+        app.attached_screen().pages().wrap_width(),
+        width,
+        "the second mid-pass resize recounts at once"
+    );
+    assert_eq!(total_of(&app), total, "rows never move mid-pass");
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert!(
+        matches!(app.overlay, Overlay::None),
+        "the boundary lands the pass"
+    );
+    assert!(!app.pass_open());
+    assert_eq!(
+        app.attached_screen().pages().wrap_width(),
+        final_width,
+        "the landing recounts at the final width"
+    );
+}
+
+/// No scroll bar draws while the opening pass runs: the counts are not
+/// exact mid-pass, and the thumb returns with the landing, as while
+/// frozen (`docs/tui.md`, "History and paging").
+#[test]
+fn no_thumb_while_the_pass_is_open() {
+    let mut app = app();
+    let mut seq = 0u64;
+    for line in replies(&mut seq, 14) {
+        app.on_line(line);
+    }
+    app.attached_screen_mut().jump(0);
+    let following = thumb_rows(&app, &rendered(&app));
+    assert!(!following.is_empty(), "a thumb shows with no pass open");
+    let mut replay = 0u64;
+    let lines = replies(&mut replay, 14);
+    let last = replay - 1;
+    app.on_line(hub("stream_reopened", SESSION, Some(last)));
+    assert!(app.pass_open());
+    assert!(!app.counts_exact(), "counts are exact mid-pass");
+    assert!(
+        thumb_rows(&app, &rendered(&app)).is_empty(),
+        "the thumb draws mid-pass"
+    );
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert!(
+        matches!(app.overlay, Overlay::None),
+        "the boundary lands the pass"
+    );
+    assert!(!app.pass_open());
+    assert!(app.counts_exact());
+    assert_eq!(
+        thumb_rows(&app, &rendered(&app)),
+        following,
+        "the thumb returns with the landing"
+    );
+}
