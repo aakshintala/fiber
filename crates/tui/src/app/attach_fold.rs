@@ -452,8 +452,12 @@ impl App {
 
     /// Whether the scroll bar draws its thumb: the counts are exact
     /// while the screen is not frozen, except on the attached screen
-    /// while the overlay keeps the preview.
+    /// while the overlay keeps the preview. While an opening pass runs,
+    /// the screen shows the pages already held, so no thumb draws.
     pub(crate) fn counts_exact(&self) -> bool {
+        if self.pass_open() {
+            return false;
+        }
         if self.screen.frozen() {
             return false;
         }
