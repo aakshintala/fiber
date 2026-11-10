@@ -118,6 +118,11 @@ pub struct Resumed {
     /// backfill resolves its jobs through this. Jobs with no mapping (another
     /// harness, a missing line) resolve to skip-and-continue.
     pub(crate) delegate_sessions: HashMap<JobId, SessionId>,
+    /// The settled finish's worktree inspection: `Some` on the
+    /// session-process resume path, which reports the delegate's worktree
+    /// at settle time; `None` (rewind, tests, any caller without a session
+    /// process) settles with no worktree.
+    pub settle_finish: Option<contract::jobs::FinishWorktree>,
     /// The repository's offers: the session's skips and the pending offer.
     pub(crate) offers: crate::offer::Folded,
     /// Whether the person's name pins the session: the fold of every
