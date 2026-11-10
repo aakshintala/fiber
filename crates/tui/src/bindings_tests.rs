@@ -103,8 +103,9 @@ fn only_the_conditional_rows_carry_a_condition() {
 
 /// Doc rows that name a binding the table does not build yet: row
 /// `archive_session` is new, and `delete_session` gives Backspace to it.
-/// The build ticket (#3782) removes both and the filter below.
-const NOT_BUILT: [&str; 2] = ["archive_session", "delete_session"];
+/// The build ticket (#3782) removes both and the filter below. Row
+/// `focus_project` is new; its build ticket (#4599) removes it.
+const NOT_BUILT: [&str; 3] = ["archive_session", "delete_session", "focus_project"];
 
 #[test]
 fn the_table_matches_the_doc_row_for_row() {

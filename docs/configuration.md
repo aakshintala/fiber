@@ -121,6 +121,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `hub.default` | none | no | On a client, the name of the hub in `hubs` it uses without `--hub`; unset, it uses the local hub. |
 | `hubs."<name>".address` | none | no | On a client, a hub's address: `ws://`, `wss://`, or `unix:` and a socket path (`docs/invocation.md`, "Several hubs"). The device token is in `credentials/hubs/<name>`, never here. |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn, no jobs and no cache warming, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
+| `session.keep_exited` | 10 | no | How many exited sessions each project keeps on home before the hub archives the older ones; 0 keeps them all (`docs/invocation.md`, "Archiving"). |
 | `reviewer.model` | none | no | The reviewer's model: when set it wins, else the provider's saved pick, else the package default (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). Only Fiber home's global and per-project files set it; `-c` is ignored with a `notice`. |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
