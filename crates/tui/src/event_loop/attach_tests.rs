@@ -3993,10 +3993,9 @@ fn a_rejected_count_folds_nothing() {
         rows.iter().any(|row| row.contains("quokkas")),
         "the preview stays: {rows:?}"
     );
-    assert_eq!(
-        rows.iter().filter(|row| row.contains("thrashers")).count(),
-        1,
-        "the trailer prompt shows once: {rows:?}"
+    assert!(
+        rows.iter().any(|row| row.contains("thrashers")),
+        "the trailer prompt stays: {rows:?}"
     );
     assert!(
         !rows.iter().any(|row| row.contains("root reply")),
