@@ -21,6 +21,11 @@ use crate::{CliError, finish, write_line};
 /// The `id` of the one command `fiber sessions` sends.
 const LIST_ID: &str = "c_sessions";
 
+/// The `id` of the archived-only query `resolve_listed` sends beside it:
+/// a separate command id on its own stream, so each answer arrives on
+/// the request that asked for it.
+const ARCHIVED_ID: &str = "c_sessions_archived";
+
 /// Only the status fields this list prints. Flattening `SessionState`
 /// here would buffer every ignored field, including delegate progress,
 /// before reading the state. Read its tag and associated fields directly.
@@ -124,18 +129,21 @@ struct Row {
     spend: f64,
 }
 
-/// `fiber sessions [--all] [--json]` in the current directory, through the
-/// hub `connect` reaches, starting one when none runs.
+/// `fiber sessions [--all] [--json] [--archived]` in the current
+/// directory, through the hub `connect` reaches, starting one when none
+/// runs. `--archived` asks for the archived set; without it the hub
+/// answers its live and exited sessions.
 pub fn list(
     all: bool,
     json: bool,
+    archived: bool,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let ran = std::env::current_dir()
         .map_err(CliError::CurrentDirectory)
         .and_then(|workspace| {
             let project = worktree::resolve_project(&workspace);
-            run(&project, all, json, &mut io::stdout(), connect)
+            run(&project, all, json, archived, &mut io::stdout(), connect)
         });
     finish(ran)
 }
@@ -146,13 +154,14 @@ fn run(
     project: &worktree::Project,
     all: bool,
     json: bool,
+    archived: bool,
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), CliError> {
     let command = HubCommand::Sessions(SessionsArgs {
         project: (!all && project.in_repository).then(|| log::project_key(&project.path)),
         active: None,
-        archived: None,
+        archived: archived.then_some(true),
     });
     let (stream, _) = connect().map_err(CliError::Hub)?;
     let result = request_value(&mut BufReader::new(stream), LIST_ID, command)?;
@@ -168,11 +177,40 @@ fn run(
     Ok(())
 }
 
+/// One `sessions` query's live then exited ids, in the hub's order.
+fn query_ids(
+    command_id: &str,
+    archived: Option<bool>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<Vec<String>, CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let result = request_value(
+        &mut BufReader::new(stream),
+        command_id,
+        HubCommand::Sessions(SessionsArgs {
+            project: None,
+            active: None,
+            archived,
+        }),
+    )?;
+    let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
+    Ok(answer
+        .live
+        .into_iter()
+        .map(|row| row.session_id)
+        .chain(answer.exited.into_iter().map(|row| row.session_id))
+        .collect())
+}
+
 /// `fiber resume <selector> --hub <name>`: the session the selector names
 /// on that hub, over the hub's `sessions` answer across every project.
+/// The selector resolves over the default set and the archived set at
+/// once: an archived session resumes by naming it, without a flag. Each
+/// set arrives on its own stream under its own command id; either query
+/// failing fails the resolution rather than resolving a partial union.
 /// A full id wins over a longer id it prefixes, else a unique prefix;
-/// an empty selector matches nothing. The command carries no `project`
-/// argument, as the list outside a repository does, and never reads the
+/// an empty selector matches nothing. The commands carry no `project`
+/// argument, as the list outside a repository does, and never read the
 /// current directory.
 pub fn resolve_listed(
     selector: &str,
@@ -182,23 +220,11 @@ pub fn resolve_listed(
     if selector.is_empty() {
         return Err(not_found(selector, hub));
     }
-    let (stream, _) = connect().map_err(CliError::Hub)?;
-    let result = request_value(
-        &mut BufReader::new(stream),
-        LIST_ID,
-        HubCommand::Sessions(SessionsArgs {
-            project: None,
-            active: None,
-            archived: None,
-        }),
-    )?;
-    let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
-    let ids = answer
-        .live
-        .into_iter()
-        .map(|row| row.session_id)
-        .chain(answer.exited.into_iter().map(|row| row.session_id));
-    let ids: Vec<String> = ids.collect();
+    let default = query_ids(LIST_ID, None, connect)?;
+    let archived = query_ids(ARCHIVED_ID, Some(true), connect)?;
+    let mut ids: Vec<String> = default.into_iter().chain(archived).collect();
+    ids.sort();
+    ids.dedup();
     if ids.iter().any(|id| id == selector) {
         return Ok(SessionId(selector.to_owned()));
     }

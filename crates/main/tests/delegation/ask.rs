@@ -835,10 +835,11 @@ Sessions:
   fiber [--model <model>] [-c <key>=<value>]...                                                                   Open the terminal
   ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   resume [<id>] [--credential <label>]                                                                            Open a session in the terminal, or home at the session list
-  continue [--hub <name>]                                                                                           Open the most recent session in this project
-  sessions [--all] [--json]                                                                                       List sessions: id, state, name, what it waits on, spend
+  continue [--hub <name>]                                                                                         Open the most recent session in this project
+  sessions [--all] [--archived] [--json]                                                                          List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                                                                         Search the logs of past and running sessions for the text
   sessions delete [--hub <name>] [--cascade] [--yes] <id>                                                         Delete a session, and with --cascade the sessions that continue it
+  sessions archive [--hub <name>] <id>                                                                            Archive a session: it leaves the list and the home rail
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
   sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
