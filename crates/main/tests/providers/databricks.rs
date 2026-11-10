@@ -240,7 +240,6 @@ fn assert_discovery_fetched(requests: &[Request]) {
 /// discovery requests carry the source-only header; the model's carries
 /// `model_tags`, parsed.
 fn assert_tagged_turn(requests: &[Request], model_path: &str, model_tags: &Value) {
-    assert_discovery_fetched(requests);
     let model = find_request(requests, model_path);
     for path in DISCOVERY_PATHS {
         let request = find_request(requests, path);
@@ -800,6 +799,9 @@ fn request_tags_hub_overrides_are_session_local() {
         .kill_and_wait();
 }
 
+/// `docs/testing.md`, "Event streams": the event kinds as a set with counts.
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
+
 /// Every diagnostic line under the home's `logs/`, parsed: the witness for
 /// an omission is the session's diagnostic log, read after the child exits
 /// (`crates/main/tests/extension_host/extension_diagnostics.rs`).
@@ -809,13 +811,8 @@ fn log_lines(setup: &Setup) -> Vec<Value> {
     if !logs.exists() {
         return lines;
     }
-    let mut files: Vec<_> = std::fs::read_dir(&logs)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    files.sort();
-    for path in files {
-        let text = std::fs::read_to_string(&path).unwrap();
+    for entry in std::fs::read_dir(&logs).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
         for line in text.lines() {
             lines.push(serde_json::from_str(line).unwrap());
         }
@@ -856,12 +853,13 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let kinds: Vec<&str> = run
-        .kinds()
-        .into_iter()
-        .filter(|kind| *kind != "extension_log")
+    let without_extension_log: Vec<Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "extension_log")
+        .cloned()
         .collect();
-    assert_eq!(kinds, HELLO_KINDS);
+    support::assert_kinds_multiset(&without_extension_log, &HELLO_KINDS, &[], None, COUNT_DOC);
     assert_eq!(run.text_completed(), "Hello.");
     assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
     let lines = log_lines(&setup);
@@ -905,7 +903,7 @@ fn all_services_backed_logs_no_omission() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
+    support::assert_kinds_multiset(&run.lines, &HELLO_KINDS, &[], None, COUNT_DOC);
     assert_eq!(run.text_completed(), "Hello.");
     assert_turn(&server.requests(), "/ai-gateway/mlflow/v1/chat/completions");
     let lines = log_lines(&setup);

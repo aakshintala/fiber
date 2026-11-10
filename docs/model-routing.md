@@ -876,7 +876,7 @@ a new list only through a tool result (`docs/prompt-cache.md`).
 The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A vendor with no listing endpoint ships a
 static list instead. A service the vendor lists but backs with no serving
-endpoint is deliberately left out of discovery, and each omission is named in
+endpoint is deliberately left out of discovery, and each omission is named once in
 the diagnostic log (see #4337).
 
 A provider runs Lua in five functions at most: `models()`, `quota()`,
