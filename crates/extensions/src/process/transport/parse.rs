@@ -42,8 +42,21 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
         .and_then(serde_json::Value::as_object)
         .cloned()
         .unwrap_or_default();
+    // A failed `import` whose `args` are sound but whose `source` names
+    // no harness is refused naming the two sources. The check reads the
+    // raw line before the value moves into the command-line read.
+    let unknown_source = import_source_unknown(&classified, map.get("args"));
     let parsed: Result<CommandLine, _> = serde_json::from_value(value);
     let Ok(parsed) = parsed else {
+        // An `import` whose `args` are sound but whose `source` names no
+        // harness is refused naming the two sources, as the dispatch
+        // refused it before the retype.
+        if unknown_source {
+            return ParsedLine::Refused {
+                id: classified.id,
+                message: "`source` must be `claude-code` or `codex`.".to_owned(),
+            };
+        }
         return unbuilt_or_unfit(classified);
     };
     match parsed.command {
@@ -156,6 +169,31 @@ fn classify(map: &serde_json::Map<String, serde_json::Value>, id: CommandId) -> 
         Some(_) => return None,
     }
     Some(Classified { id, command })
+}
+
+/// Whether a failed `import` line holds a structurally sound `args`
+/// object whose string `source` names no harness: only then does the
+/// refusal name the two sources. The structural checks run first, so
+/// an extra key, a null, a non-string source or missing `args` keeps
+/// today's mapping instead.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn import_source_unknown(classified: &Classified, args: Option<&serde_json::Value>) -> bool {
+    if classified.command != "import" {
+        return false;
+    }
+    let Some(serde_json::Value::Object(args)) = args else {
+        return false;
+    };
+    if args.len() != 1 || !args.contains_key("source") {
+        return false;
+    }
+    let Some(serde_json::Value::String(name)) = args.get("source") else {
+        return false;
+    };
+    serde_json::from_value::<contract::commands::ImportSource>(serde_json::Value::String(
+        name.clone(),
+    ))
+    .is_err()
 }
 
 /// Answers a full parse failure by the name alone, sharing the doors'
