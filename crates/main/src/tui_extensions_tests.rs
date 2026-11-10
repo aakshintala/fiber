@@ -1912,7 +1912,7 @@ fn click_error_notice_once() {
         );
     }
     // One hook_failed notice per extension and slot until /reload
-    // (`docs/tui.md:3655-3667`: one notice per extension and slot; a key or
+    // (`docs/tui.md`:3655-3667: one notice per extension and slot; a key or
     // click handler that errors counts as not handled).
     let pending = renderer.take_pending();
     assert_eq!(pending.len(), 2, "{pending:?}");
@@ -1975,7 +1975,7 @@ fn click_timeout_off() {
         KeyOutcome::NotHandled
     );
     let pending = renderer.take_pending();
-    // `docs/tui.md:3655-3667`, "When an extension fails": a click timeout switches the extension off with one extension_failed notice.
+    // `docs/tui.md`:3655-3667, "When an extension fails": a click timeout switches the extension off with one extension_failed notice.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "extension_failed");
     assert!(pending[0].1.contains("slow"), "{pending:?}");
@@ -2031,7 +2031,7 @@ fn click_inert_and_conflict() {
         );
     }
     let pending = renderer.take_pending();
-    // `docs/tui.md:3689`: one notice per slot and set of contenders.
+    // `docs/tui.md`:3689: one notice per slot and set of contenders.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "command_conflict");
 }
