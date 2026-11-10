@@ -507,6 +507,27 @@ impl<'de> Deserialize<'de> for ImportSource {
     }
 }
 
+/// Whether an `import` line's `args` value names no harness while staying
+/// structurally sound: the command is `import`, `args` is an object with
+/// only `source`, and `source` is a string the `ImportSource` enum refuses.
+/// Only then does the refusal name the two sources; any other shape keeps
+/// the generic mapping.
+pub fn is_unknown_import_source(command: &str, args: Option<&Value>) -> bool {
+    if command != "import" {
+        return false;
+    }
+    let Some(Value::Object(map)) = args else {
+        return false;
+    };
+    if map.len() != 1 || !map.contains_key("source") {
+        return false;
+    }
+    let Some(Value::String(name)) = map.get("source") else {
+        return false;
+    };
+    serde_json::from_value::<ImportSource>(Value::String(name.clone())).is_err()
+}
+
 /// The `args` of `import`: `claude-code` or `codex`; absent means both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

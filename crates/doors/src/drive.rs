@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, Weak};
 
-use contract::commands::{Command, CommandLine, ImportSource, ReplyAnswer};
+use contract::commands::{Command, CommandLine, ReplyAnswer};
 use contract::inbox::{Ack, Rejection};
 use contract::shapes::Origin;
 use contract::{CommandId, ErrorCode};
@@ -177,27 +177,6 @@ fn unknown_command(id: CommandId, command: &str) -> (CommandId, ErrorCode, Strin
     (id, ErrorCode::UnknownCommand, client::not_built(command))
 }
 
-/// Whether a failed `import` line holds a structurally sound `args`
-/// object whose string `source` names no harness: only then does the
-/// refusal name the two sources. The structural checks run first, so
-/// an extra key, a null, a non-string source or a missing `args` keeps
-/// today's mapping instead.
-fn import_source_unknown(line: &Classified) -> bool {
-    if line.command != "import" {
-        return false;
-    }
-    let Some(args) = line.value.get("args").and_then(Value::as_object) else {
-        return false;
-    };
-    if args.len() != 1 || !args.contains_key("source") {
-        return false;
-    }
-    let Some(Value::String(name)) = args.get("source") else {
-        return false;
-    };
-    serde_json::from_value::<ImportSource>(Value::String(name.clone())).is_err()
-}
-
 /// The `CommandLine` check, shared by the socket line and the
 /// in-process driver: `classify` runs first in both. A line that reads as
 /// a command goes on; a line whose name is not built answers
@@ -209,7 +188,8 @@ pub(crate) fn parse(
     // A failed `import` whose `args` are sound but whose `source` names
     // no harness is refused naming the two sources. The check reads the
     // raw line before the value moves into the command-line read.
-    let unknown_source = import_source_unknown(&line);
+    let unknown_source =
+        contract::commands::is_unknown_import_source(&line.command, line.value.get("args"));
     match serde_json::from_value::<CommandLine>(line.value) {
         Ok(parsed) => {
             if matches!(parsed.command, Command::Unknown) {
@@ -224,8 +204,7 @@ pub(crate) fn parse(
             {
                 Ok(Command::Unknown) => Err(unknown_command(line.id, &line.command)),
                 // An `import` whose `args` are sound but whose `source`
-                // names no harness is refused naming the two sources,
-                // as the dispatch refused it before the retype.
+                // names no harness is refused naming the two sources.
                 _ if unknown_source => Err((
                     line.id,
                     ErrorCode::InvalidArguments,

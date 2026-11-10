@@ -172,8 +172,8 @@ pub(crate) fn on_import(hub: &Hub, args: &Map<String, Value>) -> Result<Option<V
         return Err(invalid());
     }
     // The hub never builds `ImportArgs`: the raw map parses through the
-    // contract enum, keeping the same arms and messages, so a null, a
-    // non-string or an unknown name is refused exactly as today.
+    // contract enum, so a null, a non-string or an unknown name is refused
+    // `invalid_arguments` naming the two sources.
     let source = match args.get("source") {
         None => None,
         Some(Value::String(name)) => Some(
