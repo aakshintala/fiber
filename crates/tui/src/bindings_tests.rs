@@ -103,8 +103,10 @@ fn only_the_conditional_rows_carry_a_condition() {
 
 /// Doc rows that name a binding the table does not build yet: row
 /// `archive_session` is new, and `delete_session` gives Backspace to it.
-/// The build ticket (#3782) removes both and the filter below.
-const NOT_BUILT: [&str; 2] = ["archive_session", "delete_session"];
+/// The build ticket (#3782) removes both and the filter below. Row
+/// `open_in_editor` names "the editor" (`tui.editor`, then `$VISUAL`, then
+/// `$EDITOR`); its build ticket (#4591) removes it.
+const NOT_BUILT: [&str; 3] = ["archive_session", "delete_session", "open_in_editor"];
 
 #[test]
 fn the_table_matches_the_doc_row_for_row() {
