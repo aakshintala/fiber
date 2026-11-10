@@ -272,3 +272,5 @@ crates/main/tests/screens/tui_command_extension.rs	fiber-2720	grant	2026-11-10T1
 crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-10T12:43:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/support/reviewer_eval.rs	fiber-477	plan	2026-11-10T12:43:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-10T12:43:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/fixtures/reviewer_eval/check_confidential.sh	fiber-477	plan	2026-11-10T12:45:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/workflow.md	fiber-477	plan	2026-11-10T12:45:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
