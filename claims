@@ -287,3 +287,11 @@ crates/loop/prompt/reviewer.md	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBo
 docs/permissions.md	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer_tests.rs	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/prompt_tests.rs	fiber-4234	plan	2026-11-10T15:47:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_table.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/codex/providers/codex.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/tests/providers_data.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/models-dev.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/openai/providers/openai.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/models_dev.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/models.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
