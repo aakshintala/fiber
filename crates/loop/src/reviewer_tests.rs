@@ -349,7 +349,7 @@ fn the_prompt_approves_the_whole_answered_proposal() {
         "reviewer.md covers a named action's purpose-implied steps"
     );
     assert!(
-        PROMPT.contains("A pipeline run uses its build service"),
+        PROMPT.contains("a pipeline run uses its build service"),
         "reviewer.md names the run's build service as implied"
     );
     assert!(
