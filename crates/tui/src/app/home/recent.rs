@@ -358,7 +358,7 @@ impl Recent {
 
     /// Folds valid archived rows into the project's stored archived
     /// page and total, returning whether a retrigger needs a fresh page.
-    pub(super) fn answer_archived(
+    fn answer_archived(
         &mut self,
         project: &str,
         rows: Vec<Row>,
@@ -384,6 +384,32 @@ impl Recent {
         }
         sessions.clear_archived_dirty(project);
         self.archived_first(project, sessions, connected, outbox)
+    }
+
+    /// Asks the next archived scoped `recent` page for `project` past
+    /// `before`, recording its id. While one is in flight for the
+    /// project, sends nothing: paging is not a re-trigger, so it marks
+    /// nothing dirty. Nothing goes out with no home, with the link
+    /// down, or for an empty project.
+    pub(super) fn archived_page(
+        &mut self,
+        project: &str,
+        before: Option<&str>,
+        connected: bool,
+        outbox: &mut Outbox,
+    ) -> Option<String> {
+        if project.is_empty() || !connected {
+            return None;
+        }
+        if archived_out(outbox, project) {
+            return None;
+        }
+        let id = support::mint("c_");
+        outbox.wait(
+            &id,
+            Waiting::Recent(RecentAsk::Archived(project.to_owned())),
+        );
+        Some(recent_line(&id, Some(project), before, true))
     }
 
     /// Asks the next scoped `recent` page for `project` past `before`,
@@ -525,6 +551,18 @@ impl App {
             .collect()
     }
 
+    /// Asks the next archived page for a project, without marking an
+    /// in-flight ask dirty.
+    pub(super) fn archived_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
+        let connected = self.outbox.is_up();
+        let outbox = &mut self.outbox;
+        let home = &mut self.home;
+        home.recent
+            .archived_page(project, before, connected, outbox)
+            .into_iter()
+            .collect()
+    }
+
     /// Asks the first unscoped `recent` page again: an accepted delete
     /// fills the gap it left. It also asks the scoped `recent` for the
     /// deleted row's project, or marks it dirty while one is in flight.
@@ -634,7 +672,7 @@ impl App {
                         home.recent
                             .answer_archived(&project, rows, total, &mut home.sessions);
                     home.refill_picker();
-                    let lines = if dirty {
+                    let mut lines = if dirty {
                         home.recent.follow_up_archived(
                             &project,
                             &mut home.sessions,
@@ -644,6 +682,30 @@ impl App {
                     } else {
                         Vec::new()
                     };
+                    // While the fold is open and rows are missing, page
+                    // on: each answer chains the next page until every
+                    // row is loaded. Paging never marks dirty.
+                    let (open, loaded, held, before) = {
+                        let sessions = &home.sessions;
+                        (
+                            sessions.is_archived_open(&project),
+                            sessions.archived_loaded(&project),
+                            sessions.archived_total_for(&project),
+                            sessions.archived_before(&project),
+                        )
+                    };
+                    if open && held.is_some_and(|held| loaded < held) {
+                        lines.extend(
+                            home.recent
+                                .archived_page(
+                                    &project,
+                                    before.as_ref().map(|id| id.0.as_str()),
+                                    connected,
+                                    &mut self.outbox,
+                                )
+                                .into_iter(),
+                        );
+                    }
                     Some(lines)
                 }
                 Err(notice) => {

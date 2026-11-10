@@ -976,6 +976,20 @@ impl Sessions {
         self.archived.values().flatten().any(|row| row.id == *id)
     }
 
+    /// How many archived rows are loaded for `project`.
+    pub(crate) fn archived_loaded(&self, project: &str) -> usize {
+        self.archived.get(project).map(Vec::len).unwrap_or(0)
+    }
+
+    /// The last loaded archived row's id for `project`: the next
+    /// archived page's cursor.
+    pub(crate) fn archived_before(&self, project: &str) -> Option<SessionId> {
+        self.archived
+            .get(project)
+            .and_then(|rows| rows.last())
+            .map(|row| row.id.clone())
+    }
+
     /// The live feed rows, in feed order.
     pub(crate) fn live(&self) -> Vec<&Row> {
         self.feed.iter().filter(|row| row.left.is_none()).collect()

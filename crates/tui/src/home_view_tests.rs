@@ -504,6 +504,78 @@ fn a_project_with_no_archived_sessions_shows_no_line() {
 }
 
 #[test]
+fn opening_the_archived_fold_pages_until_every_row_is_loaded() {
+    let mut app = home(80, 24);
+    let outgoing = outgoings(app.on_line(hello()));
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"))
+        .to_owned();
+    let fanout = outgoings(app.on_line(accepted(
+        &recent,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+    )));
+    let scoped = scoped_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    app.on_line(accepted(
+        &scoped,
+        serde_json::json!({"sessions": [], "total": 1}),
+    ));
+    // The hub pages the archived `recent`: fifty rows, then the last one.
+    let first: Vec<serde_json::Value> = (0..50)
+        .map(|n| recent_row(&format!("s_{n:016x}"), &format!("filed {n:02}"), "exited"))
+        .collect();
+    app.on_line(accepted(
+        &archived,
+        serde_json::json!({"sessions": first, "total": 51}),
+    ));
+    // The head counts the held total, not the loaded rows.
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("archived · 51"), "{frame}");
+    // Opening the fold asks the next page past the last loaded row: a
+    // fake hub serving two pages. Stopping after the first page leaves
+    // the last row missing, failing the assertion below.
+    let key = archived_head_key(&app);
+    let Effect::Send(page) = app.on_click(crate::mouse::TargetId::Home(Spot::Archived(key))) else {
+        panic!("opening the fold pages the archived recent");
+    };
+    assert_eq!(page.len(), 1);
+    let page: serde_json::Value =
+        serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(page["command"], "recent");
+    assert_eq!(page["args"]["project"], "-w");
+    assert!(page["args"].get("archived").is_some());
+    assert_eq!(page["args"]["before"], "s_0000000000000031");
+    app.on_line(accepted(
+        page["id"].as_str().unwrap_or_else(|| panic!("page id")),
+        serde_json::json!({"sessions": [recent_row("s_3232323232323232", "filed 50", "exited")], "total": 51}),
+    ));
+    // The head still counts the held total, and every row is listed:
+    // stopping after the first page leaves the last row missing,
+    // failing the count below.
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("archived · 51"), "{frame}");
+    let mut filed: Vec<String> = app
+        .home_screen()
+        .map(|screen| {
+            screen
+                .list
+                .into_iter()
+                .filter_map(|line| match line {
+                    ListLine::Exited { name, .. } => Some(name),
+                    _ => None,
+                })
+                .filter(|name| name.starts_with("filed "))
+                .collect()
+        })
+        .unwrap_or_default();
+    filed.sort_unstable();
+    filed.dedup();
+    assert_eq!(filed.len(), 51, "{filed:?}");
+    insta::assert_snapshot!("home_with_fully_paged_archived_fold", frame);
+}
+
+#[test]
 fn an_archived_only_project_shows_its_section() {
     let mut app = home_with_archived_fold();
     // Delete the last exited row through the foot question: the accepted

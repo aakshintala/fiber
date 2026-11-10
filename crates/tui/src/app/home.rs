@@ -1370,19 +1370,40 @@ impl App {
             Spot::Archived(key) => {
                 // The archived fold toggles in place: opening lists the
                 // loaded archived rows as exited rows, and again folds
-                // them. The head keeps the focus.
+                // them. The head keeps the focus. Opening with rows
+                // missing pages the project's archived `recent` until
+                // every row is loaded; folding and reopening never
+                // refetches rows already loaded.
                 let project = self
                     .home
                     .sessions
                     .by_key(key)
                     .map(|row| row.project.clone());
                 if let Some(project) = project {
-                    if self.home.sessions.is_archived_open(&project) {
-                        self.home.sessions.close_archived(&project);
-                    } else {
+                    let opening = !self.home.sessions.is_archived_open(&project);
+                    if opening {
                         self.home.sessions.open_archived(&project);
+                    } else {
+                        self.home.sessions.close_archived(&project);
                     }
                     self.focus = Some(TargetId::Home(Spot::Archived(key)));
+                    if opening {
+                        let (loaded, held, before) = {
+                            let sessions = &self.home.sessions;
+                            (
+                                sessions.archived_loaded(&project),
+                                sessions.archived_total_for(&project),
+                                sessions.archived_before(&project),
+                            )
+                        };
+                        if held.is_some_and(|held| loaded < held) {
+                            let lines = self
+                                .archived_page(&project, before.as_ref().map(|id| id.0.as_str()));
+                            if !lines.is_empty() {
+                                return Effect::Send(lines);
+                            }
+                        }
+                    }
                 }
                 Effect::None
             }
