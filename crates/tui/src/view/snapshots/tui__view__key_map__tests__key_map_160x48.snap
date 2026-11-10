@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/key_map_tests.rs
+assertion_line: 79
 expression: "whole_screen(&app, 160, 48)"
 ---
                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -7,7 +8,7 @@ expression: "whole_screen(&app, 160, 48)"
                         Key map                                                                                                ✕
 
                         Every binding by area, with its other paths.
-                        39 actions, 27 with other paths
+                        40 actions, 28 with other paths
 
                         All  Sessions  The input box  The conversation  Steering  Requests, models and help
                         Type to search shortcuts› █
@@ -22,12 +23,14 @@ expression: "whole_screen(&app, 160, 48)"
                           Sessions                   Go home                                  ⌥0 · /home
                           Sessions                   Start a new session                      Ctrl+N · /new
                           Sessions                   Switch to the session of rail card N     ⌥1 to ⌥9 · click the card
-                          Sessions                   Delete the selected exited, or a live    Delete, or Backspace · click the
-                                                     one with Delete session in the session   row's ✕
+                          Sessions                   Delete the selected exited, or a live    Delete, or Shift+Backspace · click
+                                                     one with Delete session in the session   a live row's ✕
                                                      list (on the row)
                      ⋮    Sessions                   Interrupt the turn on screen, whatever   ⌥I · click a delegate's "⏸          ⋮
                      ⋮                               is open over it, except the /keys        interrupt" or its working line;     ⋮
                      ⋮                               screen                                   click "Esc to interrupt"            ⋮
+                          Sessions                   Archive the selected exited session in   Backspace · click an exited row's
+                                                     the session list (on the row)            ✕; /archive
                           The input box              Recall an earlier prompt from the        ↑
                                                      project of the session on screen (in an
                                                      empty box)
@@ -38,9 +41,7 @@ expression: "whole_screen(&app, 160, 48)"
                           The input box              Delete a word                            ⌥Backspace, Ctrl+Backspace, Ctrl+W
                           The input box              Delete to the start of the line          Ctrl+U
                           The input box              Start or end of the line (where the      Ctrl+A Ctrl+E; ⌘← ⌘→
-                                                     terminal passes them)
-                          The input box              Open the draft, or a pasted token, in    Ctrl+G · click the token
-                        ↓                            $VISUAL or $EDITOR
+                        ↓                            terminal passes them)
 
                         ↑↓ move · ←→ tabs · Esc closes
 

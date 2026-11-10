@@ -90,7 +90,7 @@ fn tabs_run_all_then_each_area_in_table_order() {
             .find(|row| row.id == *id)
             .is_some_and(|row| row.area == "Sessions")
     }));
-    assert_eq!(shown(&state, &keys).len(), 9);
+    assert_eq!(shown(&state, &keys).len(), 10);
 }
 
 #[test]
@@ -109,6 +109,7 @@ fn each_area_tab_shows_exactly_its_bindings_in_table_order() {
                 "rail_row_n",
                 "delete_session",
                 "interrupt_turn",
+                "archive_session",
             ],
         ),
         (

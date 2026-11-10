@@ -236,25 +236,26 @@ fn home_80x24_wraps_delete_session_and_down_focuses_recall_prompt() {
         tap(&mut app, "down");
     }
     let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
-    // The delete_session row shows Delete, Backspace in full across two
-    // display lines: the first ends its keys cell with the comma, the
-    // second starts it with Backspace (`docs/tui.md`, "Bindings").
+    // The delete_session row shows Delete, Shift+Backspace in full
+    // across two display lines: the first ends its keys cell with the
+    // comma, the second starts it with Shift+Backspace
+    // (`docs/tui.md`, "Bindings").
     let at = rows
         .iter()
         .position(|row| row.contains("Delete,"))
         .expect("a row showing the delete_session keys");
     assert!(
-        !rows[at].contains("Backspace"),
+        !rows[at].contains("Shift+Backspace"),
         "the first wrapped line ends at the comma: {}",
         rows[at]
     );
     assert!(
-        rows[at.saturating_add(1)].contains("Backspace"),
-        "the second wrapped line shows Backspace: {:?}",
+        rows[at.saturating_add(1)].contains("Shift+Backspace"),
+        "the second wrapped line shows Shift+Backspace: {:?}",
         rows
     );
     // One down-arrow from it focuses the next action, interrupt_turn,
-    // and a second the one after, recall_prompt.
+    // a second the inserted archive_session, and a third recall_prompt.
     tap(&mut app, "down");
     let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
     assert!(
@@ -266,10 +267,18 @@ fn home_80x24_wraps_delete_session_and_down_focuses_recall_prompt() {
     tap(&mut app, "down");
     let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
     assert!(
+        rows.iter()
+            .any(|row| row.starts_with("›") && row.contains("archive_session")),
+        "archive_session focused after two downs: {:?}",
+        rows
+    );
+    tap(&mut app, "down");
+    let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
+    assert!(
         rows.iter().any(|row| row.starts_with("›")
             && row.contains("recall_prompt")
             && row.contains("Recall an earlier")),
-        "recall_prompt focused after one down: {:?}",
+        "recall_prompt focused after three downs: {:?}",
         rows
     );
     insta::assert_snapshot!("keys_home_80x24_wrapped_focus", screen(&app, 80, 24));

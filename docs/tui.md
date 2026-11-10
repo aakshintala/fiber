@@ -2293,7 +2293,7 @@ so it does not redraw the screen as it does in some terminal programs.
 
 The key map docks at the bottom, full width, in the overlay frame ("Look",
 "Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
-binding by area, with its other paths." and the counts ("39 actions, 27 with
+binding by area, with its other paths." and the counts ("40 actions, 28 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type

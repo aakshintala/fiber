@@ -212,7 +212,7 @@ fn enter_starts_a_capture_naming_the_action() {
 fn a_variant_capture_names_each_variant_in_order() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 12);
+    select(&mut screen, &keys, 13);
     press(&mut screen, &keys, &["enter"]);
     assert_eq!(
         footer(&screen, &keys),
@@ -266,7 +266,7 @@ fn a_free_key_applies_with_its_edit() {
 fn a_variant_action_takes_one_key_per_variant() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 12);
+    select(&mut screen, &keys, 13);
     press(&mut screen, &keys, &["enter"]);
     assert!(matches!(
         press(&mut screen, &keys, &["ctrl+b"]),
@@ -284,7 +284,7 @@ fn a_variant_action_takes_one_key_per_variant() {
 fn a_repeated_key_is_refused_and_capture_waits() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 12);
+    select(&mut screen, &keys, 13);
     press(&mut screen, &keys, &["enter", "ctrl+b"]);
     assert!(matches!(
         press(&mut screen, &keys, &["ctrl+b"]),
@@ -390,7 +390,7 @@ fn esc_at_a_prompt_cancels_everything() {
 fn clashing_with_two_actions_prompts_twice_then_applies() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 12);
+    select(&mut screen, &keys, 13);
     press(&mut screen, &keys, &["enter", "ctrl+o", "ctrl+r"]);
     assert_eq!(
         below(&screen, &keys),
@@ -433,7 +433,7 @@ fn clashing_with_two_actions_prompts_twice_then_applies() {
 fn reset_applies_the_defaults_removing_the_entry() {
     let keys = person(&[("copy_focused", json!(["c"]))]);
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 22);
+    select(&mut screen, &keys, 23);
     match press(&mut screen, &keys, &["r"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),
@@ -463,7 +463,7 @@ fn reset_through_a_clash_prompts_and_swaps() {
         ),
     ]);
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 11);
+    select(&mut screen, &keys, 12);
     press(&mut screen, &keys, &["r"]);
     assert_eq!(below(&screen, &keys), ["Ctrl+R is bound to Move by word"]);
     match press(&mut screen, &keys, &["enter"]) {
@@ -498,7 +498,7 @@ fn reset_through_a_clash_prompts_and_swaps() {
 fn delete_and_backspace_unbind() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 18);
+    select(&mut screen, &keys, 19);
     match press(&mut screen, &keys, &["delete"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),
@@ -527,7 +527,7 @@ fn delete_and_backspace_unbind() {
 fn delete_on_an_unbound_action_saves_nothing() {
     let keys = person(&[("delete_word", json!([]))]);
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 13);
+    select(&mut screen, &keys, 14);
     assert!(matches!(
         press(&mut screen, &keys, &["delete"]),
         Outcome::Nothing
@@ -1133,7 +1133,7 @@ fn wheel_in_a_capture_waits_on() {
 fn wheel_in_a_clash_keeps_the_prompt() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 11);
+    select(&mut screen, &keys, 12);
     press(&mut screen, &keys, &["enter", "ctrl+o", "ctrl+r"]);
     assert_eq!(
         below(&screen, &keys),
@@ -1207,13 +1207,13 @@ fn delete_session_wraps_after_the_comma_at_80() {
     let start: usize = grown.iter().take(7).sum();
     assert_eq!(frame.rows.len(), grown.iter().sum::<usize>());
     // The boundary: the first line is exactly `Delete,` and the second
-    // starts with `Backspace`, so the wrap fell after the comma.
+    // starts with `Shift+Backspace`, so the wrap fell after the comma.
     assert_eq!(frame.rows[start][0].0.trim_end(), "Delete,");
     assert!(
         frame.rows[start + 1][0]
             .0
             .trim_start()
-            .starts_with("Backspace"),
+            .starts_with("Shift+Backspace"),
         "{:?}",
         frame.rows[start + 1][0].0
     );
@@ -1237,7 +1237,7 @@ fn an_overlong_word_breaks_inside_at_a_narrow_width() {
         .iter()
         .position(|binding| binding.id == "delete_word")
         .expect("delete_word");
-    assert_eq!(delete_word, 13);
+    assert_eq!(delete_word, 14);
     let grown = heights(&keys, 44);
     // `docs/tui.md`, "Bindings" — each column wraps inside its own width; grown[delete_word] == 6 is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(grown[delete_word], 6);
@@ -1344,7 +1344,7 @@ fn settle_clamps_a_past_the_end_selection_to_the_last_action() {
     screen.settle(&grown, shown);
     assert_eq!(screen.selected, BINDINGS.len().saturating_sub(1));
     // The window moves down to show the last action's first line.
-    assert_eq!(screen.top, 40);
+    assert_eq!(screen.top, 42);
 }
 
 /// A window of nothing shown keeps the clamped top: with no rows to
