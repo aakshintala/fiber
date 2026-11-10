@@ -291,3 +291,4 @@ crates/support/src/framing.rs	fiber-4445	plan	2026-11-10T15:57:17Z	Amoghs-MacBoo
 crates/support/src/framing_tests.rs	fiber-4445	plan	2026-11-10T15:57:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/fake.rs	fiber-4445	plan	2026-11-10T15:57:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/fake_tests.rs	fiber-4445	plan	2026-11-10T15:57:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/archive_tests.rs	fiber-4562	plan	2026-11-10T16:02:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
