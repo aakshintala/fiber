@@ -198,7 +198,7 @@ pub enum Delivery {
     Cancelled,
     /// A driver `shell` with `send` true, run as `send` false is: the loop
     /// writes it as `shell_command` at the drain that takes it, then
-    /// answers `Ok(None)` (`docs/invocation.md`, "Shell").
+    /// answers `Ok(None)` (`docs/invocation.md`, "What each command does").
     Shell(crate::events::ShellCommand, Ack),
     /// A driver `shell` with `send` true is about to start its command: the
     /// loop writes `shell_command_started` at the drain that takes it,

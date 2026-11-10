@@ -286,8 +286,9 @@ list is one row tall, it shows the focused row's first line.
   last row reads "… N more", and Enter or a click on it lists
   the rest of the project's exited sessions in place.
 - **The project's archived sessions** sit under a dim "archived · N" after
-  its exited rows, folded. Enter or a click on that line lists them in place,
-  the most recent first, each drawn as an exited row, and again folds them.
+  its exited rows, folded. Enter or a click on that line lists them all in
+  place, paging the project's archived `recent`, the most recent first,
+  each drawn as an exited row, and again folds them.
   The line is left out when N is 0. An archived session is on neither the
   exited rows nor the rail ("Archiving" in `docs/invocation.md`).
 The focused row is drawn on the selection bar. With no session, the list's
