@@ -82,22 +82,28 @@ pub(crate) enum ShellError {
     #[error("{}", crate::shell::INDETERMINATE)]
     Indeterminate,
     /// A command ran past its timeout and was stopped.
-    #[error("{}", crate::shell::timeout_line(*ms))]
+    #[error("{}", crate::shell::timeout_line(*ms, *has_pipe))]
     TimedOut {
         /// The timeout in milliseconds.
         ms: u64,
+        /// The command text holds a `|`: a pipeline stage may hold its
+        /// output until it exits, which the stop then loses.
+        has_pipe: bool,
     },
     /// A moved job ran past the timeout it kept and was stopped: the same
     /// line as [`TimedOut`], plus how to keep a long-running process
     /// instead. Foreground kills keep [`TimedOut`] exactly.
     #[error(
         "{} {}",
-        crate::shell::timeout_line(*ms),
+        crate::shell::timeout_line(*ms, *has_pipe),
         crate::shell::MOVED_JOB_HINT
     )]
     TimedOutMoved {
         /// The timeout in milliseconds.
         ms: u64,
+        /// The command text holds a `|`: a pipeline stage may hold its
+        /// output until it exits, which the stop then loses.
+        has_pipe: bool,
     },
     /// A monitor ran past its deadline and was stopped.
     #[error("{}", crate::shell::deadline_line(*ms))]
