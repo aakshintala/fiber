@@ -602,7 +602,7 @@ fn process_resume_recomposes_under_the_resume_reason() {
         .lines()
         .map(|line| serde_json::from_str(line).expect("each hello is one JSON object"))
         .collect();
-    // `docs/extensions.md`, "Process extensions" (`extension_hello` reasons) and :215 (every
+    // `docs/extensions.md`, "Process extensions" (`extension_hello` reasons) and (`docs/extensions.md`, "Process extensions") (every
     // session starts its own process extensions at session start): the
     // first run hellos once as `new`, the resume run hellos once as
     // `resume`, each carrying the resumed session's id.

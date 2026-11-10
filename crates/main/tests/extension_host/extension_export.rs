@@ -278,7 +278,7 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
         .filter(|line| line.starts_with("> page-prompt-"))
         .collect();
     let expected: Vec<String> = asked.iter().map(|text| format!("> {text}")).collect();
-    // `docs/events.md`, "`turn_started`" and :1367: each prompt enters one `turn_started`
+    // `docs/events.md`, "`turn_started`" and (`docs/events.md`, "`command_accepted`"): each prompt enters one `turn_started`
     // `input` in arrival order, and `history` returns those lines in `seq`
     // order, so the quotes run in prompt order across pages.
     assert_eq!(
@@ -418,7 +418,7 @@ fn steering_and_a_failed_call_are_written() {
     let steer_at = written
         .find("> use the other file")
         .expect("the steering message is quoted");
-    // `docs/events.md`, "`turn_started`" and :1367: the steer is a durable line after the
+    // `docs/events.md`, "`turn_started`" and (`docs/events.md`, "`command_accepted`"): the steer is a durable line after the
     // prompt's `turn_started`, and `history` returns lines in `seq` order.
     assert!(prompt_at < steer_at);
     assert!(

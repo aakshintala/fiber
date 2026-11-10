@@ -520,7 +520,7 @@ fn unknown_model(argument: &str) -> String {
 /// object without one, a non-string `credential`, or a non-role argument.
 /// A repository's role names no credential: its winning source is the
 /// repository layer, and its `credential` is ignored, so it reads as
-/// `None` too (`docs/configuration.md`, `roles."<name>").
+/// `None` too (`docs/configuration.md`, "Keys").
 fn role_credential(config: &config::Config, name: &str) -> Option<String> {
     let key = format!("roles.{}", config::path::display(&[name.to_owned()]));
     let (value, source) = config.get(&key, None)?;
