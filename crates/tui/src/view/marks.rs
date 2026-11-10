@@ -139,7 +139,10 @@ pub(super) fn paint_clicks(
     rect: Rect,
     targets: &mut Vec<Target>,
 ) {
-    if text.decoration || clicks.is_empty() || rect.width == 0 {
+    // A zero-width row paints nothing: every range clips to an empty
+    // window and the start-past-end check skips it, as an empty click
+    // list paints nothing, so the guard names only the early returns.
+    if text.decoration || clicks.is_empty() {
         return;
     }
     for (range, key) in clicks {

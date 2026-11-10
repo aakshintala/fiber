@@ -178,6 +178,36 @@ fn click_unhandled_resumes_the_fallback() {
 }
 
 #[test]
+fn click_resolves_the_route_at_the_extension_stop() {
+    let clicked = Clicked::canned(true);
+    let (mut app, key) = clicked_app(&clicked);
+    // The extension stop and the panel sit on disjoint cells: the route
+    // must resolve at the extension stop's own cells, never a guessed
+    // coordinate (`docs/tui.md`, "Input and focus").
+    app.drawn(&[
+        Hit {
+            id: TargetId::Extension(key),
+            rect: Rect::new(0, 0, 4, 1),
+        },
+        Hit {
+            id: TargetId::Panel(Spot::Jobs),
+            rect: Rect::new(5, 0, 5, 1),
+        },
+    ]);
+    app.on_click(TargetId::Extension(key));
+    // The handler saw the session, slot and id; the panel stayed shut.
+    assert_eq!(
+        clicked.calls.borrow().clone(),
+        vec![(
+            Some(SESSION.to_owned()),
+            "notice".to_owned(),
+            "badge".to_owned()
+        )]
+    );
+    assert!(!app.panel_state.jobs_open());
+}
+
+#[test]
 fn click_stale_key_never_reaches_the_handler() {
     let clicked = Clicked::canned(true);
     let (mut app, _) = clicked_app(&clicked);

@@ -3632,3 +3632,86 @@ fn closed_entries_prune_with_the_instance_and_re_raise_starts_at_zero() {
     assert!(text_of(&reopened).starts_with("f0"), "{reopened:?}");
     assert_eq!(fresh_answers.frames.borrow().clone(), vec![0, 0]);
 }
+
+/// A click identity no stored line or painted fragment names, for the
+/// prune tests: only the prune releases it.
+fn ghost(cache: &Cache) -> super::ClickKey {
+    cache.intern_click(&contract::SessionId("s".into()), "test", "badge", "ghost")
+}
+
+/// A closed notice draw holding `text`, with no animation frame begun.
+fn draw_closed_notice(cache: &Cache, id: usize, text: &'static str) {
+    let row = notice_input(text);
+    let drawn = cache.lines_animated_notice(id, "test", None, &row, 20, ANIM_INTERVAL, |frame| {
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            false,
+        )
+    });
+    assert!(drawn.is_some(), "the closed notice draws");
+}
+
+#[test]
+fn dropped_notice_lines_release_unrelated_click_identities() {
+    crate::work::take();
+    let cache = Cache::default();
+    let unnamed = ghost(&cache);
+    draw_closed_notice(&cache, 7, "down");
+    assert!(cache.click_target(unnamed).is_some());
+    // Dropping the notice drops its stored entry and closed lines, so
+    // the changed count prunes the unnamed identity: a pruned notice
+    // keeps no dispatch (`docs/tui.md`, "How a TUI extension runs").
+    cache.retain_notices(&[]);
+    assert_eq!(cache.click_target(unnamed), None);
+}
+
+#[test]
+fn dropped_animation_entries_release_unrelated_click_identities() {
+    crate::work::take();
+    let cache = Cache::default();
+    let unnamed = ghost(&cache);
+    let answers = AnimAnswers::new();
+    cache.begin_anim_frame(Some(origin()), false);
+    let row = notice_input("down");
+    let drawn = cache.lines_animated_notice(8, "test", None, &row, 20, ANIM_INTERVAL, |frame| {
+        answers.frames.borrow_mut().push(frame);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            false,
+        )
+    });
+    assert!(drawn.is_some(), "the open notice draws");
+    assert!(cache.click_target(unnamed).is_some());
+    // Dropping the notice drops its stored animated lines, so the
+    // changed count prunes the unnamed identity (`docs/tui.md`,
+    // "How a TUI extension runs").
+    cache.retain_notices(&[]);
+    assert_eq!(cache.click_target(unnamed), None);
+}
+
+#[test]
+fn published_click_frame_keeps_only_named_stops() {
+    crate::work::take();
+    let cache = Cache::default();
+    let session = contract::SessionId("s".into());
+    let one = cache.intern_click(&session, "test", "badge", "one");
+    let two = cache.intern_click(&session, "test", "badge", "two");
+    cache.begin_click_frame();
+    cache.paint_click(one, 0, crate::rows::Join::Break, "one".to_owned());
+    cache.paint_click(two, 1, crate::rows::Join::Break, "two".to_owned());
+    // Only the surviving target's key keeps its fragments: the covered
+    // stop leaves no invisible focus stop or stale text (`docs/tui.md`,
+    // "Input and focus").
+    cache.finish_click_frame(&[crate::mouse::Target {
+        id: crate::mouse::TargetId::Extension(one),
+        rect: ratatui::layout::Rect::new(0, 0, 4, 1),
+    }]);
+    assert_eq!(cache.click_text(one), Some("one".to_owned()));
+    assert_eq!(cache.click_text(two), None);
+}

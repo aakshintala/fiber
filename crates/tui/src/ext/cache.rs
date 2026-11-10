@@ -1017,6 +1017,14 @@ impl Cache {
 
     /// How many fitted lines the stores hold: the prune guard above
     /// reads it, not the lines.
+    // `*` for the first `+` is behaviorally identical: every closed
+    // entry pairs an entries entry under the same key (written together
+    // in `closed_draw`, dropped together), so a retain drops as many of
+    // each. With x dropped pairs and z dropped animated widths the `*`
+    // sum moves by -x(entries + closed - x) - z, which vanishes exactly
+    // when the `+` sum's -(2x + z) move vanishes, so no test can tell
+    // them apart. The dropped-notice prune tests pin the other moves.
+    #[cfg_attr(false, mutants::skip)]
     fn stored_line_count(&self) -> usize {
         support::lock(&self.entries).len()
             + support::lock(&self.closed).len()

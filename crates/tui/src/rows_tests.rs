@@ -1132,6 +1132,28 @@ fn click_pad_split_intersects_and_rebases_click_ranges_as_links() {
 }
 
 #[test]
+fn click_pad_split_drops_a_range_ending_at_the_cut() {
+    // A click range ending exactly where the next piece starts belongs
+    // to no piece: a split keeps only the cells each piece draws, as
+    // with links (`docs/tui.md`, "Selection and copy").
+    let badge = key("badge");
+    let run = key("run");
+    let mut rows = Rows::default();
+    rows.push_text(
+        row("hello world"),
+        RowText {
+            clicks: vec![(0..6, badge), (9..11, run)],
+            ..RowText::plain()
+        },
+    );
+    rows.pad(0, 0, 6);
+    let (_, texts) = rows.into_parts();
+    assert_eq!(texts.len(), 2);
+    assert_eq!(texts[0].clicks, vec![(0..5, badge)]);
+    assert_eq!(texts[1].clicks, vec![(3..5, run)]);
+}
+
+#[test]
 fn click_prefix_row_shifts_click_ranges_with_skip_and_links() {
     let badge = key("badge");
     let mut rows = Rows::default();
