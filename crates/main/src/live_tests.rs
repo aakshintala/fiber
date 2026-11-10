@@ -368,6 +368,7 @@ fn live_reviewer() {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded

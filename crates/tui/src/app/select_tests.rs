@@ -1840,3 +1840,85 @@ fn home_outside_the_input_keeps_its_dispatch() {
     assert_eq!(app.input().position(), 2);
     assert_eq!(app.input().expand(), "ab");
 }
+
+/// A press on an extension span anchors a conversation selection: the
+/// span claims like a link, while a click without a drag still goes
+/// to the slot's handler, never to selection-follow
+/// (`docs/tui.md`, "Input and focus").
+/// An app showing "hello there" with an extension span over "hello".
+fn extended() -> (App, Vec<crate::mouse::Target>, u16, u16) {
+    let app = replied(40, 10, "hello there");
+    let (col, row) = find(&app, "hello");
+    let key = app.screen.pages().ext.cache.intern_click(
+        &contract::SessionId(SESSION.to_owned()),
+        "test",
+        "notice",
+        "badge",
+    );
+    // The extension span draws over the reply's cells; a badge covers
+    // the same row underneath.
+    let targets = vec![
+        crate::mouse::Target {
+            id: TargetId::Badge,
+            rect: Rect::new(col, row, 11, 1),
+        },
+        crate::mouse::Target {
+            id: TargetId::Extension(key),
+            rect: Rect::new(col, row, 5, 1),
+        },
+    ];
+    (app, targets, col, row)
+}
+
+/// A drag from an extension span selects its drawn text; a click
+/// without a drag leaves no selection, so the stop routes to on_click
+/// instead of selection-follow.
+#[test]
+fn click_drag_from_extension_selects_drawn_text() {
+    let (mut app, targets, col, row) = extended();
+    // The press anchors on the conversation through the extension span;
+    // under the badge alone it claims nothing.
+    assert!(matches!(
+        app.press_at(col + 1, row, &targets),
+        Some((SurfaceId::Conversation, _))
+    ));
+    assert_eq!(app.press_at(col + 1, row, &targets[..1]), None);
+    let at = |col: u16| Mouse {
+        kind: MouseKind::Press(Button::Left),
+        col,
+        row,
+    };
+    // A drag across the span selects its drawn text; release copies it.
+    assert_eq!(app.on_select(&at(col), &targets), Effect::None);
+    let drag = Mouse {
+        kind: MouseKind::Drag(Button::Left),
+        col: col + 4,
+        row,
+    };
+    assert_eq!(app.on_select(&drag, &targets), Effect::None);
+    let release = Mouse {
+        kind: MouseKind::Release,
+        col: col + 4,
+        row,
+    };
+    assert_eq!(
+        app.on_select(&release, &targets),
+        Effect::Copy("hello".to_owned())
+    );
+    // A click without a drag selects nothing: the stop is a click, not
+    // the start of a selection-follow.
+    let (mut app, targets, col, row) = extended();
+    assert_eq!(app.on_select(&at(col), &targets), Effect::None);
+    assert_eq!(
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Release,
+                col,
+                row
+            },
+            &targets
+        ),
+        Effect::None
+    );
+    assert_eq!(app.select.span(), None);
+}

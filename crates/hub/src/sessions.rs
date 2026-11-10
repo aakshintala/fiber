@@ -32,26 +32,35 @@ pub(crate) fn answer(
     // no start read of its own; without a callable no clock is read.
     let started = timing.map(|_| clock.now());
     let _timer = timing.and_then(|timing| timing(Op::SessionsList, None, started));
-    let (project, active) = session_args(args)?;
+    let (project, active, archived) = session_args(args)?;
     feed.settled();
-    Ok(Some(list_with_active(feed.live(), home, project, active)))
+    Ok(Some(list_with_active(
+        feed.live(),
+        home,
+        project,
+        active,
+        archived,
+    )))
 }
 
-/// `project` (a string keeping only its sessions) and `active` (a boolean
-/// adding each entry's activity): both optional, absent reads as off.
-/// Any other key, a wrong type, or an explicit `null` is rejected, so the
-/// default listing never opens a session log.
-fn session_args(args: &Map<String, Value>) -> Result<(Option<&str>, bool), Refused> {
+/// `project` (a string keeping only its sessions), `active` (a boolean
+/// adding each entry's activity) and `archived` (a boolean listing only
+/// archived sessions): all optional, absent reads as off. Any other key,
+/// a wrong type, or an explicit `null` is rejected, so the default
+/// listing never opens a session log.
+fn session_args(args: &Map<String, Value>) -> Result<(Option<&str>, bool, bool), Refused> {
     let mut project = None;
     let mut active = false;
+    let mut archived = false;
     for (key, value) in args {
         match (key.as_str(), value) {
             ("project", Value::String(kept)) => project = Some(kept.as_str()),
             ("active", Value::Bool(wanted)) => active = *wanted,
+            ("archived", Value::Bool(wanted)) => archived = *wanted,
             _ => return Err(invalid()),
         }
     }
-    Ok((project, active))
+    Ok((project, active, archived))
 }
 
 /// The answer from a captured `live` snapshot and `home`'s `recent.jsonl`
@@ -64,44 +73,55 @@ pub(crate) fn list(
     home: &Path,
     project: Option<&str>,
 ) -> Value {
-    list_with_active(live, home, project, false)
+    list_with_active(live, home, project, false, false)
 }
 
 /// The same answer, but with `active` every entry also carries its
-/// activity, read from that entry's session log.
+/// activity, read from that entry's session log. With `archived`, only
+/// archived rows are listed and there are no live entries; without it,
+/// archived rows are left out. Stale rows for running sessions are
+/// suppressed in both, so every session is listed once.
 fn list_with_active(
     live: Vec<(String, SessionStatus)>,
     home: &Path,
     project: Option<&str>,
     active: bool,
+    archived: bool,
 ) -> Value {
     let running: BTreeSet<String> = live.iter().map(|(id, _)| id.clone()).collect();
+    let exited_rows: Vec<recent::RecentRow> = recent::listed(home, project)
+        .into_iter()
+        .filter(|row| !running.contains(&row.session_id.0))
+        .filter(|row| row.archived == archived)
+        .collect();
     if !active {
         // The default listing opens no session log: typed rows straight
         // into the answer, as before opt-in activity, so the listing
         // keeps the `sessions_list_ms` budget.
-        let live: Vec<Value> = live
-            .into_iter()
-            .filter(|(_, status)| project.is_none_or(|key| status.project == key))
-            .map(|(id, status)| json!({"session_id": id, "status": status}))
-            .collect();
-        let exited: Vec<recent::RecentRow> = recent::listed(home, project)
-            .into_iter()
-            .filter(|row| !running.contains(&row.session_id.0))
-            .collect();
+        let live: Vec<Value> = if archived {
+            Vec::new()
+        } else {
+            live.into_iter()
+                .filter(|(_, status)| project.is_none_or(|key| status.project == key))
+                .map(|(id, status)| json!({"session_id": id, "status": status}))
+                .collect()
+        };
+        let exited: Vec<recent::RecentRow> = exited_rows;
         return json!({"live": live, "exited": exited});
     }
-    let live: Vec<Value> = live
+    let live: Vec<Value> = if archived {
+        Vec::new()
+    } else {
+        live.into_iter()
+            .filter(|(_, status)| project.is_none_or(|key| status.project == key))
+            .map(|(id, status)| {
+                let dir = log::session_dir(home, &status.project, &SessionId(id.clone()));
+                json!({"session_id": id, "status": status, "active": active_of(&dir)})
+            })
+            .collect()
+    };
+    let exited: Vec<Value> = exited_rows
         .into_iter()
-        .filter(|(_, status)| project.is_none_or(|key| status.project == key))
-        .map(|(id, status)| {
-            let dir = log::session_dir(home, &status.project, &SessionId(id.clone()));
-            json!({"session_id": id, "status": status, "active": active_of(&dir)})
-        })
-        .collect();
-    let exited: Vec<Value> = recent::listed(home, project)
-        .into_iter()
-        .filter(|row| !running.contains(&row.session_id.0))
         .map(|row| {
             let mut entry = serde_json::to_value(&row).unwrap_or(Value::Null);
             let dir = log::session_dir(home, &row.project, &row.session_id);

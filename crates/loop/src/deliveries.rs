@@ -74,6 +74,7 @@ impl Starts {
             | Event::ShellCommandDelta(_)
             | Event::DirectoryAdded(_)
             | Event::SessionNamed(_)
+            | Event::Archived(_)
             | Event::Clients(_)
             | Event::SessionStatus(_)
             | Event::ContextAdded(_)
