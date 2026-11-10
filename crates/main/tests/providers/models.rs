@@ -533,12 +533,12 @@ fn models_lists_a_thousand_openrouter_models_within_the_memory_cap() {
 }
 
 /// Every first-party model loads: `fiber models --json` lists each
-/// `provider/id` the six files hold, and none is dropped as
+/// `provider/id` the seven files hold, and none is dropped as
 /// `model_invalid`.
 #[test]
 fn models_lists_every_first_party_model_and_drops_none() {
     let setup = Setup::new();
-    for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
+    for package in ["anthropic", "codex", "gemini", "muse", "openai", "opencode"] {
         let dest = setup.home().join("extensions").join(package);
         support::package::copy_package(package, &dest, "", "");
         write_record(&dest);
@@ -560,7 +560,7 @@ fn models_lists_every_first_party_model_and_drops_none() {
     assert_eq!(run.stderr, "");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
     let mut expected = Vec::new();
-    for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
+    for package in ["anthropic", "codex", "gemini", "muse", "openai", "opencode"] {
         for provider in config::read_providers(&root.join(package)).unwrap() {
             for model in &provider.models {
                 expected.push(format!("{}/{}", provider.name, model.id));
@@ -569,6 +569,23 @@ fn models_lists_every_first_party_model_and_drops_none() {
     }
     expected.sort_by_key(|reference| reference.split('/').next().unwrap_or("").to_owned());
     assert_eq!(listed_ids(&run), expected);
+    assert!(
+        listed_ids(&run)
+            .iter()
+            .any(|id| id == "codex/gpt-6.1-terra"),
+        "models --json lists codex/gpt-6.1-terra"
+    );
+    let terra = run
+        .stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|row| row.get("model").and_then(Value::as_str) == Some("codex/gpt-6.1-terra"))
+        .expect("models --json names codex/gpt-6.1-terra");
+    assert_eq!(
+        terra.get("context_window").and_then(Value::as_u64),
+        Some(272000),
+        "codex/gpt-6.1-terra keeps the ChatGPT backend window"
+    );
 }
 
 #[test]
