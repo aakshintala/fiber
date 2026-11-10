@@ -23,11 +23,9 @@ pub(crate) mod run;
 pub use models::{DelegateModels, Resolve};
 pub(crate) mod message;
 
+pub(crate) use contract::jobs::{EndWorktree, FinishWorktree};
 pub use message::{DelegateMessage, LastSeq, Steer, Steered, WorktreeRecord};
-pub use run::{
-    CreateWorktree, EndWorktree, FinishWorktree, Fresh, Launch, Launched, Start, Watch, Watched,
-    WorktreeGuard,
-};
+pub use run::{CreateWorktree, Fresh, Launch, Launched, Start, Watch, Watched, WorktreeGuard};
 
 use run::Runner;
 

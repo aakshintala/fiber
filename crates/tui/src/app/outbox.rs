@@ -158,6 +158,8 @@ pub(crate) enum RecentAsk {
     Page,
     /// A page scoped to one project.
     Scoped(String),
+    /// An archived page scoped to one project.
+    Archived(String),
 }
 
 /// The hub connection, as the terminal sees it.

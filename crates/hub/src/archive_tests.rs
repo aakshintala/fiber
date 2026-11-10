@@ -377,8 +377,8 @@ fn archive_refuses_a_held_lock_without_appending() {
     let hub = temp.hub();
     temp.logged(4, &["fiber_exited"]);
     temp.exited_row(4);
-    // A holder from a separate open: the label names its process, and
-    // the lock releases when the test releases it.
+    // Held on this thread, as a running session process holds it: the
+    // label names this process, and the lock releases at scope end.
     let dir = temp.dir_of(4);
     fs::write(
         dir.join("session.lock"),
@@ -390,33 +390,13 @@ fn archive_refuses_a_held_lock_without_appending() {
         .write(true)
         .open(dir.join("session.lock"))
         .unwrap();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let holder = thread::spawn(move || {
-        // Held as a session process holds it: the hub's probe fails
-        // while this is held, as in `delete`'s holder fixture.
-        held.try_lock().unwrap();
-        release_rx.recv().unwrap();
-    });
-    // The holder's acquisition is the signal: our own probe fails.
-    testkit::await_true("the holder takes the lock", {
-        let dir = dir.clone();
-        move || {
-            let probe = fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(dir.join("session.lock"))
-                .unwrap();
-            probe.try_lock().is_err()
-        }
-    });
+    held.try_lock().unwrap();
     let before_log = temp.log_text(4);
     let before_recent = temp.recent_text();
     let refused = call(&hub, serde_json::json!({"session": testkit::id(4)})).unwrap_err();
     assert_eq!(refused.code, ErrorCode::SessionHeld);
     assert_eq!(temp.log_text(4), before_log);
     assert_eq!(temp.recent_text(), before_recent);
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
 }
 
 #[test]
