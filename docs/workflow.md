@@ -156,7 +156,9 @@ use is committed under `scripts/`. A one-off script goes in the pull request
 body.
 
 A question about what one layer does with a given input is answered with that
-layer's jig, not a throwaway program (`docs/testing.md`, "Jigs").
+layer's jig, not a throwaway program (`docs/testing.md`, "Jigs"). A committed
+test in that layer's crate that pins the answer also answers it, and no jig
+is built only to ask it.
 
 ## When fixes keep failing
 
