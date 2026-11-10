@@ -504,3 +504,4 @@ crates/tui/src/view/home.rs	fiber-4402	plan	2026-11-10T01:21:31Z	Amoghs-MacBook-
 crates/loop/examples/review.rs	fiber-4504	plan	2026-11-10T01:48:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/support/review.rs	fiber-4504	plan	2026-11-10T01:48:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/fakes.md	fiber-4504	plan	2026-11-10T01:48:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/panel.rs	fiber-4496	grant	2026-11-10T02:12:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4496-context-fold-wait	
