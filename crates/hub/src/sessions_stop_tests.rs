@@ -474,6 +474,43 @@ fn stop_keeper_confirms_a_reset_read_without_waiting() {
     assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
+/// Every keeper read result decides with no socket: the closed-socket
+/// kinds confirm, anything else a keeper never writes is unconfirmed
+/// at once, `WouldBlock` alone reads again, a clean EOF confirms, and
+/// any line is a live session left running.
+#[test]
+fn keeper_read_decision_matches_every_read_result() {
+    for kind in [
+        ErrorKind::ConnectionReset,
+        ErrorKind::BrokenPipe,
+        ErrorKind::ConnectionAborted,
+    ] {
+        assert!(
+            matches!(
+                decide_keeper_read(Err(std::io::Error::from(kind))),
+                KeeperRead::Done(SessionOutcome::KeeperConfirmed)
+            ),
+            "a closed socket confirms: {kind:?}"
+        );
+    }
+    assert!(matches!(
+        decide_keeper_read(Err(std::io::Error::from(ErrorKind::PermissionDenied))),
+        KeeperRead::Done(SessionOutcome::Unconfirmed)
+    ));
+    assert!(matches!(
+        decide_keeper_read(Err(std::io::Error::from(ErrorKind::WouldBlock))),
+        KeeperRead::Again
+    ));
+    assert!(matches!(
+        decide_keeper_read(Ok(None)),
+        KeeperRead::Done(SessionOutcome::KeeperConfirmed)
+    ));
+    assert!(matches!(
+        decide_keeper_read(Ok(Some(vec![b'x']))),
+        KeeperRead::Done(SessionOutcome::Unconfirmed)
+    ));
+}
+
 #[test]
 fn keeper_gone_before_the_stop_write_is_gone_not_confirmed() {
     let temp = Temp::new("ss-keeper-vanish");

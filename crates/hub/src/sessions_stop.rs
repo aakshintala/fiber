@@ -555,16 +555,34 @@ fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
     }
 }
 
-/// Whether a read error closed the socket: a reset, broken pipe or
-/// aborted connection after the write reads as a close. Exempt: Linux
-/// reports a peer reset as EOF, so the Linux mutants run cannot reach
-/// the reset arm.
-#[cfg_attr(false, mutants::skip)]
-fn closed_by_error(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::ConnectionAborted
-    )
+/// What one keeper read decides: the stop's outcome, or another read
+/// after a readiness wait.
+enum KeeperRead {
+    /// The read settled the stop.
+    Done(SessionOutcome),
+    /// The socket may yet answer: wait for readiness, then read again.
+    Again,
+}
+
+/// Decides one keeper read, with no I/O: a keeper never writes, so any
+/// line is a live session left running, a clean EOF or a closed socket
+/// confirms the stop, and anything else is unconfirmed at once.
+/// `WouldBlock` alone waits for another read.
+fn decide_keeper_read(read: std::io::Result<Option<Vec<u8>>>) -> KeeperRead {
+    match read {
+        Ok(Some(_)) => KeeperRead::Done(SessionOutcome::Unconfirmed),
+        Ok(None) => KeeperRead::Done(SessionOutcome::KeeperConfirmed),
+        Err(error) if error.kind() == ErrorKind::WouldBlock => KeeperRead::Again,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::ConnectionAborted
+            ) =>
+        {
+            KeeperRead::Done(SessionOutcome::KeeperConfirmed)
+        }
+        Err(_) => KeeperRead::Done(SessionOutcome::Unconfirmed),
+    }
 }
 
 /// Stops one keeper: a fresh connection, the frozen stop line, then the
@@ -595,23 +613,13 @@ fn stop_keeper(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
     // Bytes stay in `pending` across readiness waits; see `keeper_line`.
     let mut pending: Vec<u8> = Vec::new();
     loop {
-        match keeper_line(&mut read, &mut pending) {
-            // A keeper never writes: any line is a live session, still running.
-            Ok(Some(_)) => return SessionOutcome::Unconfirmed,
-            Ok(None) => return SessionOutcome::KeeperConfirmed,
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+        match decide_keeper_read(keeper_line(&mut read, &mut pending)) {
+            KeeperRead::Done(outcome) => return outcome,
+            KeeperRead::Again => {
                 if !wait_ready(stream.as_fd(), PollFlags::IN, hub, end) {
                     return SessionOutcome::Unconfirmed;
                 }
             }
-            // A closed socket confirms, like a clean EOF. Any other
-            // read error is something a keeper never writes
-            // (`docs/events.md`, "Hub feed", "keepers"),
-            // so it is unconfirmed at once, with no wait.
-            Err(error) if closed_by_error(&error) => {
-                return SessionOutcome::KeeperConfirmed;
-            }
-            Err(_) => return SessionOutcome::Unconfirmed,
         }
     }
 }
