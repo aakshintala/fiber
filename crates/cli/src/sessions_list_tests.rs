@@ -27,18 +27,32 @@ use fakes::Deadline;
 /// One named deadline per wait on the fake hub.
 const HUB_DEADLINE: Duration = Duration::from_secs(10);
 
-/// An in-process hub: `connect` hands out one end of a pair, and a thread
-/// on the other reads the one command line, then writes `answers`.
+/// An in-process hub: each `connect` hands out one end of a pair, and a
+/// thread on the other reads the one command line, then writes that
+/// connection's answers. Connections past the queued answers read an
+/// immediate end: the hub closed before answering.
 struct FakeHub {
-    answers: Vec<String>,
-    got: Option<mpsc::Receiver<String>>,
+    answers: Vec<Vec<String>>,
+    got: Vec<mpsc::Receiver<String>>,
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl FakeHub {
     fn new(answers: &[Value]) -> Self {
         Self {
-            answers: answers.iter().map(|line| format!("{line}\n")).collect(),
-            got: None,
+            answers: vec![encode(answers)],
+            got: Vec::new(),
+            workers: Vec::new(),
+        }
+    }
+
+    /// `first` answers the first connection, `second` the second: the
+    /// default and archived `sessions` queries resolution sends.
+    fn new_split(first: &[Value], second: &[Value]) -> Self {
+        Self {
+            answers: vec![encode(first), encode(second)],
+            got: Vec::new(),
+            workers: Vec::new(),
         }
     }
 
@@ -47,16 +61,20 @@ impl FakeHub {
         hub.set_read_timeout(Some(HUB_DEADLINE))
             .map_err(doors::Error::Local)?;
         let (tx, rx) = mpsc::channel();
-        let answers = self.answers.clone();
-        thread::spawn(move || {
+        let answers = if self.answers.is_empty() {
+            Vec::new()
+        } else {
+            self.answers.remove(0)
+        };
+        self.workers.push(thread::spawn(move || {
             let mut line = String::new();
             BufReader::new(&hub).read_line(&mut line).unwrap();
             tx.send(line).unwrap();
             for answer in answers {
                 (&hub).write_all(answer.as_bytes()).unwrap();
             }
-        });
-        self.got = Some(rx);
+        }));
+        self.got.push(rx);
         let hello = HubLine {
             kind: HubEventKind::HubHello,
             ts: 1,
@@ -66,13 +84,39 @@ impl FakeHub {
         Ok((client, hello))
     }
 
-    /// The command line the hub read, as JSON.
+    /// The command line the hub read on the last connection, as JSON.
     #[track_caller]
     fn sent(&self) -> Value {
-        let line = Deadline::after(HUB_DEADLINE)
-            .recv(self.got.as_ref().unwrap())
-            .unwrap();
-        serde_json::from_str(&line).unwrap()
+        self.sent_all().pop().unwrap()
+    }
+
+    /// The command line the hub read on every connection, in order.
+    #[track_caller]
+    fn sent_all(&self) -> Vec<Value> {
+        self.got
+            .iter()
+            .map(|got| {
+                let line = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(got)
+                    .unwrap();
+                serde_json::from_str(&line).unwrap()
+            })
+            .collect()
+    }
+}
+
+/// One answer queue: each line with its newline.
+fn encode(answers: &[Value]) -> Vec<String> {
+    answers.iter().map(|line| format!("{line}\n")).collect()
+}
+
+impl Drop for FakeHub {
+    /// Joins every worker a connection started: each served its one
+    /// command line and exited, so no thread outlives the fake.
+    fn drop(&mut self) {
+        for worker in self.workers.drain(..) {
+            let _joined = worker.join();
+        }
     }
 }
 
@@ -81,9 +125,14 @@ fn hub_line(kind: &str, payload: Value) -> Value {
 }
 
 fn accepted(result: Value) -> Value {
+    accepted_as("c_sessions", result)
+}
+
+/// The acceptance of the command sent as `command_id`.
+fn accepted_as(command_id: &str, result: Value) -> Value {
     hub_line(
         "command_accepted",
-        json!({"command_id": "c_sessions", "result": result}),
+        json!({"command_id": command_id, "result": result}),
     )
 }
 
@@ -141,6 +190,7 @@ fn listing(
     project: &worktree::Project,
     all: bool,
     json: bool,
+    archived: bool,
     answers: &[Value],
 ) -> (Result<(), CliError>, String, Value) {
     let project = project.clone();
@@ -149,7 +199,9 @@ fn listing(
     thread::spawn(move || {
         let mut hub = FakeHub::new(&answers);
         let mut out = Vec::new();
-        let ran = run(&project, all, json, &mut out, &mut || hub.connect());
+        let ran = run(&project, all, json, archived, &mut out, &mut || {
+            hub.connect()
+        });
         let text = String::from_utf8(out).unwrap();
         let sent = hub.sent();
         tx.send((ran, text, sent)).unwrap_or(());
@@ -160,7 +212,13 @@ fn listing(
 /// The JSON Lines `fiber sessions --json` prints for `result`.
 #[track_caller]
 fn json_rows(result: Value) -> Vec<Value> {
-    let (ran, out, _) = listing(&project_at("/w", false), false, true, &[accepted(result)]);
+    let (ran, out, _) = listing(
+        &project_at("/w", false),
+        false,
+        true,
+        false,
+        &[accepted(result)],
+    );
     ran.unwrap();
     out.lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -172,9 +230,26 @@ fn empty() -> Value {
 }
 
 #[test]
+fn archived_asks_for_the_archived_set_and_bare_flags_stay_live() {
+    let (ran, _, sent) = listing(
+        &project_at("/w", false),
+        false,
+        false,
+        true,
+        &[accepted(empty())],
+    );
+    ran.unwrap();
+    assert_eq!(
+        sent,
+        json!({"id": "c_sessions", "command": "sessions", "args": {"archived": true}})
+    );
+}
+
+#[test]
 fn inside_a_repository_without_all_the_request_names_the_project() {
     let (ran, _, sent) = listing(
         &project_at("/r/.git", true),
+        false,
         false,
         false,
         &[accepted(empty())],
@@ -193,6 +268,7 @@ fn with_all_or_outside_a_repository_the_request_names_no_project() {
             &project_at(identity, in_repository),
             all,
             false,
+            false,
             &[accepted(empty())],
         );
         ran.unwrap();
@@ -210,6 +286,7 @@ fn lines_before_the_answer_are_skipped() {
         &project_at("/w", false),
         false,
         true,
+        false,
         &[
             hub_line("attention", json!({"session_id": "s_1"})),
             hub_line("command_accepted", json!({"command_id": "c_other"})),
@@ -225,6 +302,7 @@ fn lines_before_the_answer_are_skipped() {
 fn a_rejection_is_a_failure_with_its_code_and_message() {
     let (ran, out, _) = listing(
         &project_at("/w", false),
+        false,
         false,
         false,
         &[hub_line(
@@ -251,7 +329,7 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
 
 #[test]
 fn an_end_before_the_answer_is_io_failed() {
-    let (ran, _, _) = listing(&project_at("/w", false), false, false, &[]);
+    let (ran, _, _) = listing(&project_at("/w", false), false, false, false, &[]);
     let failure = ran.unwrap_err();
     assert!(
         matches!(&failure, CliError::HubClosed { command } if command == "sessions"),
@@ -363,7 +441,13 @@ fn the_name_is_the_statuss_else_the_rows_and_an_empty_one_is_a_dash_in_text() {
             json!("")
         ]
     );
-    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
+    let (ran, out, _) = listing(
+        &project_at("/w", false),
+        false,
+        false,
+        false,
+        &[accepted(result)],
+    );
     ran.unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[1].ends_with("  -"), "{}", lines[1]);
@@ -376,6 +460,7 @@ fn json_keys_come_in_the_documented_order() {
         &project_at("/w", false),
         false,
         true,
+        false,
         &[accepted(json!({
             "live": [
                 live("s_1", status("fix it", waiting_on("approval", "run"), Some(0.42), 0.0)),
@@ -396,6 +481,7 @@ fn json_keys_come_in_the_documented_order() {
 fn text_is_a_padded_table_with_a_header_and_two_decimal_spend() {
     let (ran, out, _) = listing(
         &project_at("/w", false),
+        false,
         false,
         false,
         &[accepted(json!({
@@ -421,7 +507,13 @@ fn a_multiline_name_is_one_row_in_text_and_whole_in_json() {
     let result = json!({"live": [live("s_1", idle(name))], "exited": []});
     let rows = json_rows(result.clone());
     assert_eq!(rows[0]["name"], json!(name));
-    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
+    let (ran, out, _) = listing(
+        &project_at("/w", false),
+        false,
+        false,
+        false,
+        &[accepted(result)],
+    );
     ran.unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 2, "{out}");
@@ -434,7 +526,13 @@ fn a_tab_and_an_escape_in_a_name_print_as_spaces_in_text() {
     let result = json!({"live": [live("s_1", idle(name))], "exited": []});
     let rows = json_rows(result.clone());
     assert_eq!(rows[0]["name"], json!(name));
-    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
+    let (ran, out, _) = listing(
+        &project_at("/w", false),
+        false,
+        false,
+        false,
+        &[accepted(result)],
+    );
     ran.unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 2, "{out}");
@@ -444,7 +542,13 @@ fn a_tab_and_an_escape_in_a_name_print_as_spaces_in_text() {
 
 #[test]
 fn no_rows_prints_the_header_in_text_and_nothing_in_json() {
-    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(empty())]);
+    let (ran, out, _) = listing(
+        &project_at("/w", false),
+        false,
+        false,
+        false,
+        &[accepted(empty())],
+    );
     ran.unwrap();
     assert_eq!(out, "id  state  spend  waits on  name\n");
     assert!(json_rows(empty()).is_empty());
@@ -458,7 +562,7 @@ const CHILD: &str = "FIBER_CLI_SESSIONS_LIST_CHILD";
 fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
     if let Ok(case) = std::env::var(CHILD) {
         let code = match case.as_str() {
-            "connect-error" => list(false, false, &mut || {
+            "connect-error" => list(false, false, false, &mut || {
                 Err(doors::Error::Local(io::Error::other("hub down")))
             }),
             "rejected" => {
@@ -466,13 +570,13 @@ fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
                     "command_rejected",
                     json!({"command_id": "c_sessions", "code": "invalid_arguments", "message": "no"}),
                 )]);
-                let code = list(false, false, &mut || hub.connect());
+                let code = list(false, false, false, &mut || hub.connect());
                 assert_eq!(hub.sent()["command"], json!("sessions"));
                 code
             }
             _ => {
                 let mut hub = FakeHub::new(&[accepted(empty())]);
-                let code = list(false, false, &mut || hub.connect());
+                let code = list(false, false, false, &mut || hub.connect());
                 assert_eq!(hub.sent()["command"], json!("sessions"));
                 code
             }
@@ -510,20 +614,37 @@ fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
     }
 }
 
-/// Resolves `selector` on hub `box` against `result` answered to one
-/// `sessions` command: the outcome and the command the hub read, the
-/// outcome received under the hub deadline.
+/// Resolves `selector` on hub `box` against `default` answered to the
+/// default `sessions` command and `archived` to the archived one: the
+/// outcome and each command the hub read, the outcome received under the
+/// hub deadline.
 #[track_caller]
-fn resolving(selector: &str, result: Value) -> (Result<contract::SessionId, CliError>, Value) {
+fn resolving(
+    selector: &str,
+    default: Value,
+    archived: Value,
+) -> (Result<contract::SessionId, CliError>, Vec<Value>) {
     let selector = selector.to_owned();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut hub = FakeHub::new(&[accepted(result)]);
+        let mut hub = FakeHub::new_split(
+            &[accepted(default)],
+            &[accepted_as("c_sessions_archived", archived)],
+        );
         let resolved = resolve_listed(&selector, "box", &mut || hub.connect());
-        let sent = hub.sent();
+        let sent = hub.sent_all();
         tx.send((resolved, sent)).unwrap_or(());
     });
     Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
+}
+
+/// The two `sessions` commands resolution sends, in order: the default
+/// query, then the archived one.
+fn queries() -> Vec<Value> {
+    vec![
+        json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+        json!({"id": "c_sessions_archived", "command": "sessions", "args": {"archived": true}}),
+    ]
 }
 
 #[test]
@@ -531,12 +652,10 @@ fn an_exact_id_wins_over_a_longer_id_it_prefixes() {
     let (resolved, sent) = resolving(
         "s_1",
         json!({"live": [live("s_1", idle("a")), live("s_10", idle("b"))], "exited": []}),
+        empty(),
     );
     assert_eq!(resolved.unwrap().0, "s_1");
-    assert_eq!(
-        sent,
-        json!({"id": "c_sessions", "command": "sessions", "args": {}})
-    );
+    assert_eq!(sent, queries());
 }
 
 #[test]
@@ -548,9 +667,89 @@ fn a_unique_prefix_resolves_live_or_exited() {
                 "live": [live("s_abcdef", idle("a"))],
                 "exited": [exited("s_exit1", "n", "exited", None)],
             }),
+            empty(),
         );
         assert_eq!(resolved.unwrap().0, expected, "{selector}");
     }
+}
+
+#[test]
+fn an_archived_session_resolves_by_name_without_a_flag() {
+    let (resolved, sent) = resolving(
+        "s_9",
+        empty(),
+        json!({"live": [live("s_9", idle("z"))], "exited": []}),
+    );
+    assert_eq!(resolved.unwrap().0, "s_9");
+    assert_eq!(sent, queries());
+}
+
+#[test]
+fn an_exact_id_in_one_set_beats_a_prefix_in_the_other() {
+    let (resolved, _) = resolving(
+        "s_1",
+        json!({"live": [live("s_10", idle("a"))], "exited": []}),
+        json!({"live": [live("s_1", idle("z"))], "exited": []}),
+    );
+    assert_eq!(resolved.unwrap().0, "s_1");
+}
+
+#[test]
+fn a_prefix_matching_rows_in_both_sets_is_a_usage_error_naming_both_sorted() {
+    let (resolved, _) = resolving(
+        "s_",
+        json!({"live": [live("s_b", idle("a"))], "exited": []}),
+        json!({"live": [live("s_a", idle("b"))], "exited": []}),
+    );
+    let failure = resolved.unwrap_err();
+    assert!(
+        matches!(
+            &failure,
+            CliError::Log(log::Error::Ambiguous { matches, .. })
+                if matches == &["s_a".to_owned(), "s_b".to_owned()]
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::Usage);
+    assert_eq!(
+        failure.to_string(),
+        "\"s_\" matches more than one session: s_a, s_b"
+    );
+}
+
+#[test]
+fn a_failing_archived_query_fails_the_resolution() {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new_split(
+            &[accepted(
+                json!({"live": [live("s_1", idle("a"))], "exited": []}),
+            )],
+            &[hub_line(
+                "command_rejected",
+                json!({"command_id": "c_sessions_archived", "code": "invalid_arguments", "message": "no"}),
+            )],
+        );
+        let resolved = resolve_listed("s_1", "box", &mut || hub.connect());
+        tx.send(resolved).unwrap_or(());
+    });
+    let resolved: Result<contract::SessionId, CliError> =
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap();
+    let failure = resolved.unwrap_err();
+    assert!(
+        matches!(
+            &failure,
+            CliError::Rejected {
+                code: ErrorCode::InvalidArguments,
+                ..
+            }
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::InvalidArguments);
+    assert_eq!(failure.to_string(), "no");
 }
 
 #[test]
@@ -562,7 +761,7 @@ fn a_prefix_matching_two_rows_is_a_usage_error_naming_both_sorted() {
             "exited": [exited("s_a", "n", "exited", None)],
         }),
     ] {
-        let (resolved, _) = resolving("s_", result);
+        let (resolved, _) = resolving("s_", result, empty());
         let failure = resolved.unwrap_err();
         assert!(
             matches!(
@@ -582,7 +781,7 @@ fn a_prefix_matching_two_rows_is_a_usage_error_naming_both_sorted() {
 
 #[test]
 fn no_match_is_session_not_found_naming_the_hub() {
-    let (resolved, _) = resolving("s_nope", empty());
+    let (resolved, _) = resolving("s_nope", empty(), empty());
     let failure = resolved.unwrap_err();
     assert!(
         matches!(
@@ -682,6 +881,7 @@ fn a_wrong_shaped_result_is_a_sessions_answer_error() {
         &project_at("/w", false),
         false,
         false,
+        false,
         &[accepted(json!(7))],
     );
     let failure = ran.unwrap_err();
@@ -691,7 +891,7 @@ fn a_wrong_shaped_result_is_a_sessions_answer_error() {
     );
     assert_eq!(failure.code(), ErrorCode::IoFailed);
 
-    let (resolved, _) = resolving("s_1", json!(7));
+    let (resolved, _) = resolving("s_1", json!(7), empty());
     let failure = resolved.unwrap_err();
     assert!(
         matches!(&failure, CliError::SessionsAnswer(_)),

@@ -86,6 +86,76 @@ fn last_kind_reads_only_a_whole_last_line() {
 }
 
 #[test]
+fn is_archived_reads_the_last_marker_in_file_order() {
+    let home = fakes::TempDir::new("log-is-archived");
+    let dir = home.path().join("s");
+    // A missing log, and one with neither marker, read as not archived.
+    assert!(!is_archived(&dir));
+    write(&dir, b"");
+    assert!(!is_archived(&dir));
+    write(&dir, b"{\"kind\":\"session_started\"}\n");
+    assert!(!is_archived(&dir));
+    // An archived marker after the start archives the session.
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"archived\"}\n",
+    );
+    assert!(is_archived(&dir));
+    // A resume, a new fiber_started after the marker, unarchives it.
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"archived\"}\n{\"kind\":\"fiber_started\"}\n",
+    );
+    assert!(!is_archived(&dir));
+    // A repeated cycle archives it again.
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"archived\"}\n{\"kind\":\"fiber_started\"}\n{\"kind\":\"archived\"}\n",
+    );
+    assert!(is_archived(&dir));
+    // File order wins over timestamps: a newer-started line still comes
+    // first when it was written earlier.
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\",\"ts\":9}\n{\"kind\":\"archived\",\"ts\":1}\n",
+    );
+    assert!(is_archived(&dir));
+    write(
+        &dir,
+        b"{\"kind\":\"archived\",\"ts\":9}\n{\"kind\":\"fiber_started\",\"ts\":1}\n",
+    );
+    assert!(!is_archived(&dir));
+    // Intervening job lines change nothing.
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"job_started\"}\n{\"kind\":\"archived\"}\n{\"kind\":\"job_completed\"}\n",
+    );
+    assert!(is_archived(&dir));
+    // Shell lines are inert: neither starts nor stops the archive.
+    write(
+        &dir,
+        b"{\"kind\":\"shell_command_started\",\"command_id\":\"c\"}\n{\"kind\":\"archived\"}\n{\"kind\":\"shell_command_delta\",\"text\":\"o\"}\n",
+    );
+    assert!(is_archived(&dir));
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"shell_command_started\",\"command_id\":\"c\"}\n{\"kind\":\"shell_command_delta\",\"text\":\"o\"}\n",
+    );
+    assert!(!is_archived(&dir));
+    // A torn trailing marker is skipped: the last complete marker wins.
+    write(
+        &dir,
+        b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"archived\"}\n{\"kind\":\"arch",
+    );
+    assert!(is_archived(&dir));
+    write(
+        &dir,
+        b"{\"kind\":\"archived\"}\n{\"kind\":\"fiber_started\"}\n{\"kind\":\"arch",
+    );
+    assert!(!is_archived(&dir));
+}
+
+#[test]
 fn complete_len_of_stops_at_the_last_newline() {
     let home = fakes::TempDir::new("log-complete-len");
     let dir = home.path().join("s");
