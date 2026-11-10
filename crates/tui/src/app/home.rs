@@ -691,17 +691,19 @@ impl App {
                     if after_attach {
                         self.home.left_after_attach = Some(exited.clone());
                     }
-                    // The project's count may have changed: ask again
-                    // under the one-in-flight-plus-dirty bound, never
-                    // adjusting the count here.
+                    // The project's counts may have changed: ask again,
+                    // each kind under its one-in-flight-plus-dirty
+                    // bound, never adjusting a count here.
                     let project = self
                         .home
                         .sessions
                         .row(&exited)
                         .map(|row| row.project.clone());
-                    let mut lines = project
-                        .map(|project| self.scoped_first(&project))
-                        .unwrap_or_default();
+                    let mut lines = Vec::new();
+                    if let Some(project) = &project {
+                        lines.extend(self.scoped_first(project));
+                        lines.extend(self.archived_first(project));
+                    }
                     if how == Left::Exited {
                         self.rail_state.note_exited(&exited);
                     }
@@ -919,15 +921,20 @@ impl App {
                         self.home.left_after_attach = None;
                     }
                     self.refresh_session_labels();
-                    // The queued ask rides in home's outbox, drained by
-                    // `home_outgoing`; while one is in flight it marks the
-                    // project dirty instead. The status still reaches the
-                    // conversation below.
-                    if let Some(project) = fresh
-                        && self.home.sessions.total_for(&project).is_none()
-                    {
-                        for line in self.scoped_first(&project) {
-                            self.home.subs.queue(line);
+                    // The queued asks ride in home's outbox, drained by
+                    // `home_outgoing`; while one is in flight it marks
+                    // the project dirty instead. The status still
+                    // reaches the conversation below.
+                    if let Some(project) = fresh {
+                        if self.home.sessions.total_for(&project).is_none() {
+                            for line in self.scoped_first(&project) {
+                                self.home.subs.queue(line);
+                            }
+                        }
+                        if self.home.sessions.archived_total_for(&project).is_none() {
+                            for line in self.archived_first(&project) {
+                                self.home.subs.queue(line);
+                            }
                         }
                     }
                     self.note_feed(&session);

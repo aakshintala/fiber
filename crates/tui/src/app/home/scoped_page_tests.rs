@@ -70,6 +70,19 @@ fn refused(id: &str, message: &str) -> Line {
     })
 }
 
+/// A hub `session_left` for `session`, ending `how`.
+fn left(session: &str, how: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: HubEventKind::SessionLeft,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"session_id": session, "how": how})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
 /// A `session_status` for `session`, idle and named.
 fn status(session: &str) -> Line {
     Line::Session(contract::Envelope {
@@ -145,16 +158,42 @@ fn linked(app: &mut App) -> (String, String) {
     )
 }
 
-/// The `project` arg of each outgoing `recent` line, in order.
+/// Whether `line` is an archived scoped `recent` ask.
+fn is_archived(line: &Value) -> bool {
+    line["command"] == "recent"
+        && line["args"]
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+/// The `project` arg of each outgoing scoped (not archived) `recent`
+/// line, in order.
 fn fanout_projects(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
+        .filter(|line| !is_archived(line))
         .map(|line| {
-            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`).
+            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`; the archived asks ride beside these).
             assert_eq!(line["command"], "recent");
             line["args"]["project"]
                 .as_str()
                 .unwrap_or_else(|| panic!("a scoped ask: {line}"))
+        })
+        .collect()
+}
+
+/// The `project` of each outgoing archived scoped `recent` line, in
+/// order.
+fn archived_projects(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| is_archived(line))
+        .map(|line| {
+            // `docs/invocation.md`, "The hub" (the archived `recent` carries `archived` with its project).
+            line["args"]["project"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a scoped archived ask: {line}"))
         })
         .collect()
 }
@@ -169,6 +208,11 @@ fn line_id(line: &Value) -> &str {
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
     app.home.sessions.total_for(project)
+}
+
+/// The stored archived scoped total for `project`.
+fn archived_stored(app: &App, project: &str) -> Option<usize> {
+    app.home.sessions.archived_total_for(project)
 }
 
 /// Every listed row's line, drawn or not: what the feed and `recent` folded.
@@ -273,10 +317,13 @@ fn list_shapes(app: &App) -> Vec<String> {
 fn a_repeat_status_for_a_known_project_queues_no_scoped_ask() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
-    // The first status introduces the project: one scoped ask goes out
-    // (`docs/tui.md`, "The session list": one ask in flight per project).
+    // The first status introduces the project: one scoped ask of each
+    // kind goes out (`docs/tui.md`, "The session list": one ask of each
+    // in flight per project).
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    assert_eq!(queued.len(), 1);
+    assert_eq!(queued.len(), 2);
+    assert_eq!(fanout_projects(&queued), ["-w"]);
+    assert_eq!(archived_projects(&queued), ["-w"]);
     assert_eq!(queued[0]["args"]["project"], "-w");
     let first = line_id(&queued[0]).to_owned();
     // Its refusal clears the in-flight ask without storing a total, so
@@ -401,6 +448,7 @@ fn page_recent_scopes_to_the_focused_project_not_its_neighbor() {
     for (project, total) in [("-w", 3), ("-other", 1)] {
         let id = fanout
             .iter()
+            .filter(|line| !is_archived(line))
             .find(|line| line["args"]["project"] == project)
             .map(line_id)
             .unwrap_or_else(|| panic!("the {project} scoped ask"))
@@ -672,13 +720,296 @@ fn scoped_first_needs_a_project_and_the_link() {
     // behavior held the ask instead of sending it.
     let lines = commands(app.on_line(hello()));
     let scoped: Vec<Value> = lines
-        .into_iter()
+        .iter()
         .filter(|line| {
             line.get("args")
-                .is_some_and(|args| args.get("project").is_some())
+                .is_some_and(|args| args.get("project").is_some() && args.get("archived").is_none())
         })
+        .cloned()
         .collect();
+    // The reconnect refetches the archived count beside the exited one
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project).
+    let mut archived = archived_projects(&lines);
+    archived.sort_unstable();
+    assert_eq!(archived, ["-w"]);
     let mut projects = fanout_projects(&scoped);
     projects.sort_unstable();
     assert_eq!(projects, ["-w"]);
+}
+
+/// The archived ask's id in `fanout`.
+fn archived_id(fanout: &[Value]) -> String {
+    fanout
+        .iter()
+        .find(|line| is_archived(line))
+        .map(line_id)
+        .unwrap_or_else(|| panic!("an archived ask: {fanout:?}"))
+        .to_owned()
+}
+
+#[test]
+fn archived_fanout_rides_beside_the_scoped_ask_with_the_flag() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    // `docs/tui.md`, "The session list" (one ask of each in flight per project).
+    assert_eq!(fanout_projects(&fanout), ["-w"]);
+    assert_eq!(archived_projects(&fanout), ["-w"]);
+    let archived = fanout
+        .iter()
+        .find(|line| is_archived(line))
+        .unwrap_or_else(|| panic!("an archived ask: {fanout:?}"));
+    // `docs/invocation.md`, "The hub" (the archived `recent` carries `archived` with its project and no cursor).
+    assert_eq!(archived["command"], "recent");
+    assert_eq!(archived["args"]["project"], "-w");
+    assert_eq!(archived["args"]["archived"], true);
+    assert!(archived["args"].get("before").is_none());
+}
+
+#[test]
+fn an_accepted_archived_answer_sets_rows_and_total() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    let id = archived_id(&fanout);
+    // The archived answer folds its own rows and total, leaving the
+    // exited count untouched until its own answer arrives.
+    let lines = answer_value(
+        &mut app,
+        &id,
+        json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")], "total": 2}),
+    );
+    assert!(lines.is_empty());
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and
+    // `docs/tui.md`, "The session list" (the archived count from that `total`).
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    assert_eq!(stored(&app, "-w"), None);
+    // The archived row resolves through the same key lookup an open uses.
+    let row = app
+        .home
+        .sessions
+        .row(&SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+        .unwrap_or_else(|| panic!("the archived row"));
+    assert_eq!(row.project, "-w");
+}
+
+#[test]
+fn an_archived_refusal_keeps_the_held_total_with_one_notice() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    // While both asks are in flight a leave marks both dirty and sends
+    // nothing; the refusal then clears the archived dirty flag without
+    // a follow-up, storing nothing.
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    let id = archived_id(&fanout);
+    assert!(app.on_line(refused(&id, "no recent")).is_empty());
+    assert_eq!(archived_stored(&app, "-w"), None);
+    assert_eq!(app.notice(), Some("no recent"));
+    // The cleared flag leaves no stuck ask: the next trigger sends a
+    // fresh archived ask, which then holds its total.
+    let retrigger = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
+    assert_eq!(archived_projects(&retrigger), ["-w"]);
+    let id = archived_id(&retrigger);
+    assert!(
+        app.on_line(accepted(
+            &id,
+            json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    // A refusal now keeps the held total with one notice and queues
+    // nothing: deleting the keep-held-total branch reads `None` here.
+    let retrigger = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
+    let id = archived_id(&retrigger);
+    assert!(app.on_line(refused(&id, "gone")).is_empty());
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    assert_eq!(app.notice(), Some("gone"));
+}
+
+#[test]
+fn a_malformed_archived_answer_keeps_the_held_total() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    // No total held: a first answer without one stores nothing, with
+    // one notice.
+    let id = archived_id(&fanout);
+    assert!(app.on_line(accepted(&id, json!({"total": 2}))).is_empty());
+    assert_eq!(archived_stored(&app, "-w"), None);
+    assert!(app.notice().is_some());
+    // Hold a total, then an answer without rows keeps it.
+    let retrigger = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
+    let id = archived_id(&retrigger);
+    assert!(
+        app.on_line(accepted(
+            &id,
+            json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    let retrigger = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
+    let id = archived_id(&retrigger);
+    assert!(
+        app.on_line(accepted(
+            &id,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "c", "/w", "-w")]}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(2));
+    assert!(app.notice().is_some());
+}
+
+#[test]
+fn an_archived_trigger_while_in_flight_sends_exactly_one_follow_up() {
+    let mut app = home_with(80, 24, launch());
+    app.on_line(hello());
+    let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(queued.len(), 2);
+    let archived = queued
+        .iter()
+        .find(|line| is_archived(line))
+        .map(line_id)
+        .unwrap_or_else(|| panic!("an archived ask"))
+        .to_owned();
+    let scoped = queued
+        .iter()
+        .filter(|line| !is_archived(line))
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("a scoped ask"))
+        .to_owned();
+    // While both asks are in flight the leave marks both dirty and
+    // sends nothing.
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    // The archived answer folds its total and sends exactly one
+    // archived follow-up, leaving the exited dirty flag alone.
+    let follow = answer_value(&mut app, &archived, json!({"sessions": [], "total": 1}));
+    assert_eq!(follow.len(), 1);
+    assert_eq!(archived_projects(&follow), ["-w"]);
+    assert_eq!(archived_stored(&app, "-w"), Some(1));
+    // The exited answer still owes its own follow-up: the archived
+    // answer cleared no exited dirty flag, and vice versa.
+    let scoped_follow = answer_value(&mut app, &scoped, json!({"sessions": [], "total": 1}));
+    assert_eq!(scoped_follow.len(), 1);
+    assert_eq!(fanout_projects(&scoped_follow), ["-w"]);
+    // With both flags cleared the follow-ups' answers queue nothing.
+    let id = line_id(&follow[0]).to_owned();
+    assert!(
+        app.on_line(accepted(&id, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archived_first_sends_nothing_without_a_project_or_the_link() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    assert_eq!(archived_projects(&fanout), ["-w"]);
+    // An empty project sends nothing while the link is up: with `||`
+    // the empty-but-up ask reads as linked and a line goes out.
+    assert!(app.archived_first("").is_empty());
+    // A named project sends nothing with the link down: with `||` the
+    // named-but-down ask reads as linked and a line goes out. The
+    // request waits for the reconnect instead.
+    app.disconnected();
+    assert!(app.archived_first("-w").is_empty());
+}
+
+#[test]
+fn an_archived_answer_with_the_link_down_queues_no_follow_up() {
+    let mut app = home_with(80, 24, launch());
+    app.on_line(hello());
+    let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(queued.len(), 2);
+    let archived = archived_id(&queued);
+    // The leave marks the archived ask dirty while the link is up.
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    // The answer lands with the link down: the follow-up stays held,
+    // but the rows and total still fold.
+    app.disconnected();
+    assert!(
+        app.on_line(accepted(&archived, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(1));
+}
+
+#[test]
+fn ask_recent_first_refetches_the_archived_count_with_the_project() {
+    let mut app = home_with(80, 24, launch());
+    app.on_line(hello());
+    // An accepted delete refills the unscoped gap and refetches both
+    // counts for the deleted row's project (`docs/tui.md`, "The session
+    // list": one ask of each in flight per project).
+    let lines = commands(app.ask_recent_first(Some("-w")));
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["command"], "recent");
+    assert!(lines[0].get("args").is_none());
+    assert_eq!(fanout_projects(&lines[1..]), ["-w"]);
+    assert_eq!(archived_projects(&lines), ["-w"]);
+}
+
+#[test]
+fn a_held_archived_total_is_not_fanned_out_again() {
+    let mut app = home_with(80, 24, launch());
+    app.on_line(hello());
+    // No rows on home: the delete-path refill asks the unscoped page
+    // plus both counts for the project.
+    let lines = commands(app.ask_recent_first(Some("-w")));
+    assert_eq!(lines.len(), 3);
+    let first = line_id(&lines[0]).to_owned();
+    let archived = archived_id(&lines);
+    let scoped = lines
+        .iter()
+        .filter(|line| !is_archived(line) && line["args"].get("project").is_some())
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("a scoped ask"))
+        .to_owned();
+    // The scoped ask is refused without storing: its count stays
+    // unheld, so only the archived total will be held below.
+    assert!(app.on_line(refused(&scoped, "no recent")).is_empty());
+    assert_eq!(stored(&app, "-w"), None);
+    assert!(
+        app.on_line(accepted(&archived, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert_eq!(archived_stored(&app, "-w"), Some(1));
+    // The refill introduces the project's rows with no project on home
+    // before it: the exited count is asked again while the held
+    // archived one is not. With `is_none` flipped the archived ask
+    // goes out again.
+    let refill = answer_value(
+        &mut app,
+        &first,
+        json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")]}),
+    );
+    assert_eq!(fanout_projects(&refill), ["-w"]);
+    assert!(archived_projects(&refill).is_empty());
 }

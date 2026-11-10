@@ -5448,11 +5448,12 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     assert!(kinds.contains(&"recent"));
     assert!(kinds.contains(&"sessions"));
     // The scoped refetches cover both projects; request order is open.
+    // The archived refetch lines carry a project too, and filter out.
     let scoped: Vec<Value> = lines
         .iter()
         .filter(|line| {
             line.get("args")
-                .is_some_and(|args| args.get("project").is_some())
+                .is_some_and(|args| args.get("project").is_some() && args.get("archived").is_none())
         })
         .cloned()
         .collect();
@@ -5460,11 +5461,27 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     projects.sort_unstable();
     // `docs/tui.md`, "The session list" (one ask per project).
     assert_eq!(projects, ["-other", "-w"]);
+    // The reconnect refetches the archived count beside the exited one
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project).
+    let mut archived: Vec<&str> = lines
+        .iter()
+        .filter(|line| is_archived(line))
+        .map(|line| {
+            line["args"]["project"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a scoped archived ask: {line}"))
+        })
+        .collect();
+    archived.sort_unstable();
+    assert_eq!(archived, ["-other", "-w"]);
     // Totals are empty but rows stay for the refetch.
     // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-other"), None);
+    assert_eq!(archived_stored(&app, "-w"), None);
+    assert_eq!(archived_stored(&app, "-other"), None);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
     let mut rows = listed(&app);
@@ -6596,6 +6613,20 @@ fn line_id(line: &Value) -> &str {
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
     app.home.sessions.total_for(project)
+}
+
+/// The stored archived scoped total for `project`.
+fn archived_stored(app: &App, project: &str) -> Option<usize> {
+    app.home.sessions.archived_total_for(project)
+}
+
+/// Whether `line` is an archived scoped `recent` ask.
+fn is_archived(line: &Value) -> bool {
+    line["command"] == "recent"
+        && line["args"]
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 #[test]
