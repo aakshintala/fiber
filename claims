@@ -253,3 +253,4 @@ crates/tui/src/app/home/prompt/hooks_offer_tests.rs	fiber-1732	plan	2026-11-10T1
 crates/tui/src/app/commands_tests.rs	fiber-1732	plan	2026-11-10T12:22:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/home_view_tests.rs	fiber-1732	plan	2026-11-10T12:22:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop_tests.rs	fiber-1732	plan	2026-11-10T12:22:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/model_picker_tests.rs	fiber-1732	plan	2026-11-10T12:32:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
