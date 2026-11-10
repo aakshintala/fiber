@@ -19,6 +19,7 @@
 use crate::extension_harness;
 use crate::support;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -31,6 +32,12 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use contract::events::{
+    DelegateStarted, Event, EventKind, FiberExited, FiberStarted, FinalMessage, JobStarted, Parent,
+    SessionStarted, Variables, VariablesSource,
+};
+use contract::shapes::{Tokens, Usage, Worktree};
+use contract::{ActionId, JobId, SessionId};
 use extension_harness::{send, until_session, until_session_close};
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
@@ -11292,171 +11299,238 @@ fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attache
     quit(run);
 }
 
-#[test]
-fn a_resumed_parent_settles_an_isolated_delegate_worktree() {
-    let setup = support::Setup::new();
-    let _guard = arm(&setup);
-    // A git repository workspace: the isolated delegate's worktree is cut
-    // from its HEAD, as in
-    // `isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace`.
-    let workspace = setup.workspace();
+/// A seeded orphan and its exited delegate: the sessions directory holding
+/// both logs, the parent session id, the delegate's job, and the recorded
+/// worktree's canonicalized path and branch.
+struct SeededDelegate {
+    sessions: PathBuf,
+    parent: String,
+    job: String,
+    worktree: String,
+    branch: String,
+}
+
+/// The parent's opening line: this workspace, no parent, no worktree.
+fn seeded_parent_started(workspace: &str) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: workspace.into(),
+        variables: Variables {
+            path: String::new(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: None,
+        rewind: None,
+        worktree: None,
+        supervised: false,
+    })
+}
+
+/// The parent's job line for the delegate spawn: started, never completed.
+fn seeded_job_started(job: &str) -> Event {
+    Event::JobStarted(JobStarted {
+        job_id: JobId(job.into()),
+        tool: Some("delegate_spawn".into()),
+        extension: None,
+        description: "scan".into(),
+        output_path: format!("artifacts/{job}.log"),
+    })
+}
+
+/// The parent's delegate line: an isolated Fiber delegate on the configured
+/// model, carrying the recorded worktree without its repository, as a
+/// delegate event does.
+fn seeded_delegate_started(job: &str, child: &str, worktree: &str, branch: &str) -> Event {
+    Event::DelegateStarted(DelegateStarted {
+        job_id: JobId(job.into()),
+        delegate_session_id: SessionId(child.into()),
+        harness: "fiber".into(),
+        model: "fake/m".into(),
+        workspace: worktree.into(),
+        worktree: Some(Worktree {
+            path: worktree.into(),
+            branch: branch.into(),
+            repository: None,
+        }),
+        forked_from: None,
+    })
+}
+
+/// The child's opening line: the delegate's own worktree with its path,
+/// branch and repository, parented to the seeding session.
+fn seeded_child_started(
+    worktree: &str,
+    branch: &str,
+    repository: &str,
+    parent: &str,
+    job: &str,
+) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: worktree.into(),
+        variables: Variables {
+            path: String::new(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: Some(Parent {
+            session_id: SessionId(parent.into()),
+            delegate_id: JobId(job.into()),
+        }),
+        forked_from: None,
+        rewind: None,
+        worktree: Some(Worktree {
+            path: worktree.into(),
+            branch: branch.into(),
+            repository: Some(repository.into()),
+        }),
+        supervised: false,
+    })
+}
+
+/// The child's clean exit with its final message, as its writer left it.
+fn seeded_child_exit() -> Event {
+    Event::FiberExited(FiberExited {
+        exit_code: 0,
+        usage: Usage {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        final_message: Some(FinalMessage {
+            final_action_id: ActionId("a_1".into()),
+            text: "seeded finish".into(),
+        }),
+        error: None,
+        suspended_on: None,
+        questions: None,
+    })
+}
+
+/// Stages an orphaned isolated delegate and its exited child on disk: a
+/// repository workspace with a clean linked worktree, a parent log holding
+/// the spawn's start lines and no completion, and a child log ending in a
+/// clean exit. No process runs, so no keeper can complete the job: the
+/// resume settles it from the child's log (`docs/delegates.md`, "Lifetime").
+fn seed_isolated_delegate(setup: &support::Setup) -> SeededDelegate {
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
     fakes::git::git(&workspace, &["init", "--quiet"]);
     fs::write(workspace.join("base.txt"), "parent repository").unwrap();
     fakes::git::git(&workspace, &["add", "."]);
     fakes::git::git(&workspace, &["commit", "--quiet", "-m", "base"]);
-    let base = fakes::git::git(&workspace, &["rev-parse", "HEAD"]);
-    // The parent spawns one isolated delegate, then stalls on the receipt:
-    // the stall holds the turn open, so no live finish can land while the
-    // child runs below.
-    let parent = ProviderServer::start_responding({
-        let stage = std::sync::atomic::AtomicUsize::new(0);
-        move |request: &Request| {
-            let text = String::from_utf8_lossy(&request.body);
-            if !text.contains(r#""tools":[{"#) {
-                return cstream(&[ctext_id("p_allow", "allow"), cusage_id("p_allow", 0.0)]);
-            }
-            match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
-                0 => cstream(&[
-                    ccall_id(
-                        "p_spawn",
-                        "delegate_spawn",
-                        &json!({"description": "scan", "prompt": "say hello", "model": "fiber:pb/m", "isolation": "worktree"}),
-                    ),
-                    cusage_id("p_spawn", 0.0),
-                ]),
-                _ => stall(),
-            }
-        }
-    })
+    let parent = doors::mint("s_");
+    let child = doors::mint("s_");
+    let job = doors::mint("j_");
+    let branch = format!("fiber/{child}");
+    let raw = setup.root.path().join("wt").to_string_lossy().into_owned();
+    fakes::git::git(&workspace, &["worktree", "add", "-b", &branch, &raw]);
+    let worktree = fs::canonicalize(&raw)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let repository = worktree::project(&workspace).to_string_lossy().into_owned();
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&workspace));
+    let parent_log = log::Log::create(
+        &sessions,
+        SessionId(parent.clone()),
+        fakes::clock::FakeClock::new(),
+    )
     .unwrap();
-    // The child stalls its first turn: it starts, writes its session
-    // lines, and never finishes, so the kill below catches it mid-run.
-    let child = ProviderServer::start_responding({
-        move |request: &Request| {
-            let text = String::from_utf8_lossy(&request.body);
-            if !text.contains(r#""tools":[{"#) {
-                return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
-            }
-            stall()
-        }
-    })
+    parent_log
+        .append(
+            &seeded_parent_started(&workspace.to_string_lossy()),
+            None,
+            None,
+        )
+        .unwrap();
+    parent_log
+        .append(&seeded_job_started(&job), None, None)
+        .unwrap();
+    parent_log
+        .append(
+            &seeded_delegate_started(&job, &child, &worktree, &branch),
+            None,
+            None,
+        )
+        .unwrap();
+    let child_log = log::Log::create(
+        &sessions,
+        SessionId(child.clone()),
+        fakes::clock::FakeClock::new(),
+    )
     .unwrap();
-    providers_url(&setup, &parent.url(), &child.url(), "openai-completions");
-    standing_allow(&setup);
-    slow_idle(&setup);
+    child_log
+        .append(
+            &seeded_child_started(&worktree, &branch, &repository, &parent, &job),
+            None,
+            None,
+        )
+        .unwrap();
+    child_log
+        .append(
+            &Event::FiberStarted(FiberStarted {
+                version: "0.0.0".into(),
+                resumed: false,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    child_log.append(&seeded_child_exit(), None, None).unwrap();
+    // Both locks release before the resume starts, so its first pass finds
+    // them free.
+    drop(parent_log);
+    drop(child_log);
+    SeededDelegate {
+        sessions,
+        parent,
+        job,
+        worktree,
+        branch,
+    }
+}
 
-    // Held until each side parks: the parent stalls on the receipt before
-    // the child records anything, whatever the scheduling.
-    parent.hold();
-    child.hold();
-    let id = doors::mint("s_");
-    let mut running = Running::start(
-        &setup,
-        &id,
-        &["--model", "pa/m", "--prompt", "scan the tree"],
-    );
+#[test]
+fn a_resumed_parent_settles_a_seeded_isolated_delegate() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let seeded = seed_isolated_delegate(&setup);
+    // No keeper ever ran, so nothing could have completed the job: the log
+    // holds the spawn's start lines and no completion.
+    let staged = log::read(&seeded.sessions.join(&seeded.parent)).unwrap();
     assert!(
-        parent.await_requests(1, setup.deadline),
-        "the spawn call was requested"
+        staged
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted),
+        "the staged parent holds no completion"
     );
-    parent.release_one();
-    assert!(
-        parent.await_requests(2, setup.deadline),
-        "the verdict was requested"
-    );
-    parent.release_one();
-    assert!(
-        parent.await_requests(3, setup.deadline),
-        "the turn stalled on the receipt"
-    );
-    parent.release();
-    // The parent is blocked in its stall: the child now starts its first
-    // turn, so its `session_started` is durable before the kill.
-    child.release();
-    assert!(
-        child.await_requests(1, setup.deadline),
-        "the child started its first turn"
-    );
-    let started = running.wait_line("the delegate start", |line| {
-        line["kind"] == "delegate_started"
-    });
-    let delegate = started.last().unwrap();
-    let job_id = delegate["payload"]["job_id"].as_str().unwrap().to_owned();
-    let child_id = delegate["payload"]["delegate_session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let worktree_path = delegate["payload"]["worktree"]["path"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let worktree_branch = delegate["payload"]["worktree"]["branch"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert_eq!(worktree_branch, format!("fiber/{child_id}"));
-    assert_eq!(
-        fakes::git::git(Path::new(&worktree_path), &["rev-parse", "HEAD"]),
-        base
-    );
-    // The kill-to-settled window runs under MUST_SUCCEED_WITHIN: the
-    // child's hangup shutdown fits SHUTDOWN_BOUND, and the bound below
-    // leaves shutdown plus observation slack on top of it.
-    assert!(
-        fakes::MUST_SUCCEED_WITHIN
-            >= doors::SHUTDOWN_BOUND + Duration::from_secs(2) + Duration::from_secs(2),
-        "the success bound clears the shutdown bound with slack to spare"
-    );
-    let bound = support::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    // Subscribed before the kill: the child's exit is awaited on this
-    // socket, so a shutdown that beats a later subscription cannot hide
-    // the exit line.
-    let child_socket = support::Socket::connect(bound, &setup.session_socket(&child_id));
-    let sub = support::subscribe_direct(&child_socket);
-    // The parent is gone however it died: SIGKILL to its group, which the
-    // child left when it became its own leader. The remaining deadline
-    // from here is the kill-to-settled window the resume asserts on.
-    let killing = setup.deadline.left();
-    fakes::kill_group(running.group, "KILL").unwrap();
-    let (status, _, _) = running.wait();
-    assert_eq!(status.code(), None);
-    // End of file on the lifeline is a hangup: the child shuts down with
-    // 129 within the bound, releasing its session lock.
-    let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
-        line["kind"] == "fiber_exited"
-    });
-    let exited = lines.last().unwrap();
-    assert_eq!(exited["payload"]["exit_code"], 129);
-
     // The resume settles the child's recorded exit: the settled finish
-    // reports the `delegate_started` worktree's path and branch with the
-    // shared inspection's `dirty`, and the paired completion fails the
-    // nonzero exit instead of completing. Removal stays refused, so the
-    // worktree directory still stands after the resume.
-    let mut resumed = Running::start(&setup, &id, &["--resume"]);
+    // reports the recorded worktree's path and branch with the shared
+    // inspection's dirty bit, and the paired completion carries the clean
+    // exit. The settle reports only, so the worktree directory still stands
+    // after the resume (`docs/delegates.md`, "Worktrees"). Every wait below
+    // rides the one setup deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut resumed = Running::start(&setup, &seeded.parent, &["--resume"]);
     let settled = resumed.wait_line("the settled finish", |line| {
-        line["kind"] == "delegate_finished" && line["payload"]["job_id"] == job_id
+        line["kind"] == "delegate_finished" && line["payload"]["job_id"] == seeded.job
     });
     let finished = settled.last().unwrap();
-    assert_eq!(finished["payload"]["worktree"]["path"], worktree_path);
-    assert_eq!(finished["payload"]["worktree"]["branch"], worktree_branch);
+    assert_eq!(finished["payload"]["worktree"]["path"], seeded.worktree);
+    assert_eq!(finished["payload"]["worktree"]["branch"], seeded.branch);
+    assert_eq!(finished["payload"]["text"], "seeded finish");
     assert_eq!(finished["payload"]["worktree"]["dirty"], false);
-    let consumed = killing
-        .checked_sub(setup.deadline.left())
-        .expect("the deadline only shrinks");
-    assert!(
-        consumed < fakes::MUST_SUCCEED_WITHIN,
-        "kill to settled takes {consumed:?}, within {:?}",
-        fakes::MUST_SUCCEED_WITHIN,
-    );
     let completed = resumed.wait_line("the settled completion", |line| {
-        line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id
+        line["kind"] == "job_completed" && line["payload"]["job_id"] == seeded.job
     });
     let completed = completed.last().unwrap();
-    assert_eq!(completed["payload"]["status"], "failed");
-    assert_eq!(completed["payload"]["error"]["code"], "nonzero_exit");
+    assert_eq!(completed["payload"]["status"], "completed");
     assert!(
-        Path::new(&worktree_path).exists(),
+        Path::new(&seeded.worktree).exists(),
         "the settle reports only: the worktree stands"
     );
     let client = resumed.connect(&setup);
