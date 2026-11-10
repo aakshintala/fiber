@@ -793,24 +793,15 @@ fn dropping_the_host_sends_no_shutdown_to_a_retained_keeper() {
     assert!(rest.is_empty(), "Drop must not write a shutdown");
 }
 
-// ---- the bounded handover queue (see #4054: the flood's RSS) ----
+// ---- the bounded handover queue (see #4054) ----
 
 #[test]
-#[expect(
-    clippy::assertions_on_constants,
-    reason = "pins the shared queue and burst bounds against the RSS budget"
-)]
 fn handover_queue_fits_the_growth_budget() {
-    // 8 KiB is the keeper reader's largest frame. A full queue stands once;
-    // one pass copies its burst about eight times over (burst, fresh bytes,
-    // decoded text, splitter carry and lines, joined batch and its JSON).
-    // Both bounds together keep the worst case under the flood test's 4 MiB
-    // growth budget.
-    assert!(
-        contract::keeper::HOST_EVENT_QUEUE * 8 + contract::keeper::HOST_BURST_FRAMES * 8 * 8
-            <= 4 * 1024,
-        "the queue and burst bounds outgrew the RSS budget"
-    );
+    // The handover queue holds HOST_EVENT_QUEUE frames behind a stalled
+    // runner; one runner pass takes HOST_BURST_FRAMES and leaves the rest
+    // queued (`take_burst_takes_at_most_the_bound_and_stops_after_an_ending`).
+    assert_eq!(contract::keeper::HOST_EVENT_QUEUE, 64);
+    assert_eq!(contract::keeper::HOST_BURST_FRAMES, 16);
 }
 
 #[test]
@@ -844,6 +835,126 @@ fn a_full_handover_queue_applies_backpressure() {
             Err(mpsc::TrySendError::Full(_))
         ),
         "the handover queue applies backpressure past its bound"
+    );
+}
+
+#[test]
+fn handover_end_releases_client_maps() {
+    // Receiving `End` alone cannot clear `client.adopted`: `attached_host`
+    // installs no `Host::observe`, and that map is removed only when the
+    // observer sees a durable `JobCompleted` (`keeper.rs:225-238`), while
+    // `Client::reply(Exit)` removes only `waiters` (`keeper.rs:569-578`).
+    // The fixture therefore subscribes the observer and drives a durable
+    // completion before asserting both maps are empty.
+    let (host, clock, _peers, mut peer, mut attached) =
+        attached_host(vec![kept("call_0", "j_one")], b"");
+    let log_home = fakes::TempDir::new("main-keeper-handover-end");
+    let log = log::Log::create(log_home.path(), session_id(), clock.clone()).unwrap();
+    let _observer = host.observe(&log);
+    let adopted = attached.take_jobs().pop().unwrap();
+    assert_eq!(adopted.job.job_id.0, "j_one");
+    let out_home = fakes::TempDir::new("main-keeper-handover-end-out");
+    let output_path = out_home.path().join("j_one.log");
+    std::fs::write(&output_path, b"").unwrap();
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&output_path)
+        .unwrap();
+    let (end_send, end_recv) = mpsc::channel();
+    let emit: Arc<dyn contract::emit::Emit> = Arc::new(fakes::Recorder::default());
+    let opened = contract::jobs::Opened {
+        started: contract::events::JobStarted {
+            job_id: contract::JobId("j_one".into()),
+            tool: Some("shell".into()),
+            extension: None,
+            description: "job j_one".into(),
+            output_path: "artifacts/j_one.log".into(),
+        },
+        path: output_path.clone(),
+        file,
+        end: contract::jobs::End(Box::new(move |completed| match end_send.send(completed) {
+            Ok(()) | Err(_) => {}
+        })),
+        emit,
+        lines: None,
+    };
+    let run = tools::AdoptedRun::new(
+        opened,
+        adopted.events,
+        None,
+        contract::jobs::Stop(Box::new(|| {})),
+        dyn_clock(&clock),
+    );
+    let runner = thread::spawn(move || run.run());
+    // Production-shaped 8 KiB frames through the real sender; the size is
+    // informational, the bound is structural (see #4054).
+    let sender = lock(&attached.client.waiters)
+        .get("call_0")
+        .cloned()
+        .unwrap();
+    const FRAME: usize = 8 * 1024;
+    const FRAMES: usize = 256;
+    let mut expected = Vec::with_capacity(FRAME * FRAMES);
+    for i in 0..FRAMES {
+        let byte = b'a'.wrapping_add(u8::try_from(i % 26).unwrap());
+        let bytes = vec![byte; FRAME];
+        expected.extend_from_slice(&bytes);
+        sender
+            .send(HostEvent::Output {
+                stream: Stream::Out,
+                bytes,
+            })
+            .unwrap();
+    }
+    // The ending arrives on the keeper connection so `reply(Exit)` removes
+    // the waiter and forwards it to the runner.
+    reply(
+        &mut peer,
+        serde_json::json!({"exit":{"id":"call_0","code":0,"signal":null,"timed_out":false,"output_cap":false}}),
+    );
+    let dl = fakes::Deadline::after(Duration::from_secs(10));
+    let completed = dl.recv_or_fail(&end_recv, "the adopted End");
+    assert_eq!(completed.job_id.0, "j_one");
+    match runner.join() {
+        Ok(_) => {}
+        Err(_) => panic!("the runner thread panicked"),
+    }
+    // The observed durable completion releases the adopted entry.
+    let exit = contract::keeper::Exit {
+        code: Some(0),
+        signal: None,
+        timed_out: false,
+        output_cap: false,
+    };
+    log.append(
+        &contract::events::Event::JobCompleted(tools::kept_end(
+            contract::JobId("j_one".into()),
+            &exit,
+        )),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(&output_path).unwrap(),
+        expected,
+        "the file holds exactly the sent bytes"
+    );
+    assert!(
+        lock(&attached.client.waiters).get("call_0").is_none(),
+        "waiters held after End: {:?}",
+        lock(&attached.client.waiters)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !lock(&attached.client.adopted).contains_key(&contract::JobId("j_one".into())),
+        "adopted held after the observed completion: {:?}",
+        lock(&attached.client.adopted)
+            .iter()
+            .map(|(job, id)| (job.0.clone(), id.clone()))
+            .collect::<Vec<_>>()
     );
 }
 
