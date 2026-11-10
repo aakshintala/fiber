@@ -269,3 +269,6 @@ crates/main/src/session_command.rs	fiber-4313	plan	2026-11-10T12:39:56Z	Amoghs-M
 crates/main/tests/delegation/delegates.rs	fiber-4313	plan	2026-11-10T12:39:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4550
 docs/delegates.md	fiber-4313	plan	2026-11-10T12:39:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4550
 crates/main/tests/screens/tui_command_extension.rs	fiber-2720	grant	2026-11-10T12:41:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-part3-slash-commands	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-10T12:43:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/support/reviewer_eval.rs	fiber-477	plan	2026-11-10T12:43:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-10T12:43:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
