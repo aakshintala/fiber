@@ -248,3 +248,8 @@ crates/loop/tests/switch.rs	fiber-4400	plan	2026-11-10T07:45:17Z	Amoghs-MacBook-
 crates/main/tests/session_turns/resume.rs	fiber-4400	plan	2026-11-10T07:45:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4400	plan	2026-11-10T07:45:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4400	plan	2026-11-10T07:45:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/install.rs	fiber-4392	plan	2026-11-10T08:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/manage.rs	fiber-4392	plan	2026-11-10T08:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/update.rs	fiber-4392	plan	2026-11-10T08:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/release.rs	fiber-4392	plan	2026-11-10T08:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/update_tests.rs	fiber-4392	plan	2026-11-10T08:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
