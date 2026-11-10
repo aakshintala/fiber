@@ -701,7 +701,7 @@ pub(crate) fn assemble_session(
             let ResumeStart {
                 dir,
                 log,
-                folded,
+                mut folded,
                 opened,
             } = resume;
             let clock = Arc::clone(&process.clock);
@@ -743,6 +743,10 @@ pub(crate) fn assemble_session(
                 seen_files,
                 ..
             } = parts;
+            // The settle reports each orphaned delegate's worktree through
+            // the session's own inspection: a resumed run reports only,
+            // never removes.
+            folded.settle_finish = Some(crate::delegates::worktree_finisher(&home, &clock));
             // The log is already open: install the writer before any append the
             // resumed process makes. The level is checked once; its answer gates
             // both the install and the connection timing below.
