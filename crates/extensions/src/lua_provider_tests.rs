@@ -316,6 +316,87 @@ fn list_models_with_a_non_list_return_is_bad_return() {
     assert_eq!(callback, "p.models");
 }
 
+#[test]
+fn list_models_parses_an_omission_mark_into_its_reason() {
+    let root = fakes::TempDir::new("fiber-list-models-omitted");
+    let run = format!(
+        "{{ {{ id = \"gone\", protocol = \"openai-responses\", \
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 1000, \
+         omit_reason = \"no serving endpoint with a matching name\" }}, {} }}",
+        model_entry("ok")
+    );
+    let (_home, provider) = models_provider(&root, &run);
+    let (models, returned) = fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
+    .unwrap();
+    assert_eq!(models.len(), 2);
+    assert_eq!(
+        models[0].omit_reason.as_deref(),
+        Some("no serving endpoint with a matching name")
+    );
+    assert_eq!(models[1].omit_reason, None);
+    assert_eq!(
+        returned[0]["omit_reason"],
+        json!("no serving endpoint with a matching name")
+    );
+}
+
+/// Runs `list_models` against a `models()` return whose single entry
+/// carries `run` as its mark, expecting the whole list to fail as
+/// `BadReturn`.
+#[track_caller]
+fn list_models_mark_err(run: &str) -> crate::Error {
+    let root = fakes::TempDir::new("fiber-list-models-bad-mark");
+    let entry = format!(
+        "{{ {{ id = \"gone\", protocol = \"openai-responses\", \
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 1000, \
+         omit_reason = {run} }} }}"
+    );
+    let (_home, provider) = models_provider(&root, &entry);
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
+    .unwrap_err()
+}
+
+#[test]
+fn list_models_with_a_non_string_mark_is_bad_return() {
+    let err = list_models_mark_err("7");
+    let crate::Error::BadReturn { callback, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(callback, "p.models");
+}
+
+#[test]
+fn list_models_with_an_empty_mark_is_bad_return() {
+    let err = list_models_mark_err("\"\"");
+    let crate::Error::BadReturn { callback, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(callback, "p.models");
+}
+
+#[test]
+fn list_models_with_a_whitespace_mark_is_bad_return() {
+    let err = list_models_mark_err("\"   \"");
+    let crate::Error::BadReturn { callback, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(callback, "p.models");
+}
+
 /// A provider `p` whose `credential()` reads its token over HTTP from
 /// `url`, failing the fetch on any status but 200, so the test holds and
 /// counts the fetches through the server.
