@@ -2408,6 +2408,64 @@ fn a_persons_deny_ends_permission_without_running() {
     );
 }
 
+/// The next `permission_requested` payload on a watcher registered before
+/// the turn. One wait started at entry covers the whole drain, as
+/// [`wait_requested`] does.
+fn wait_requested_payload(
+    watcher: &mut log::Watcher,
+    deadline: &Deadline,
+    what: &str,
+) -> Map<String, Value> {
+    let wait = deadline.start_wait();
+    loop {
+        let line = watcher
+            .recv_timeout(wait.left())
+            .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
+            .expect("the log stays readable")
+            .expect("no end yet");
+        if line.kind() == EventKind::PermissionRequested {
+            return line.payload.clone();
+        }
+    }
+}
+
+// A standing ask on a rewritten call writes the hook's arguments and
+// names onto its `permission_requested`.
+#[test]
+fn permission_requested_rewrite_on_a_standing_ask_carries_the_rewritten_arguments() {
+    let rules = Arc::new(FakeRules::default());
+    rules.set(ask_rule("atlas", "atlas"));
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let mut rewritten = Map::new();
+    rewritten.insert("mode".to_owned(), json!("fast"));
+    setup.hooks = Some(Arc::new(ProbeHooks::rewriting(rewritten.clone())));
+    let home = fakes::TempDir::new("fiber-4400-ask");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let requested = wait_requested_payload(
+        &mut watcher,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+        "the approval is raised",
+    );
+    assert_eq!(requested["arguments"], json!({"mode": "fast"}));
+    assert_eq!(requested["changed_by"], json!(["probe"]));
+    let id = requested["request_id"].as_str().unwrap().to_owned();
+    reply(&world, &id, allow());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(tool.ran_args(), vec![rewritten]);
+}
+
 // With nobody to answer, the approval is denied with one record.
 #[test]
 fn a_headless_approval_is_denied_with_one_record() {
@@ -3289,6 +3347,8 @@ fn dropping_suspended_state_closes_its_guard_once() {
                     prefix: "atlas".into(),
                 },
             },
+            arguments: None,
+            changed_by: None,
         }),
         action: ActionId("a_test".into()),
         batch: Vec::new(),

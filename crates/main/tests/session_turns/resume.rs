@@ -1586,6 +1586,8 @@ fn ask_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
@@ -1609,6 +1611,8 @@ fn review_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             }),
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
