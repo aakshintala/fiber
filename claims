@@ -283,3 +283,8 @@ crates/loop/tests/resume.rs	fiber-4313	plan	2026-11-10T08:24:58Z	Amoghs-MacBook-
 crates/main/tests/delegation/delegates.rs	fiber-4313	plan	2026-11-10T08:24:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/compiled_in.rs	fiber-4536	plan	2026-11-10T08:34:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/compiled_in_tests.rs	fiber-4536	plan	2026-11-10T08:34:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/keys.rs	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/keys_tests.rs	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/configuration.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/mockups/settings.html	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
