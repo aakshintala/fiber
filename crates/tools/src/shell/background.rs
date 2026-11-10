@@ -452,9 +452,11 @@ fn hand_off(
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .map(|()| errors.as_path());
+        // The keeper carries the monitor intent itself: a stderr file that
+        // could not be created leaves `errors_path` empty, not the lines.
         if hosted
             .host
-            .adopt(&hosted.id, &job_id, &path, errors_path)
+            .adopt(&hosted.id, &job_id, &path, errors_path, feed.is_some())
             .is_err()
         {
             hosted.host.stop(&hosted.id);
@@ -892,7 +894,7 @@ pub(super) fn to_completed_reported(
 }
 
 /// The last [`TAIL_BYTES`] of the file, read from there, decoded lossily.
-fn output_tail(path: &Path) -> Option<String> {
+pub(super) fn output_tail(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let window = u64::try_from(TAIL_BYTES).unwrap_or(u64::MAX);

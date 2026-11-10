@@ -11,13 +11,25 @@ use super::kept_end;
 use crate::Shell;
 
 struct Host {
-    calls: mpsc::Sender<(Spawn, mpsc::Sender<HostEvent>)>,
+    calls: mpsc::Sender<(Spawn, mpsc::SyncSender<HostEvent>)>,
     stops: Mutex<Vec<String>>,
     stopped: Option<mpsc::Sender<String>>,
-    adopted: Option<mpsc::Sender<(JobId, std::path::PathBuf)>>,
+    adopted: Option<mpsc::Sender<Adopted>>,
+}
+/// What the shell told the host to keep: the job, its output file, its
+/// stderr file and whether it delivers monitor lines.
+struct Adopted {
+    job: JobId,
+    path: std::path::PathBuf,
+    errors: Option<std::path::PathBuf>,
+    lines: bool,
 }
 impl CommandHost for Host {
-    fn start(&self, spec: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
+    fn start(
+        &self,
+        spec: Spawn,
+        events: mpsc::SyncSender<HostEvent>,
+    ) -> Result<Started, HostError> {
         self.calls.send((spec, events)).expect("start observed");
         Ok(Started { pgid: u32::MAX })
     }
@@ -31,10 +43,22 @@ impl CommandHost for Host {
     fn write(&self, _: &str, _: &str) -> Result<(), HostError> {
         Ok(())
     }
-    fn adopt(&self, _: &str, job: &JobId, path: &Path, _: Option<&Path>) -> Result<(), HostError> {
+    fn adopt(
+        &self,
+        _: &str,
+        job: &JobId,
+        path: &Path,
+        errors: Option<&Path>,
+        lines: bool,
+    ) -> Result<(), HostError> {
         if let Some(adopted) = &self.adopted {
             adopted
-                .send((job.clone(), path.to_path_buf()))
+                .send(Adopted {
+                    job: job.clone(),
+                    path: path.to_path_buf(),
+                    errors: errors.map(Path::to_path_buf),
+                    lines,
+                })
                 .expect("adopt observed");
         }
         Ok(())
@@ -216,7 +240,13 @@ fn a_background_call_adopts_after_job_started_and_keeps_writing_its_file() {
     });
     let (spec, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "start");
     assert_eq!(spec.timeout_ms, None);
-    let (job, path) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
+    let Adopted {
+        job,
+        path,
+        errors,
+        lines,
+    } = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
+    assert_eq!((errors, lines), (None, false), "a plain background job");
     // docs/tools.md, "The keeper": adoption follows the durable job start.
     assert_eq!(
         jobs.started()
@@ -439,6 +469,48 @@ fn keeper_end_maps_every_process_failure_without_a_tail() {
 }
 
 #[test]
+fn an_adopted_end_reads_the_output_tail_a_kept_end_leaves_out() {
+    let dir = fakes::TempDir::new("fiber-hosted-adopted-end");
+    let output = dir.path().join("job.log");
+    std::fs::write(&output, "first\nlast\n").unwrap();
+    let exit = Exit {
+        code: Some(0),
+        signal: None,
+        timed_out: false,
+        output_cap: false,
+    };
+    let adopted = super::adopted_end(JobId("j_one".into()), &output, &exit);
+    assert_eq!(adopted.status, Outcome::Completed);
+    assert_eq!(adopted.output_tail.as_deref(), Some("first\nlast\n"));
+    // The same exit, written by the keeper, has no tail to give.
+    assert!(kept_end(JobId("j_one".into()), &exit).output_tail.is_none());
+    // A file the session cannot read gives no tail and no failure.
+    let missing = super::adopted_end(JobId("j_one".into()), &dir.path().join("none"), &exit);
+    assert!(missing.output_tail.is_none());
+    assert_eq!(missing.status, Outcome::Completed);
+}
+
+#[test]
+fn a_flooded_adopted_end_fails_with_the_flooded_code_and_keeps_the_tail() {
+    let dir = fakes::TempDir::new("fiber-hosted-flooded-end");
+    let output = dir.path().join("job.log");
+    std::fs::write(&output, "noise\n").unwrap();
+    let exit = Exit {
+        code: None,
+        signal: Some(15),
+        timed_out: false,
+        output_cap: false,
+    };
+    let flooded = super::adopted_flooded_end(JobId("j_one".into()), &output, &exit);
+    assert_eq!(flooded.status, Outcome::Failed);
+    assert_eq!(
+        flooded.error.as_ref().map(|error| &error.code),
+        Some(&ErrorCode::Flooded)
+    );
+    assert_eq!(flooded.output_tail.as_deref(), Some("noise\n"));
+}
+
+#[test]
 fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a keeper-held
     // 60 s timeout stops the job at 2023-11-14T22:14:20Z. The drive keeps no
@@ -483,6 +555,53 @@ fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     drop(events);
 }
 
+#[test]
+fn monitor_lines_without_stderr_artifact() {
+    let dir = fakes::TempDir::new("fiber-hosted-monitor-lines");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    // The fixture's first job writes `j_0000000000000001.log`, so its stderr
+    // file would be `j_0000000000000001.stderr.log`: a directory there makes
+    // the file's creation fail.
+    std::fs::create_dir(dir.path().join("j_0000000000000001.stderr.log")).expect("block stderr");
+    let (calls, started) = mpsc::channel();
+    let (adopted, adopts) = mpsc::channel();
+    let host = Arc::new(Host {
+        calls,
+        stops: Mutex::new(Vec::new()),
+        stopped: None,
+        adopted: Some(adopted),
+    });
+    let shell = Shell::new(
+        dir.path().to_path_buf(),
+        Arc::new(fakes::clock::SystemClock),
+    )
+    .with_host(host)
+    .with_jobs(jobs.clone());
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(
+            shell.run(
+                serde_json::json!({"command":"held", "monitor":true})
+                    .as_object()
+                    .expect("object"),
+                &CancelToken::default(),
+                &Recorder::default(),
+            ),
+        )
+        .expect("result");
+    });
+    let (_, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "start");
+    let adopt = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
+    // `docs/tools.md`, "The keeper": the keeper carries the monitor intent.
+    // The missing stderr file leaves the path empty, not the intent.
+    assert!(adopt.lines, "the monitor still delivers lines");
+    assert_eq!(adopt.errors, None);
+    // The process stays alive through the adoption; now let it end.
+    events.send(HostEvent::Exit(end())).expect("exit");
+    let output = Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "receipt");
+    assert!(output.error.is_none(), "{:?}", output.error);
+}
+
 /// What a hosted run's emitter and host saw, in order: `starting` from the
 /// emitter, `start` from the host.
 type Order = Arc<Mutex<Vec<&'static str>>>;
@@ -516,11 +635,11 @@ impl contract::emit::Emit for Probe {
 struct Noting {
     order: Order,
     refusal: Option<String>,
-    calls: mpsc::Sender<mpsc::Sender<HostEvent>>,
+    calls: mpsc::Sender<mpsc::SyncSender<HostEvent>>,
 }
 
 impl CommandHost for Noting {
-    fn start(&self, _: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
+    fn start(&self, _: Spawn, events: mpsc::SyncSender<HostEvent>) -> Result<Started, HostError> {
         self.order.lock().expect("order").push("start");
         if let Some(io) = &self.refusal {
             return Err(HostError {
@@ -537,7 +656,14 @@ impl CommandHost for Noting {
     fn write(&self, _: &str, _: &str) -> Result<(), HostError> {
         Ok(())
     }
-    fn adopt(&self, _: &str, _: &JobId, _: &Path, _: Option<&Path>) -> Result<(), HostError> {
+    fn adopt(
+        &self,
+        _: &str,
+        _: &JobId,
+        _: &Path,
+        _: Option<&Path>,
+        _: bool,
+    ) -> Result<(), HostError> {
         Ok(())
     }
 }
@@ -547,7 +673,7 @@ impl CommandHost for Noting {
 struct Noted {
     order: Order,
     probe: Arc<Probe>,
-    started: mpsc::Receiver<mpsc::Sender<HostEvent>>,
+    started: mpsc::Receiver<mpsc::SyncSender<HostEvent>>,
     result: mpsc::Receiver<std::io::Result<super::Ran>>,
     _dir: fakes::TempDir,
 }
