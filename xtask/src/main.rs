@@ -131,7 +131,7 @@
 //!   occurrences (subscribe-then-action-then-unbounded-wait on a replayable
 //!   session, plus `recv_reply`, `fn subscribe(`, `fn subscribe_full(`)
 //!   than its maximum (0 when absent)
-//! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
+//! - `site --out <dir>`: builds the user docs site (`docs/ci.md`, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
 //!   regenerates and never committed

@@ -1325,7 +1325,7 @@ fn the_first_frame_row_shows_each_fixtures_median() {
     ));
     let results = with_metric(head(), "terminal_attach_ms", Value::Array(full));
     let out = judge(&results, Some(&base()), Event::PullRequest);
-    // docs/performance.md:72,184-185,303-307: medians under the flat 50 ms bound pass with five samples per fixture.
+    // `docs/performance.md`, "Measuring": medians under the flat 50 ms bound pass with five samples per fixture.
     assert_eq!(out.failures, Vec::<String>::new());
     let line = row(&out.comment, "Terminal to its first frame, attaching");
     // Each fixture's median, not one median across both, and no formula
@@ -1359,7 +1359,7 @@ fn an_attaching_median_over_its_ceiling_is_advisory() {
     entries.extend(attach_entries("10 MiB", 10_485_760, &[20.0; 5]));
     let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
     let out = judge(&results, Some(&base()), Event::PullRequest);
-    // docs/performance.md:72,308-310: an over-ceiling median on an advisory model stays advisory with no failure.
+    // `docs/performance.md`, "When a budget is exceeded": an over-ceiling median on an advisory model stays advisory with no failure.
     assert_eq!(out.failures, Vec::<String>::new());
     let line = row(&out.comment, "Terminal to its first frame, attaching");
     assert!(line.contains("61.0 ms"), "{line}");
@@ -2229,7 +2229,7 @@ fn a_metric_whose_count_differs_from_its_declared_runs_fails() {
 fn a_file_without_metric_runs_expects_runs_for_every_metric() {
     // Every non-attach array cut to its first 3 entries; `fsyncs` keeps
     // its one pass. Attach always takes 5 samples per fixture
-    // (`docs/performance.md:184-185`), so its 3-sample case fails below.
+    // (`docs/performance.md`, "Measuring"), so its 3-sample case fails below.
     let mut three = with_counts(head(), 3, 3);
     for id in [
         "session_idle_rss_kib",
@@ -2268,7 +2268,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
     three = trim_metric(&three, "turn_log_bytes", 3);
     three = trim_attach(&three, 3);
     let out = judge(&three, Some(&base()), Event::PullRequest);
-    // docs/performance.md:184-185: the attach row already takes 5 samples,
+    // `docs/performance.md`, "Measuring": the attach row already takes 5 samples,
     // so 3 per fixture fails even when the file declares 3; every other
     // metric falls back to the file's runs and passes.
     assert!(
@@ -2302,7 +2302,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
         ],
     );
     let out = judge(&trim_attach(&attach, 3), Some(&base()), Event::PullRequest);
-    // docs/performance.md:184-185: attach declares five runs, so three
+    // `docs/performance.md`, "Measuring": attach declares five runs, so three
     // samples per fixture fail even when the declared count matches them.
     assert!(
         has(&out.failures, "terminal_attach_ms"),
@@ -4512,7 +4512,7 @@ fn three_sample_pr_files_gate_on_stored_evidence_not_sample_count() {
 
 #[test]
 fn both_attach_fixtures_gate_the_absolute_bound() {
-    // docs/performance.md:72,326-328: exactly 50 ms per fixture passes;
+    // `docs/performance.md`, "When a budget is exceeded": exactly 50 ms per fixture passes;
     // over-50 cases live in the base-tolerance tests below.
     for (ten_head, one_head) in [
         ([50.0; 5], [31.0; 5]),
@@ -4543,7 +4543,7 @@ fn both_attach_fixtures_gate_the_absolute_bound() {
 
 #[test]
 fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
-    // docs/performance.md:326-332,334-335: over 50 ms and exactly 10 % over a
+    // `docs/performance.md`, "When a budget is exceeded": over 50 ms and exactly 10 % over a
     // comparable base passes, and the report names each median. Just over
     // 10 % produces one named failure per fixture. `—` counts as 10 %.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
@@ -4605,7 +4605,7 @@ fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
 
 #[test]
 fn attach_absolute_bound_holds_without_a_usable_base() {
-    // docs/performance.md:330-332,334-335,338-339: with no base, a failed
+    // `docs/performance.md`, "When a budget is exceeded": with no base, a failed
     // base, a missing or malformed base metric, or a different base CPU, the
     // 50 ms bound holds on its own. Each over-ceiling fixture produces one
     // named failure, and the report names the median.
@@ -4648,7 +4648,7 @@ fn attach_absolute_bound_holds_without_a_usable_base() {
 
 #[test]
 fn attach_fails_only_when_over_50_and_over_the_base() {
-    // docs/performance.md:326-330,334-335: a fixture fails only when its
+    // `docs/performance.md`, "When a budget is exceeded": a fixture fails only when its
     // median is over 50 ms and more than 10 % over the comparable base.
     // Within 10 % passes and is named. Under 50 ms passes. Each
     // over-ceiling fixture produces one named failure. The within note is
@@ -4776,7 +4776,7 @@ fn attach_fails_only_when_over_50_and_over_the_base() {
 
 #[test]
 fn attach_numeric_tolerance_applies_below_and_above_the_ceiling() {
-    // docs/performance.md:326-330,334-335,336-339: a numeric tolerance is
+    // `docs/performance.md`, "When a budget is exceeded": a numeric tolerance is
     // the margin on either side of 50 ms. Head 52 ms over base 45 ms at 25 %
     // (bound 56.25 ms) passes and is named; 57 ms produces one named failure
     // per fixture. Head 50.1 ms over base 50.0 ms at 10 % passes. Targets
@@ -4826,7 +4826,7 @@ fn attach_numeric_tolerance_applies_below_and_above_the_ceiling() {
 
 #[test]
 fn attach_head_at_50_with_no_base_passes() {
-    // docs/performance.md:326-330,338-339: a fixture fails only when its
+    // `docs/performance.md`, "When a budget is exceeded": a fixture fails only when its
     // median is over 50 ms, and without a usable comparable base only the
     // absolute bound can fail it. Head exactly at 50 ms with no base
     // passes, shows its measured 50.0 ms, and stays advisory. Targets the
@@ -4857,7 +4857,7 @@ fn attach_head_at_50_with_no_base_passes() {
 
 #[test]
 fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
-    // docs/performance.md:326-330,334-335,336-339: with a numeric tolerance,
+    // `docs/performance.md`, "When a budget is exceeded": with a numeric tolerance,
     // the boundary is the tolerance-adjusted base. Base 60 ms at 25 % puts
     // it at exactly 75 ms: the boundary passes while naming the breach, and
     // just above produces one named failure per over-ceiling fixture.
@@ -4898,7 +4898,7 @@ fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
 
 #[test]
 fn attach_numeric_tolerance_keeps_the_relative_leg_below_the_absolute_ceiling() {
-    // docs/performance.md:336-339: either breach fails, once per fixture;
+    // `docs/performance.md`, "When a budget is exceeded": either breach fails, once per fixture;
     // `—` disables only the relative comparison below the ceiling. Numeric
     // tolerance is strict.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
@@ -4954,7 +4954,7 @@ fn attach_middle_and_unknown_models_stay_advisory() {
         MIDDLE_MODEL,
     );
     let out = judge(&h, Some(&b), Event::PullRequest);
-    // docs/performance.md:308: middle with 2 stored runs stays advisory.
+    // `docs/performance.md`, "When a budget is exceeded": middle with 2 stored runs stays advisory.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, "Terminal to its first frame, attaching");
     assert!(line.ends_with("| advisory |"), "{line}");
@@ -4966,7 +4966,7 @@ fn attach_middle_and_unknown_models_stay_advisory() {
         &[60.0; 5],
         SLOW_MODEL,
     );
-    // docs/performance.md:308: unknown and few-run models stay advisory.
+    // `docs/performance.md`, "When a budget is exceeded": unknown and few-run models stay advisory.
     for (cpu, reason) in [
         ("Some Other CPU 1234", "unknown or not recorded"),
         (SLOW_ADVISORY_MODEL, "4 stored runs"),
@@ -4984,7 +4984,7 @@ fn attach_middle_and_unknown_models_stay_advisory() {
 fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
     // Head and base carry the pass metric: the row never fails on a
     // sample, however slow, while every class cell reads `—`.
-    // docs/performance.md:73,309-310: the pass-end row stays advisory reference data with no timing gate.
+    // `docs/performance.md`, "When a budget is exceeded": the pass-end row stays advisory reference data with no timing gate.
     let out = judge(&head(), Some(&base()), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(
@@ -5008,14 +5008,14 @@ fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
         }),
     );
     let out = judge(&slow, Some(&base()), Event::PullRequest);
-    // docs/performance.md:73,309-310: a slow pass end stays advisory with no failure.
+    // `docs/performance.md`, "When a budget is exceeded": a slow pass end stays advisory with no failure.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(
         &out.comment,
         "Terminal attaching, to the end of the opening pass",
     );
     assert!(line.ends_with("| advisory |"), "{line}");
-    // docs/performance.md:73,184-185,223-227,309-310: five samples per
+    // `docs/performance.md`, "When a budget is exceeded": five samples per
     // fixture, and one named failure for each malformed attach metric.
     // Missing fixture/ms, unknown fixture and wrong run count all fail.
     for build in [
@@ -5068,7 +5068,7 @@ fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
 
 #[test]
 fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
-    // docs/performance.md:72,184-185,223-227,303-310: per-fixture medians,
+    // `docs/performance.md`, "When a budget is exceeded": per-fixture medians,
     // sample counts and one named failure per over-ceiling fixture.
     // Mixed entry ordering still judges per-fixture medians.
     let mut entries = attach_entries("10 MiB", 10_492_016, &[1400.0; 5]);
@@ -5190,7 +5190,7 @@ fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
     );
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, FOLD_BUDGET), "{:?}", out.failures);
-    // docs/performance.md:184-185: attach always takes five samples per
+    // `docs/performance.md`, "Measuring": attach always takes five samples per
     // fixture, so three declared samples fail even when the samples match.
     let declared = with_metric_runs(
         neutral_scalars("terminal_attach_ms", head()),
@@ -5268,7 +5268,7 @@ fn the_comment_names_gated_timing_verdicts_and_reasons() {
     // Attach rows show the flat class ceiling at each fixture.
     let (h, b) = attach_pair(&[40.0; 5], &[31.0; 5], &[60.0; 5], &[60.0; 5], SLOW_MODEL);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    // docs/performance.md:72,303-310: medians under the flat 50 ms bound pass.
+    // `docs/performance.md`, "When a budget is exceeded": medians under the flat 50 ms bound pass.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, "Terminal to its first frame, attaching");
     assert!(line.contains("slow ceiling 50.0 ms"), "{line}");
@@ -5346,7 +5346,7 @@ fn mismatched_attach_pair() -> (Value, Value) {
 
 #[test]
 fn a_mismatched_attach_base_never_forces_the_gate() {
-    // docs/performance.md:302-306: missing comparisons stay advisory
+    // `docs/performance.md`, "When a budget is exceeded": missing comparisons stay advisory
     // when neither fixture breaches the absolute bound.
     let (h, b) = mismatched_attach_pair();
     let out = judge(&h, Some(&b), Event::PullRequest);
@@ -5369,7 +5369,7 @@ fn failed_base(cpu: &str) -> Value {
 
 #[test]
 fn failed_attach_base_stays_advisory() {
-    // docs/performance.md:302-306: under-ceiling head, failed comparison.
+    // `docs/performance.md`, "When a budget is exceeded": under-ceiling head, failed comparison.
     let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
     let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
@@ -5379,7 +5379,7 @@ fn failed_attach_base_stays_advisory() {
 
 #[test]
 fn failed_attach_base_shows_its_failure() {
-    // docs/performance.md:302-306: an under-ceiling head names the base
+    // `docs/performance.md`, "When a budget is exceeded": an under-ceiling head names the base
     // failure rather than a generic missing-comparison reason.
     let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
     let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
@@ -5399,7 +5399,7 @@ fn failed_attach_base_shows_its_failure() {
 
 #[test]
 fn missing_attach_base_metric_stays_advisory() {
-    // docs/performance.md:302-306: an under-ceiling head stays advisory
+    // `docs/performance.md`, "When a budget is exceeded": an under-ceiling head stays advisory
     // with its missing-comparison reason.
     let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
     let mut missing = base();
@@ -6335,7 +6335,7 @@ fn attach_and_session_list_breaches_name_no_remeasure_skip() {
         }),
     );
     let out = judge(&h, Some(&b), Event::PullRequest);
-    // docs/performance.md:73,184-185,309-310: the pass-end row already takes 5 samples and never breaches, so no remeasure skip.
+    // `docs/performance.md`, "Measuring": the pass-end row already takes 5 samples and never breaches, so no remeasure skip.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     assert_eq!(out.remeasure_skip, None);
     // `session_list` has no row the selector skips: its breach fails with no skip.
@@ -6802,7 +6802,7 @@ fn memory_budgets_lists_exactly_the_memory_budgets() {
 
 #[test]
 fn is_memory_marks_only_the_memory_checks() {
-    // `docs/performance.md` line 274: an exact or memory budget fails the
+    // `docs/performance.md`, "When a budget is exceeded": an exact or memory budget fails the
     // pull request from its first run. This predicate decides which rows
     // those are: the peak RSS rows and the row held within one.
     assert!(super::is_memory(Check::Memory(&["paging_rss_kib"])));
@@ -6832,7 +6832,7 @@ fn is_memory_marks_only_the_memory_checks() {
 
 #[test]
 fn a_memory_first_pass_failure_survives_clean_timing_extras() {
-    // `docs/performance.md` line 274: an exact or memory budget fails the
+    // `docs/performance.md`, "When a budget is exceeded": an exact or memory budget fails the
     // pull request from its first run. The paging peak RSS stays over its
     // ceiling while clean extras outvote the width breach, so the merged
     // verdict keeps the memory failure and drops the timing one.

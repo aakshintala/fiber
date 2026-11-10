@@ -169,7 +169,7 @@ pub(crate) struct Gate {
     pub(crate) history: OnceLock<Option<PathBuf>>,
     /// The prompts waiting for their acknowledgement, by command id: the
     /// loop's `on_rewrite` replaces a replaced prompt's content before it
-    /// is accepted (`docs/state.md`, "Prompt history").
+    /// is accepted (`docs/state.md`, "What each part holds").
     pub(crate) prompts: crate::prompt_history::Pending,
     /// Fiber home: what the sender-name lookup reads (`docs/tools.md`,
     /// "Messaging other sessions").
@@ -446,7 +446,7 @@ impl Session {
         self.run(first.into_iter().collect(), cancel, run)
     }
 
-    /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
+    /// The tool a driver `shell` runs (`docs/invocation.md`, "What each command does").
     /// With none set, `shell` stays an unknown command.
     pub fn shell(&self, tool: Arc<dyn Tool>) {
         let stored = self.gate.driver_shell.set(tool);
@@ -673,8 +673,7 @@ impl Session {
     }
 
     /// Reports a replaced prompt's replacement, to record in the prompt
-    /// history before the prompt's acceptance (`docs/state.md`, "Prompt
-    /// history"): what the loop's `on_rewrite` calls with the command id
+    /// history before the prompt's acceptance (`docs/state.md`, "What each part holds"): what the loop's `on_rewrite` calls with the command id
     /// and the replacement as the hook returned it. It holds the gate
     /// weakly and does nothing once [`Session::close`] has begun.
     #[allow(

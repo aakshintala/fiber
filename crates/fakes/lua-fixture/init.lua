@@ -1,5 +1,5 @@
 -- The fixture Lua extension: one command per behaviour of the runtime that a
--- test exercises (docs/extensions.md, "Lua extensions" and "When an extension
+-- test exercises (`docs/extensions.md`, "Lua extensions" and "When an extension
 -- misbehaves").
 
 local helper = require("lib.helper")
@@ -103,14 +103,14 @@ fiber.command("grow", {
   end,
 })
 
--- The fixture provider (docs/model-routing.md, "Model discovery", "Signing a
+-- The fixture provider (`docs/model-routing.md`, "Model discovery", "Signing a
 -- request" and "Credentials"). Its server's address is per test, so the test
 -- stores it as the secret `fixture.url`.
 local function hex(bytes)
   return (bytes:gsub(".", function(c) return string.format("%02x", c:byte()) end))
 end
 
--- The fixture's `after_tool` hook (docs/extensions.md, "The hook points"):
+-- The fixture's `after_tool` hook (`docs/extensions.md`, "The hook points"):
 -- removes the fixture's secret from every result, and changes nothing else.
 fiber.hook("after_tool", {
   phase = "sanitize",

@@ -1,5 +1,5 @@
 //! Copying a session's log and artifacts into a new directory
-//! (`docs/invocation.md`, "Exporting a session"): `fiber sessions export`.
+//! (`docs/invocation.md`, "Deleting and pruning"): `fiber sessions export`.
 //! The export is the log as recorded: the complete lines written so far,
 //! and nothing but `events.jsonl` and `artifacts/`.
 

@@ -187,7 +187,7 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
         .recv(&result)
         .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"));
     assert!(started.failed.is_empty());
-    // `docs/mcp.md:82`: tools are sorted by name.
+    // `docs/mcp.md`, "Tools and their names": tools are sorted by name.
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
     // The infos run parallel to the sorted tools: `start` sorts the
     // tools by name and unzips the infos from the same sorted list

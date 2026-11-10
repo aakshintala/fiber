@@ -1,7 +1,7 @@
 //! Warming a jig's built binary past its first-exec stall, for tests.
 //!
 //! The first exec of a freshly linked binary can stall for seconds on macOS
-//! (`docs/testing.md`:289 states the stall), so every jig test runs its
+//! (`docs/testing.md`, "Waits and timeouts" states the stall), so every jig test runs its
 //! binary once on fast-failing arguments under [`START_BOUND`] before the
 //! exchange keeps its own deadline. No retry and no wider exchange deadline:
 //! the warm-up either absorbs the stall or fails naming the start.

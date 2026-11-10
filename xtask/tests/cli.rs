@@ -1462,7 +1462,7 @@ fn ticket_reads_the_body_on_stdin() {
 
 /// A `gh` that runs `script` through `/bin/sh`: `fakes::script` links `bin/gh`
 /// to a checked-in trampoline, so no test executes a file it wrote
-/// (docs/testing.md, "Waits and timeouts").
+/// (`docs/testing.md`, "Waits and timeouts").
 #[cfg(unix)]
 fn fake_gh(dir: &TempDir, script: &str) -> String {
     let bin = dir.path().join("bin");
@@ -2214,7 +2214,7 @@ fn flake_classify_prints_one_record_per_unique_title() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     // Records are matched by title: their order is not part of this
-    // test's contract. The count holds docs/testing/running.md, "Flaky
+    // test's contract. The count holds `docs/testing/running.md`, "Flaky
     // tests": "Within one report job a file's title files or comments once;
     // a repeat is skipped".
     assert_eq!(records.len(), 2, "{out}");
@@ -2272,9 +2272,9 @@ fn flake_classify_files_two_tests_of_one_binary_once() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
-    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // `docs/testing/running.md`, "Flaky tests": "a repeated title takes its
     // runner and detail from its first occurrence in file-name byte order".
     assert_eq!(records.len(), 1, "{out}");
     assert_eq!(records[0]["title"], "Flaky tests: main::a", "{out}");
@@ -2321,12 +2321,12 @@ fn flake_classify_keys_main_modules_by_file() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // `docs/testing/running.md`, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
-    // docs/ci.md, "On every pull request that changes code": "writes one
+    // `docs/ci.md`, "On every pull request that changes code": "writes one
     // classification line per unique title": two modules give two titles plus
     // the root fallback and integration titles.
-    // docs/testing/running.md, "Flaky tests": "an area binary names its first
+    // `docs/testing/running.md`, "Flaky tests": "an area binary names its first
     // test-module segment, the file".
     assert_eq!(records.len(), 4, "{out}");
     let by_title = |title: &str| {
@@ -2724,7 +2724,7 @@ fn mutants_reuse_matching_fixture_prints_true() {
     // 40 mutants derive a 3-shard total, and the candidate passed exactly
     // those three shards; the match also prints the matched run id and
     // PR-entry head sha for the select log
-    // (docs/ci.md, "On every pull request that changes code").
+    // (`docs/ci.md`, "On every pull request that changes code").
     let dir = workspace();
     let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
     let jobs = serde_json::json!({ "7": reuse_shards(3, "success") }).to_string();
@@ -2740,7 +2740,7 @@ fn mutants_reuse_matching_fixture_prints_true() {
 #[test]
 fn mutants_reuse_shard_count_mismatch_prints_false() {
     // Four successful shards against a derived 3-shard total reuses nothing
-    // (docs/ci.md, "On every pull request that changes code").
+    // (`docs/ci.md`, "On every pull request that changes code").
     let dir = workspace();
     let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
     let jobs = serde_json::json!({ "7": reuse_shards(4, "success") }).to_string();

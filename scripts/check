@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate (docs/workflow.md, "The gate"). Runs the checks docs/ci.md,
+# The gate (`docs/workflow.md`, "The gate"). Runs the checks `docs/ci.md`,
 # "Selection", chooses for the diff.
 #
 # Usage: scripts/check [--base REV] [--platform-only | --shared-only]
@@ -98,7 +98,7 @@ echo "== extension cases: ${extension_packages:-none}"
 # cargo fmt only matches a bare name among workspace members. The other
 # commands below resolve `-p` against the whole dependency graph, so they
 # need a spec that still names one package once a workspace crate shares a
-# name with a dependency (docs/ci.md, "Selection").
+# name with a dependency (`docs/ci.md`, "Selection").
 package_args=()
 for p in $packages; do package_args+=(-p "$p"); done
 package_spec_args=()
@@ -126,7 +126,7 @@ if [ "$scope" != platform ]; then
   # research/tui-prototype is not a workspace member, so nothing else here lints
   # it, and a diff that touches only research/ is mode docs. It has its own
   # manifest and target directory; lint it when the diff touches it
-  # (docs/ci.md, "On every pull request that changes code").
+  # (`docs/ci.md`, "On every pull request that changes code").
   prototype=research/tui-prototype
   if { git diff --name-only "$(git merge-base "$base" HEAD)"; git ls-files --others --exclude-standard; } | grep -q "^$prototype/"; then
     echo "== tui-prototype: cargo fmt --check, cargo clippy"
@@ -159,7 +159,7 @@ if [ "$scope" != platform ]; then
     echo "== grid-read ratchet"
     # A grid read outside a wait observes a frame no wait settled, so the
     # frame it compares can differ from the waited one
-    # (docs/testing/screens.md, "Screens"). Each file under
+    # (`docs/testing/screens.md`, "Screens"). Each file under
     # crates/main/tests/ holds at most its inline maximum of unmarked
     # grid-read lines (`.screen()`, `.cell(`, `.contents`, `.rows`), and a
     # file missing from the list holds none: a line inside a `wait_screen`
@@ -174,7 +174,7 @@ if [ "$scope" != platform ]; then
     # file missing from the mouse entries holds none; wheel reports stay
     # outside the count. Read detection, wait-span tracking, comment
     # recognition and the per-file comparison live in
-    # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
+    # `cargo xtask screen-ratchet` (`docs/testing.md`, "Levels").
     cargo xtask screen-ratchet <<'EOF'
 crates/main/tests/commands/change_workspace.rs 1
 crates/main/tests/commands/changed_files_editor.rs 4
@@ -266,7 +266,7 @@ EOF
     # whose count rises fails; lowering a count is always free, and a file
     # missing from the list holds none. Detection and the per-file
     # comparison live in `cargo xtask census-ratchet`
-    # (docs/code-quality.md, "Types").
+    # (`docs/code-quality.md`, "Types").
     cargo xtask census-ratchet <<'EOF'
 crates/bench/examples/bench/attach.rs 3
 crates/bench/examples/bench/busy.rs 1
@@ -380,7 +380,7 @@ EOF
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl \
         crates/main/tests/release_pack_fixture/bin/gh
-      # The bash files come from `cargo xtask shellcheck-files` (docs/ci.md,
+      # The bash files come from `cargo xtask shellcheck-files` (`docs/ci.md`,
       # "On every pull request that changes code"), so a new script is
       # checked unnamed. A plain assignment, so a failing list stops the
       # gate under set -e.
@@ -393,7 +393,7 @@ EOF
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
-    # The notices file the release publishes (docs/dependencies.md, "Supply
+    # The notices file the release publishes (`docs/dependencies.md`, "Supply
     # chain"): the same cargo about generate the release runs, so a licence
     # the root about.toml rejects fails the pull request, not the release.
     # CI's lint job installs cargo-about; a local run without it skips.

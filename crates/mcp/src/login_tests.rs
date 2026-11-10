@@ -2506,7 +2506,7 @@ fn a_mid_size_callback_head_reads() {
 /// poll, and a connection that pauses shorter is served: the boundary
 /// and the byte-reset through `answer_within`, paced by the reader's own
 /// tap signals, never the real clock. Exact counts hold because each test
-/// runs in its own process (docs/testing.md, "Running tests"), so no
+/// runs in its own process (`docs/testing.md`, "Running tests"), so no
 /// other test's connection can signal this test's taps.
 #[test]
 fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
@@ -2805,7 +2805,7 @@ fn an_observed_login_writes_one_mcp_line_per_request() {
         ],
         "the probe, two discovery fetches, the registration, the exchange"
     );
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends; login, discovery and token refresh alike.
+    // `docs/state.md`, "What each part holds": one line per POST the transport sends; login, discovery and token refresh alike.
     assert_eq!(lines.len(), requests.len(), "{lines:?}");
     for (line, request) in lines.iter().zip(requests.iter()) {
         assert_mcp_shape(line);
