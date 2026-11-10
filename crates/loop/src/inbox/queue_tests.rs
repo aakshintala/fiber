@@ -238,7 +238,7 @@ fn reconnect_collection_sees_pending_batches_without_exposing_them_to_nested_dra
     for ack in queue.take_reconnects("db", std::path::Path::new("/"), None) {
         (ack.0)(Ok(None));
     }
-    // docs/mcp.md, "Servers, their state and the per-server commands":
+    // `docs/mcp.md`, "Servers, their state and the per-server commands":
     // waiting duplicates join once; different servers remain untouched.
     assert_eq!(
         answers.try_iter().collect::<Vec<_>>(),
@@ -265,7 +265,7 @@ fn a_transition_in_an_older_pending_batch_stops_collection_in_newer_batches() {
     for ack in queue.take_reconnects("db", std::path::Path::new("/"), None) {
         (ack.0)(Ok(None));
     }
-    // docs/invocation.md, "Lifecycle": commands after close retain their
+    // `docs/invocation.md`, "Lifecycle": commands after close retain their
     // own closing verdict, even when held in another admission snapshot.
     assert_eq!(answers.try_iter().collect::<Vec<_>>(), ["before"]);
     assert!(matches!(older.next(), Some(Delivery::Close(_))));
