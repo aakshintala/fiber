@@ -264,14 +264,7 @@ docs/extensions.md	fiber-2720	plan	2026-11-09T23:58:35Z	Amoghs-MacBook-Pro:/User
 crates/tui/src/app_mouse_tests.rs	fiber-2720	plan	2026-11-10T00:10:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-extension-keys	
 crates/tui/src/view/item_tests.rs	fiber-2720	plan	2026-11-10T00:10:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-extension-keys	
 crates/main/tests/screens/tui_click_extension.rs	fiber-2720	plan	2026-11-10T00:10:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-extension-keys	
-crates/tui/src/app/screen.rs	fiber-4444	plan	2026-11-10T00:20:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/screen_tests.rs	fiber-4444	plan	2026-11-10T00:20:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app.rs	fiber-3897	plan	2026-11-10T00:28:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
-crates/tui/src/app.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app_mouse.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/chrome.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/attach_fold.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/overlay_tests.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/journeys.rs	fiber-4496	plan	2026-11-10T00:58:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/journey.rs	fiber-4496	plan	2026-11-10T01:05:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/panel_look.rs	fiber-4496	plan	2026-11-10T01:05:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
