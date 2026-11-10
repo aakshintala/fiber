@@ -224,3 +224,5 @@ crates/fakes/src/jig_start_tests.rs	fiber-4546	plan	2026-11-10T09:53:07Z	Amoghs-
 docs/testing/fakes.md	fiber-4546	plan	2026-11-10T09:53:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/tui_vm.rs	fiber-2720	plan	2026-11-10T10:05:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/commands.rs	fiber-2720	plan	2026-11-10T10:05:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/package.rs	fiber-4538	plan	2026-11-10T10:09:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/review_sweep.rs	fiber-4538	plan	2026-11-10T10:09:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
