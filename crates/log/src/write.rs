@@ -892,6 +892,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         // effect.
         Event::FiberStarted(_)
         | Event::FiberExited(_)
+        | Event::Archived(_)
         | Event::SessionStarted(_)
         | Event::Rewound(_)
         | Event::TurnStarted(_)

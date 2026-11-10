@@ -149,9 +149,10 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("help", &[], &["-h", "--help"]),
     (
         "sessions",
-        &["delete", "export", "prune", "search"],
-        &["--all", "--json", "--hub", "-h", "--help"],
+        &["archive", "delete", "export", "prune", "search"],
+        &["--all", "--archived", "--json", "--hub", "-h", "--help"],
     ),
+    ("sessions archive", &[], &["--hub", "-h", "--help"]),
     (
         "sessions delete",
         &[],

@@ -383,6 +383,54 @@ fn home_with_live_and_exited_rows() {
 }
 
 #[test]
+fn home_with_an_archived_session_shows_only_ordinary_rows() {
+    let mut app = home(80, 24);
+    // The hub's store mixes ordinary sessions with two archived ones,
+    // "filed work" (exited) and "settled crash" (crashed): the answers
+    // below are what its default queries return for that store, with
+    // the archived pair withheld.
+    let outgoing: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    for line in &outgoing {
+        let args = &line["args"];
+        assert!(
+            args.is_null() || args.get("archived").is_none(),
+            "home asks default queries: {line}"
+        );
+    }
+    let recent = outgoing
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "tidy docs", idle()));
+    app.on_line(accepted(
+        recent,
+        serde_json::json!({"sessions": [
+            recent_row("s_cccccccccccccccc", "old work", "exited"),
+            recent_row("s_dddddddddddddddd", "dead work", "crashed"),
+        ]}),
+    ));
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("fix the parser"), "{frame}");
+    assert!(frame.contains("old work"), "{frame}");
+    assert!(frame.contains("dead work"), "{frame}");
+    // The count derives from the scoped `recent` total (`docs/tui.md`, "The
+    // session list": each project's "exited · N" counts from that `total`).
+    assert!(frame.contains("exited · 2"), "{frame}");
+    assert!(!frame.contains("filed work"), "{frame}");
+    assert!(!frame.contains("settled crash"), "{frame}");
+    insta::assert_snapshot!(
+        "home_with_an_archived_session_shows_only_ordinary_rows",
+        frame
+    );
+}
+
+#[test]
 fn a_section_with_no_workspace_draws_no_plus_target() {
     let mut app = home(80, 24);
     let outgoing: Vec<serde_json::Value> = app

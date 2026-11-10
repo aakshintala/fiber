@@ -286,6 +286,21 @@ pub(crate) fn shows_row(screen: &Grid, expected: &str) -> bool {
     screen.rows.iter().any(|row| row.trim() == expected)
 }
 
+/// Whether the `ctx` segment shows a drawn size: the nearest row
+/// carrying `ctx` has text after `ctx` with no em-dash and an ASCII
+/// digit. Only the text after `ctx` counts, so a digit in the working
+/// directory is not a size. No job row is required: journey grids
+/// never carry one.
+pub(crate) fn ctx_size_drawn(screen: &Grid) -> bool {
+    let Some(row) = screen.rows.iter().rfind(|row| row.contains("ctx")) else {
+        return false;
+    };
+    let Some((_, after)) = row.split_once("ctx") else {
+        return false;
+    };
+    !after.contains('—') && after.chars().any(|c| c.is_ascii_digit())
+}
+
 /// Clicks the `✕` on the grid's `cache_rebuild` notice row: an SGR press
 /// then its release on the same cell. The notice fades only after ten
 /// seconds of real time, so a journey dismisses it instead.

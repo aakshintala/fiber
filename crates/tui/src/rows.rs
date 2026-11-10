@@ -14,6 +14,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::Target;
+use crate::ext::cache::ClickKey;
 use crate::ext::spans::FittedLine;
 use crate::ext::{Bound, Input, RawSpan};
 use crate::surface::{Edges, edge_row};
@@ -47,6 +48,11 @@ pub(crate) struct RowText {
     /// The links drawn on the row: each one's cells in the line and its
     /// destination (`docs/tui.md`, "Links": links are handled on click).
     pub(crate) links: Vec<(Range<u16>, String)>,
+    /// The click ranges drawn on the row, each with its interned key
+    /// (`docs/tui.md`, "Input and focus"): a click on one goes to the
+    /// slot's handler, and one the handler declines goes to the target
+    /// under it.
+    pub(crate) clicks: Vec<(Range<u16>, ClickKey)>,
     /// The collapsible sections the row is inside, outermost first: what
     /// a search draw opens, and what a match names (`docs/tui.md`,
     /// "Search").
@@ -69,6 +75,9 @@ impl RowText {
             tail: 0,
             decoration: false,
             links: Vec::new(),
+            // A plain row draws no click target until a replacement
+            // lends it one.
+            clicks: Vec::new(),
             scopes: Vec::new(),
             spin: None,
             // A still row draws no animated item until an animated
@@ -241,15 +250,17 @@ impl Rows {
     }
 
     /// Adds a fitted replacement line as its own row: the line's cells
-    /// with its links, the pad count in the row text's tail, and
-    /// `target`. The pad is decoration, never text. The line's animated
-    /// tag rides along, so the paint pass marks the item visible.
+    /// with its links and click ranges, the pad count in the row text's
+    /// tail, and `target`. The pad is decoration, never text. The
+    /// line's animated tag rides along, so the paint pass marks the item
+    /// visible.
     pub(crate) fn push_fitted(&mut self, line: &FittedLine, target: Option<Target>) {
         self.push_text(
             (line.line.clone(), target),
             RowText {
                 tail: line.pad,
                 links: line.links.clone(),
+                clicks: line.clicks.clone(),
                 anim: line.anim.clone(),
                 ..RowText::plain()
             },
@@ -374,6 +385,20 @@ impl Rows {
                             let from = range.start.max(start);
                             let to_cell = range.end.min(end);
                             (from < to_cell).then(|| (from - start..to_cell - start, to.clone()))
+                        })
+                        .collect(),
+                    // A split intersects and rebases click ranges
+                    // exactly as links: a piece keeps only the cells it
+                    // draws, in its own coordinates.
+                    clicks: text
+                        .clicks
+                        .iter()
+                        .filter_map(|(range, key)| {
+                            let start = u16::try_from(start_cell).unwrap_or(u16::MAX);
+                            let end = u16::try_from(end_cell).unwrap_or(u16::MAX);
+                            let from = range.start.max(start);
+                            let to_cell = range.end.min(end);
+                            (from < to_cell).then(|| (from - start..to_cell - start, *key))
                         })
                         .collect(),
                     scopes: text.scopes.clone(),
@@ -769,6 +794,10 @@ fn prefix_row(line: &mut Line<'static>, text: &mut RowText, pad: u16) {
         .insert(0, Span::raw(" ".repeat(usize::from(pad))));
     text.skip = text.skip.saturating_add(pad);
     for (range, _) in &mut text.links {
+        range.start = range.start.saturating_add(pad);
+        range.end = range.end.saturating_add(pad);
+    }
+    for (range, _) in &mut text.clicks {
         range.start = range.start.saturating_add(pad);
         range.end = range.end.saturating_add(pad);
     }

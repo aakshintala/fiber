@@ -1834,6 +1834,234 @@ fn a_person_owned_binding_stays_dormant_with_one_notice() {
     assert!(renderer.take_pending().is_empty());
 }
 
+/// A slot named `slot` whose click handler is `body`, so adapter tests
+/// draw no fixture beyond the click seam.
+fn clickable(slot: &str, body: &str) -> String {
+    format!(
+        "fiber.slot('{slot}', {{ timeout = 100, render = function() return {{}} end, \
+         on_click = {{ timeout = 100, run = function(input) {body} end }} }})"
+    )
+}
+
+/// A `notice` slot whose click handler is `body`.
+fn clickable_notice(body: &str) -> String {
+    clickable("notice", body)
+}
+
+#[test]
+fn click_dispatch() {
+    let (_dir, loader) = keyed_loader(&[("send", json!("ctrl+q"))]);
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&format!(
+            "{}\n fiber.key('ctrl+q', {{ timeout = 100, run = function() return true end }})",
+            clickable_notice("if input.click == 'badge' then return true end return false")
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    // The person-owned key binding reports once at load; the click
+    // handler registers untouched beside it.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "extension_failed");
+    // A handled id stops dispatch; an unhandled id falls through to the
+    // terminal with no notice.
+    assert_eq!(
+        renderer.on_click(&ctx(None), "notice", "badge"),
+        KeyOutcome::Handled
+    );
+    assert_eq!(
+        renderer.on_click(&ctx(None), "notice", "other"),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+    // A click never consults the person's keys: the dormant binding stays
+    // silent and unrun.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+q", true),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn click_error_notice_once() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&clickable("notice", "error('boom')")),
+    );
+    // A second slot keeps its own winner, so the wrong shape dispatches
+    // too instead of suppressing on a shared slot.
+    package(&loader, "b", None, Some(&clickable("home", "return 5")));
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    for _ in 0..2 {
+        // `docs/tui.md`, "When an extension fails": an erroring or
+        // wrong-shaped click handler counts as not having handled it.
+        assert_eq!(
+            renderer.on_click(&ctx(None), "notice", "badge"),
+            KeyOutcome::NotHandled
+        );
+        assert_eq!(
+            renderer.on_click(&ctx(None), "home", "badge"),
+            KeyOutcome::NotHandled
+        );
+    }
+    // One hook_failed notice per extension and slot until /reload
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension, the slot
+    // and the Lua error, once for each extension and slot until `/reload`; a key or click
+    // handler that errors counts as not having handled the input).
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 2, "{pending:?}");
+    for notice in &pending {
+        assert_eq!(notice.0, "hook_failed");
+    }
+    assert!(
+        pending
+            .iter()
+            .any(|notice| notice.1.contains("extension a"))
+    );
+    assert!(
+        pending
+            .iter()
+            .any(|notice| notice.1.contains("extension b"))
+    );
+    // A hook failure leaves the VM on and deduplicated: a later failing
+    // click still falls through with no new notice.
+    assert_eq!(
+        renderer.on_click(&ctx(None), "notice", "badge"),
+        KeyOutcome::NotHandled
+    );
+    assert_eq!(
+        renderer.on_click(&ctx(None), "home", "badge"),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn click_timeout_off() {
+    let dir = fakes::TempDir::new("fiber-tui-click-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let origin = FakeClock::new();
+    let clock = std::sync::Arc::new(JumpClock {
+        origin: origin.now(),
+        step: std::time::Duration::from_millis(200),
+        calls: std::sync::atomic::AtomicU64::new(0),
+    });
+    let loader = Loader::new(sources, clock.clone());
+    package(
+        &loader,
+        "slow",
+        None,
+        Some(&clickable_notice("return true")),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // The handler spans two clock reads, so it is already past its
+    // 100 ms deadline when it returns: typed failure, switched off.
+    assert_eq!(
+        renderer.on_click(&ctx(None), "notice", "badge"),
+        KeyOutcome::NotHandled
+    );
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": a click handler that passes its timeout switches the extension off until `/reload`, with one `extension_failed` notice.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_failed");
+    assert!(pending[0].1.contains("slow"), "{pending:?}");
+    // Off until reload: selection drops the VM, and a later click stays
+    // silent with no second notice.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "notice"),
+        SlotSelection::Absent
+    );
+    assert_eq!(
+        renderer.on_click(&ctx(None), "notice", "badge"),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn click_inert_and_conflict() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "ranged",
+        Some(json!({"min":"v1.0.0"})),
+        Some(&clickable_notice("return true")),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // An inert session keeps the built-in: the handler would answer
+    // handled, so not-handled proves it never ran.
+    assert_eq!(
+        renderer.on_click(&ctx(Some(vec![])), "notice", "badge"),
+        KeyOutcome::NotHandled
+    );
+    assert_eq!(
+        renderer.on_click(&ctx(Some(vec![("ranged", "v1.0.0")])), "notice", "badge"),
+        KeyOutcome::Handled
+    );
+    package(
+        &loader,
+        "rival",
+        None,
+        Some(&clickable_notice("return true")),
+    );
+    let (renderer, _) = loader.load();
+    // Both contend once the ranged half loads: neither handler runs.
+    let loaded = ctx(Some(vec![("ranged", "v1.0.0")]));
+    for _ in 0..2 {
+        // `docs/tui.md`, "When two extensions want one slot": two
+        // extensions drawing one slot suppress, and neither handler runs.
+        assert_eq!(
+            renderer.on_click(&loaded, "notice", "badge"),
+            KeyOutcome::NotHandled
+        );
+    }
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When two extensions want one slot": the notice comes once for each slot and set of contenders until `/reload`.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "command_conflict");
+}
+
+#[test]
+fn click_home_no_session() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&clickable_notice(
+            "return input.session_id == nil and input.click == 'badge'",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // Home has no session: the handler still runs, with no session_id key.
+    let home = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    assert_eq!(
+        renderer.on_click(&home, "notice", "badge"),
+        KeyOutcome::Handled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
 #[test]
 fn two_extensions_binding_one_key_suppress_with_one_conflict() {
     let (_dir, loader) = fixture();
