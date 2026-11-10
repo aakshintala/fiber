@@ -10,8 +10,8 @@ use crate::home::{QuitChoice, Spot, State};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use contract::ErrorCode;
-use contract::{CommandId, SessionId};
 use contract::commands::{CloseArgs, Command, SubscribeLevel};
+use contract::{CommandId, SessionId};
 
 impl App {
     /// Quits, asking first while sessions work: with no session working
@@ -307,10 +307,7 @@ impl App {
         }
         let (lines, pairs) = self.close_lines(&working);
         for (session, id) in pairs {
-            self.home
-                .questions
-                .closing
-                .push((session, id.0.clone()));
+            self.home.questions.closing.push((session, id.0.clone()));
             self.outbox.wait(&id.0, super::super::super::Waiting::Close);
         }
         Effect::ExitTracked(lines)
@@ -340,8 +337,7 @@ impl App {
                 .questions
                 .asks
                 .insert(id.0.clone(), Ask::Stop(session));
-            self.outbox
-                .wait(&id.0, super::super::super::Waiting::Stop);
+            self.outbox.wait(&id.0, super::super::super::Waiting::Stop);
         }
         self.close_prompt();
         self.draft.clear();
@@ -369,11 +365,7 @@ impl App {
             }
             let id = CommandId(support::mint("c_"));
             lines.push(Sent {
-                line: session_line(
-                    &id,
-                    session,
-                    Command::Close(CloseArgs { now: true }),
-                ),
+                line: session_line(&id, session, Command::Close(CloseArgs { now: true })),
                 id: id.clone(),
             });
             pairs.push((session.clone(), id));

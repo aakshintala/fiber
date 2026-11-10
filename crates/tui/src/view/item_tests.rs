@@ -168,7 +168,6 @@ fn opened(app: &mut App) {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
@@ -252,7 +251,6 @@ fn open_job(app: &mut App, job: &str) {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
@@ -321,14 +319,12 @@ fn open_item(app: &mut App) {
                 }
             }
         }
-        crate::app::Effect::SendTracked(_)
-        | crate::app::Effect::None => {}
+        crate::app::Effect::SendTracked(_) | crate::app::Effect::None => {}
         crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
@@ -654,7 +650,6 @@ fn clicking_stop_sends_job_stop_to_the_parent() {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
@@ -716,7 +711,6 @@ fn the_stop_target_is_reached_from_the_keyboard() {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
@@ -883,7 +877,6 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
         | crate::app::Effect::FindPause { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
@@ -1678,7 +1671,6 @@ fn click_open(app: &mut App) -> String {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)

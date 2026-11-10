@@ -371,8 +371,21 @@ fn write(app: &mut App, lines: Vec<String>) -> Vec<String> {
 /// What `act` sends, written.
 fn sent(app: &mut App, act: impl FnOnce(&mut App) -> Effect) -> Vec<String> {
     let effect = act(app);
-    let Effect::Send(lines) = effect else {
-        panic!("expected lines to send, got {effect:?}");
+    let lines = match effect {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("expected lines to send"),
     };
     write(app, lines)
 }

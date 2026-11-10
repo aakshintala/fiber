@@ -70,7 +70,11 @@ fn one_line(effect: Effect) -> String {
         }
         Effect::SendTracked(sents) => {
             assert_eq!(sents.len(), 1);
-            sents.into_iter().next().map(|sent| sent.line).unwrap_or_default()
+            sents
+                .into_iter()
+                .next()
+                .map(|sent| sent.line)
+                .unwrap_or_default()
         }
         Effect::None
         | Effect::Quit
@@ -80,7 +84,6 @@ fn one_line(effect: Effect) -> String {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -246,7 +249,6 @@ fn esc_busy_sends_cancel() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -508,7 +510,6 @@ fn rejected_cancel_shows_nothing() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)

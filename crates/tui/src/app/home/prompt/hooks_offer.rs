@@ -22,9 +22,9 @@ use crate::configure::ConfigureError;
 use crate::home::HooksChoice;
 use crate::install_worker::{HooksInstall, HooksJob, HooksQuery};
 use crate::keys::Key;
+use contract::CommandId;
 use contract::ErrorCode;
 use contract::commands::hub::{HubCommand, Start};
-use contract::CommandId;
 
 /// The refusal that opens the offer: the hub's gate for declared
 /// blocking hooks with no `hooks` extension to run them. Any other
@@ -418,12 +418,10 @@ impl App {
                         command_id: sent.id.0.clone(),
                     };
                 }
-                match self.outbox.send(
-                    sent.id.0.clone(),
-                    Kind::Start,
-                    draft,
-                    sent.line.clone(),
-                ) {
+                match self
+                    .outbox
+                    .send(sent.id.0.clone(), Kind::Start, draft, sent.line.clone())
+                {
                     // The retry cruises the fold with its id paired,
                     // like every resent start.
                     Some(_) => {
@@ -515,11 +513,14 @@ impl App {
             for ch in text.chars() {
                 self.on_key(crate::keys::Key::Char(ch), now);
             }
-            if !matches!(self.on_key(crate::keys::Key::Enter, now), Effect::Send(_)) {
+            if !matches!(
+                self.on_key(crate::keys::Key::Enter, now),
+                Effect::Send(_) | Effect::SendTracked(_)
+            ) {
                 return None;
             }
         } else if !self.outbox.waiting_any(&crate::app::Waiting::ClearStart)
-            && !matches!(self.clear(), Effect::Send(_))
+            && !matches!(self.clear(), Effect::Send(_) | Effect::SendTracked(_))
         {
             return None;
         }

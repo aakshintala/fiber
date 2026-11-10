@@ -216,7 +216,6 @@ fn sent(effect: Effect) -> Vec<String> {
         Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
@@ -374,7 +373,6 @@ fn enter_on_the_focused_image_opens_it() {
         Some(
             Effect::None
             | Effect::Quit
-            | Effect::Exit(_)
             | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::ReadImage(_)
@@ -452,7 +450,7 @@ fn a_stale_viewer_failure_does_not_refuse() {
     let generation = app.images.generation;
     app.image_viewed(1, "shot.png", generation + 1, Err("boom".to_owned()));
     assert_eq!(app.notice(), None);
-    assert!(matches!(app.view_image(1), Effect::Send(_)));
+    assert!(matches!(app.view_image(1), Effect::SendTracked(_)));
 }
 
 #[test]

@@ -734,7 +734,7 @@ fn the_quit_question_takes_keys_over_the_picker() {
     // `c` closes them; with the hub up it sends the closes, then quits.
     assert!(matches!(
         quitting().on_key(Key::Char('c'), now()),
-        Effect::Exit(_)
+        Effect::ExitTracked(_)
     ));
     // Esc stays, keeping the picker open with its selection.
     let mut app = quitting();
@@ -2124,7 +2124,18 @@ fn started(effect: Effect) -> serde_json::Value {
     let lines = match effect {
         Effect::Send(lines) => lines,
         Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
-        _ => panic!("Enter on home sends the start, got {effect:?}"),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter on home sends the start"),
     };
     let start = lines
         .iter()
@@ -2382,7 +2393,18 @@ fn the_start_model_clears_once_start_is_accepted() {
     let lines = match app.on_key(Key::Enter, now()) {
         Effect::Send(lines) => lines,
         Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
-        effect => panic!("Enter on home sends the start, got {effect:?}"),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter on home sends the start"),
     };
     let id = lines
         .iter()
@@ -5633,4 +5655,27 @@ fn a_name_click_in_a_settings_picker_saves_the_reference_to_the_row() {
     );
     assert!(!app.model_picker_open());
     assert!(app.config_view_open());
+}
+
+#[test]
+fn start_writes_the_hand_built_wire_bytes() {
+    use crate::app::hub_line;
+    use contract::CommandId;
+    use contract::commands::hub::{HubCommand, Start};
+    let line = hub_line(
+        &CommandId("c_1".to_owned()),
+        HubCommand::Start(Start {
+            workspace: "/w".to_owned(),
+            model: None,
+            overrides: None,
+            worktree: None,
+            continues: None,
+            supervised: None,
+            content: None,
+        }),
+    );
+    assert_eq!(
+        line,
+        r#"{"args":{"workspace":"/w"},"command":"start","id":"c_1"}"#
+    );
 }

@@ -851,7 +851,12 @@ impl App {
         let session = row.id.clone();
         let id = CommandId(support::mint("c_"));
         let sent = Sent {
-            line: hub_line(&id, HubCommand::Dismiss(Dismiss { session: session.clone() })),
+            line: hub_line(
+                &id,
+                HubCommand::Dismiss(Dismiss {
+                    session: session.clone(),
+                }),
+            ),
             id: id.clone(),
         };
         self.outbox
@@ -965,7 +970,6 @@ fn sent(effect: Effect) -> Vec<String> {
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::OpenFile(_) => Vec::new(),
     }

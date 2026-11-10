@@ -291,7 +291,6 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
         | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)

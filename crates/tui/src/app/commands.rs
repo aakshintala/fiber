@@ -7,12 +7,12 @@ use std::time::Instant;
 
 use contract::ErrorCode;
 use contract::commands::hub::HubCommand;
-use contract::{CommandId, SessionId};
 use contract::commands::{
     AddDirectoryArgs, ChangeWorkspaceArgs, CloseArgs, Command, Compact, ContentArgs, ImportArgs,
     Name, RunCommand, SandboxArgs,
 };
 use contract::events::CommandAccepted;
+use contract::{CommandId, SessionId};
 
 use super::{App, Effect, Kind, Link, Phase, Sent, Surface, hub_line, session_line};
 use crate::editor::{OpenFile, Target};
@@ -1174,10 +1174,12 @@ impl App {
                     command_id: sent.id.0.clone(),
                 };
                 let draft = std::mem::take(&mut self.draft);
-                return match self
-                    .outbox
-                    .send(sent.id.0.clone(), Kind::Start, draft, sent.line.clone())
-                {
+                return match self.outbox.send(
+                    sent.id.0.clone(),
+                    Kind::Start,
+                    draft,
+                    sent.line.clone(),
+                ) {
                     Some(_) => Effect::SendTracked(vec![sent]),
                     None => Effect::None,
                 };

@@ -1742,7 +1742,6 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
         Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }

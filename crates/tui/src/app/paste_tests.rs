@@ -621,7 +621,6 @@ fn sent_id(effect: Effect) -> String {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)

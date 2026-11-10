@@ -364,7 +364,6 @@ fn open_first(app: &mut App) -> Vec<Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -593,7 +592,6 @@ fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -663,7 +661,6 @@ fn a_job_view_draws_no_fallback() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)

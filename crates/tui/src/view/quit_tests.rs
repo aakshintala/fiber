@@ -237,19 +237,6 @@ fn a_click_on_a_choice_does_what_its_key_does() {
 /// sessions and args agree.
 fn stripped(effect: &Effect) -> Effect {
     match effect {
-        Effect::Exit(lines) => Effect::Exit(
-            lines
-                .iter()
-                .map(|line| {
-                    let mut line: serde_json::Value =
-                        serde_json::from_str(line).unwrap_or_default();
-                    if let Some(object) = line.as_object_mut() {
-                        object.remove("id");
-                    }
-                    line.to_string()
-                })
-                .collect(),
-        ),
         Effect::ExitTracked(sents) => Effect::ExitTracked(
             sents
                 .iter()

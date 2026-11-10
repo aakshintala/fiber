@@ -256,10 +256,22 @@ fn deletes(lines: &[Value]) -> Vec<Value> {
 /// Confirms the open question, returning the raw lines going out.
 fn confirm(app: &mut App) -> Vec<String> {
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter confirms");
-    };
-    lines
+    match app.on_key(Key::Enter, now) {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter confirms"),
+    }
 }
 
 /// Answers the discovery for `sessions` held by `held`, and confirms.

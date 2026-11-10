@@ -125,7 +125,6 @@ fn sent(effect: Effect) -> Vec<Value> {
             })
             .collect(),
         Effect::None
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)

@@ -142,7 +142,6 @@ fn sent(effect: Effect) -> Vec<Value> {
             .collect(),
         Effect::None => Vec::new(),
         Effect::Quit
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
@@ -1010,7 +1009,6 @@ fn type_query(app: &mut App, query: &str) {
             | Effect::Send(_)
             | Effect::SendTracked(_)
             | Effect::Quit
-            | Effect::Exit(_)
             | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::Search { .. }

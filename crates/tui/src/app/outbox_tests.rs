@@ -420,7 +420,7 @@ fn enter_when_up_sends_the_start() {
     assert_eq!(app.outbox.link, Link::Up);
     type_text(&mut app, "go");
     let effect = app.on_key(crate::keys::Key::Enter, now());
-    assert!(matches!(effect, Effect::Send(_)), "{effect:?}");
+    assert!(matches!(effect, Effect::SendTracked(_)), "{effect:?}");
 }
 
 #[test]
@@ -854,16 +854,13 @@ fn a_delegate_steer_send_registers_steer() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(crate::keys::Key::Enter, now()) {
         Effect::Send(lines) => commands(lines),
-        Effect::SendTracked(sents) => commands(
-            sents.into_iter().map(|sent| sent.line).collect(),
-        ),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)

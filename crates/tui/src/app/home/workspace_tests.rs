@@ -133,7 +133,6 @@ fn directories_of(effect: &Effect) -> Vec<(String, String)> {
         ),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
@@ -400,10 +399,7 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
             chips(&app).iter().any(|chip| chip.contains("worktree")),
             git
         );
-        assert_eq!(
-            app.start_args().unwrap().workspace,
-            "/sentinel/launch-dir"
-        );
+        assert_eq!(app.start_args().unwrap().workspace, "/sentinel/launch-dir");
     }
 }
 
@@ -520,11 +516,12 @@ fn enter_on_a_completion_chooses_it_for_the_next_start() {
     for ch in "hi".chars() {
         key(&mut app, Key::Char(ch));
     }
-    let Effect::Send(lines) = key(&mut app, Key::Enter) else {
+    let Effect::SendTracked(sents) = key(&mut app, Key::Enter) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(lines.len(), 1);
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    assert_eq!(sents.len(), 1);
+    let line: Value =
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/a1");
 }
@@ -1301,6 +1298,15 @@ fn an_empty_choice_clears_the_pick_and_enter_reopens_the_picker() {
     // (`docs/tui.md`, "Home") instead of starting.
     key(&mut app, Key::Enter);
     assert!(picker_open(&app));
+}
+
+#[test]
+fn start_args_is_none_without_a_workspace() {
+    // Neither the picker nor the launch names a workspace: no `start`
+    // goes out, keeping the draft as the link-down path does.
+    let mut app = App::new(None);
+    app.set_home(Launch::default());
+    assert_eq!(app.start_args(), None);
 }
 
 /// With no local workspace nothing reads the working directory: the

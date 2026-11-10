@@ -17,10 +17,10 @@ use serde_json::Value;
 use super::commands::{Completions, Rows};
 use super::overlay::Overlay;
 use super::{App, Effect, Sent, hub_line};
-use contract::commands::hub::{HubCommand, PromptHistory};
-use contract::CommandId;
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
+use contract::CommandId;
+use contract::commands::hub::{HubCommand, PromptHistory};
 
 #[cfg(debug_assertions)]
 std::thread_local! {

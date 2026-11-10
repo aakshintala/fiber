@@ -1478,8 +1478,7 @@ impl App {
         Some(Start {
             workspace,
             model: None,
-            overrides: (!self.launch_overrides.is_empty())
-                .then(|| self.launch_overrides.clone()),
+            overrides: (!self.launch_overrides.is_empty()).then(|| self.launch_overrides.clone()),
             worktree: (home.chooser.worktree() && home.in_git()).then_some(true),
             continues: None,
             supervised: None,

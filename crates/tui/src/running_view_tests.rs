@@ -140,7 +140,6 @@ fn opened(app: &mut App) {
             | crate::app::Effect::FindPause { .. }
             | crate::app::Effect::Search { .. }
             | crate::app::Effect::Editor { .. }
-            | crate::app::Effect::Exit(_)
             | crate::app::Effect::ExitTracked(_)
             | crate::app::Effect::Copy(_)
             | crate::app::Effect::OpenLink(_)

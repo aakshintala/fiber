@@ -106,7 +106,6 @@ fn click(lp: &mut Loop<TestBackend>) -> Vec<String> {
         Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)

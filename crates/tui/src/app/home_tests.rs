@@ -720,10 +720,10 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    let start = commands(lines);
+    let start = commands(sents.into_iter().map(|sent| sent.line).collect());
     let id = start[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("start id"));
@@ -892,12 +892,12 @@ fn start_names_the_launch_workspace() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(lines.len(), 1);
+    assert_eq!(sents.len(), 1);
     let line: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/w");
     assert!(line["args"].get("content").is_none());
@@ -957,7 +957,6 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -1138,9 +1137,10 @@ fn accept_summary(app: &mut App, session: &str, ack: &str) {
 /// Starts a session from the draft and accepts the start for `session`:
 /// the app attached, its `full` subscribe in flight.
 fn start_session(app: &mut App, session: &str) -> Vec<Value> {
-    let Effect::Send(lines) = enter_text(app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     let out: Vec<Value> = app
@@ -1442,7 +1442,6 @@ fn a_click_on_a_row_opens_it() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -2883,9 +2882,10 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
     assert_eq!(app.focused(), None, "the entry bar has focus");
     assert!(chips(&app).contains(&"[ ] new worktree".to_owned()));
 
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start = commands(lines)[0].clone();
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/other");
@@ -2903,9 +2903,10 @@ fn start_names_the_chosen_workspace() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
@@ -3307,9 +3308,10 @@ fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
 fn a_rejected_start_sets_the_blocker_lines() {
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     let message = "No provider key.\nRun fiber login to fix it.";
@@ -3354,9 +3356,10 @@ fn a_rejected_prompt_sets_none() {
 fn the_next_start_clears_them() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     start_rejected(
         &mut app,
@@ -3364,7 +3367,7 @@ fn the_next_start_clears_them() {
         "No provider key.",
     );
     assert_eq!(blockers(&app), ["No provider key."]);
-    let Effect::Send(_) = enter_text(&mut app, "again") else {
+    let Effect::SendTracked(_) = enter_text(&mut app, "again") else {
         panic!("Enter tries again");
     };
     assert!(blockers(&app).is_empty());
@@ -3374,9 +3377,10 @@ fn the_next_start_clears_them() {
 fn the_feed_arriving_keeps_them() {
     let mut app = home_with(80, 24, launch());
     let (feed, recent) = linked(&mut app);
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     start_rejected(
         &mut app,
@@ -3603,9 +3607,10 @@ fn enter_sends_delete_without_cascade() {
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "delete");
@@ -3687,9 +3692,10 @@ fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3882,9 +3888,10 @@ fn up_and_down_scroll_the_delete_question() {
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3926,9 +3933,10 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     ));
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3950,9 +3958,10 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3968,9 +3977,10 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
         s_1111111111111111, s_2222222222222222? It cannot be undone · Enter delete all · Esc keep"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "delete");
@@ -3994,9 +4004,10 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4016,9 +4027,10 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
         "Delete fix the parser (s_0123456789abcdef) and 1 session that continues it: \
         s_1111111111111111? It cannot be undone · Enter delete all · Esc keep"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let cascade = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("cascade id"))
@@ -4034,9 +4046,10 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
         s_1111111111111111, s_3333333333333333? It cannot be undone · Enter delete all · Esc keep"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(
         lines[0]["args"]["expect"],
@@ -4054,9 +4067,10 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4105,9 +4119,10 @@ fn a_refused_cascade_delete_notes_the_row() {
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4121,9 +4136,10 @@ fn a_refused_cascade_delete_notes_the_row() {
         ))
         .is_empty()
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let cascade = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("cascade id"))
@@ -4513,9 +4529,10 @@ fn an_accepted_delete_closes_its_question() {
     ));
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4544,9 +4561,10 @@ fn an_answer_for_another_delete_keeps_the_newer_question() {
     ));
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4576,9 +4594,10 @@ fn an_accepted_delete_asks_the_first_page_unscoped() {
     ));
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4836,7 +4855,10 @@ fn start_carries_the_terminal_layer_in_overrides() {
     assert_eq!(args.workspace, "/w");
     assert_eq!(
         args.overrides,
-        Some(vec!["model=acme/m".to_owned(), "retry.attempts=2".to_owned()])
+        Some(vec![
+            "model=acme/m".to_owned(),
+            "retry.attempts=2".to_owned()
+        ])
     );
     assert_eq!(args.worktree, None);
     // Beside the worktree switch: both keys ride.
@@ -4915,7 +4937,6 @@ fn stop(app: &mut App) -> Vec<Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
@@ -5609,9 +5630,10 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
     );
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let sent: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(sent)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -5666,9 +5688,10 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
         .to_owned();
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let sent: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(sent)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -6196,11 +6219,11 @@ fn resolve(app: &mut App, seam: &Fake) {
 /// a linked app.
 fn press(app: &mut App, key: Key) -> Value {
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(key, now) else {
+    let Effect::SendTracked(sents) = app.on_key(key, now) else {
         panic!("the key sends");
     };
-    assert_eq!(lines.len(), 1);
-    serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"))
+    assert_eq!(sents.len(), 1);
+    serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"))
 }
 
 /// A hub `command_accepted` carrying the offer's import `result`.
@@ -7531,12 +7554,9 @@ fn set_home_replaces_the_seeded_home() {
     app.on_line(hello());
     let asked = match app.on_key(Key::Up, crate::app::testkit::now()) {
         Effect::Send(lines) => commands(lines),
-        Effect::SendTracked(sents) => commands(
-            sents.into_iter().map(|sent| sent.line).collect(),
-        ),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
         | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
