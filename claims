@@ -453,3 +453,10 @@ providers/databricks/tests/models-tiers-fall-back-to-base.json	fiber-4257	plan	2
 providers/databricks/tests/models-twenty-pages-list.json	fiber-4257	plan	2026-11-10T07:08:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/databricks/tests/models-vision-input.json	fiber-4257	plan	2026-11-10T07:08:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/databricks/tests/models-zero-price-no-cost.json	fiber-4257	plan	2026-11-10T07:08:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+providers/databricks/tests/models-catalog-500-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-no-key-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-no-workspace-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-not-json-body-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-services-401-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-services-not-a-list-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-twentieth-page-with-a-token-raises.json	fiber-4257	plan	2026-11-10T07:16:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
