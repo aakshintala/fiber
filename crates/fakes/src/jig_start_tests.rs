@@ -206,6 +206,19 @@ fn a_source_from_the_same_second_as_the_binary_fails_closed() {
         stale, source,
         "a source no older than the binary fails closed"
     );
+    let failed = std::panic::catch_unwind(|| {
+        WarmedJig::warm(binary.clone(), &["--bogus"], 0);
+    })
+    .expect_err("a warm with an equal-mtime source fails before it spawns");
+    let message = panic_message(failed);
+    assert!(
+        message.contains("not older"),
+        "the failure says not older, covering the equal mtime: {message}"
+    );
+    assert!(
+        message.contains("cargo build --examples"),
+        "the failure names the rebuild command: {message}"
+    );
 }
 
 #[test]
@@ -225,6 +238,26 @@ fn a_dep_info_with_no_rule_fails_naming_the_dep_info() {
     let dep_info = dep_info_path(&binary);
     fs::write(&dep_info, "no colon here\n").unwrap();
     let stale = stale_evidence(&binary).expect("a malformed dep-info is stale");
+    assert_eq!(stale, dep_info, "the refusal names the dep-info file");
+}
+
+#[test]
+fn a_dep_info_with_no_target_fails_naming_the_dep_info() {
+    let dir = TempDir::new("fiber-jig-no-target");
+    let binary = stand_in(&dir, binary_mtime());
+    let dep_info = dep_info_path(&binary);
+    fs::write(&dep_info, ": \n").unwrap();
+    let stale = stale_evidence(&binary).expect("a dep-info rule with no target is stale");
+    assert_eq!(stale, dep_info, "the refusal names the dep-info file");
+}
+
+#[test]
+fn a_dep_info_with_no_dependencies_fails_naming_the_dep_info() {
+    let dir = TempDir::new("fiber-jig-no-deps");
+    let binary = stand_in(&dir, binary_mtime());
+    let dep_info = dep_info_path(&binary);
+    fs::write(&dep_info, format!("{}: \n", binary.display())).unwrap();
+    let stale = stale_evidence(&binary).expect("a dep-info rule with no dependencies is stale");
     assert_eq!(stale, dep_info, "the refusal names the dep-info file");
 }
 

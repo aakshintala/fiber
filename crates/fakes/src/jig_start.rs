@@ -65,7 +65,7 @@ impl WarmedJig {
 fn assert_jig_fresh(binary: &Path) {
     if let Some(stale) = stale_evidence(binary) {
         panic!(
-            "stale jig binary {}: {} is newer than the binary, missing, or unreadable; rebuild the examples with `cargo build --examples`",
+            "stale jig binary {}: {} is not older than the binary, missing, or unreadable; rebuild the examples with `cargo build --examples`",
             binary.display(),
             stale.display()
         );
@@ -122,8 +122,15 @@ fn dep_info_deps(text: &str) -> Option<Vec<String>> {
         .take_while(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let (_, deps) = rule.split_once(':')?;
-    Some(make_words(deps))
+    let (target, deps) = rule.split_once(':')?;
+    if target.trim().is_empty() {
+        return None;
+    }
+    let deps = make_words(deps);
+    if deps.is_empty() {
+        return None;
+    }
+    Some(deps)
 }
 
 /// Split the escaped dependency words in cargo's first makefile rule.
