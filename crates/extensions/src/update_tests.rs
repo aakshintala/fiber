@@ -1295,3 +1295,152 @@ fn an_unlisted_platform_stage_writes_no_line() {
         server.requests()
     );
 }
+
+/// The first-party extension the running binary does not know.
+const FUTURISTIC: &str = "github.com/aakshintala/fiber/extensions/futuristic";
+
+/// An installed first-party extension the running binary does not know is
+/// adopted from the archive: the archive's own manifest names the member,
+/// so the running binary trusts it and stages it under its short
+/// directory.
+#[test]
+fn stage_update_adopts_an_installed_extension_the_binary_does_not_know() {
+    let mut setup = Setup::new();
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
+    assert_eq!(names, [FUTURISTIC]);
+    staged.commit().unwrap();
+    let dir = setup.home().join("extensions/futuristic");
+    assert_eq!(
+        fs::read_to_string(dir.join("extension.json")).unwrap(),
+        manifest(FUTURISTIC, "0.2.0")
+    );
+    assert_eq!(setup.record("futuristic")["name"], FUTURISTIC);
+}
+
+/// An unknown first-party extension that is not installed stays absent:
+/// the update still succeeds and stages only what is installed.
+#[test]
+fn stage_update_leaves_an_unknown_first_party_extension_absent_when_not_installed() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
+    assert_eq!(names, ["github.com/acme/widget"]);
+    staged.commit().unwrap();
+    assert!(
+        !setup.home().join("extensions/futuristic").exists(),
+        "an extension that is not installed is not adopted"
+    );
+}
+
+/// An uninstalled unknown member whose manifest declares an incompatible
+/// API refuses with that manifest's error, not the layout refusal.
+#[test]
+fn stage_update_refuses_an_uninstalled_unknown_extension_with_a_bad_api() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let before = setup.installed_state();
+    let bad = serde_json::json!({
+        "name": FUTURISTIC,
+        "version": "0.2.0",
+        "fiber": "0.0.0",
+        "api": 99,
+    })
+    .to_string();
+    let server = serve(b"marker", b"new", &[("futuristic", &bad)], "[]");
+    let err = setup.stage_err(&server);
+    let Error::ApiVersion { name, .. } = &err else {
+        panic!("a bad API refuses as its own error: {err}");
+    };
+    assert_eq!(name, FUTURISTIC);
+    assert_eq!(setup.installed_state(), before);
+}
+
+/// An archive member that would take the directory of an installed
+/// third-party extension refuses before the first rename, naming that
+/// directory, and leaves both installs in place.
+#[test]
+fn an_update_that_would_replace_a_third_party_extension_refuses_before_any_rename() {
+    let mut setup = Setup::new();
+    // A third-party extension installed from a path, living at
+    // `extensions/futuristic/`.
+    let src = fakes::TempDir::new("fiber-4392-third-party");
+    fs::write(
+        src.path().join("extension.json"),
+        serde_json::json!({
+            "name": "futuristic",
+            "version": "1.0.0",
+            "fiber": "0.0.0",
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    plan(
+        &setup.home(),
+        &Request::Path(src.path().into()),
+        RELEASE,
+        &setup.origin(),
+        clock.as_ref(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The first-party extension of the same short, installed from git
+    // under its slugged directory.
+    setup.member(FUTURISTIC, "0.1.0");
+    setup.install(FUTURISTIC);
+    setup.tag_release();
+    let before = setup.installed_state();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[("futuristic", &manifest(FUTURISTIC, "0.2.0"))],
+        "[]",
+    );
+    let err = setup.stage_err(&server);
+    assert!(
+        err.to_string().contains("extensions/futuristic"),
+        "the refusal names the directory: {err}"
+    );
+    assert_eq!(setup.installed_state(), before);
+}

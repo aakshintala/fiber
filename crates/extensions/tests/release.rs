@@ -611,7 +611,59 @@ impl DebugLog for Lines {
     }
 }
 
-/// An observed install writes one `extension_release` line per download:
+/// An archive holding a first-party extension the running binary does not
+/// know installs it under its short directory: the archive's own manifest
+/// names the member, so the release can add one without the binary
+/// knowing its name.
+#[test]
+fn an_archive_naming_an_unknown_first_party_extension_installs_it() {
+    let futuristic = first_party("futuristic", "extensions");
+    let newprovider_manifest = first_party("newprovider", "providers");
+    let mut newprovider_data = provider();
+    newprovider_data["name"] = "newprovider".into();
+    let members = vec![
+        file("futuristic/extension.json", futuristic.to_string()),
+        file(
+            "newprovider/extension.json",
+            newprovider_manifest.to_string(),
+        ),
+        file(
+            "newprovider/providers/newprovider.json",
+            newprovider_data.to_string(),
+        ),
+    ];
+    let setup = Setup::new();
+    let home = setup.home();
+    let (result, _server) = install_release(&home, &Files::with_extensions(&members));
+    let names = result.unwrap();
+    assert_eq!(
+        names,
+        [
+            "github.com/aakshintala/fiber/extensions/futuristic",
+            "github.com/aakshintala/fiber/providers/newprovider",
+        ]
+    );
+    for (short, full) in [
+        (
+            "futuristic",
+            "github.com/aakshintala/fiber/extensions/futuristic",
+        ),
+        (
+            "newprovider",
+            "github.com/aakshintala/fiber/providers/newprovider",
+        ),
+    ] {
+        let dir = home.join("extensions").join(short);
+        let manifest: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+        assert_eq!(manifest["name"], full, "{short}");
+        let record: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(".fiber.json")).unwrap()).unwrap();
+        assert_eq!(record["name"], full, "{short}");
+    }
+}
+
+/// Every `http_request` line the observed release install writes, in order.
 /// the docs and extensions archives and their checksum files, each with
 /// the server's host, the download's path, status 200, and the served
 /// body count.
