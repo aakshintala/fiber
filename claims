@@ -296,3 +296,4 @@ xtask/tests/models_dev.rs	fiber-4459	plan	2026-11-10T15:18:16Z	Amoghs-MacBook-Pr
 docs/model-routing.md	fiber-4459	plan	2026-11-10T15:18:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/models.rs	fiber-4459	plan	2026-11-10T15:18:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/archive_tests.rs	fiber-4562	plan	2026-11-10T15:22:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/prompt_tests.rs	fiber-4234	plan	2026-11-10T15:39:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
