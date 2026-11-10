@@ -390,3 +390,5 @@ docs/extensions.md	fiber-4337	plan	2026-11-10T18:39:04Z	Amoghs-MacBook-Pro:/User
 docs/model-routing.md	fiber-4337	plan	2026-11-10T18:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4337	plan	2026-11-10T18:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/databricks/providers/databricks.lua	fiber-4337	plan	2026-11-10T18:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/home_view_tests.rs	fiber-4494	plan	2026-11-10T18:39:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__view__home__tests__home_after_forgot_drops_the_row.snap	fiber-4494	plan	2026-11-10T18:39:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
