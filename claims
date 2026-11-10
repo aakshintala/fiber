@@ -283,3 +283,5 @@ crates/config/src/keys_tests.rs	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacB
 docs/configuration.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/mockups/settings.html	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/examples/review_sweep.rs	fiber-4538	plan	2026-11-10T08:43:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/review_sweep.rs	fiber-4538	plan	2026-11-10T08:43:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
