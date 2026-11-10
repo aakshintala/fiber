@@ -406,7 +406,6 @@ crates/tui/src/view/quit_tests.rs	fiber-4029	plan	2026-11-10T03:25:24Z	Amoghs-Ma
 crates/tui/src/view/rail_tests.rs	fiber-4029	plan	2026-11-10T03:25:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/steering_queue_tests.rs	fiber-4029	plan	2026-11-10T03:25:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/doc-citations.allow	fiber-4029	plan	2026-11-10T03:25:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop.rs	fiber-4058	plan	2026-11-10T06:15:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/attach_fold.rs	fiber-4268	plan	2026-11-10T06:17:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop/attach_tests.rs	fiber-4268	plan	2026-11-10T06:17:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/release.rs	fiber-4392	plan	2026-11-10T06:19:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
