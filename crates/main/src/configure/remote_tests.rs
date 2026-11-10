@@ -2303,12 +2303,48 @@ fn seam_keepers_counts_only_keeper_or_gone() {
     fs::write(run.join("s_0000000000000001"), "stale").unwrap();
     // A live session answers the probe's subscribe.
     let _live = Served::live(&run.join("s_0000000000000002"));
-    // A keeper accepts, then closes: EOF before any line.
+    // A keeper accepts, then closes: EOF before any line. Its session
+    // log carries the keeper's lock, which is what publishes the id.
     let _keeper = Served::keeper(&run.join("s_0000000000000003"));
+    let keeper_dir = home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_0000000000000003");
+    fs::create_dir_all(&keeper_dir).unwrap();
+    fs::write(keeper_dir.join("session.lock"), "keeper 4242\n").unwrap();
     let seam = Seam::new(home.clone());
     assert_eq!(
         seam.keepers(&home, fakes::clock::FakeClock::new()),
         vec![contract::SessionId("s_0000000000000003".to_owned())]
+    );
+}
+
+#[test]
+fn seam_keepers_leaves_out_keeper_or_gone_without_a_keeper_lock() {
+    use hub::KeeperProbe;
+
+    // Keeper-or-gone sockets no keeper holds: one with no session log
+    // at all, one with a dead session's stale pid label. A session
+    // that died as the probe landed reads keeper-or-gone either way,
+    // and neither may publish.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let run = home.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _first = Served::keeper(&run.join("s_0000000000000001"));
+    let _second = Served::keeper(&run.join("s_0000000000000002"));
+    let stale_dir = home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_0000000000000002");
+    fs::create_dir_all(&stale_dir).unwrap();
+    fs::write(stale_dir.join("session.lock"), "4242\n").unwrap();
+    let seam = Seam::new(home.clone());
+    assert_eq!(
+        seam.keepers(&home, fakes::clock::FakeClock::new()),
+        Vec::<contract::SessionId>::new()
     );
 }
 

@@ -2127,14 +2127,15 @@ fn a_repeated_feed_on_a_stalled_subscriber_shuts_its_connection_and_drops_the_re
     assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
 }
 
-/// Asserts no line arrives within a beat: the scan published nothing.
+/// Asserts no line arrived: the scan published nothing. The caller
+/// signals scan completion first (`await_scanner`), so the queue is
+/// final; the read itself waits nothing (`docs/testing.md`, "Waits and
+/// timeouts"): one nonblocking read, then the blocking deadline back.
 fn assert_silent(sub: &mut Sub, what: &str) {
-    sub.read
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(50)))
-        .unwrap();
+    sub.read.get_mut().set_nonblocking(true).unwrap();
     let mut text = String::new();
     let read = sub.read.read_line(&mut text);
+    sub.read.get_mut().set_nonblocking(false).unwrap();
     sub.read.get_mut().set_read_timeout(Some(DEADLINE)).unwrap();
     assert!(
         read.is_err() || text.is_empty(),
@@ -2153,12 +2154,14 @@ fn the_snapshot_ends_with_the_probe_keeper_set() {
         .get_or_init(|| Arc::clone(&probe) as Arc<dyn crate::KeeperProbe>);
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
-    // Empty still snapshots: one keepers line, always, even empty.
+    // Empty still snapshots: one keepers line, always, even empty
+    // (`docs/events.md`, "Hub feed").
     let keepers = sub.next("the empty keepers line");
     assert_eq!(keepers["kind"], "keepers");
     assert_eq!(keepers["payload"], json!({"keepers": []}));
     // A scan publishes the new set, and a later subscriber snapshots
-    // it; an unchanged scan publishes nothing.
+    // it; an unchanged scan publishes nothing (`docs/events.md`,
+    // "Hub feed").
     probe.set(vec![SessionId(id(1)), SessionId(id(2))]);
     advance_to_scan(&feed, &clock);
     let published = sub.next("the published keepers line");
@@ -2170,6 +2173,7 @@ fn the_snapshot_ends_with_the_probe_keeper_set() {
         json!({"keepers": [id(1), id(2)]})
     );
     advance_to_scan(&feed, &clock);
+    await_scanner(&clock);
     assert_silent(&mut sub, "the unchanged scan");
     stop_within(&feed);
 }
@@ -2193,12 +2197,13 @@ fn a_scan_counts_only_confirmed_keepers_never_answer_excluded() {
     assert_eq!(snapshotted["kind"], "keepers");
     assert_eq!(snapshotted["payload"], json!({"keepers": []}));
     // The first scan publishes the probe's set; the held socket that
-    // never answers is not in it.
+    // never answers is not in it (`docs/events.md`, "Hub feed").
     let published = sub.next("the published keepers line");
     assert_eq!(published["kind"], "keepers");
     assert_eq!(published["payload"], json!({"keepers": [id(1)]}));
     // A later scan keeps the set: still no line for the held socket.
     advance_to_scan(&feed, &clock);
+    await_scanner(&clock);
     assert_silent(&mut sub, "the rescan");
     stop_within(&feed);
 }

@@ -339,7 +339,7 @@ fn stop_keeper_waits_out_a_silent_keeper_to_the_bound() {
     let id = SessionId(testkit::id(23));
     let listener = UnixListener::bind(temp.run(&id)).unwrap();
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (stream, _) = listener.accept().unwrap();
         // The stop line arrives first; then silence: the read below
         // would block until the keeper exits, which never comes.
         let mut line = String::new();
@@ -392,7 +392,7 @@ fn stop_keeper_confirms_an_overlong_read_without_waiting() {
         // it confirms without the bound moving. Tolerate the stop
         // closing mid-write: it answers as soon as it has read past the cap.
         let payload = vec![b'x'; support::framing::MAX_LINE + 8];
-        let _ = stream.write_all(&payload);
+        stream.write_all(&payload).unwrap_or(());
     });
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let end = temp.clock.origin() + KEEPERS_STOP_WITHIN;

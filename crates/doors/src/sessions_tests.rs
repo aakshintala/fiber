@@ -1671,7 +1671,7 @@ fn probe_marks_an_overlong_line_keeper_or_gone_without_waiting() {
         // of reading a close. Tolerate the probe closing mid-write: it
         // answers as soon as it has read past the cap.
         let payload = vec![b'x'; MAX_LINE + 8];
-        let _ = stream.write_all(&payload);
+        stream.write_all(&payload).unwrap_or(());
         thread::park();
     });
     let wall = Deadline::after(fakes::deadline::WAIT);

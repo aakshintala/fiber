@@ -168,7 +168,7 @@ pub(crate) struct KeepersOutcome {
 /// stop is requested.
 pub(crate) fn stop_keepers(hub: &Arc<Hub>, ids: &[SessionId]) -> KeepersOutcome {
     let end = hub.clock.now() + KEEPERS_STOP_WITHIN;
-    let shared = Arc::new(Mutex::new(KeeperFanout {
+    let shared = Arc::new(Mutex::new(Fanout {
         total: ids.len(),
         done: 0,
         outcomes: Vec::new(),
@@ -239,26 +239,6 @@ pub(crate) fn stop_keepers(hub: &Arc<Hub>, ids: &[SessionId]) -> KeepersOutcome 
     }
 }
 
-/// One named keeper's fan-out records: every worker records exactly
-/// once, so the serving thread's wait ends when `done` reaches `total`.
-#[derive(Default)]
-struct KeeperFanout {
-    total: usize,
-    done: usize,
-    outcomes: Vec<(String, KeeperOutcome)>,
-}
-
-impl KeeperFanout {
-    fn record(&mut self, id: String, outcome: KeeperOutcome) {
-        self.done += 1;
-        self.outcomes.push((id, outcome));
-    }
-
-    fn settled(&self) -> bool {
-        self.done >= self.total
-    }
-}
-
 /// What one named keeper's verify-and-stop found.
 enum KeeperOutcome {
     /// Its socket closed after the frozen stop was written.
@@ -271,19 +251,34 @@ enum KeeperOutcome {
     Unconfirmed,
 }
 
-/// Verifies one named keeper, then stops it: the subscribe-first
-/// verify, then the frozen stop for keeper-or-gone sockets. The
-/// exchange follows the sessions stop's: bounded connect, `summary`
-/// subscribe first on every connection, then the keeper's own stop
-/// leg. Every wait shares the loop deadline and ends on the stop.
-fn stop_one_verified(hub: &Hub, id: &SessionId, end: Instant) -> KeeperOutcome {
+/// What one bounded subscribe-first verify found.
+enum Verified {
+    /// Answered its subscribe: a live session, with the connection
+    /// the close leg continues on.
+    Live(UnixStream, BufReader<UnixStream>),
+    /// EOF without an answer: a keeper holding the crashed socket, or
+    /// a session gone mid-handshake. The stop leg tells them apart.
+    KeeperOrGone,
+    /// Refused or absent: already gone.
+    Gone,
+    /// Anything else short of an answer: still running, or gone past
+    /// the bound.
+    Unconfirmed,
+}
+
+/// Verifies one id with the sessions stop's opening exchange: bounded
+/// connect, `summary` subscribe first on every connection, then the
+/// read of its acknowledgement. (A refused or absent socket never
+/// reaches the read: it is gone at connect.) Every wait shares the
+/// loop deadline and ends on the stop.
+fn verify_one(hub: &Hub, id: &SessionId, end: Instant) -> Verified {
     let stream = match connect_session(hub, id, end) {
         Connected::Stream(stream) => stream,
-        Connected::Gone => return KeeperOutcome::Gone,
-        Connected::Unconfirmed => return KeeperOutcome::Unconfirmed,
+        Connected::Gone => return Verified::Gone,
+        Connected::Unconfirmed => return Verified::Unconfirmed,
     };
     let Ok(read) = stream.try_clone() else {
-        return KeeperOutcome::Unconfirmed;
+        return Verified::Unconfirmed;
     };
     let mut read = BufReader::new(read);
     let subscribe_id = support::mint("c_hub_stop_");
@@ -294,20 +289,31 @@ fn stop_one_verified(hub: &Hub, id: &SessionId, end: Instant) -> KeeperOutcome {
     });
     match write_line_bounded(&stream, &subscribe, hub, end) {
         Wrote::Done => {}
-        Wrote::Gone => return KeeperOutcome::Gone,
-        Wrote::Unconfirmed => return KeeperOutcome::Unconfirmed,
+        Wrote::Gone => return Verified::Gone,
+        Wrote::Unconfirmed => return Verified::Unconfirmed,
     }
     match read_ack(&mut read, &stream, hub, &subscribe_id, end) {
+        Ack::Accepted => Verified::Live(stream, read),
+        Ack::Rejected => Verified::Unconfirmed,
+        // EOF without an answer is a keeper holding the crashed
+        // socket, or a session gone mid-handshake: the stop leg tells
+        // them apart, as in the sessions stop.
+        Ack::Gone => Verified::KeeperOrGone,
+        Ack::Unconfirmed => Verified::Unconfirmed,
+    }
+}
+
+/// Verifies one named keeper, then stops it: the subscribe-first
+/// verify, then the frozen stop for keeper-or-gone sockets through the
+/// same transport the sessions stop uses.
+fn stop_one_verified(hub: &Hub, id: &SessionId, end: Instant) -> KeeperOutcome {
+    match verify_one(hub, id, end) {
         // A live session answers its subscribe: left running, never
         // stopped.
-        Ack::Accepted => return KeeperOutcome::Live,
-        Ack::Rejected => return KeeperOutcome::Unconfirmed,
-        // EOF without an answer is a keeper holding the crashed socket,
-        // or a session gone mid-handshake: the stop leg tells them
-        // apart, as in the sessions stop. (A refused or absent socket
-        // never reaches this read: it is gone at connect.)
-        Ack::Gone => {}
-        Ack::Unconfirmed => return KeeperOutcome::Unconfirmed,
+        Verified::Live(..) => return KeeperOutcome::Live,
+        Verified::KeeperOrGone => {}
+        Verified::Gone => return KeeperOutcome::Gone,
+        Verified::Unconfirmed => return KeeperOutcome::Unconfirmed,
     }
     match stop_keeper(hub, id, end) {
         SessionOutcome::KeeperConfirmed => KeeperOutcome::Confirmed,
@@ -462,17 +468,18 @@ fn fan_out(hub: &Arc<Hub>, ids: &[SessionId], end: Instant, tally: &mut Tally) {
     }
 }
 
-/// One fan-out's records: every worker records exactly once, so the
-/// serving thread's wait ends when `done` reaches `total`.
+/// One fan-out's records, over either stop's outcome: every worker
+/// records exactly once, so the serving thread's wait ends when
+/// `done` reaches `total`.
 #[derive(Default)]
-struct Fanout {
+struct Fanout<O> {
     total: usize,
     done: usize,
-    outcomes: Vec<(String, SessionOutcome)>,
+    outcomes: Vec<(String, O)>,
 }
 
-impl Fanout {
-    fn record(&mut self, id: String, outcome: SessionOutcome) {
+impl<O> Fanout<O> {
+    fn record(&mut self, id: String, outcome: O) {
         self.done += 1;
         self.outcomes.push((id, outcome));
     }
@@ -506,36 +513,15 @@ enum SessionOutcome {
 // the WouldBlock guard's only other input is unreachable.
 #[cfg_attr(false, mutants::skip)]
 fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
-    let stream = match connect_session(hub, id, end) {
-        Connected::Stream(stream) => stream,
-        Connected::Gone => return SessionOutcome::Gone,
-        Connected::Unconfirmed => return SessionOutcome::Unconfirmed,
+    let (stream, mut read) = match verify_one(hub, id, end) {
+        Verified::Live(stream, read) => (stream, read),
+        // EOF without an answer is a keeper holding the crashed
+        // socket, or a session gone mid-handshake: the keeper leg
+        // tells them apart.
+        Verified::KeeperOrGone => return stop_keeper(hub, id, end),
+        Verified::Gone => return SessionOutcome::Gone,
+        Verified::Unconfirmed => return SessionOutcome::Unconfirmed,
     };
-    let Ok(read) = stream.try_clone() else {
-        return SessionOutcome::Unconfirmed;
-    };
-    let mut read = BufReader::new(read);
-    let subscribe_id = support::mint("c_hub_stop_");
-    let subscribe = serde_json::json!({
-        "id": subscribe_id,
-        "command": "subscribe",
-        "args": { "level": "summary" },
-    });
-    match write_line_bounded(&stream, &subscribe, hub, end) {
-        Wrote::Done => {}
-        Wrote::Gone => return SessionOutcome::Gone,
-        Wrote::Unconfirmed => return SessionOutcome::Unconfirmed,
-    }
-    match read_ack(&mut read, &stream, hub, &subscribe_id, end) {
-        Ack::Accepted => {}
-        Ack::Rejected => return SessionOutcome::Unconfirmed,
-        // EOF without an answer is a keeper holding the crashed socket,
-        // or a session gone mid-handshake: the keeper leg tells them
-        // apart. (A refused or absent socket never reaches this read: it
-        // is gone at connect.)
-        Ack::Gone => return stop_keeper(hub, id, end),
-        Ack::Unconfirmed => return SessionOutcome::Unconfirmed,
-    }
     let close_id = support::mint("c_hub_stop_");
     let close = serde_json::json!({
         "id": close_id,
