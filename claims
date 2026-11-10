@@ -473,3 +473,8 @@ crates/loop/tests/fixtures/reviewer_consent/field-7-tkt-build-from-gate/events.j
 crates/tui/src/app/screen.rs	fiber-4444	plan	2026-11-10T00:20:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/screen_tests.rs	fiber-4444	plan	2026-11-10T00:20:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app.rs	fiber-3897	plan	2026-11-10T00:28:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
+crates/tui/src/app.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app_mouse.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/chrome.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/attach_fold.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/overlay_tests.rs	fiber-4444	plan	2026-11-10T00:41:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
