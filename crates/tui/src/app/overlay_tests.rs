@@ -2657,52 +2657,6 @@ fn a_turn_longer_than_one_answer_reads_until_its_start() {
     );
 }
 
-/// Temporary probe: which lone line kinds fold rows with no turn open.
-#[test]
-fn probe_lone_line_rows() {
-    let probe_app = app();
-    eprintln!(
-        "PROBE height80x24={} height60x12={}",
-        probe_app.conversation_height(),
-        {
-            let mut small = app();
-            small.set_size(60, 12);
-            small.conversation_height()
-        }
-    );
-    let probe = |name: &str, envelope: contract::Envelope| {
-        let mut fresh = probe_app.attached_screen().pages().fresh();
-        fresh.apply(&envelope);
-        eprintln!("PROBE {name}: total={}", fresh.index().total());
-    };
-    let envelope = |seq: u64, kind: &str, payload: serde_json::Value| {
-        let line = line(kind, seq, None, payload);
-        let Line::Session(envelope) = line else {
-            unreachable!()
-        };
-        envelope
-    };
-    probe(
-        "text",
-        envelope(0, "text_completed", json!({"text": "probe text"})),
-    );
-    probe(
-        "turn_started",
-        envelope(
-            1,
-            "turn_started",
-            json!({"input": [{"type": "message", "source": "driver",
-                "content": [{"type": "text", "text": "probe prompt"}]}]}),
-        ),
-    );
-    probe("session_started", envelope(2, "session_started", json!({})));
-    probe(
-        "assistant_message_started",
-        envelope(3, "assistant_message_started", json!({})),
-    );
-    probe("usage", envelope(4, "usage_recorded", json!({})));
-}
-
 /// Seeds the attached screen with one driver turn replying `text`, for
 /// the kept screen an ended install must preserve.
 fn seed_screen(app: &mut App, text: &str) -> usize {

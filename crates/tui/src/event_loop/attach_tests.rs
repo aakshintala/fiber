@@ -3368,7 +3368,7 @@ fn tail_open_prepared(
                                     json!({"lines": doors_window(&log, &command["args"])}),
                                 ));
                             }
-                            History::FailCount(message) if reads > 1 => {
+                            History::FailCount(message) if reads > 2 => {
                                 write(session_rejected(&id, message));
                             }
                             History::FailCount(_) => write(session_ack(
@@ -3792,16 +3792,6 @@ fn a_rejected_second_window_installs_nothing() {
         |app| crate::app::testkit::seed_after_launch(app, &seed),
     );
     assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
-    eprintln!(
-        "DUMP-A total={} rows={:?}",
-        open.lp.app.pages().index().total(),
-        open.lp
-            .app
-            .lines()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    );
     assert_eq!(
         open.lp.app.pages().index().total(),
         total,
@@ -3999,7 +3989,6 @@ fn a_rejected_count_folds_nothing() {
         .iter()
         .map(ToString::to_string)
         .collect();
-    eprintln!("DUMP-C rows={rows:?}");
     assert!(
         rows.iter().any(|row| row.contains("quokkas")),
         "the preview stays: {rows:?}"
@@ -4022,7 +4011,6 @@ fn a_rejected_count_folds_nothing() {
     );
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
-    eprintln!("DUMP-C frame={frame}");
     // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
     // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
     assert!(frame.contains("quokkas"), "{frame}");
