@@ -278,11 +278,6 @@ crates/loop/tests/resume.rs	fiber-4313	plan	2026-11-10T08:24:58Z	Amoghs-MacBook-
 crates/main/tests/delegation/delegates.rs	fiber-4313	plan	2026-11-10T08:24:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/compiled_in.rs	fiber-4536	plan	2026-11-10T08:34:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/compiled_in_tests.rs	fiber-4536	plan	2026-11-10T08:34:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/config/src/keys.rs	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/config/src/keys_tests.rs	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/configuration.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tui.md	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/mockups/settings.html	fiber-4526	plan	2026-11-10T08:38:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/examples/review_sweep.rs	fiber-4538	plan	2026-11-10T08:43:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/review_sweep.rs	fiber-4538	plan	2026-11-10T08:43:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4353	plan	2026-11-10T08:48:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -295,4 +290,3 @@ crates/tui/src/event_loop.rs	fiber-4268	plan	2026-11-10T09:07:37Z	Amoghs-MacBook
 crates/tui/src/app/overlay_tests.rs	fiber-4268	plan	2026-11-10T09:07:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/testkit.rs	fiber-4268	plan	2026-11-10T09:07:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4268	plan	2026-11-10T09:07:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/config_views_tests.rs	fiber-4526	plan	2026-11-10T09:30:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
