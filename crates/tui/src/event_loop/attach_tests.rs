@@ -2442,6 +2442,10 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
         let link = WireLink::new(Arc::clone(&wire), hand_tx);
         let count = Arc::clone(&link.count);
         let (mut lp, theirs, tx, rx) = opened();
+        // The demand the history answers is staged before the pass
+        // opens: paging waits while the pass runs (`docs/tui.md`,
+        // "History and paging"), so mid-pass pages are dropped.
+        demand_top(&mut lp);
         let last = session().len() + r - 1;
         lp.app.on_line(Line::Session(line(
             "command_accepted",
@@ -2490,14 +2494,6 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
         });
         Deadline::after(DEADLINE).recv_or_fail(&reached, "chunk one to wait");
         let mut keys = Vec::new();
-        for _ in 0..10 {
-            for input in super::to_the_top() {
-                let Input::Bytes(bytes) = input else {
-                    panic!("PageUp bytes");
-                };
-                keys.extend(bytes);
-            }
-        }
         keys.extend_from_slice(b"\x06fixture");
         tx.send(Input::Bytes(keys)).unwrap();
         tx.send(Input::FindDue(7)).unwrap();
