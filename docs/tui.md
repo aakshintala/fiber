@@ -1163,10 +1163,13 @@ install still running.
     - The Editor row's pick list holds, after "Default", each of `nvim`,
       `vim`, `hx`, `nano`, `micro`, `emacs`, `code`, `cursor`, `zed` and
       `subl` found on `PATH`, then "Other…". `code`, `cursor`, `zed` and
-      `subl` save with `--wait`, so Fiber waits for the file to close.
+      `subl` save with `--wait`: without it they return at once, and
+      Ctrl+G on the draft would read the file back before any edit.
       "Other…" opens a field for a command line, holding the current value;
-      Enter saves it and Esc cancels. "Default" reads "Default ($EDITOR:
-      nvim)", or "Default (none set)" dim when neither variable is set.
+      Enter saves it and Esc cancels. "Default" names the variable the
+      editor rule picks and its value, "Default ($VISUAL: vim)" or
+      "Default ($EDITOR: nvim)", or reads "Default (none set)" dim when
+      neither is set.
     - A number with a natural range is a slider, `▕████░░░░▏` in `info`
       followed by the value and its unit. ←→ on the focused row, and Enter,
       move it one step; Enter steps up and wraps from the top of the range to the bottom.
