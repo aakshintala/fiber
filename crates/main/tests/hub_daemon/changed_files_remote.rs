@@ -317,7 +317,7 @@ fn changed_files_editor_remote() {
     run.turn_finished(from);
     // The Changed files list opens through `/diff`, keyboard-only: no
     // pointer input, so no row-position signal is needed
-    // (`docs/testing/screens.md`, "A pointer event…"). The frame-end
+    // (`docs/testing/screens.md`, "Screens"). The frame-end
     // marker proves the list drew after the command, and the file row
     // proves the swapped list is on screen.
     let list_from = run.output().len();

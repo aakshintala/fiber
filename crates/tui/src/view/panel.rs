@@ -408,39 +408,72 @@ fn card_rows(
 fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
+    // While a Fiber delegate's view is open every figure below reads
+    // the delegate's fold, defaulting to its unknown form; else the
+    // parent's (`docs/tui.md`, "Swapped views").
+    let followed = app.delegate_session();
+    let item = followed.as_ref().and(app.item_view());
     // The title names the card, with the permission mode right-aligned;
     // the working directory is the first row under it, blank until the
     // first status names it, so no row moves when it lands
-    // (`docs/tui.md`, "The panel").
-    out.push(title_row(
-        "Session status",
-        vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
-        text,
-    ));
-    let workspace = panel
-        .status()
-        .map(|status| status.workspace.as_str())
-        .unwrap_or("");
+    // (`docs/tui.md`, "The panel"). A delegate's view titles the card
+    // with its description, keeping the parent chrome.
+    let name = match item.as_ref() {
+        Some(view) => format!("◆ {}", view.description),
+        None => "Session status".to_owned(),
+    };
+    // A finished delegate's view appends its outcome beside the mode.
+    let finished = item
+        .as_ref()
+        .and_then(|view| (!view.running).then(|| view.word.clone()));
+    let mut figures = vec![Span::styled(PERMISSION_MODE, style(Role::Attention))];
+    if let Some(outcome) = finished.as_deref() {
+        figures.push(Span::styled(outcome.to_owned(), style(Role::Muted)));
+    }
+    out.push(title_row(&name, figures, text));
+    let workspace = match followed.as_ref() {
+        Some(session) => panel
+            .delegate_status_for(session)
+            .map(|status| status.workspace.as_str())
+            .unwrap_or(""),
+        None => panel
+            .status()
+            .map(|status| status.workspace.as_str())
+            .unwrap_or(""),
+    };
     out.push(Row {
         line: Line::from(workspace.to_owned()),
         spot: None,
         tint: None,
         edge: false,
     });
-    out.push(branch_row(app));
-    let model = panel.session_model();
+    out.push(match followed.as_ref() {
+        Some(session) => delegate_branch_row(app, session),
+        None => branch_row(app),
+    });
+    let model = match followed.as_ref() {
+        Some(session) => panel.delegate_model_for(session),
+        None => panel.session_model(),
+    };
     // The model slot stays fixed from the first frame: blank until a
     // `session_status` or a preamble names the model, with no
     // placeholder text.
+    let (thinking, thinking_now) = match followed.as_ref() {
+        Some(session) => (
+            panel.delegate_thinking_for(session),
+            panel.delegate_thinking_now_for(session),
+        ),
+        None => (panel.thinking(), panel.thinking_now()),
+    };
     match model {
         Some(model) => {
             // The model in accent, the thinking level right-aligned in
             // attention, with a dim `∴` after it while the model thinks
             // (`docs/tui.md`, "The panel").
-            let line = match panel.thinking() {
+            let line = match thinking {
                 Some(thinking) => {
                     let mut right = vec![Span::styled(thinking.to_owned(), style(Role::Attention))];
-                    if panel.thinking_now() {
+                    if thinking_now {
                         right.push(Span::styled(" ∴", style(Role::Muted)));
                     }
                     sides_spans(
@@ -465,17 +498,33 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
             edge: false,
         }),
     }
-    let context = app.session().and_then(|session| {
-        let window = panel.window_for(session).filter(|window| *window > 0)?;
-        let context = panel.status_for(session)?.context.as_ref()?;
-        Some((window, context))
-    });
+    let context = match followed.as_ref() {
+        Some(session) => panel
+            .delegate_window_for(session)
+            .filter(|window| *window > 0)
+            .and_then(|window| {
+                panel
+                    .delegate_status_for(session)?
+                    .context
+                    .as_ref()
+                    .map(|context| (window, context))
+            }),
+        None => app.session().and_then(|session| {
+            let window = panel.window_for(session).filter(|window| *window > 0)?;
+            let context = panel.status_for(session)?.context.as_ref()?;
+            Some((window, context))
+        }),
+    };
     // The context bar and the two lines under it draw from the first
     // frame. Figures not known yet show dim dashes, so no row moves
     // when preamble and status folds land (`docs/tui.md`, "The panel").
     // The compaction line follows the preamble alone; the bar fill, the
     // size and the share follow the status, with dim dashes until then.
-    let compaction = match panel.trigger_at() {
+    let trigger = match followed.as_ref() {
+        Some(session) => panel.delegate_trigger_for(session),
+        None => panel.trigger_at(),
+    };
+    let compaction = match trigger {
         Some(trigger) => format!("compacts at {}", short_tokens(trigger)),
         None => "compacts at —".to_owned(),
     };
@@ -483,14 +532,14 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
         Some((window, context)) => {
             let pct = context.tokens.saturating_mul(100) / window;
             (
-                bar_spans(context.tokens, window, panel.trigger_at(), 17),
+                bar_spans(context.tokens, window, trigger, 17),
                 Span::raw(short_tokens(context.tokens)),
                 format!("{pct}% of window"),
             )
         }
         // The empty bar: 17 cells of track and a dim dash for the size.
         None => (
-            bar_spans(0, 1, panel.trigger_at(), 17),
+            bar_spans(0, 1, trigger, 17),
             Span::styled("—", style(Role::Muted)),
             "—".to_owned(),
         ),
@@ -522,7 +571,15 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
     // Every figure row draws from the first frame: a figure not known
     // yet shows a dim dash, so no row moves when its data arrives
     // (`docs/tui.md`, "The panel").
-    match panel.status() {
+    let status = match followed.as_ref() {
+        Some(session) => panel.delegate_status_for(session),
+        None => panel.status(),
+    };
+    let budget = match followed.as_ref() {
+        Some(session) => panel.delegate_budget_for(session),
+        None => panel.budget(),
+    };
+    match status {
         Some(status) => {
             let tokens = &status.spend.tokens;
             let written = tokens
@@ -587,10 +644,12 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
             // cost still null counts as zero until it settles
             // (`docs/loop.md`, "Spending budget"). A known billed cost
             // draws whenever known, `$0.00` included.
-            let cost = format::spend_against_budget(status.spend.cost, panel.budget())
-                .unwrap_or_else(|| match status.spend.cost {
-                    Some(cost) => format::money(cost),
-                    None => "unknown".to_owned(),
+            let cost =
+                format::spend_against_budget(status.spend.cost, budget).unwrap_or_else(|| {
+                    match status.spend.cost {
+                        Some(cost) => format::money(cost),
+                        None => "unknown".to_owned(),
+                    }
                 });
             out.push(figure_row("cost", cost, Some(Spot::Usage), text));
             // The subscription sum draws on every frame once a status
@@ -614,7 +673,11 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
             }
         }
     }
-    match panel.speed() {
+    let speed = match followed.as_ref() {
+        Some(session) => panel.delegate_speed_for(session),
+        None => panel.speed(),
+    };
+    match speed {
         Some(speed) => {
             out.push(figure_row(
                 "speed, last reply",
@@ -628,15 +691,29 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
     }
     // Zero turns are known, not unknown: the row draws `0` before the
     // first turn completes.
-    out.push(figure_row("turns", panel.turns().to_string(), None, text));
-    if !panel.down().is_empty() {
-        // One `✗ <server> down` per down server, joined by a space and
-        // cut from the left when too long for the card.
-        let down: Vec<String> = panel
+    let turns = match followed.as_ref() {
+        Some(session) => panel.delegate_turns_for(session),
+        None => panel.turns(),
+    };
+    out.push(figure_row("turns", turns.to_string(), None, text));
+    let down: Vec<String> = match followed.as_ref() {
+        Some(session) => panel
+            .delegate_down_for(session)
+            .map(|set| {
+                set.iter()
+                    .map(|server| format!("\u{2717} {server} down"))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => panel
             .down()
             .iter()
             .map(|server| format!("\u{2717} {server} down"))
-            .collect();
+            .collect(),
+    };
+    if !down.is_empty() {
+        // One `✗ <server> down` per down server, joined by a space and
+        // cut from the left when too long for the card.
         let value = crate::text::cut_left(&down.join(" "), text.saturating_sub("tools".len() + 1));
         out.push(Row {
             line: sides(
@@ -665,7 +742,85 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
             edge: false,
         });
     }
+    // A finished delegate view without a stored status shows its calls
+    // and elapsed time with the outcome; model and context read unknown
+    // (`docs/tui.md`, "Swapped views").
+    if let Some(view) = item.as_ref()
+        && !view.running
+        && followed
+            .as_ref()
+            .is_some_and(|session| panel.delegate_status_for(session).is_none())
+    {
+        let calls = view
+            .calls
+            .map(|calls| crate::format::count(calls, "call", "calls"))
+            .unwrap_or_else(|| "—".to_owned());
+        let elapsed = view
+            .completed_ts
+            .map(|completed| crate::format::duration(completed.saturating_sub(view.started_ts)))
+            .unwrap_or_else(|| "—".to_owned());
+        out.push(Row {
+            line: Line::from(vec![Span::styled(
+                format!("  {calls} · {elapsed}"),
+                style(Role::Muted),
+            )]),
+            spot: None,
+            tint: None,
+            edge: false,
+        });
+    }
+    // A finished delegate's card reads as past.
+    if finished.is_some() {
+        out = dim_rows(out);
+    }
     out
+}
+
+/// Every row dimmed: a finished delegate's card reads as past
+/// (`docs/tui.md`, "Swapped views").
+fn dim_rows(mut out: Vec<Row>) -> Vec<Row> {
+    for row in &mut out {
+        for span in &mut row.line.spans {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        }
+    }
+    out
+}
+
+/// The Session card's branch slot from `branch`: "git" dim and the
+/// branch in secondary. It stays blank and has no target until a branch
+/// is known; outside a repository the line stays blank
+/// (`docs/tui.md`, "Git").
+fn branch_row_for(branch: Option<String>) -> Row {
+    let Some(branch) = branch else {
+        return Row {
+            line: Line::from(""),
+            spot: None,
+            tint: None,
+            edge: false,
+        };
+    };
+    Row {
+        line: Line::from(vec![
+            Span::styled("git", style(Role::Muted)),
+            Span::raw("  "),
+            Span::styled(branch, style(Role::Secondary)),
+        ]),
+        spot: Some(Spot::Branch),
+        tint: None,
+        edge: false,
+    }
+}
+
+/// The delegate's Session card branch slot: its status's git, never the
+/// attached branch query's answer.
+fn delegate_branch_row(app: &App, session: &contract::SessionId) -> Row {
+    branch_row_for(
+        app.panel_state()
+            .delegate_status_for(session)
+            .and_then(|status| status.git.as_ref())
+            .map(|git| git.branch.as_deref().unwrap_or("detached").to_owned()),
+    )
 }
 
 /// A figure row: its plain label dim, the figure right-aligned in the
@@ -772,24 +927,7 @@ fn sides_spans(left: Vec<Span<'static>>, right: Vec<Span<'static>>, text: usize)
 /// secondary. It stays blank and has no target until a branch is known;
 /// outside a repository the line stays blank (`docs/tui.md`, "Git").
 fn branch_row(app: &App) -> Row {
-    let Some(branch) = branch_text(app) else {
-        return Row {
-            line: Line::from(""),
-            spot: None,
-            tint: None,
-            edge: false,
-        };
-    };
-    Row {
-        line: Line::from(vec![
-            Span::styled("git", style(Role::Muted)),
-            Span::raw("  "),
-            Span::styled(branch, style(Role::Secondary)),
-        ]),
-        spot: Some(Spot::Branch),
-        tint: None,
-        edge: false,
-    }
+    branch_row_for(branch_text(app))
 }
 
 /// The branch the Session card and the narrow status line show: the
@@ -837,10 +975,20 @@ pub(super) fn countdown_span(expiry: u64, now: u64, normal: Style) -> Span<'stat
 /// A painted countdown requests its next text boundary, never a wake
 /// while rows are only being measured or constructed.
 pub(super) fn ask_countdown(app: &App) {
-    if let Some(expiry) = app
-        .panel_state()
-        .status()
-        .and_then(|status| status.cache_expires)
+    // The open delegate's countdown, when its view is open: the painted
+    // row counts its expiry down, so the wake follows it too
+    // (`docs/tui.md`, "Swapped views").
+    let expiry = match app.delegate_session() {
+        Some(session) => app
+            .panel_state()
+            .delegate_status_for(&session)
+            .and_then(|status| status.cache_expires),
+        None => app
+            .panel_state()
+            .status()
+            .and_then(|status| status.cache_expires),
+    };
+    if let Some(expiry) = expiry
         && let Some(due) = countdown_due_wall(expiry, app.motion().wall_ms().unwrap_or(0))
     {
         app.motion().ask_wall(due);

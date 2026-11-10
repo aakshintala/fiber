@@ -57,7 +57,7 @@ impl Hold {
     /// so the open never blocks and a holder's `read` parks. The release
     /// end stays open until the hold is dropped or stood down: a release
     /// written before the reader opens is buffered in the FIFO and read
-    /// when the reader opens it (`docs/testing.md:297-299`).
+    /// when the reader opens it (`docs/testing.md`, "Waits and timeouts").
     ///
     /// # Panics
     ///

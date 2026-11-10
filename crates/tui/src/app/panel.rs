@@ -19,7 +19,7 @@ use contract::events::{
     SessionStarted, SessionState, SessionStatus, ToolCallCompleted, Ui, UsageRecorded,
 };
 
-use super::{App, Effect, Kind, mint};
+use super::{App, Effect, Kind};
 use crate::context_view::Compaction;
 use crate::input::Draft;
 use crate::shell;
@@ -112,6 +112,198 @@ enum ThinkingState {
     Closed,
 }
 
+/// The session figures one fold keeps: the attached session's or one
+/// open delegate's. The attached fold and the delegate fold share one
+/// fold over these, fed the selected session, so the two never drift
+/// (`docs/tui.md`, "Swapped views").
+#[derive(Debug, Default)]
+struct SessionFigures {
+    status: Option<SessionStatus>,
+    model: Option<String>,
+    thinking: Option<String>,
+    thinking_state: ThinkingState,
+    /// The credential label the latest `preamble_built` or
+    /// `model_changed` names: `None` before either, `Some(None)` when
+    /// the provider takes no credential.
+    credential: Option<Option<String>>,
+    window: Option<u64>,
+    trigger_at: Option<u64>,
+    budget: Option<f64>,
+    turns: u64,
+    started_at: Option<u64>,
+    speed: Option<u64>,
+    down: BTreeSet<String>,
+}
+
+/// Folds one session-figure envelope into `figures`: `session_status`,
+/// `preamble_built`, `model_changed`, `turn_completed`,
+/// `assistant_message_started`, the thinking latches,
+/// `usage_recorded`, and the MCP down/ready lines. Any other envelope
+/// leaves `figures` alone, so each caller routes only its own
+/// session's lines here (`docs/tui.md`, "Swapped views").
+fn fold_session_figures(figures: &mut SessionFigures, envelope: &Envelope) {
+    match envelope.kind() {
+        EventKind::SessionStatus => {
+            if let Some(status) = super::read!(envelope, SessionStatus) {
+                figures.status = Some(status);
+            }
+        }
+        EventKind::PreambleBuilt => {
+            if let Some(built) = super::read!(envelope, PreambleBuilt) {
+                figures.model = Some(built.model);
+                figures.thinking = built.thinking;
+                figures.credential = Some(built.credential);
+                figures.window = Some(built.context_window);
+                figures.trigger_at = built.trigger_at;
+                // The latest build's budget is the one in force; a
+                // build without one clears it.
+                figures.budget = built.budget;
+            }
+        }
+        EventKind::ModelChanged => {
+            if let Some(changed) = super::read!(envelope, ModelChanged) {
+                figures.model = Some(changed.after.model);
+                figures.thinking = changed.after.thinking;
+                figures.credential = Some(changed.after.credential);
+            }
+        }
+        EventKind::TurnCompleted => {
+            figures.turns = figures.turns.saturating_add(1);
+            figures.started_at = None;
+            // A settled turn ends any thinking it streamed: a
+            // thinking-only turn never draws a stale `∴`.
+            figures.thinking_state = ThinkingState::Closed;
+        }
+        EventKind::AssistantMessageStarted => {
+            figures.started_at = Some(envelope.ts);
+            // Every model call opens here, so the new call starts
+            // with no thinking streamed yet.
+            figures.thinking_state = ThinkingState::Idle;
+        }
+        // Only streamed thinking sets the flag: a bare start marker
+        // also fires for replies with no streamed thought, and an
+        // ephemeral delta can pass unseen, in which case no glyph is
+        // promised (`docs/architecture.md`, "Streaming").
+        EventKind::ReasoningDelta => {
+            if figures.thinking_state != ThinkingState::Closed {
+                figures.thinking_state = ThinkingState::Thinking;
+            }
+        }
+        // The first text, the first tool call the model starts
+        // emitting, or the call's end stops the thinking, whichever
+        // comes first; later deltas of this call stay ignored.
+        EventKind::AssistantMessageDelta
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::AssistantMessageCompleted => {
+            figures.thinking_state = ThinkingState::Closed;
+        }
+        EventKind::UsageRecorded => {
+            if let Some(usage) = super::read!(envelope, UsageRecorded)
+                && usage.origin_session_id.is_none()
+                && usage.extension.is_none()
+            {
+                figures.speed = figures
+                    .started_at
+                    .and_then(|started| envelope.ts.checked_sub(started))
+                    .and_then(|span| {
+                        usage
+                            .tokens
+                            .output
+                            .checked_mul(1000)
+                            .and_then(|scaled| scaled.checked_div(span))
+                    });
+            }
+        }
+        EventKind::McpServerFailed => {
+            if let Some(failed) = super::read!(envelope, McpServerFailed) {
+                figures.down.insert(failed.server);
+            }
+        }
+        EventKind::McpServerReady => {
+            if let Some(ready) = super::read!(envelope, McpServerReady) {
+                figures.down.remove(&ready.server);
+            }
+        }
+        EventKind::ExtensionUi
+        | EventKind::SessionStarted
+        | EventKind::ToolCallCompleted
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::ShellCommandStarted
+        | EventKind::ShellCommandDelta
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Archived
+        | EventKind::Clients
+        | EventKind::ContextAdded
+        | EventKind::TextCompleted
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => {}
+    }
+}
+
+/// The open Fiber delegate's folded Session figures: its own
+/// envelopes, folded while its view is open (`docs/tui.md`, "Swapped
+/// views"). Every figure mirrors the attached fold's; nothing here
+/// feeds the parent's cards.
+#[derive(Debug, Default)]
+struct DelegateFigures {
+    /// The delegate session these figures came from: the views read
+    /// them only for that session, so another delegate's leftovers never
+    /// show as its own.
+    session: Option<SessionId>,
+    /// The delegate's session figures, through the shared fold.
+    figures: SessionFigures,
+}
+
 /// The last readable figures retained when a delegate finishes.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FinishedFigures {
@@ -126,16 +318,10 @@ pub(crate) struct PanelState {
     /// The attached session's quota answer and query state.
     pub(crate) quota: quota::Query,
     widgets: Vec<Widget>,
-    status: Option<SessionStatus>,
-    /// The session whose `session_status` supplied `status`.
+    /// The attached session's figures, through the shared fold.
+    figures: SessionFigures,
+    /// The session whose `session_status` supplied the figures' status.
     status_session: Option<SessionId>,
-    model: Option<String>,
-    thinking: Option<String>,
-    thinking_state: ThinkingState,
-    /// The credential label the latest `preamble_built` or
-    /// `model_changed` names: `None` before either, `Some(None)` when
-    /// the provider takes no credential.
-    credential: Option<Option<String>>,
     /// The credential label this attachment's `start` named, until a
     /// `preamble_built` or `model_changed` replaces it.
     start_credential: Option<String>,
@@ -144,13 +330,6 @@ pub(crate) struct PanelState {
     /// The attached session's recorded workspace root, from the latest
     /// `session_started`: `/pwd` shows it.
     workspace: Option<String>,
-    window: Option<u64>,
-    trigger_at: Option<u64>,
-    budget: Option<f64>,
-    turns: u64,
-    started_at: Option<u64>,
-    speed: Option<u64>,
-    down: BTreeSet<String>,
     changes: BTreeMap<String, (u64, u64)>,
     jobs: Vec<(JobId, String)>,
     delegates: BTreeMap<JobId, DelegateStarted>,
@@ -168,6 +347,9 @@ pub(crate) struct PanelState {
     branch: Option<Branch>,
     scroll: usize,
     delegate_scroll: usize,
+    /// The open Fiber delegate's folded Session figures, keyed to its
+    /// session; the attached fold never reads them.
+    delegate: DelegateFigures,
     delegates_open: bool,
     /// The delegate sessions this attachment already tried to subscribe,
     /// so a refused subscribe goes out once per attachment
@@ -182,90 +364,32 @@ impl PanelState {
             EventKind::ExtensionUi => self.fold_widget(envelope),
             EventKind::SessionStatus => {
                 if let Some(status) = super::read!(envelope, SessionStatus) {
-                    self.status = Some(status);
+                    // The fold keeps the status with whose it is, so a
+                    // previous session's status never supplies the new
+                    // attachment's context (`docs/tui.md`, "Swapped
+                    // views"); the delegate path shares the same store
+                    // through the shared fold below.
+                    self.figures.status = Some(status);
                     self.status_session = Some(envelope.session_id.clone());
                 }
+            }
+            EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::TurnCompleted
+            | EventKind::AssistantMessageStarted
+            | EventKind::ReasoningDelta
+            | EventKind::AssistantMessageDelta
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::UsageRecorded
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady => {
+                fold_session_figures(&mut self.figures, envelope);
             }
             EventKind::SessionStarted => {
                 if let Some(started) = super::read!(envelope, SessionStarted) {
                     self.worktree = started.worktree.is_some();
                     self.workspace = Some(started.workspace.clone());
-                }
-            }
-            EventKind::PreambleBuilt => {
-                if let Some(built) = super::read!(envelope, PreambleBuilt) {
-                    self.model = Some(built.model);
-                    self.thinking = built.thinking;
-                    self.credential = Some(built.credential);
-                    self.window = Some(built.context_window);
-                    self.trigger_at = built.trigger_at;
-                    // The latest build's budget is the one in force; a
-                    // build without one clears it.
-                    self.budget = built.budget;
-                }
-            }
-            EventKind::ModelChanged => {
-                if let Some(changed) = super::read!(envelope, ModelChanged) {
-                    self.model = Some(changed.after.model);
-                    self.thinking = changed.after.thinking;
-                    self.credential = Some(changed.after.credential);
-                }
-            }
-            EventKind::TurnCompleted => {
-                self.turns = self.turns.saturating_add(1);
-                self.started_at = None;
-                // A settled turn ends any thinking it streamed: a
-                // thinking-only turn never draws a stale `∴`.
-                self.thinking_state = ThinkingState::Closed;
-            }
-            EventKind::AssistantMessageStarted => {
-                self.started_at = Some(envelope.ts);
-                // Every model call opens here, so the new call starts
-                // with no thinking streamed yet.
-                self.thinking_state = ThinkingState::Idle;
-            }
-            // Only streamed thinking sets the flag: a bare start marker
-            // also fires for replies with no streamed thought, and an
-            // ephemeral delta can pass unseen, in which case no glyph is
-            // promised (`docs/architecture.md`, "Streaming").
-            EventKind::ReasoningDelta => {
-                if self.thinking_state != ThinkingState::Closed {
-                    self.thinking_state = ThinkingState::Thinking;
-                }
-            }
-            // The first text, the first tool call the model starts
-            // emitting, or the call's end stops the thinking, whichever
-            // comes first; later deltas of this call stay ignored.
-            EventKind::AssistantMessageDelta
-            | EventKind::ToolCallArgumentsDelta
-            | EventKind::AssistantMessageCompleted => {
-                self.thinking_state = ThinkingState::Closed;
-            }
-            EventKind::UsageRecorded => {
-                if let Some(usage) = super::read!(envelope, UsageRecorded)
-                    && usage.origin_session_id.is_none()
-                    && usage.extension.is_none()
-                {
-                    self.speed = self
-                        .started_at
-                        .and_then(|started| envelope.ts.checked_sub(started))
-                        .and_then(|span| {
-                            usage
-                                .tokens
-                                .output
-                                .checked_mul(1000)
-                                .and_then(|scaled| scaled.checked_div(span))
-                        });
-                }
-            }
-            EventKind::McpServerFailed => {
-                if let Some(failed) = super::read!(envelope, McpServerFailed) {
-                    self.down.insert(failed.server);
-                }
-            }
-            EventKind::McpServerReady => {
-                if let Some(ready) = super::read!(envelope, McpServerReady) {
-                    self.down.remove(&ready.server);
                 }
             }
             EventKind::ToolCallCompleted => {
@@ -329,6 +453,7 @@ impl PanelState {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::ContextAdded
             | EventKind::TextCompleted
@@ -402,6 +527,212 @@ impl PanelState {
         }
     }
 
+    /// Folds one open Fiber delegate's envelope into the
+    /// delegate-scoped figures. The caller routes only the open Fiber
+    /// delegate's session here; any other session never reaches this
+    /// fold, so its lines never touch these figures (`docs/tui.md`,
+    /// "Swapped views").
+    pub(crate) fn fold_delegate(&mut self, envelope: &Envelope) {
+        // The fold is keyed to one delegate session: a new session starts
+        // from unknown, never inheriting the previous session's cached
+        // status, model, context or spend (`docs/tui.md`, "Swapped views").
+        if self.delegate.session.as_ref() != Some(&envelope.session_id) {
+            self.clear_delegate();
+        }
+        self.delegate.session = Some(envelope.session_id.clone());
+        match envelope.kind() {
+            EventKind::SessionStatus
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::TurnCompleted
+            | EventKind::AssistantMessageStarted
+            | EventKind::ReasoningDelta
+            | EventKind::AssistantMessageDelta
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::UsageRecorded
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady => {
+                // The attached fold shares this fold, fed its own
+                // session; any other envelope leaves the figures alone.
+                fold_session_figures(&mut self.delegate.figures, envelope);
+            }
+            EventKind::ExtensionUi
+            | EventKind::SessionStarted
+            | EventKind::ToolCallCompleted
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::ShellCommandStarted
+            | EventKind::ShellCommandDelta
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Archived
+            | EventKind::Clients
+            | EventKind::ContextAdded
+            | EventKind::TextCompleted
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
+        }
+    }
+
+    /// Drops the delegate-scoped figures: a resume of the open job
+    /// starts from unknown, never from the previous run's figures
+    /// (`docs/tui.md`, "Swapped views").
+    fn clear_delegate(&mut self) {
+        self.delegate = DelegateFigures::default();
+    }
+
+    /// The delegate fold when it holds `session`'s figures.
+    fn delegate_for(&self, session: &SessionId) -> Option<&DelegateFigures> {
+        (self.delegate.session.as_ref() == Some(session)).then_some(&self.delegate)
+    }
+
+    /// The delegate's cached `session_status`, only when it belongs to
+    /// `session`.
+    pub(crate) fn delegate_status_for(&self, session: &SessionId) -> Option<&SessionStatus> {
+        self.delegate_for(session)
+            .and_then(|delegate| delegate.figures.status.as_ref())
+    }
+
+    /// The model the delegate runs on: its latest `session_status`
+    /// model first, else its latest `preamble_built` or `model_changed`
+    /// model; `None` while neither has landed.
+    pub(crate) fn delegate_model_for(&self, session: &SessionId) -> Option<&str> {
+        self.delegate_for(session).and_then(|delegate| {
+            delegate
+                .figures
+                .status
+                .as_ref()
+                .map(|status| status.model.as_str())
+                .or(delegate.figures.model.as_deref())
+        })
+    }
+
+    /// The thinking level the delegate's latest `preamble_built` or
+    /// `model_changed` names.
+    pub(crate) fn delegate_thinking_for(&self, session: &SessionId) -> Option<&str> {
+        self.delegate_for(session)
+            .and_then(|delegate| delegate.figures.thinking.as_deref())
+    }
+
+    /// Whether the delegate's running model call is streaming thinking
+    /// now.
+    pub(crate) fn delegate_thinking_now_for(&self, session: &SessionId) -> bool {
+        self.delegate_for(session)
+            .is_some_and(|delegate| delegate.figures.thinking_state == ThinkingState::Thinking)
+    }
+
+    /// The context window in force for the delegate: its latest own
+    /// `preamble_built`'s, or its reported window when it logged no own
+    /// preamble.
+    pub(crate) fn delegate_window_for(&self, session: &SessionId) -> Option<u64> {
+        self.delegate_for(session).and_then(|delegate| {
+            delegate.figures.window.or_else(|| {
+                delegate
+                    .figures
+                    .status
+                    .as_ref()?
+                    .context
+                    .as_ref()
+                    .map(|context| context.window)
+            })
+        })
+    }
+
+    /// The delegate's latest `preamble_built`'s compaction point, in
+    /// tokens.
+    pub(crate) fn delegate_trigger_for(&self, session: &SessionId) -> Option<u64> {
+        self.delegate_for(session)
+            .and_then(|delegate| delegate.figures.trigger_at)
+    }
+
+    /// The delegate's latest `preamble_built`'s budget, in US dollars;
+    /// `None` when it set none.
+    pub(crate) fn delegate_budget_for(&self, session: &SessionId) -> Option<f64> {
+        self.delegate_for(session)
+            .and_then(|delegate| delegate.figures.budget)
+    }
+
+    /// How many of the delegate's turns have completed.
+    pub(crate) fn delegate_turns_for(&self, session: &SessionId) -> u64 {
+        self.delegate_for(session)
+            .map(|delegate| delegate.figures.turns)
+            .unwrap_or(0)
+    }
+
+    /// The delegate's last reply's output speed, in tokens per second.
+    pub(crate) fn delegate_speed_for(&self, session: &SessionId) -> Option<u64> {
+        self.delegate_for(session)
+            .and_then(|delegate| delegate.figures.speed)
+    }
+
+    /// The MCP servers down on the delegate, by name; `None` when none
+    /// are down or no delegate figures are held.
+    pub(crate) fn delegate_down_for(&self, session: &SessionId) -> Option<&BTreeSet<String>> {
+        self.delegate_for(session)
+            .filter(|delegate| !delegate.figures.down.is_empty())
+            .map(|delegate| &delegate.figures.down)
+    }
+
+    /// The MCP servers down the Session card names while `session`'s
+    /// delegate view is open: its own set, empty when none are down,
+    /// never the attached session's (`docs/tui.md`, "Swapped views").
+    pub(crate) fn delegate_tools_for(&self, session: &SessionId) -> &BTreeSet<String> {
+        static EMPTY: std::sync::LazyLock<BTreeSet<String>> =
+            std::sync::LazyLock::new(BTreeSet::new);
+        self.delegate_for(session)
+            .map(|delegate| &delegate.figures.down)
+            .unwrap_or(&EMPTY)
+    }
+
     /// Everything back to default.
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
@@ -414,7 +745,7 @@ impl PanelState {
 
     /// The latest `session_status` of the attached session, if any.
     pub(crate) fn status(&self) -> Option<&SessionStatus> {
-        self.status.as_ref()
+        self.figures.status.as_ref()
     }
 
     /// The model the session runs on: the latest `session_status`
@@ -423,16 +754,17 @@ impl PanelState {
     /// display falls back to the configured default
     /// (`docs/tui.md`, "The input box").
     pub(crate) fn session_model(&self) -> Option<&str> {
-        self.status
+        self.figures
+            .status
             .as_ref()
             .map(|status| status.model.as_str())
-            .or(self.model.as_deref())
+            .or(self.figures.model.as_deref())
     }
 
     /// The thinking level the latest `preamble_built` or `model_changed`
     /// names.
     pub(crate) fn thinking(&self) -> Option<&str> {
-        self.thinking.as_deref()
+        self.figures.thinking.as_deref()
     }
 
     /// Whether the running model call is streaming thinking now,
@@ -440,14 +772,14 @@ impl PanelState {
     /// its `∴` only when a level and this flag meet
     /// (`docs/tui.md`, "The panel").
     pub(crate) fn thinking_now(&self) -> bool {
-        self.thinking_state == ThinkingState::Thinking
+        self.figures.thinking_state == ThinkingState::Thinking
     }
 
     /// The credential label the latest `preamble_built` or
     /// `model_changed` names: `None` before either, `Some(None)` when
     /// the provider takes no credential.
     pub(crate) fn credential(&self) -> Option<Option<&str>> {
-        self.credential.as_ref().map(Option::as_deref)
+        self.figures.credential.as_ref().map(Option::as_deref)
     }
 
     /// Records the credential label a `start`'s `args` name, so a later
@@ -461,13 +793,14 @@ impl PanelState {
     /// fresh panel, after the reset the attach starts from.
     pub(crate) fn carry_clear_credential(&mut self, credential: Option<Option<String>>) {
         self.start_credential = credential.clone().flatten();
-        self.credential = credential;
+        self.figures.credential = credential;
     }
 
     /// The credential state a clear carries: the latest build or switch,
     /// including an explicit absence, otherwise the label its `start` named.
     pub(crate) fn clear_credential(&self) -> Option<Option<&str>> {
-        self.credential
+        self.figures
+            .credential
             .as_ref()
             .map(Option::as_deref)
             .or_else(|| self.start_credential.as_deref().map(Some))
@@ -489,7 +822,7 @@ impl PanelState {
     /// or the active session's reported window when it logged no own
     /// preamble (`docs/tui.md`, "Swapped views").
     pub(crate) fn window_for(&self, session: &SessionId) -> Option<u64> {
-        self.window.or_else(|| {
+        self.figures.window.or_else(|| {
             self.status_for(session)?
                 .context
                 .as_ref()
@@ -500,7 +833,7 @@ impl PanelState {
     /// The cached status only when it belongs to `session`.
     pub(crate) fn status_for(&self, session: &SessionId) -> Option<&SessionStatus> {
         if self.status_session.as_ref() == Some(session) {
-            self.status.as_ref()
+            self.figures.status.as_ref()
         } else {
             None
         }
@@ -508,7 +841,7 @@ impl PanelState {
 
     /// The latest `preamble_built`'s compaction point, in tokens.
     pub(crate) fn trigger_at(&self) -> Option<u64> {
-        self.trigger_at
+        self.figures.trigger_at
     }
 
     /// The automatic compaction point in force: the latest own
@@ -517,7 +850,7 @@ impl PanelState {
     /// A build always sets the window, so a window means an own build
     /// replaced the inherited one (`docs/tui.md`, "Swapped views").
     pub(crate) fn compaction(&self) -> Compaction {
-        match (self.window.is_some(), self.trigger_at) {
+        match (self.figures.window.is_some(), self.figures.trigger_at) {
             (true, Some(point)) => Compaction::At(point),
             (true, None) => Compaction::Off,
             (false, _) => Compaction::Unknown,
@@ -527,22 +860,22 @@ impl PanelState {
     /// The latest `preamble_built`'s budget, in US dollars; `None` when
     /// it set none.
     pub(crate) fn budget(&self) -> Option<f64> {
-        self.budget
+        self.figures.budget
     }
 
     /// How many turns have completed.
     pub(crate) fn turns(&self) -> u64 {
-        self.turns
+        self.figures.turns
     }
 
     /// The last reply's output speed, in tokens per second.
     pub(crate) fn speed(&self) -> Option<u64> {
-        self.speed
+        self.figures.speed
     }
 
     /// The MCP servers down, by name.
     pub(crate) fn down(&self) -> &BTreeSet<String> {
-        &self.down
+        &self.figures.down
     }
 
     /// The lines changed per path: added and removed.
@@ -653,10 +986,10 @@ impl PanelState {
         // `session_status`: the old window and compaction point end here.
         // Keep the cached status; its session identity prevents it from
         // supplying the new attachment's context (`docs/tui.md`, "Swapped views").
-        self.window = None;
-        self.trigger_at = None;
+        self.figures.window = None;
+        self.figures.trigger_at = None;
         // A new attachment has no running call, so no streamed thinking.
-        self.thinking_state = ThinkingState::Idle;
+        self.figures.thinking_state = ThinkingState::Idle;
         self.delegate_scroll = 0;
         self.delegates_open = false;
     }
@@ -783,6 +1116,18 @@ impl App {
         &self.panel_state
     }
 
+    /// The open Fiber delegate's session, while its view is open: the
+    /// Session figures follow it. A job's view, another harness's
+    /// delegate, or no view reads the parent's (`docs/tui.md`, "Swapped
+    /// views").
+    pub(crate) fn delegate_session(&self) -> Option<SessionId> {
+        let view = self.item_view()?;
+        if view.harness != "fiber" {
+            return None;
+        }
+        view.session_label.map(SessionId)
+    }
+
     /// The card list the panel draws, in order; empty without home, so no
     /// card draws there.
     pub(crate) fn panel_cards(&self) -> &[String] {
@@ -799,6 +1144,18 @@ impl App {
         answer: Option<&super::answer::Answer<'_>>,
     ) -> Vec<String> {
         self.panel_state.fold(envelope);
+        // A resume of the open item's job clears the delegate overlay:
+        // the new run folds its own figures, never inheriting the
+        // previous run's. Any other job's resume leaves the open view's
+        // figures intact (`docs/tui.md`, "Swapped views").
+        if envelope.kind() == EventKind::JobStarted
+            && let Some(started) = super::read!(envelope, contract::events::JobStarted)
+            && self
+                .item_view()
+                .is_some_and(|view| view.job_id == started.job_id)
+        {
+            self.panel_state.clear_delegate();
+        }
         let ended = if envelope.kind() == EventKind::SessionStatus {
             super::read!(envelope, SessionStatus).is_some_and(|status| {
                 let busy = !matches!(status.state, SessionState::Idle | SessionState::Jobs);
@@ -925,6 +1282,7 @@ impl App {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded
@@ -1009,9 +1367,8 @@ impl App {
             return None;
         }
         let session = self.session()?.clone();
-        let id = mint();
-        let line =
-            shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false).to_string();
+        let id = support::mint("c_");
+        let line = shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false);
         self.panel_state.due = false;
         self.outbox.wait(&id, super::Waiting::Branch);
         self.panel_state.asked = Some(id);
@@ -1058,9 +1415,8 @@ impl App {
                 let Some((session, _)) = self.command_session() else {
                     return Effect::None;
                 };
-                let id = mint();
-                let line = shell::command(&id, &session, "git --no-optional-locks status", false)
-                    .to_string();
+                let id = support::mint("c_");
+                let line = shell::command(&id, &session, "git --no-optional-locks status", false);
                 let mut draft = Draft::default();
                 draft.set("!!git --no-optional-locks status");
                 self.outbox.pending.insert(id, (Kind::Shell, draft));

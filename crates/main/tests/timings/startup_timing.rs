@@ -1,5 +1,4 @@
-//! Startup timers at the binary level (`docs/state.md`, "Diagnostic
-//! logs"): the built `fiber` runs `ask` against the fake provider server.
+//! Startup timers at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask` against the fake provider server.
 //! At `debug` the pre-attach writer emits `startup.config`,
 //! `startup.extensions` and `startup.routing` with only `op` and `ms` in
 //! the pid file; at the default level nothing debug is written.
@@ -437,7 +436,7 @@ fn switch_journey(setup: &Setup, id: &str) -> Vec<Value> {
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(stream.last().unwrap()["kind"], "fiber_exited");
     // The complete ordered kinds, so a duplicated, missing or reordered
-    // event fails (docs/testing.md, "Event streams"): the subscribe
+    // event fails (`docs/testing.md`, "Event streams"): the subscribe
     // acknowledgement, the switch admitted while idle, the turn on the
     // new model, then the close. `clients` is written when the one
     // connection attaches, on its own trigger, so it is set aside from
@@ -550,7 +549,7 @@ fn at_default_a_switch_writes_no_timing_line_and_leaves_the_same_log() {
     // The complete ordered kinds of the durable log: the switch, the
     // turn on the new model, then the exit. Each run meets the same
     // list, so an omitted, duplicated or reordered event fails even when
-    // both runs agree (docs/testing.md, "Event streams").
+    // both runs agree (`docs/testing.md`, "Event streams").
     let expected = [
         "session_started",
         "fiber_started",

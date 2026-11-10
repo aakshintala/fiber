@@ -17,7 +17,9 @@ use std::os::unix::net::UnixStream;
 use contract::{HubEventKind, HubLine};
 use serde_json::{Map, Value, json};
 
-use super::{Ask, HubAnswer, delete, delete_listed, delete_run, export, matched, run};
+use super::{
+    Ask, HubAnswer, archive, archive_to, delete, delete_listed, delete_run, export, matched, run,
+};
 use crate::CliError;
 use fakes::Deadline;
 
@@ -1014,7 +1016,7 @@ fn an_accepted_answer_never_runs_the_fallback() {
 fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // Per `docs/events.md`, "The envelope" a consumer skips any kind it does not
     // recognise, so the unknown line is skipped and the real answer is read.
     let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "result": {"token": "wrong"},
@@ -1042,7 +1044,7 @@ fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
 fn an_unknown_line_before_a_rejection_reads_the_refusal() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // Per `docs/events.md`, "The envelope" a consumer skips any kind it does not
     // recognise, so the unknown line is skipped and the refusal is read.
     let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "session_held", "message": "held",
@@ -1160,6 +1162,23 @@ fn sessions_answer(ids: &[&str]) -> Value {
         "payload": {"command_id": "c_sessions", "result": {"live": [], "exited": exited}}})
 }
 
+/// The archived-set `sessions` answer naming `ids` as exited sessions:
+/// what the second query of a remote resolution answers.
+fn archived_sessions_answer(ids: &[&str]) -> Value {
+    let exited: Vec<Value> = ids
+        .iter()
+        .map(|id| json!({"session_id": id, "name": "n", "how": "exited"}))
+        .collect();
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_sessions_archived", "result": {"live": [], "exited": exited}}})
+}
+
+/// An `archive` acceptance, with no result.
+fn archive_accepted() -> Value {
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_archive"}})
+}
+
 /// A dry-run answer naming `ids` as the set the delete would remove.
 fn dry_answer(ids: &[&str]) -> Value {
     dry_answer_with_held(ids, &[])
@@ -1223,6 +1242,7 @@ fn hub_delete_without_yes_confirms_the_dry_run_set_exactly() {
     let (out, err, got, _, sent) = run_delete_listed(
         &[
             sessions_answer(&[HUB_ROOT, HUB_FORK]),
+            archived_sessions_answer(&[]),
             dry_answer(&[HUB_ROOT, HUB_FORK]),
             accepted(),
         ],
@@ -1239,13 +1259,14 @@ fn hub_delete_without_yes_confirms_the_dry_run_set_exactly() {
         format!("{HUB_ROOT}\n{HUB_FORK}\n{HUB_ROOT}\n{HUB_FORK}\n")
     );
     assert_eq!(err, "delete? [y/N] ");
-    // Order and count per docs/invocation.md:1421-1426: the id resolves
+    // Order and count per `docs/invocation.md`, "Deleting and pruning": the id resolves
     // against the hub's `sessions` answer, then a dry run prints and asks,
-    // then `delete` carries that exact set as `expect` (docs/invocation.md:1415).
+    // then `delete` carries that exact set as `expect` (`docs/invocation.md`, "Deleting and pruning").
     assert_eq!(
         sent,
         vec![
             json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+            json!({"id": "c_sessions_archived", "command": "sessions", "args": {"archived": true}}),
             json!({"id": "c_delete", "command": "delete",
                 "args": {"session": HUB_ROOT, "cascade": true, "dry_run": true}}),
             json!({"id": "c_delete", "command": "delete",
@@ -1261,6 +1282,7 @@ fn hub_delete_refuses_successful_dry_run_with_held_before_asking() {
         let (out, err, got, _, sent) = run_delete_listed(
             &[
                 sessions_answer(&[HUB_ROOT, HUB_FORK]),
+                archived_sessions_answer(&[]),
                 dry_answer_with_held(&[HUB_ROOT, HUB_FORK], &[held]),
             ],
             HUB_ROOT,
@@ -1290,6 +1312,7 @@ fn hub_delete_refuses_successful_dry_run_with_held_before_asking() {
             sent,
             vec![
                 json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+                json!({"id": "c_sessions_archived", "command": "sessions", "args": {"archived": true}}),
                 json!({"id": "c_delete", "command": "delete",
                     "args": {"session": HUB_ROOT, "cascade": true, "dry_run": true}}),
             ],
@@ -1303,6 +1326,7 @@ fn hub_delete_reports_the_first_held_session_in_preview_order() {
     let (out, err, got, _, sent) = run_delete_listed(
         &[
             sessions_answer(&[HUB_ROOT, HUB_FORK]),
+            archived_sessions_answer(&[]),
             dry_answer_with_held(&[HUB_ROOT, HUB_FORK], &[HUB_FORK, HUB_ROOT]),
         ],
         HUB_ROOT,
@@ -1318,7 +1342,7 @@ fn hub_delete_reports_the_first_held_session_in_preview_order() {
     );
     assert_eq!(out, "");
     assert_eq!(err, "");
-    assert_eq!(sent.len(), 2);
+    assert_eq!(sent.len(), 3);
 }
 
 #[test]
@@ -1326,7 +1350,11 @@ fn hub_delete_malformed_held_answer_fails_before_printing_or_asking() {
     let malformed = json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
         "payload": {"command_id": "c_delete", "result": {"sessions": [HUB_ROOT], "held": "bad"}}});
     let (out, err, got, _, sent) = run_delete_listed(
-        &[sessions_answer(&[HUB_ROOT]), malformed],
+        &[
+            sessions_answer(&[HUB_ROOT]),
+            archived_sessions_answer(&[]),
+            malformed,
+        ],
         HUB_ROOT,
         false,
         false,
@@ -1336,7 +1364,11 @@ fn hub_delete_malformed_held_answer_fails_before_printing_or_asking() {
     assert!(matches!(got, Err(CliError::SessionsAnswer(_))));
     assert_eq!(out, "");
     assert_eq!(err, "");
-    assert_eq!(sent.len(), 2, "only resolve and dry run are sent");
+    assert_eq!(
+        sent.len(),
+        3,
+        "only the two resolve queries and the dry run are sent"
+    );
 }
 
 /// A dry-run answer that fails validation prints nothing, asks nothing
@@ -1344,7 +1376,11 @@ fn hub_delete_malformed_held_answer_fails_before_printing_or_asking() {
 /// question is ever read.
 fn bad_dry_run_is_unusable(result: Value) {
     let (out, err, got, _, sent) = run_delete_listed(
-        &[sessions_answer(&[HUB_ROOT]), result],
+        &[
+            sessions_answer(&[HUB_ROOT]),
+            archived_sessions_answer(&[]),
+            result,
+        ],
         HUB_ROOT,
         true,
         false,
@@ -1355,7 +1391,11 @@ fn bad_dry_run_is_unusable(result: Value) {
     assert!(matches!(error, CliError::SessionsAnswer(_)), "{error:?}");
     assert_eq!(out, "", "a bad dry run prints no preview");
     assert_eq!(err, "", "a bad dry run prints no prompt");
-    assert_eq!(sent.len(), 2, "only resolve and dry run are sent");
+    assert_eq!(
+        sent.len(),
+        3,
+        "only the two resolve queries and the dry run are sent"
+    );
 }
 
 #[test]
@@ -1418,7 +1458,11 @@ fn hub_delete_rejects_dry_run_missing_its_held_field() {
 #[test]
 fn hub_delete_yes_sends_one_delete_without_expect() {
     let (out, err, got, _, sent) = run_delete_listed(
-        &[sessions_answer(&[HUB_ROOT]), accepted()],
+        &[
+            sessions_answer(&[HUB_ROOT]),
+            archived_sessions_answer(&[]),
+            accepted(),
+        ],
         HUB_ROOT,
         false,
         true,
@@ -1427,12 +1471,13 @@ fn hub_delete_yes_sends_one_delete_without_expect() {
     );
     got.unwrap();
     // One `delete` with no `expect` and no dry run: the exact line
-    // proves both keys are absent (docs/invocation.md:1424-1426: with
+    // proves both keys are absent (`docs/invocation.md`, "Deleting and pruning": with
     // `--yes` one `delete` with no `expect` follows the `sessions` resolve).
     assert_eq!(
         sent,
         vec![
             json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+            json!({"id": "c_sessions_archived", "command": "sessions", "args": {"archived": true}}),
             json!({"id": "c_delete", "command": "delete", "args": {"session": HUB_ROOT}}),
         ]
     );
@@ -1443,7 +1488,7 @@ fn hub_delete_yes_sends_one_delete_without_expect() {
 #[test]
 fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
     let (_, _, got, _, sent) = run_delete_listed(
-        &[sessions_answer(&[HUB_OTHER])],
+        &[sessions_answer(&[HUB_OTHER]), archived_sessions_answer(&[])],
         "s_zz",
         false,
         true,
@@ -1456,12 +1501,15 @@ fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
         "{error:?}"
     );
     assert_eq!(error.code(), ErrorCode::SessionNotFound);
-    // The resolve connected; no dry run follows a failed resolve
-    // (docs/invocation.md:1421-1424: the dry run comes only after a resolve).
-    assert_eq!(sent.len(), 1);
+    // Both resolve queries connected; no dry run follows a failed resolve
+    // (`docs/invocation.md`, "Deleting and pruning": the dry run comes only after a resolve).
+    assert_eq!(sent.len(), 2);
 
     let (_, _, got, _, sent) = run_delete_listed(
-        &[sessions_answer(&[HUB_ROOT, HUB_FORK])],
+        &[
+            sessions_answer(&[HUB_ROOT, HUB_FORK]),
+            archived_sessions_answer(&[]),
+        ],
         "s_11111111111111",
         false,
         true,
@@ -1474,15 +1522,15 @@ fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
         "{error:?}"
     );
     assert_eq!(error.code(), ErrorCode::Usage);
-    // One `sessions` resolve and nothing after the ambiguous match
-    // (docs/invocation.md:1421-1424: the dry run comes only after a resolve).
-    assert_eq!(sent.len(), 1);
+    // Both resolve queries and nothing after the ambiguous match
+    // (`docs/invocation.md`, "Deleting and pruning": the dry run comes only after a resolve).
+    assert_eq!(sent.len(), 2);
 }
 
 #[test]
 fn hub_delete_without_a_terminal_never_connects() {
     let (out, _, got, connects, sent) = run_delete_listed(
-        &[sessions_answer(&[HUB_ROOT])],
+        &[sessions_answer(&[HUB_ROOT]), archived_sessions_answer(&[])],
         HUB_ROOT,
         false,
         false,
@@ -1493,7 +1541,7 @@ fn hub_delete_without_a_terminal_never_connects() {
     assert!(matches!(&error, CliError::DeleteNobody), "{error:?}");
     assert_eq!(error.code(), ErrorCode::Usage);
     assert_eq!(out, "");
-    // Nobody to ask fails before connecting (docs/invocation.md:1418-1420:
+    // Nobody to ask fails before connecting (`docs/invocation.md`, "Deleting and pruning":
     // with no terminal to ask on, asking is a usage error), so no request.
     assert_eq!(connects, 0);
     assert!(sent.is_empty());
@@ -1505,6 +1553,7 @@ fn hub_delete_keeps_refusal_codes() {
     let (out, _, got, _, _) = run_delete_listed(
         &[
             sessions_answer(&[HUB_ROOT]),
+            archived_sessions_answer(&[]),
             refused("c_delete", "session_held", "Session is held."),
         ],
         HUB_ROOT,
@@ -1532,6 +1581,7 @@ fn hub_delete_keeps_refusal_codes() {
     let (out, _, got, _, _) = run_delete_listed(
         &[
             sessions_answer(&[HUB_ROOT]),
+            archived_sessions_answer(&[]),
             dry_answer(&[HUB_ROOT]),
             refused("c_delete", "stale_request", "The set changed."),
         ],
@@ -1553,4 +1603,220 @@ fn hub_delete_keeps_refusal_codes() {
         "{error:?}"
     );
     assert_eq!(out, format!("{HUB_ROOT}\n"));
+}
+
+/// Runs `archive_to` for `selector` against scripted `answers`: its
+/// stdout, its outcome, how often it connected, and every command the hub
+/// read. Archiving asks nothing and reads no stdin: the entry point takes
+/// no prompt, input or terminal, so no case passes any.
+fn run_archive(
+    setup: &Setup,
+    answers: &[Value],
+    selector: &str,
+    hub: Option<&str>,
+) -> (String, Result<(), CliError>, usize, Vec<Value>) {
+    let home = setup.home();
+    let workspace = setup.workspace();
+    let answers = answers.to_owned();
+    let selector = selector.to_owned();
+    let hub = hub.map(str::to_owned);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut fake = FakeHub::new(&answers);
+        let mut out = Vec::new();
+        let got = archive_to(
+            &selector,
+            hub.as_deref(),
+            &mut out,
+            &home,
+            &workspace,
+            &mut || fake.connect(),
+        );
+        tx.send((
+            String::from_utf8(out).unwrap(),
+            got,
+            fake.connects,
+            fake.sent_all(),
+        ))
+        .unwrap_or(());
+    });
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .unwrap()
+}
+
+/// The default-set and archived-set queries a remote resolution sends.
+fn resolve_queries() -> Vec<Value> {
+    vec![
+        json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+        json!({"id": "c_sessions_archived", "command": "sessions",
+            "args": {"archived": true}}),
+    ]
+}
+
+#[test]
+fn archive_sends_one_archive_for_the_local_id_and_prints_it() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    let (out, got, connects, sent) = run_archive(&setup, &[archive_accepted()], ROOT, None);
+    got.unwrap();
+    assert_eq!(out, format!("{ROOT}\n"));
+    assert_eq!(connects, 1, "local resolve reads no hub");
+    assert_eq!(
+        sent,
+        vec![json!({"id": "c_archive", "command": "archive",
+            "args": {"session": ROOT}})],
+    );
+}
+
+#[test]
+fn archive_resolves_a_remote_id_over_both_sets_and_prints_it() {
+    let setup = Setup::new();
+    for (selector, default, archived) in [
+        (
+            HUB_ROOT,
+            sessions_answer(&[HUB_ROOT]),
+            archived_sessions_answer(&[]),
+        ),
+        (
+            "s_11111111111111a",
+            sessions_answer(&[]),
+            archived_sessions_answer(&[HUB_ROOT]),
+        ),
+    ] {
+        let (out, got, connects, sent) = run_archive(
+            &setup,
+            &[default, archived, archive_accepted()],
+            selector,
+            Some("box"),
+        );
+        got.unwrap();
+        assert_eq!(out, format!("{HUB_ROOT}\n"), "{selector}");
+        assert_eq!(connects, 3, "{selector}");
+        assert_eq!(
+            sent,
+            [
+                resolve_queries(),
+                vec![json!({"id": "c_archive", "command": "archive",
+                    "args": {"session": HUB_ROOT}})],
+            ]
+            .concat(),
+            "{selector}"
+        );
+    }
+}
+
+#[test]
+fn archive_keeps_refusal_codes() {
+    let setup = Setup::new();
+    for (code, message) in [
+        ("session_held", "Session is held."),
+        ("session_not_found", "No such session."),
+    ] {
+        let (_, got, _, sent) = run_archive(
+            &setup,
+            &[
+                sessions_answer(&[HUB_ROOT]),
+                archived_sessions_answer(&[]),
+                refused("c_archive", code, message),
+            ],
+            HUB_ROOT,
+            Some("box"),
+        );
+        let error = got.unwrap_err();
+        assert!(matches!(&error, CliError::Rejected { .. }), "{error:?}");
+        assert_eq!(error.to_string(), message);
+        assert_eq!(sent.len(), 3, "the refused archive is still sent");
+    }
+    // A failing archived query resolves nothing: the archive never sends.
+    let (_, got, _, sent) = run_archive(
+        &setup,
+        &[
+            sessions_answer(&[HUB_ROOT]),
+            refused("c_sessions_archived", "invalid_arguments", "no"),
+        ],
+        HUB_ROOT,
+        Some("box"),
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::InvalidArguments,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "no");
+    assert_eq!(sent, resolve_queries());
+}
+
+#[test]
+fn archive_exits_zero_on_success_and_one_on_refusal() {
+    if let Ok(case) = std::env::var("FIBER_CLI_ARCHIVE_CHILD") {
+        let mut hub = match case.as_str() {
+            "refusal" => FakeHub::new(&[
+                sessions_answer(&[HUB_ROOT]),
+                archived_sessions_answer(&[]),
+                refused("c_archive", "session_held", "Session is held."),
+            ]),
+            _ => FakeHub::new(&[archive_accepted()]),
+        };
+        let code = match case.as_str() {
+            "refusal" => archive(HUB_ROOT, Some("box"), &mut || hub.connect()),
+            _ => archive(ROOT, None, &mut || hub.connect()),
+        };
+        std::process::exit(code);
+    }
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    let name = module_path!().split_once("::").unwrap().1;
+    for (case, code) in [("success", 0), ("refusal", 1)] {
+        let output = fakes::rerun_prepared(
+            &format!("{name}::archive_exits_zero_on_success_and_one_on_refusal"),
+            &[("FIBER_CLI_ARCHIVE_CHILD", case)],
+            Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN), // ruling: #4311
+            |command| {
+                command
+                    .env("FIBER_HOME", setup.home())
+                    .current_dir(setup.workspace());
+            },
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{case}: {}",
+            output.status
+        );
+    }
+}
+
+#[test]
+fn hub_delete_resolves_an_archived_id_through_its_existing_caller() {
+    let (out, err, got, _, sent) = run_delete_listed(
+        &[
+            sessions_answer(&[]),
+            archived_sessions_answer(&[HUB_ROOT]),
+            accepted(),
+        ],
+        "s_11111111111111a",
+        false,
+        true,
+        false,
+        Unread,
+    );
+    got.unwrap();
+    assert_eq!(out, format!("{HUB_ROOT}\n"));
+    assert_eq!(err, "");
+    assert_eq!(
+        sent,
+        vec![
+            json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+            json!({"id": "c_sessions_archived", "command": "sessions",
+                "args": {"archived": true}}),
+            json!({"id": "c_delete", "command": "delete", "args": {"session": HUB_ROOT}}),
+        ]
+    );
 }

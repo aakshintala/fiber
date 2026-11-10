@@ -1089,6 +1089,38 @@ fn a_writing_compaction_replacement_keeps_its_link_pad_and_spinner() {
 }
 
 #[test]
+fn click_band_ranges() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["compaction_band"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "go".to_owned(),
+            click: Some("badge".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let (rows, texts) = seamed(&band, 40, &fake, false);
+
+    // The click range rides the fitted line's cells, beside the pad.
+    assert!(rows[0].0.to_string().starts_with("go"));
+    assert_eq!(texts[0].clicks.len(), 1);
+    let (range, _) = &texts[0].clicks[0];
+    assert_eq!(*range, 0..2);
+    // The built-in band without a replacement lends no click range: a
+    // renderer filling another slot leaves the built-in to draw.
+    let plain = std::rc::Rc::new(SlotRenderer::filling(
+        &["ledger_row"],
+        SlotScript::Replace(vec![vec![raw("other")]]),
+    ));
+    let (_, plain_texts) = seamed(&band, 40, &plain, false);
+    assert!(
+        plain_texts.iter().all(|text| text.clicks.is_empty()),
+        "a built-in band draws no click target"
+    );
+}
+
+#[test]
 fn a_writing_compaction_band_replacement_spins_but_a_done_one_does_not() {
     let writing = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = replaced();

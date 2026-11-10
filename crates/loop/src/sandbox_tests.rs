@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::SessionId;
@@ -310,6 +310,43 @@ fn started_with_shell(
     )
 }
 
+/// The `/tools` rows the loop publishes, in publish order: the window
+/// test reads back what `publish_preamble_rows` declared.
+#[derive(Default)]
+struct Rows {
+    declare: Mutex<Vec<(String, Option<contract::events::ToolInfo>)>>,
+}
+
+impl Rows {
+    fn setter(rows: &Arc<Rows>) -> crate::ToolRows {
+        let declare_rows = Arc::clone(rows);
+        crate::ToolRows {
+            declare: Arc::new(move |name, info| {
+                declare_rows
+                    .declare
+                    .lock()
+                    .unwrap()
+                    .push((name.to_owned(), info));
+            }),
+            state: Arc::new(|_, _| {}),
+        }
+    }
+
+    /// The latest published `bytes` for `name`: what a `/tools` read
+    /// would answer right now.
+    fn bytes(&self, name: &str) -> u64 {
+        self.declare
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(seen, _)| seen.as_str() == name)
+            .and_then(|(_, info)| info.as_ref())
+            .expect("the row is declared")
+            .bytes
+    }
+}
+
 fn flipping_apply(
     enabled: Arc<std::sync::Mutex<bool>>,
 ) -> (ApplySandbox, Arc<std::sync::Mutex<Vec<bool>>>) {
@@ -576,6 +613,87 @@ fn an_interleaved_flip_between_snapshot_and_publish_publishes_fresh_bytes() {
     // (`docs/events.md`, "`preamble_built`": the flip still builds once with reason
     // `sandbox`.)
     assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+}
+
+#[test]
+fn rows_answer_old_bytes_after_append_before_publish() {
+    let enabled = Arc::new(std::sync::Mutex::new(false));
+    let rows = Arc::new(Rows::default());
+    let (looped, _log, _watched, _home) = started_with_shell(Arc::clone(&enabled));
+    let mut looped = looped.tool_rows(Rows::setter(&rows));
+    let (apply, _) = flipping_apply(Arc::clone(&enabled));
+    looped.sandbox_apply = Some(apply);
+    // The first flip completes: its build is appended and its rows are
+    // published, so the second flip's window opens over known sizes.
+    let answer = admit(&mut looped, true);
+    assert!(matches!(answer, Ok(None)), "the flip accepts: {answer:?}");
+    // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
+    // changed the setting.)
+    assert_eq!(preamble_reasons(&looped), vec!["sandbox".to_owned()]);
+    let on_bytes = rows.bytes("shell");
+    assert!(
+        registered_description(&looped).contains("confined"),
+        "the first flip refreshes"
+    );
+    // Park the second flip's append-to-publish window: the new build is
+    // already appended when the rows still answer the first flip's bytes.
+    // The append (`Event::PreambleBuilt` in `crates/loop/src/turn.rs`)
+    // runs before `publish_preamble_rows` on the same thread, so a reader
+    // in that gap sees the new event with stale rows: that gap is the
+    // window the `/tools` polls race across.
+    let log_dir = looped.log.dir().to_path_buf();
+    let saw_window = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    crate::turn::pause_preamble_between_append_and_publish(Box::new({
+        let rows = Arc::clone(&rows);
+        let saw_window = Arc::clone(&saw_window);
+        move || {
+            saw_window.store(true, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                rows.bytes("shell"),
+                on_bytes,
+                "the rows still answer the old size after the append"
+            );
+            let built: Vec<String> = log::read(&log_dir)
+                .expect("the log reads mid-seam")
+                .into_iter()
+                .filter(|line| line.kind() == EventKind::PreambleBuilt)
+                .map(|line| {
+                    line.payload["reason"]
+                        .as_str()
+                        .expect("preamble_built carries a reason")
+                        .to_owned()
+                })
+                .collect();
+            // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
+            // changed the setting.)
+            assert_eq!(
+                built,
+                vec!["sandbox".to_owned(), "sandbox".to_owned()],
+                "the new build is appended before the publish"
+            );
+        }
+    }));
+    let answer = admit(&mut looped, false);
+    assert!(
+        matches!(answer, Ok(None)),
+        "the flip back accepts: {answer:?}"
+    );
+    assert!(
+        saw_window.load(std::sync::atomic::Ordering::SeqCst),
+        "the append-to-publish window ran"
+    );
+    // (`docs/events.md`, "`preamble_built`": a `sandbox` build follows a toggle that
+    // changed the setting.)
+    assert_eq!(
+        preamble_reasons(&looped),
+        vec!["sandbox".to_owned(), "sandbox".to_owned()]
+    );
+    let off_bytes = rows.bytes("shell");
+    assert_ne!(on_bytes, off_bytes, "the flip back republishes");
+    assert!(
+        !registered_description(&looped).contains("confined"),
+        "the flip back refreshes"
+    );
 }
 
 #[test]

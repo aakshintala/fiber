@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs Fiber from a GitHub release (docs/releasing.md, "Installing").
+# Installs Fiber from a GitHub release (`docs/releasing.md`, "Installing").
 #
 # Usage: sh install.sh [--dir <path>] [--path | --no-path] [--no-setup] [-- setup-args...]
 #

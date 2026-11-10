@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use super::super::super::{App, Effect, Kind, NoticeLine, Phase, mint};
+use super::super::super::{App, Effect, Kind, NoticeLine, Phase};
 use super::Prompt;
 use crate::configure::ConfigureError;
 use crate::home::HooksChoice;
@@ -409,7 +409,7 @@ impl App {
                 let Some(state) = self.take_hooks_offer() else {
                     return Vec::new();
                 };
-                let id = mint();
+                let id = support::mint("c_");
                 let line = json!({"id": id, "command": "start", "args": state.args}).to_string();
                 let draft = self
                     .outbox

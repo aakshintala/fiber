@@ -59,7 +59,7 @@ impl App {
     /// whether one was pushed. A repeated failure of a cached input
     /// finds its pair in the set and adds nothing. The surviving batch
     /// is grouped by code, so one frame raises one notice per code
-    /// (`docs/errors.md`, "Notices").
+    /// (`docs/tui.md`, "Notices").
     fn drain_renderer_failures(&mut self) -> bool {
         let cache = &self.screen.pages().ext.cache;
         let mut failures = cache.take_failures();
@@ -332,6 +332,31 @@ impl App {
         {
             return self.open_call_view_inner(call);
         }
+        if let TargetId::Extension(key) = id {
+            // Enter clicks the focused stop: the route resolves at the
+            // stop's own topmost-leftmost painted cell, never a guessed
+            // coordinate, and a handled click consumes it. Anything else
+            // resumes the built-in candidate saved under it, as a
+            // declined mouse click does.
+            let route = self
+                .stops
+                .iter()
+                .filter(|target| target.id == TargetId::Extension(key))
+                .min_by_key(|target| (target.rect.y, target.rect.x))
+                .and_then(|target| {
+                    crate::mouse::click_route(&self.stops, key, target.rect.x, target.rect.y)
+                });
+            if let Some(route) = route {
+                let (handled, _) = self.extension_click(&route);
+                if handled {
+                    return Effect::None;
+                }
+                if let Some(fallback) = route.fallback {
+                    return self.on_click_inner(fallback);
+                }
+            }
+            return Effect::None;
+        }
         let effect = self.on_click_inner(id);
         if matches!(id, TargetId::Steering(_)) {
             self.focus = None;
@@ -385,6 +410,10 @@ impl App {
             TargetId::FindCount | TargetId::FindResult(_) => None,
             TargetId::Steering(at) => self.steering.text(at).map(str::to_owned),
             TargetId::Turn(at) => self.turn_text(at),
+            // The stop's drawn text, joined by the selection rules; a
+            // stop with no text gives nothing, as does one whose key
+            // the frame no longer paints.
+            TargetId::Extension(key) => self.screen.pages().ext.cache.click_text(key),
             TargetId::Badge
             | TargetId::NewBelow
             | TargetId::Interrupt

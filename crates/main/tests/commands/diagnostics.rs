@@ -1,5 +1,4 @@
-//! `diagnostics.level` at the binary level (`docs/state.md`, "Diagnostic
-//! logs"): the built `fiber` runs `ask` against the fake provider server.
+//! `diagnostics.level` at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask` against the fake provider server.
 //! With the default nothing debug is written; a repository's value is
 //! ignored with a `config_key_ignored` notice; a debug hub writes a
 //! positive `resources` through the Part 1 path.
@@ -246,7 +245,7 @@ fn journey_config(setup: &Setup, servers: Value) {
 /// server and one background job writes every session-core timer: each
 /// listed operation has at least one line, and no `op_timing` line
 /// carries a field outside `op`, `ms` and `tool`.
-/// Each count below is promised by `docs/state.md`, "Diagnostic logs":
+/// Each count below is promised by `docs/state.md`, "What each part holds":
 /// startup.* by the startup and routing paragraph, `startup.preamble`,
 /// `turn.*` and `turn.compaction` by the loop paragraph, `tool.*` by the
 /// one-tool-call paragraph, `mcp.connect` by the MCP paragraph,
@@ -283,7 +282,7 @@ fn a_debug_journey_times_the_session_core_matrix() {
         "the journey asked five times: a passing test really called"
     );
     let lines = op_lines(&setup);
-    // (`docs/state.md`, "Diagnostic logs") promises one `op_timing` line
+    // (`docs/state.md`, "What each part holds") promises one `op_timing` line
     // per ended operation; each name below is that paragraph's operation.
     for op in [
         "startup.config",
@@ -307,7 +306,7 @@ fn a_debug_journey_times_the_session_core_matrix() {
             "one {op} line"
         );
     }
-    // (`docs/state.md`, "Diagnostic logs") promises one `http_request`
+    // (`docs/state.md`, "What each part holds") promises one `http_request`
     // line per ended model call and one `resources` line per turn end.
     assert!(
         log_lines(&setup)

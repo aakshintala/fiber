@@ -58,8 +58,8 @@ pub use media::read_media;
 pub use name::session_name;
 pub use name::session_parent;
 pub use read::{
-    Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_session, kind_of,
-    last_kind, lines, lines_from, read, tail_lines,
+    Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_session,
+    is_archived, kind_of, last_kind, lines, lines_from, read, tail_lines,
 };
 pub use resolve::{most_recent, opening_ts, resolve};
 pub use scan::{

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The self-test for the flake report (.github/workflows/ci.yml, jobs
-# flake_decide and flake_report; docs/testing/running.md, "Flaky tests").
+# flake_decide and flake_report; `docs/testing/running.md`, "Flaky tests").
 # It runs the decide job's classify block for real, cut from the workflow
 # file, with a `git` shim answering history from the case's fixture, and
 # the writer step's own script, cut the same way, against a stub `gh`
@@ -172,7 +172,7 @@ grep -Fq 'git diff --name-only' "$tmp/classify.sh" || fail "the classify step's 
 # `rev-parse <sha>^1` prints the first STUB_PARENTS word, `^2` the second,
 # or nothing when the run has one parent. The case's bash sources it before
 # the block, so no shim is executed through PATH: a test does not execute a
-# file it wrote in the same run (docs/testing.md, "Waits and timeouts").
+# file it wrote in the same run (`docs/testing.md`, "Waits and timeouts").
 cat >"$tmp/git-stub.sh" <<'GIT_EOF'
 git() {
   if [ "${1:-}" = rev-parse ] && [ $# -eq 2 ]; then
@@ -215,7 +215,7 @@ git() {
 }
 GIT_EOF
 
-# `jq` is absent on the Linux runners (docs/testing/running.md, "Running
+# `jq` is absent on the Linux runners (`docs/testing/running.md`, "Running
 # tests"), so the writer's fixed queries run against this minimal fake. It
 # answers only the exact filters the step uses and fails any other filter,
 # so a new query is added here deliberately. The full JSON contract lives
@@ -519,7 +519,7 @@ code=$(classify_case "$tmp/push-no-tab" push "" "" "")
 expect_exit push-no-tab-classify "$code" 0
 code=$(run_step "$tmp/push-no-tab" push "" "$empty_open" "" decisions.jsonl)
 expect_exit push-no-tab "$code" 0
-# docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
+# `docs/testing/running.md`, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/push-no-tab" 1
 expect_write "$tmp/push-no-tab" 0 "$(printf 'create %s\n%s\n%s\nlabel=test-only' "$title" "$plain" "$push_tested")"
 
@@ -532,9 +532,9 @@ code=$(classify_case "$tmp/push-create-mainmod" push "" "" "")
 expect_exit push-create-mainmod-classify "$code" 0
 code=$(run_step "$tmp/push-create-mainmod" push "" "$empty_open" "" decisions.jsonl)
 expect_exit push-create-mainmod "$code" 0
-# docs/ci.md, "On every pull request that changes code": "writes one
+# `docs/ci.md`, "On every pull request that changes code": "writes one
 # classification line per unique title": one title writes once.
-# docs/testing/running.md, "Flaky tests": "an area binary names its first
+# `docs/testing/running.md`, "Flaky tests": "an area binary names its first
 # test-module segment, the file".
 expect_writes "$tmp/push-create-mainmod" 1
 mainmod_plain="The test \`$mainmod_name\` passed after a retry on linux: $url."
@@ -568,7 +568,7 @@ code=$(classify_case "$tmp/pr-comment" pull_request "$base $head" "" "$probe_fil
 expect_exit pr-comment-classify "$code" 0
 code=$(run_step "$tmp/pr-comment" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-comment "$code" 0
-# docs/testing/running.md, "Flaky tests": "when the pull request itself changed that file it comments on the pull request instead of filing"
+# `docs/testing/running.md`, "Flaky tests": "when the pull request itself changed that file it comments on the pull request instead of filing"
 expect_writes "$tmp/pr-comment" 1
 expect_write "$tmp/pr-comment" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
 
@@ -578,7 +578,7 @@ code=$(classify_case "$tmp/pr-stale-base" pull_request "$base $head" "$probe_fil
 expect_exit pr-stale-base-classify "$code" 0
 code=$(run_step "$tmp/pr-stale-base" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-stale-base "$code" 0
-# docs/testing/running.md, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
+# `docs/testing/running.md`, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
 expect_writes "$tmp/pr-stale-base" 0
 expect_summary "$tmp/pr-stale-base" "stale base: main changed $probe_file since $base"
 
@@ -589,7 +589,7 @@ code=$(classify_case "$tmp/pr-stale-before-pr-owned" pull_request "$base $head" 
 expect_exit pr-stale-before-pr-owned-classify "$code" 0
 code=$(run_step "$tmp/pr-stale-before-pr-owned" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-stale-before-pr-owned "$code" 0
-# docs/testing/running.md, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
+# `docs/testing/running.md`, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
 expect_writes "$tmp/pr-stale-before-pr-owned" 0
 expect_summary "$tmp/pr-stale-before-pr-owned" "stale base: main changed $probe_file since $base"
 
@@ -601,7 +601,7 @@ code=$(classify_case "$tmp/pr-stale-base-open-issue" pull_request "$base $head" 
 expect_exit pr-stale-base-open-issue-classify "$code" 0
 code=$(run_step "$tmp/pr-stale-base-open-issue" pull_request 12 "$open7" "" decisions.jsonl)
 expect_exit pr-stale-base-open-issue "$code" 0
-# docs/testing/running.md, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
+# `docs/testing/running.md`, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
 expect_writes "$tmp/pr-stale-base-open-issue" 0
 expect_summary "$tmp/pr-stale-base-open-issue" "stale base: main changed $probe_file since $base"
 
@@ -613,7 +613,7 @@ code=$(classify_case "$tmp/pr-owned-open-issue" pull_request "$base $head" "" "$
 expect_exit pr-owned-open-issue-classify "$code" 0
 code=$(run_step "$tmp/pr-owned-open-issue" pull_request 12 "$open7" "" decisions.jsonl)
 expect_exit pr-owned-open-issue "$code" 0
-# docs/testing/running.md, "Flaky tests": "when the pull request itself changed that file it comments on the pull request instead of filing"
+# `docs/testing/running.md`, "Flaky tests": "when the pull request itself changed that file it comments on the pull request instead of filing"
 expect_writes "$tmp/pr-owned-open-issue" 1
 expect_write "$tmp/pr-owned-open-issue" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
 
@@ -626,7 +626,7 @@ code=$(classify_case "$tmp/pr-panic-without-file" pull_request "$base $head" "ot
 expect_exit pr-panic-without-file-classify "$code" 0
 code=$(run_step "$tmp/pr-panic-without-file" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-panic-without-file "$code" 0
-# docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
+# `docs/testing/running.md`, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/pr-panic-without-file" 1
 expect_write "$tmp/pr-panic-without-file" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(detail="$detail_nofile" body "$see_pr" "$pr_tested")")"
 
@@ -639,7 +639,7 @@ code=$(classify_case "$tmp/pr-no-panic-text" pull_request "$base $head" "$probe_
 expect_exit pr-no-panic-text-classify "$code" 0
 code=$(run_step "$tmp/pr-no-panic-text" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-no-panic-text "$code" 0
-# docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
+# `docs/testing/running.md`, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/pr-no-panic-text" 1
 expect_write "$tmp/pr-no-panic-text" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(detail="$detail_nopanic" body "$see_pr" "$pr_tested")")"
 
@@ -869,7 +869,7 @@ code=$(classify_case "$tmp/duplicate-title" push "" "" "")
 expect_exit duplicate-title-classify "$code" 0
 code=$(run_step "$tmp/duplicate-title" push "" "$empty_open" "" decisions.jsonl)
 expect_exit duplicate-title "$code" 0
-# docs/testing/running.md, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
+# `docs/testing/running.md`, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
 expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
@@ -942,7 +942,7 @@ g checkout -qb mg1 "$m1"
 g merge -q --no-ff -m "merge pr" "$p1"
 mg1=$(g rev-parse HEAD)
 # cargo is a function the block's bash sources first, not an executable
-# on PATH (docs/testing.md, "Waits and timeouts").
+# on PATH (`docs/testing.md`, "Waits and timeouts").
 cat >"$realgit/cargo-stub.sh" <<CARGO_EOF
 cargo() {
   [ "\$1" = xtask ] || { echo "stub cargo: unexpected call: \$*" >&2; return 1; }

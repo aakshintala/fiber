@@ -83,7 +83,7 @@ pub struct Span {
 /// off at the callback's deadline as the callback is, and `fiber.slot`, which
 /// fills the tables the prelude returns. Lua's own `wrap` is a separate C
 /// function that would make an unarmed coroutine.
-// A callback's timeout is in milliseconds (docs/extensions.md, "How an
+// A callback's timeout is in milliseconds (`docs/extensions.md`, "How an
 // extension runs"), and an animated slot's `animate` holds its raw
 // `{ interval_ms }` table: the adapter normalizes it to the tick floor
 // at registration, while the VM stores the validated raw value.
@@ -150,7 +150,24 @@ fiber = {
         end
       end
     end
-    slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate }
+    -- A click handler is optional, and has its own timeout: it answers
+    -- whether a click on a span carrying a `click` id was handled
+    -- (`docs/extensions.md`, "Commands and screens").
+    if spec.on_click ~= nil then
+      if type(spec.on_click) ~= "table" then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click` must be a table with `timeout` and `run`")
+      end
+      if spec.on_click.timeout == nil then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click` is missing `timeout`")
+      end
+      if math.type(spec.on_click.timeout) ~= "integer" or spec.on_click.timeout <= 0 then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click.timeout` must be a whole number of milliseconds above 0")
+      end
+      if type(spec.on_click.run) ~= "function" then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click.run` must be a function")
+      end
+    end
+    slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate, on_click = spec.on_click }
   end,
   -- A malformed binding records one rejection and skips that
   -- registration, leaving the extension loaded; the adapter reports
@@ -235,12 +252,24 @@ fiber = {
 return slots, violations, key_bindings, key_rejections
 "#;
 
-/// A registered slot: its declared timeout, its renderer, and the raw
-/// validated animation interval when the slot animates.
+/// A registered slot: its declared timeout, its renderer, the raw
+/// validated animation interval when the slot animates, and its click
+/// handler with its own declared timeout when the slot handles clicks.
 struct Slot {
     timeout: Duration,
     render: Function,
     animate: Option<Duration>,
+    on_click: Option<ClickReg>,
+}
+
+/// A click handler: its callback with its own declared timeout, separate
+/// from the renderer's, so a slow click answer never spends the draw
+/// budget (`docs/extensions.md`, "Commands and screens").
+struct ClickReg {
+    /// The declared timeout.
+    timeout: Duration,
+    /// The callback.
+    run: Function,
 }
 
 /// What an animated call returned: its lines, and whether the item keeps
@@ -492,12 +521,24 @@ impl TuiVm {
                         .map_err(|_| shape("`animate.interval_ms` must be a whole number above 0"))
                 })
                 .transpose()?;
+            let on_click: Option<Table> = spec.raw_get("on_click").map_err(lua_error)?;
+            let on_click: Option<ClickReg> = on_click
+                .map(|table| {
+                    let timeout: mlua::Integer = table.raw_get("timeout").map_err(lua_error)?;
+                    let timeout = u64::try_from(timeout)
+                        .map(Duration::from_millis)
+                        .map_err(|_| shape("`on_click.timeout` must be a whole number above 0"))?;
+                    let run: Function = table.raw_get("run").map_err(lua_error)?;
+                    Ok::<ClickReg, Error>(ClickReg { timeout, run })
+                })
+                .transpose()?;
             slots.insert(
                 slot,
                 Slot {
                     timeout,
                     render,
                     animate,
+                    on_click,
                 },
             );
         }
@@ -561,6 +602,50 @@ impl TuiVm {
         &self.lua
     }
 
+    // The shared deadline/arm/resume/off/match for key and click
+    // callbacks: the caller looked up the handler and built the arg.
+    fn run_callback(
+        &mut self,
+        run: Function,
+        timeout: Duration,
+        arg: Table,
+        resume_msg: &'static str,
+        shape_msg: &'static str,
+    ) -> Result<bool, Error> {
+        let thread = self.lua.create_thread(run).map_err(lua_error)?;
+        self.deadline.arm(&thread).map_err(lua_error)?;
+        // `None` when the timeout is too large to add to an `Instant`: such
+        // a callback is never cut off.
+        let at = self.clock.now().checked_add(timeout);
+        self.deadline.restore(at);
+        let returned = resume(&self.deadline, &thread, arg, resume_msg);
+        self.deadline.restore(None);
+        // The conversion ran no Lua, but a finish is late when the clock
+        // says so, whichever path it took.
+        let result = if self.deadline.passed() {
+            Err(Error::TuiTimeout)
+        } else {
+            returned
+        };
+        if matches!(result, Err(Error::TuiTimeout)) {
+            self.off = true;
+        }
+        match result? {
+            mlua::Value::Boolean(handled) => Ok(handled),
+            mlua::Value::Nil => Ok(false),
+            mlua::Value::LightUserData(_)
+            | mlua::Value::Integer(_)
+            | mlua::Value::Number(_)
+            | mlua::Value::String(_)
+            | mlua::Value::Table(_)
+            | mlua::Value::Function(_)
+            | mlua::Value::Thread(_)
+            | mlua::Value::UserData(_)
+            | mlua::Value::Error(_)
+            | mlua::Value::Other(_) => Err(shape(shape_msg)),
+        }
+    }
+
     /// Runs the `raw` binding's `run` with `session_id`, and returns
     /// whether it handled the key. Only `true` handles; `false` and `nil`
     /// do not, and any other value is the existing wrong-shape failure.
@@ -590,43 +675,61 @@ impl TuiVm {
                 Ok(input)
             })
             .map_err(lua_error)?;
-        let thread = self.lua.create_thread(run).map_err(lua_error)?;
-        self.deadline.arm(&thread).map_err(lua_error)?;
-        // `None` when the timeout is too large to add to an `Instant`: such
-        // a callback is never cut off.
-        let at = self.clock.now().checked_add(timeout);
-        self.deadline.restore(at);
-        let returned = resume(
-            &self.deadline,
-            &thread,
+        self.run_callback(
+            run,
+            timeout,
             arg,
             "a key handler makes no host call",
-        );
-        self.deadline.restore(None);
-        // The conversion ran no Lua, but a finish is late when the clock
-        // says so, whichever path it took.
-        let result = if self.deadline.passed() {
-            Err(Error::TuiTimeout)
-        } else {
-            returned
+            "a key handler returns only true, false or nil",
+        )
+    }
+
+    /// Runs the `slot` click handler with the clicked `id` and `session_id`,
+    /// and returns whether it handled the click. Only `true` handles;
+    /// `false` and `nil` do not, and any other value is the existing
+    /// wrong-shape failure. A yielded handler makes no host call, like a
+    /// key handler. A slot with no handler, or an unknown slot, is a
+    /// terminal fallback, not a failure: it answers not-handled with no
+    /// notice (`docs/tui.md`, "When an extension fails").
+    ///
+    /// A home call sends no `session_id` key and Lua reads nil: no previous
+    /// session's identity is reused. A timeout switches the VM off: every
+    /// later call is [`Error::TuiOff`].
+    pub fn run_click(
+        &mut self,
+        slot: &str,
+        id: &str,
+        session_id: Option<&str>,
+    ) -> Result<bool, Error> {
+        if self.off {
+            return Err(Error::TuiOff);
+        }
+        let Some(click) = self
+            .slots
+            .get(slot)
+            .and_then(|registered| registered.on_click.as_ref())
+        else {
+            return Ok(false);
         };
-        if matches!(result, Err(Error::TuiTimeout)) {
-            self.off = true;
-        }
-        match result? {
-            mlua::Value::Boolean(handled) => Ok(handled),
-            mlua::Value::Nil => Ok(false),
-            mlua::Value::LightUserData(_)
-            | mlua::Value::Integer(_)
-            | mlua::Value::Number(_)
-            | mlua::Value::String(_)
-            | mlua::Value::Table(_)
-            | mlua::Value::Function(_)
-            | mlua::Value::Thread(_)
-            | mlua::Value::UserData(_)
-            | mlua::Value::Error(_)
-            | mlua::Value::Other(_) => Err(shape("a key handler returns only true, false or nil")),
-        }
+        let (timeout, run) = (click.timeout, click.run.clone());
+        let arg = self
+            .lua
+            .create_table()
+            .and_then(|input| {
+                if let Some(session_id) = session_id {
+                    input.raw_set("session_id", session_id)?;
+                }
+                input.raw_set("click", id)?;
+                Ok(input)
+            })
+            .map_err(lua_error)?;
+        self.run_callback(
+            run,
+            timeout,
+            arg,
+            "a click handler makes no host call",
+            "a click handler returns only true, false or nil",
+        )
     }
 
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,

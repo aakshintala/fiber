@@ -1,5 +1,4 @@
-//! Part 14 operation timers at the binary level (`docs/state.md`,
-//! "Diagnostic logs"): a debug home times hub start, resume,
+//! Part 14 operation timers at the binary level (`docs/state.md`, "What each part holds"): a debug home times hub start, resume,
 //! subscription replay, socket preparation and session listing with only
 //! `op` and `ms`; the default and the explicit info homes write no
 //! `op_timing` at all. The built `fiber` runs `hub serve` in its own
@@ -28,7 +27,7 @@ const PROBE: &str = "timing-probe-twelve";
 
 /// The verbatim count rule the multiset calls cite
 /// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
 
 /// The fold-then-live order the replayed/live split below pins
 /// (`docs/invocation.md`, "Processes"; `docs/events.md`,

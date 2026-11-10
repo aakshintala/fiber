@@ -1,4 +1,4 @@
-//! The diagnostics leaf (`docs/state.md`, "Diagnostic logs"): the writer
+//! The diagnostics leaf (`docs/state.md`, "What each part holds"): the writer
 //! behind the per-process files in `logs/`, the operation timer every timed
 //! place goes through, and the usage, rate and allocation folds. It depends
 //! only on `contract` and `support`, so `tui` takes it without taking `log`;

@@ -12,11 +12,12 @@ use contract::shapes::ProviderFailure;
 use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::steering::Steering;
-use super::{App, Effect, Kind, Phase, mint, session_command};
-use crate::home::Level;
+use super::{App, Effect, Kind, Phase, session_line};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
+use contract::commands::SubscribeLevel;
+use contract::commands::{Command, JobInput, JobStop};
 
 pub(crate) mod keys;
 
@@ -507,15 +508,15 @@ impl App {
             return Effect::None;
         }
         match self.subscribed_level(session) {
-            None | Some(Level::Summary) => {
+            None | Some(SubscribeLevel::Summary) => {
                 self.items.wants.remove(session);
-                Effect::Send(vec![self.subscribe(session, Level::Full)])
+                Effect::Send(vec![self.subscribe(session, SubscribeLevel::Full)])
             }
-            Some(Level::Full) => {
+            Some(SubscribeLevel::Full) => {
                 self.items.wants.remove(session);
                 Effect::Send(vec![
-                    self.subscribe(session, Level::Summary),
-                    self.subscribe(session, Level::Full),
+                    self.subscribe(session, SubscribeLevel::Summary),
+                    self.subscribe(session, SubscribeLevel::Full),
                 ])
             }
         }
@@ -624,14 +625,14 @@ impl App {
         }
         let session = session.clone();
         let job_id = open.job_id.clone();
-        let id = mint();
-        let line = session_command(
-            &id,
-            "job_stop",
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
             &session,
-            Some(serde_json::json!({"job_id": job_id.0})),
-        )
-        .to_string();
+            Command::JobStop(JobStop {
+                job_id: job_id.clone(),
+            }),
+        );
         self.outbox.wait(&id, super::Waiting::JobStop);
         self.outbox
             .pending
@@ -681,14 +682,15 @@ impl App {
     /// view does not own input.
     fn item_job_send(&mut self, text: String) -> Option<Effect> {
         let (session, job_id) = self.item_job_target()?;
-        let id = mint();
-        let line = session_command(
-            &id,
-            "job_input",
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
             &session,
-            Some(serde_json::json!({"job_id": job_id.0, "text": text})),
-        )
-        .to_string();
+            Command::JobInput(JobInput {
+                job_id: job_id.clone(),
+                text,
+            }),
+        );
         self.outbox.wait(&id, super::Waiting::JobInput);
         self.outbox
             .pending
@@ -736,9 +738,13 @@ impl App {
         if self.steering.is_selected() {
             return Some(self.amend());
         }
-        let id = mint();
+        let id = support::mint("c_");
         let args = super::commands::content_arg(&self.draft);
-        let line = session_command(&id, "steer", &delegate.session, Some(args)).to_string();
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &delegate.session,
+            Command::Steer(args),
+        );
         let draft = std::mem::take(&mut self.draft);
         self.outbox.wait(&id, super::Waiting::Steer);
         self.outbox.pending.insert(id, (Kind::Steer, draft));
@@ -849,6 +855,7 @@ impl App {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded

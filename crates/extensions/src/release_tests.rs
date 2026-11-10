@@ -733,7 +733,7 @@ fn an_observed_nightly_tag_writes_its_lists_line() {
     let tag = fetch_nightly_tag_observed(&server.url(), &observe).unwrap();
     assert_eq!(tag, "v0.3.0-nightly.20240102");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    // `docs/state.md`, "What each part holds": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "one line per list: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -765,7 +765,7 @@ fn an_observed_stable_tag_writes_its_probes_line() {
     let tag = latest_stable_tag_observed(&server.url(), &observe).unwrap();
     assert_eq!(tag, "v0.2.0");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, each redirect included.
+    // `docs/state.md`, "What each part holds": one line per actual release HTTP request, each redirect included.
     assert_eq!(lines.len(), 2, "one line per request: {lines:?}");
     for line in &lines {
         assert_release_shape(line);
@@ -791,7 +791,7 @@ fn an_observed_stable_tag_failure_keeps_the_status_and_header_timing() {
         "a failed probe names its URL: {err}"
     );
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    // `docs/state.md`, "What each part holds": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "one line per probe: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -826,7 +826,7 @@ fn an_observed_nightly_tag_failure_writes_only_the_lists_line() {
         "a failed list names its URL: {err}"
     );
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    // `docs/state.md`, "What each part holds": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "the rejection reads no target: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);

@@ -23,7 +23,6 @@ use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
-use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
 use crate::install_worker::HooksJob;
@@ -32,6 +31,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Ended, Pages};
+use contract::commands::SubscribeLevel;
 use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
@@ -104,7 +104,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
-pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, session_line};
 pub(crate) use select::SurfaceId;
 pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
@@ -140,8 +140,7 @@ thread_local! {
 }
 
 /// How many borrowed decodes the calling thread has made
-/// (`docs/testing.md`, "a test of how much work something does counts
-/// the work"). The counted-work test reads it on the folding thread.
+/// (`docs/testing.md`, "Testing"). The counted-work test reads it on the folding thread.
 #[cfg(test)]
 pub(crate) fn decode_count() -> usize {
     DECODE_COUNT.with(|count| count.get())
@@ -346,6 +345,10 @@ pub(crate) struct App {
     /// A `/copy` waiting for the opening pass to end (`docs/tui.md`,
     /// "Selection and copy").
     copy_owed: bool,
+    /// A width the opening pass owes the pages: a resize records it
+    /// instead of recounting, and the pass end recounts once at the
+    /// width in force then (`docs/tui.md`, "History and paging").
+    recount_owed: Option<u16>,
     /// A `/pwd` waiting for the attached session's `session_started` to
     /// fold (`docs/tui.md`, "Slash commands").
     pwd_pending: bool,
@@ -389,6 +392,10 @@ pub(crate) struct App {
     keyboard: keyboard::Keyboard,
     /// The model picker: the installed models and the reads it owes.
     model_picker: crate::model_picker::ModelPicker,
+    /// Startup is waiting for the first catalogue's credential status.
+    first_run_pending: bool,
+    /// The first catalogue established that no installed provider has a key.
+    first_run_no_credential: bool,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
@@ -408,7 +415,7 @@ pub(crate) struct App {
     reconnect: reconnect::Reconnect,
     /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run
     /// layer: each `start` carries them in `overrides`
-    /// (`docs/invocation.md`, "Sessions").
+    /// (`docs/invocation.md`, "Commands and flags").
     launch_overrides: Vec<String>,
     /// The `/clear` start and close correlations (`docs/tui.md`,
     /// "Clearing").
@@ -489,6 +496,7 @@ impl App {
             history: history::History::default(),
             copied: false,
             copy_owed: false,
+            recount_owed: None,
             pwd_pending: false,
             pending_turn: None,
             focus: None,
@@ -506,6 +514,8 @@ impl App {
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),
             model_picker: crate::model_picker::ModelPicker::default(),
+            first_run_pending: false,
+            first_run_no_credential: false,
             opener: false,
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
@@ -537,6 +547,8 @@ impl App {
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
+        // A recount owed mid-pass was for the screen before this one.
+        self.recount_owed = None;
         // A `/pwd` waiting on the old session's root ends with the
         // switch: the new session's fold answers only its own wait.
         self.pwd_pending = false;
@@ -962,6 +974,9 @@ impl App {
         // The pass ends here without folding: a `/copy` waiting on it
         // has nothing new to copy.
         self.copy_owed = false;
+        // The pass ends here without folding: no landing recounts, so
+        // an owed width ends with it.
+        self.recount_owed = None;
         self.outbox.forget(&outbox::Waiting::Abandoned);
         self.end_overlay();
         if self.outbox.is_up() {
@@ -1866,7 +1881,7 @@ impl App {
     fn started(&mut self, session: SessionId, draft: Draft) -> Vec<String> {
         self.attach(session.clone());
         vec![
-            self.subscribe(&session, Level::Full),
+            self.subscribe(&session, SubscribeLevel::Full),
             self.ask_commands(&session),
             self.first_prompt(&session, draft),
         ]
@@ -2208,6 +2223,13 @@ impl App {
         // settle below, as any non-attached session's do.
         if self.is_item_session(&envelope.session_id) {
             self.item_session_line(envelope);
+            // The open Fiber delegate's own envelopes also fold its
+            // Session figures, so the card can follow its view; any
+            // other harness's keep the parent's (`docs/tui.md`, "Swapped
+            // views").
+            if self.delegate_session().as_ref() == Some(&envelope.session_id) {
+                self.panel_state.fold_delegate(envelope);
+            }
             match envelope.kind() {
                 EventKind::CommandAccepted => {
                     let accepted = read!(envelope, CommandAccepted);
@@ -2247,6 +2269,7 @@ impl App {
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
@@ -2357,6 +2380,7 @@ impl App {
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
@@ -2581,6 +2605,7 @@ impl App {
             | EventKind::TurnCompleted
             | EventKind::SteeringApplied
             | EventKind::DirectoryAdded
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded
@@ -2661,8 +2686,12 @@ impl App {
     }
 
     /// PageUp and PageDown move by the conversation height less one.
-    /// The input boundary owns the layout pass.
+    /// The input boundary owns the layout pass. While an opening pass
+    /// runs, the screen stays as it was, so the page is dropped.
     fn page_inner(&mut self, up: bool) {
+        if self.pass_open() {
+            return;
+        }
         let height = self.conversation_height();
         self.screen.page(up, height);
     }
@@ -2739,6 +2768,7 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded

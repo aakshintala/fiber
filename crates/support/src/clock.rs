@@ -61,7 +61,7 @@ impl Clock for System {
         SystemTime::now()
     }
 
-    // A wall-clock sleep; docs/testing.md, "Values that change every run",
+    // A wall-clock sleep; `docs/testing.md`, "Values that change every run",
     // permits only main's real-clock sleep test.
     #[cfg_attr(false, mutants::skip)]
     #[expect(
@@ -493,7 +493,7 @@ impl Manual {
     /// subscriber. The clock's lock is released before any [`Wake::wake`].
     pub fn advance(&self, d: Duration) {
         // The clock implementation itself moves time and wakes parked
-        // waiters; exempt (docs/testing.md, "Waits and timeouts").
+        // waiters; exempt (`docs/testing.md`, "Waits and timeouts").
         #[allow(
             clippy::disallowed_methods,
             reason = "support::clock implementation moves time and wakes parked waiters; exempt (docs/testing.md, \"Waits and timeouts\")"
@@ -1153,7 +1153,7 @@ impl Clock for Manual {
     fn sleep(&self, d: Duration) {
         match self.sleep {
             // The clock implementation itself moves time for a sleeping
-            // thread; exempt (docs/testing.md, "Waits and timeouts").
+            // thread; exempt (`docs/testing.md`, "Waits and timeouts").
             #[allow(
                 clippy::disallowed_methods,
                 reason = "support::clock implementation moves time for a sleeping thread; exempt (docs/testing.md, \"Waits and timeouts\")"

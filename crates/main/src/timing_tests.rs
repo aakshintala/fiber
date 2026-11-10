@@ -1,5 +1,5 @@
 //! Startup and routing timers under an injected clock
-//! (`docs/state.md`, "Diagnostic logs"): `parts_in` through the installed
+//! (`docs/state.md`, "What each part holds"): `parts_in` through the installed
 //! timer, and one entered switch preparation.
 
 #![allow(

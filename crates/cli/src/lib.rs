@@ -168,7 +168,7 @@ mod test_support;
 pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
 pub use contract::feedback::FrameShape;
-pub use doctor::{capture, doctor, with_fix};
+pub use doctor::{capture, doctor, first_blocker, with_fix};
 pub use extension::{
     FirstPartyInstall, Io, LoginNeed, extension_install, extension_list, extension_reinstall,
     extension_remove, extension_update, install_first_party,
@@ -198,7 +198,7 @@ pub use prune::{
 };
 pub use prune::{PruneArgs, prune};
 pub use release::release_install;
-pub use sessions::{delete, export};
+pub use sessions::{archive, delete, export};
 pub use sessions_list::list as sessions_list;
 pub use sessions_list::{latest_listed, resolve_listed};
 pub use sessions_search::search as sessions_search;

@@ -4,12 +4,13 @@
 
 use std::path::PathBuf;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::super::{App, Effect};
 use super::{Kind, Link, Outbox, RecentAsk, Waiting};
 use crate::app::testkit::{SESSION, hello, now};
 use crate::input::Draft;
+use contract::commands::{Command, CommandLine, ContentArgs, SubscribeArgs, SubscribeLevel};
 
 #[test]
 fn wait_then_settled_returns_the_tag_once() {
@@ -119,8 +120,12 @@ fn up() -> Outbox {
 }
 
 /// A `prompt` line for [`SESSION`] with `id`.
-fn prompt_line(id: &str) -> String {
-    super::session_command(id, "prompt", &contract::SessionId(SESSION.to_owned()), None).to_string()
+fn prompt_line(id: &contract::CommandId) -> String {
+    super::session_line(
+        id,
+        &contract::SessionId(SESSION.to_owned()),
+        Command::Prompt(ContentArgs { content: vec![] }),
+    )
 }
 
 #[test]
@@ -142,7 +147,7 @@ fn send_records_pending_and_returns_the_line_when_up() {
     let mut outbox = up();
     let mut draft = Draft::default();
     draft.set("hi");
-    let line = prompt_line("c_1");
+    let line = prompt_line(&contract::CommandId("c_1".to_owned()));
     assert_eq!(
         outbox.send("c_1".to_owned(), Kind::Prompt, draft, line.clone()),
         Some(line)
@@ -157,7 +162,7 @@ fn send_records_pending_and_returns_the_line_when_up() {
 fn send_holds_the_line_until_hello_when_waiting() {
     let mut outbox = Outbox::default();
     assert_eq!(outbox.link, Link::Waiting);
-    let line = prompt_line("c_1");
+    let line = prompt_line(&contract::CommandId("c_1".to_owned()));
     assert_eq!(
         outbox.send(
             "c_1".to_owned(),
@@ -188,7 +193,7 @@ fn fail_pops_pending_and_returns_its_kind_and_draft() {
 fn answered_closes_pending_and_drops_kept() {
     let mut outbox = up();
     outbox.insert("c_1".to_owned(), Kind::Prompt, Draft::default());
-    outbox.wrote(&prompt_line("c_1"));
+    outbox.wrote(&prompt_line(&contract::CommandId("c_1".to_owned())));
     assert!(outbox.is_kept("c_1"));
     let (kind, _) = outbox.answered("c_1").unwrap();
     assert_eq!(kind, Kind::Prompt);
@@ -198,20 +203,35 @@ fn answered_closes_pending_and_drops_kept() {
 }
 
 #[test]
-fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
+fn wrote_keeps_session_lines_but_not_subscribe_or_start() {
     let mut outbox = up();
     let session = contract::SessionId(SESSION.to_owned());
-    outbox.wrote(&prompt_line("c_1"));
+    outbox.wrote(&prompt_line(&contract::CommandId("c_1".to_owned())));
     assert!(outbox.is_kept("c_1"));
     // A second write of the same id keeps one entry.
-    outbox.wrote(&prompt_line("c_1"));
+    outbox.wrote(&prompt_line(&contract::CommandId("c_1".to_owned())));
     assert_eq!(outbox.kept.len(), 1);
     // A second command is kept behind the first, in write order.
-    let steer = super::session_command("c_5", "steer", &session, None).to_string();
+    let steer = super::session_line(
+        &contract::CommandId("c_5".to_owned()),
+        &session,
+        Command::Steer(ContentArgs { content: vec![] }),
+    );
     outbox.wrote(&steer);
     // `subscribe` and `commands` go out afresh on a reconnect.
-    outbox.wrote(&super::session_command("c_2", "subscribe", &session, None).to_string());
-    outbox.wrote(&super::session_command("c_3", "commands", &session, None).to_string());
+    outbox.wrote(&super::session_line(
+        &contract::CommandId("c_2".to_owned()),
+        &session,
+        Command::Subscribe(SubscribeArgs {
+            level: SubscribeLevel::Summary,
+            credential: None,
+        }),
+    ));
+    outbox.wrote(&super::session_line(
+        &contract::CommandId("c_3".to_owned()),
+        &session,
+        Command::Commands,
+    ));
     // `start` carries no `session_id`, so it is never kept.
     outbox.wrote(&json!({"id": "c_4", "command": "start"}).to_string());
     // A line with no id is not a command.
@@ -219,8 +239,53 @@ fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
     assert_eq!(outbox.kept.len(), 2);
     assert_eq!(
         outbox.reconnect_lines(),
-        vec![(session.clone(), prompt_line("c_1")), (session, steer)]
+        vec![
+            (
+                session.clone(),
+                prompt_line(&contract::CommandId("c_1".to_owned()))
+            ),
+            (session, steer)
+        ]
     );
+}
+
+#[test]
+fn session_line_round_trips_a_line_with_args_and_one_without() {
+    use contract::commands::SentPart;
+    let session = contract::SessionId(SESSION.to_owned());
+    let with_args = Command::Prompt(ContentArgs {
+        content: vec![SentPart::Text {
+            text: "hi".to_owned(),
+        }],
+    });
+    for (id, command) in [("c_1", with_args), ("c_2", Command::Cancel)] {
+        let line = super::session_line(
+            &contract::CommandId(id.to_owned()),
+            &session,
+            command.clone(),
+        );
+        let mut value: Value =
+            serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+        // The injected top-level `session_id` is not a `CommandLine`
+        // key, so it comes out before the line parses as one.
+        let session_id = value
+            .as_object_mut()
+            .and_then(|map| map.remove("session_id"))
+            .and_then(|id| id.as_str().map(str::to_owned))
+            .unwrap_or_else(|| panic!("a session_id: {line}"));
+        assert_eq!(session_id, SESSION);
+        let parsed: CommandLine =
+            serde_json::from_value(value).unwrap_or_else(|err| panic!("{line}: {err}"));
+        assert_eq!(parsed.id, contract::CommandId(id.to_owned()));
+        assert_eq!(parsed.command, command);
+    }
+    // A hand-built line with a wrong key is refused once the injected
+    // `session_id` is removed.
+    let mut bad = json!({"id": "c_9", "command": "cancel", "bogus": true});
+    bad.as_object_mut()
+        .unwrap_or_else(|| panic!("an object"))
+        .remove("session_id");
+    assert!(serde_json::from_value::<CommandLine>(bad).is_err());
 }
 
 /// An app with no home, before the hub connects.
@@ -380,7 +445,7 @@ fn kept_lines_go_out_again_unchanged_after_a_drop() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_line(hello());
     app.outbox.link = Link::Up;
-    let line = prompt_line("c_1");
+    let line = prompt_line(&contract::CommandId("c_1".to_owned()));
     app.outbox
         .insert("c_1".to_owned(), Kind::Prompt, Draft::default());
     app.outbox.wrote(&line);

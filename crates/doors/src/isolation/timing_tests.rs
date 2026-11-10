@@ -1,5 +1,4 @@
-//! The worktree create and remove stamps (`docs/state.md`, "Diagnostic
-//! logs"): the two unconditional clock reads around the one
+//! The worktree create and remove stamps (`docs/state.md`, "What each part holds"): the two unconditional clock reads around the one
 //! `worktree::create` or `worktree::recreate` call, the opener that emits
 //! the one `worktree.create` line, and the `end` scope around the one
 //! real removal. Time comes from the injected clock only.

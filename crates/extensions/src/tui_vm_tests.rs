@@ -768,7 +768,7 @@ fn animate_is_refused_unless_a_table_with_a_positive_whole_interval() {
 
 #[test]
 fn animate_with_a_key_beside_interval_ms_is_refused() {
-    // docs/extensions.md:1507-1509: any other animate shape fails
+    // `docs/extensions.md`, "Commands and screens": any other animate shape fails
     // registration, naming the slot.
     for bad in [
         "{ interval_ms = 500, extra = 1 }",
@@ -1031,7 +1031,7 @@ fn fiber_key_with_a_non_string_key_is_rejected() {
             "fiber.key({name}, {{ timeout = 100, run = function() end }})"
         ));
         assert!(bindings.is_empty(), "{name}: {bindings:?}");
-        // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
         assert_eq!(rejected.len(), 1, "{name}: {rejected:?}");
         assert!(rejected[0].reason.contains("key"), "{name}: {rejected:?}");
     }
@@ -1042,7 +1042,7 @@ fn fiber_key_with_a_non_table_spec_is_rejected() {
     for spec in ["5", "nil", "'run'"] {
         let (bindings, rejected) = rejections(&format!("fiber.key('ctrl+o', {spec})"));
         assert!(bindings.is_empty(), "{spec}: {bindings:?}");
-        // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
         assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
         assert!(
             rejected[0].reason.contains("ctrl+o"),
@@ -1055,7 +1055,7 @@ fn fiber_key_with_a_non_table_spec_is_rejected() {
 fn fiber_key_with_neither_run_nor_action_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+o', {})");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("run") && rejected[0].reason.contains("action"));
 }
@@ -1065,7 +1065,7 @@ fn fiber_key_with_both_run_and_action_is_rejected() {
     let (bindings, rejected) =
         rejections("fiber.key('ctrl+o', { timeout = 100, run = function() end, action = 'send' })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("run") && rejected[0].reason.contains("action"));
 }
@@ -1077,7 +1077,7 @@ fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
             "fiber.key('ctrl+o', {{ timeout = {timeout}, run = function() end }})"
         ));
         assert!(bindings.is_empty(), "{timeout}: {bindings:?}");
-        // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
         assert_eq!(rejected.len(), 1, "{timeout}: {rejected:?}");
         assert!(
             rejected[0].reason.contains("timeout"),
@@ -1087,7 +1087,7 @@ fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
     let (bindings, rejected) =
         rejections("fiber.key('ctrl+o', { run = function() return true end })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
 }
@@ -1096,7 +1096,7 @@ fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
 fn fiber_key_with_a_non_function_run_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+o', { timeout = 100, run = 'yes' })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("run"), "{rejected:?}");
 }
@@ -1106,7 +1106,7 @@ fn fiber_key_with_an_action_and_a_timeout_names_timeout() {
     let (bindings, rejected) =
         rejections("fiber.key('alt+h', { action = 'move_word', variant = 'left', timeout = 100 })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
 }
@@ -1117,7 +1117,7 @@ fn fiber_key_with_a_run_and_a_variant_names_variant() {
         "fiber.key('ctrl+o', { timeout = 100, run = function() end, variant = 'left' })",
     );
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("variant"), "{rejected:?}");
 }
@@ -1126,13 +1126,13 @@ fn fiber_key_with_a_run_and_a_variant_names_variant() {
 fn fiber_key_with_a_non_string_action_or_variant_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+o', { action = 5 })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("action"), "{rejected:?}");
     let (bindings, rejected) =
         rejections("fiber.key('alt+h', { action = 'move_word', variant = 5 })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(rejected[0].reason.contains("variant"), "{rejected:?}");
 }
@@ -1141,7 +1141,7 @@ fn fiber_key_with_a_non_string_action_or_variant_is_rejected() {
 fn fiber_key_with_clear_then_quit_is_rejected() {
     let (bindings, rejected) = rejections("fiber.key('ctrl+q', { action = 'clear_then_quit' })");
     assert!(bindings.is_empty());
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1);
     assert!(
         rejected[0].reason.contains("clear_then_quit"),
@@ -1155,7 +1155,7 @@ fn fiber_key_with_a_duplicate_raw_name_keeps_the_first() {
         "fiber.key('ctrl+o', { timeout = 100, run = function() return true end })\n\
          fiber.key('ctrl+o', { timeout = 200, run = function() return false end })",
     );
-    // docs/extensions.md:1526-1530: one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed shape; a second spelling is a duplicate and keeps the first.
     assert_eq!(rejected.len(), 1, "{rejected:?}");
     assert!(rejected[0].reason.contains("ctrl+o"), "{rejected:?}");
     assert!(rejected[0].reason.contains("twice"), "{rejected:?}");
@@ -1300,4 +1300,151 @@ fn a_fresh_load_works_after_a_timeout() {
     assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
     let (_, mut again) = vm(source);
     assert!(run_advancing(&mut again, FakeClock::new(), "ctrl+o", Duration::ZERO).unwrap());
+}
+
+/// A VM with the one slot `notice`, timeout 100 ms, whose click handler
+/// is `body`.
+fn clicking(body: &str) -> (Arc<FakeClock>, TuiVm) {
+    vm(&format!(
+        "fiber.slot('notice', {{ timeout = 100, render = function() return {{}} end, \
+         on_click = {{ timeout = 100, run = function(input) {body} end }} }})"
+    ))
+}
+
+/// Runs the `notice` click handler for session `s1`.
+fn click(vm: &mut TuiVm, id: &str) -> Result<bool, Error> {
+    vm.run_click("notice", id, Some("s1"))
+}
+
+/// Runs the `notice` click handler, moving the clock by `by` from inside
+/// `ticked`: the handler has started, and the clock moves only then.
+fn click_advancing(vm: &mut TuiVm, clock: Arc<FakeClock>, by: Duration) -> Result<bool, Error> {
+    vm.lua()
+        .globals()
+        .set(
+            "ticked",
+            vm.lua()
+                .create_function(move |_, ()| {
+                    tick(&clock, by);
+                    Ok(())
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    vm.run_click("notice", "badge", Some("s1"))
+}
+
+#[test]
+fn click_registration_matrix() {
+    // A click handler registers on any slot, with no key binding involved:
+    // clicks are not focus-gated.
+    for slot in ["notice", "home", "input_box", "ledger_row:shell"] {
+        let (_, mut vm) = vm(&format!(
+            "fiber.slot('{slot}', {{ timeout = 100, render = function() return {{}} end, \
+             on_click = {{ timeout = 50, run = function() return true end }} }})"
+        ));
+        assert!(vm.run_click(slot, "badge", Some("s1")).unwrap(), "{slot}");
+    }
+    // Every bad `on_click` shape refuses the load, naming the slot.
+    for (on_click, field) in [
+        ("'x'", "on_click"),
+        ("100", "on_click"),
+        ("{ timeout = 100 }", "run"),
+        ("{ run = function() end }", "timeout"),
+        ("{ timeout = 0, run = function() end }", "timeout"),
+        ("{ timeout = -1, run = function() end }", "timeout"),
+        ("{ timeout = 1.5, run = function() end }", "timeout"),
+        ("{ timeout = '100', run = function() end }", "timeout"),
+        ("{ timeout = 100, run = 'x' }", "run"),
+        ("{ timeout = 100, run = nil }", "run"),
+    ] {
+        let message = refused(&format!(
+            "fiber.slot('notice', {{ timeout = 100, render = function() end, on_click = {on_click} }})"
+        ));
+        assert!(
+            message.contains("notice") && message.contains(field),
+            "{on_click}: {message}"
+        );
+    }
+}
+
+#[test]
+fn click_returns_and_wire() {
+    for (body, handled) in [
+        ("return true", true),
+        ("return false", false),
+        ("return nil", false),
+        ("return", false),
+    ] {
+        let (_, mut vm) = clicking(body);
+        assert_eq!(click(&mut vm, "badge").unwrap(), handled, "{body}");
+    }
+    // The handler receives exactly the session and the click id.
+    let (_, mut vm) = clicking("return input.session_id == 's1' and input.click == 'badge'");
+    assert!(click(&mut vm, "badge").unwrap());
+    for body in ["return 5", "return 'handled'", "return {}"] {
+        let (_, mut vm) = clicking(body);
+        assert!(
+            matches!(click(&mut vm, "badge"), Err(Error::TuiShape(_))),
+            "{body}"
+        );
+        // A wrong shape leaves the VM on.
+        assert!(matches!(click(&mut vm, "badge"), Err(Error::TuiShape(_))));
+    }
+    let (_, mut vm) = clicking("error('boom')");
+    let Err(Error::TuiLua(message)) = click(&mut vm, "badge") else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("boom"), "{message}");
+    // An error leaves the VM on.
+    assert!(matches!(click(&mut vm, "badge"), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn click_deadline_boundary() {
+    let source = "fiber.slot('notice', { timeout = 100, render = function() return {} end, \
+         on_click = { timeout = 100, run = function() ticked() return true end } })";
+    let (clock, mut early) = vm(source);
+    assert!(click_advancing(&mut early, clock, 99 * MS).unwrap());
+    let (clock, mut timed) = vm(source);
+    let timed_out = click_advancing(&mut timed, clock, 100 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    let later = click(&mut timed, "badge");
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
+    let (clock, mut past) = vm(source);
+    let timed_out = click_advancing(&mut past, clock, 101 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+}
+
+#[test]
+fn click_unknown_slot() {
+    let (_, mut vm) = clicking("return true");
+    // An unknown slot, and a slot with no click handler, answer
+    // not-handled with no notice and no switch-off.
+    assert!(!vm.run_click("home", "badge", Some("s1")).unwrap());
+    let (_, mut bare) = notice("return {}");
+    assert!(!bare.run_click("notice", "badge", Some("s1")).unwrap());
+    assert!(click(&mut vm, "badge").unwrap());
+}
+
+#[test]
+fn click_none_omits_field() {
+    let (_, mut vm) = clicking("return input.session_id == nil and input.click == 'badge'");
+    assert!(vm.run_click("notice", "badge", None).unwrap());
+}
+
+#[test]
+fn click_host_call_rejected() {
+    let (_, mut vm) = vm(
+        "fiber.slot('notice', { timeout = 100, render = function() return {} end, \
+         on_click = { timeout = 100, run = function() coroutine.yield() end } })\n\
+         fiber.slot('home', { timeout = 100, render = function() return {} end, \
+         on_click = { timeout = 100, run = function() return true end } })",
+    );
+    let Err(Error::TuiLua(message)) = vm.run_click("notice", "badge", Some("s1")) else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("host call"), "{message}");
+    // A rejected host call is an error, not a switch-off: the VM stays on.
+    assert!(vm.run_click("home", "badge", Some("s1")).unwrap());
 }

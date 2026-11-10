@@ -219,7 +219,16 @@ fn run() -> i32 {
             hub_command::run(command, &process)
         }
         cli::Invocation::Run(Some(cli::Commands::Sessions(args)), _) => match args.command {
-            None => sessions_list(args.all, args.json, args.hub.as_deref(), &process),
+            None => sessions_list(
+                args.all,
+                args.json,
+                args.archived,
+                args.hub.as_deref(),
+                &process,
+            ),
+            Some(cli::SessionsCommands::Archive { hub, id }) => {
+                sessions_archive(&id, hub.as_deref(), &process)
+            }
             Some(cli::SessionsCommands::Delete {
                 hub,
                 cascade,
@@ -1187,7 +1196,7 @@ fn terminal(
     let diag_home = home.clone();
     // The terminal's diagnostic writer: one process, one file. Built once
     // here and shared with the terminal, so the error path below writes to
-    // the same file a run would have (`docs/state.md`, "Diagnostic logs").
+    // the same file a run would have (`docs/state.md`, "What each part holds").
     let diag = Arc::new(log::diag::Diag::new(
         &diag_home,
         log::diag::Process::Tui,
@@ -1220,6 +1229,8 @@ fn terminal(
     // directory the terminal opens in: cloned before `launch` takes it.
     let feedback_home = home.clone();
     let feedback_workspace = workspace.clone();
+    let blocker_home = home.clone();
+    let blocker_workspace = workspace.clone();
     let feedback_version = cli::bare_version();
     let feedback_clock = Arc::clone(&clock);
     // The `doctor` output both the feedback writer and the `/doctor`
@@ -1291,6 +1302,15 @@ fn terminal(
     let doctor: contract::feedback::ReadDoctor =
         std::sync::Arc::new(move || report().map_err(|error| error.to_string()));
     launch.doctor = Some(doctor);
+    let doctor_blocker: contract::feedback::ReadDoctorBlocker = std::sync::Arc::new(move || {
+        ::cli::first_blocker(
+            &blocker_home,
+            &blocker_workspace,
+            &|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()),
+            &mcp::url_has_userinfo,
+        )
+    });
+    launch.doctor_blocker = Some(doctor_blocker);
     launch.open_at = open_at;
     match tui::run(
         tty,
@@ -1306,7 +1326,7 @@ fn terminal(
             let failure = failed(error.code(), error.to_string());
             // The terminal never started: one `error` line in
             // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
-            // startup failure does (`docs/state.md`, "Diagnostic logs").
+            // startup failure does (`docs/state.md`, "What each part holds").
             let code = serde_json::to_value(&failure.code)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))
@@ -1366,13 +1386,33 @@ fn hub_target(named: Option<&str>) -> Result<(PathBuf, doors::hub::Target), Fail
 }
 
 /// `fiber sessions`: the hub it reaches is started when none runs.
-fn sessions_list(all: bool, json: bool, named: Option<&str>, process: &startup::Process) -> i32 {
+fn sessions_list(
+    all: bool,
+    json: bool,
+    archived: bool,
+    named: Option<&str>,
+    process: &startup::Process,
+) -> i32 {
     let (home, target) = match hub_target(named) {
         Ok(target) => target,
         Err(error) => return fail(error),
     };
     let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
-    ::cli::sessions_list(all || target.is_listed(), json, &mut connect)
+    ::cli::sessions_list(all || target.is_listed(), json, archived, &mut connect)
+}
+
+/// `fiber sessions archive`: the hub it reaches is started when none runs.
+fn sessions_archive(id: &str, named: Option<&str>, process: &startup::Process) -> i32 {
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
+    };
+    let hub = match &target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
+    };
+    let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
+    ::cli::archive(id, hub, &mut connect)
 }
 
 /// `fiber sessions delete`: the hub it reaches is started when none runs.

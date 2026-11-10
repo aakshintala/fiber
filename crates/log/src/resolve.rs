@@ -11,7 +11,8 @@ use crate::{EVENTS, Error};
 
 /// The session used most recently in `sessions`
 /// (`docs/invocation.md`, "Commands and flags"): the one whose log's
-/// last line is newest, live or exited alike. A directory counts only
+/// last line is newest, live or exited alike, never an archived one
+/// (`docs/invocation.md`, "Archiving"). A directory counts only
 /// when [`resolve`] would accept it, and never when its first line names
 /// a parent: a delegate resumes only through its parent
 /// (`docs/delegates.md`), which the hub refuses to resume. `in_project`
@@ -31,6 +32,9 @@ pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option
             if opening.delegate {
                 return None;
             }
+            if crate::is_archived(&entry.path()) {
+                return None;
+            }
             let activity = crate::last_ts(&entry.path()).unwrap_or(opening.ts);
             Some((
                 activity,
@@ -44,7 +48,7 @@ pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option
 /// Resolves `selector` to the session it names in `sessions`: a name that
 /// equals it, or the one name it prefixes. A directory is a session only
 /// when its first complete line is `session_started` (`docs/events.md`,
-/// "A directory is a session ...") and `in_project` accepts the worktree's
+/// "The session directory") and `in_project` accepts the worktree's
 /// recorded repository when one is recorded, else that line's workspace, so a crash between `Log::create` and the first write leaves
 /// nothing to resolve, and a slug shared by two workspaces (`docs/state.md`,
 /// "Projects") never reaches another project's sessions. A missing, torn,

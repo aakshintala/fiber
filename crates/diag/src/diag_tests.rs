@@ -1,4 +1,4 @@
-//! The diagnostic writer (`docs/state.md`, "Diagnostic logs"): line bytes,
+//! The diagnostic writer (`docs/state.md`, "What each part holds"): line bytes,
 //! the debug level, file naming before and after `attach`, rotation, and a
 //! line racing `attach`.
 

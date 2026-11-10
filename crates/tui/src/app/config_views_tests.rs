@@ -7,6 +7,7 @@ use contract::ErrorCode;
 use contract::{HubEventKind, events::EventKind};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use ratatui::backend::TestBackend;
@@ -17,7 +18,9 @@ use ratatui::style::Color;
 use super::super::{App, Effect};
 use super::ConfigView;
 use crate::Configure;
-use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
+use crate::configure::{
+    Layer, LoginKind, LoginTarget, SettingControl, SettingRow, Shown, WriteScope,
+};
 use crate::configure_fake::{Fake, controlled, file, placed};
 use crate::editor::OpenFile;
 use crate::home::Launch;
@@ -2829,4 +2832,99 @@ fn a_key_set_by_dash_c_takes_no_enter_tab_or_delete_through_the_app() {
     assert_eq!(screen(&app), before, "no field opened, nothing changed");
     assert!(seam.writes().is_empty());
     assert!(seam.resets.lock().unwrap().is_empty());
+}
+
+/// The blocker lines home draws above the box.
+fn blockers(app: &App) -> Vec<String> {
+    app.home_screen()
+        .map(|screen| screen.blockers)
+        .unwrap_or_default()
+}
+
+/// Whether each blocker line is a key fix away.
+fn blocker_keys(app: &App) -> Vec<bool> {
+    app.home_screen()
+        .map(|screen| screen.blocker_keys)
+        .unwrap_or_default()
+}
+
+/// A seam with one key provider, so `/login` opens its rows.
+fn login_seam() -> Arc<Fake> {
+    let seam = fake();
+    *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
+        name: "acme".to_owned(),
+        kind: LoginKind::Key,
+    }]);
+    seam
+}
+
+/// A blocker reader counting its reads, answering `line` with `key`.
+fn counting_blocker(
+    line: &str,
+    key: bool,
+    calls: &Arc<AtomicUsize>,
+) -> contract::feedback::ReadDoctorBlocker {
+    let counting = Arc::clone(calls);
+    let line = line.to_owned();
+    Arc::new(move || {
+        counting.fetch_add(1, Ordering::SeqCst);
+        Some((line.clone(), key))
+    })
+}
+
+#[test]
+fn esc_on_a_non_login_overlay_reads_no_blocker_and_restores_none() {
+    // Kills `config_view_key`'s `&&`/`||` mutant on the arming read:
+    // with `||`, Esc on any overlay would arm the restore.
+    let mut app = home(login_seam());
+    let calls = Arc::new(AtomicUsize::new(0));
+    app.set_doctor_blocker(Some(counting_blocker("client line", true, &calls)));
+    app.set_home_blockers(vec!["kept".to_owned()], vec![false]);
+    app.open_config_view(ConfigView::Logout);
+    assert!(app.config_view_open());
+    app.on_key(Key::Esc, now());
+    assert!(!app.config_view_open());
+    assert_eq!(blockers(&app), ["kept"]);
+    assert_eq!(blocker_keys(&app), [false]);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_non_esc_key_on_the_login_overlay_reads_no_blocker_and_restores_none() {
+    // Kills `config_view_key`'s `&&`/`||` mutant on the arming read:
+    // with `||`, any key on the login overlay would read the blocker.
+    // The read count is the mutant's witness: the key stays open, so no
+    // restore could fire either way.
+    let mut app = home(login_seam());
+    let calls = Arc::new(AtomicUsize::new(0));
+    app.set_doctor_blocker(Some(counting_blocker("client line", true, &calls)));
+    app.set_home_blockers(vec!["kept".to_owned()], vec![false]);
+    app.open_config_view(ConfigView::Login);
+    assert!(app.config_view_open());
+    app.on_key(Key::Char('q'), now());
+    assert!(app.config_view_open());
+    assert_eq!(blockers(&app), ["kept"]);
+    assert_eq!(blocker_keys(&app), [false]);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn esc_on_a_login_inner_step_reads_but_restores_no_blocker() {
+    // Kills `config_view_key`'s `&&`/`||` mutant on the restore: with
+    // `||`, Esc stepping back to the provider list would set the
+    // blockers even though the view does not close. The read count pins
+    // the arming: Esc armed and stepped back exactly once.
+    let mut app = home(login_seam());
+    let calls = Arc::new(AtomicUsize::new(0));
+    app.set_doctor_blocker(Some(counting_blocker("client line", true, &calls)));
+    app.set_home_blockers(vec!["kept".to_owned()], vec![false]);
+    app.open_config_view(ConfigView::Login);
+    assert!(app.config_view_open());
+    app.on_key(Key::Enter, now());
+    assert!(app.config_view_open());
+    app.on_key(Key::Esc, now());
+    assert!(app.config_view_open());
+    assert_eq!(blockers(&app), ["kept"]);
+    assert_eq!(blocker_keys(&app), [false]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

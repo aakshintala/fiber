@@ -1,4 +1,4 @@
-//! MCP token storage in Fiber home (`docs/state.md`, "Credentials").
+//! MCP token storage in Fiber home (`docs/state.md`, "What each part holds").
 use crate::{ConfigError, CredentialFile, CredentialLock};
 use contract::mcp_tokens::{HeldTokenFile, TokenFileError, TokenFiles};
 use serde_json::Value;

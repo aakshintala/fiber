@@ -332,8 +332,8 @@ fn present(path: &Path) -> Result<bool, Error> {
     }
 }
 
-/// Works out what removing `typed` deletes (`docs/state.md`, "Extension
-/// data"; `docs/configuration.md`, "Extension settings").
+/// Works out what removing `typed` deletes (`docs/state.md`, "What each part
+/// holds"; `docs/configuration.md`, "Extension settings").
 pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, Error> {
     let lock = lock(home, clock)?;
     let name = full_name(typed);

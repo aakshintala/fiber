@@ -585,6 +585,18 @@ With the rail hidden and sessions waiting, the Session status card ends with "! 
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
+While a Fiber delegate's view is open the Session status card follows
+that delegate's figures: its title reads "◆ <description>", from the
+open job record, and every figure below it reads the delegate's own
+`session_status`, `preamble_built`, `model_changed`, `turn_completed`
+and `usage_recorded` lines. A value the delegate has not sent yet reads
+the unknown form above for it — a blank workspace, model and branch, an
+empty bar, dim dashes — never the attached session's. A finished
+delegate's view keeps its last status, every row dim, with the items
+outcome (`completed`, `failed` or `cancelled`) beside the permission
+mode; without a stored status it shows the delegate's calls and elapsed
+time instead. Esc returns the card to the attached session.
+
 The context bar is drawn against the window `session_status` reports and
 the compaction point the session's own `preamble_built` names. That window is
 the latest own build's `context_window`, or the inherited one when the
@@ -679,6 +691,17 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   shows one dim line under the path line instead: "No transcript for
   <harness> delegates". A finished delegate whose log is missing or
   unreadable shows "No transcript: <reason>", dim.
+
+While a Fiber delegate's view is open, the Session status card, the
+input box's status row and the status line's cost and cache segments
+follow that delegate's figures; changed files, Delegates, Jobs and Quota
+keep the attached session's. A value the delegate has not sent yet reads
+its unknown form there too, never the attached session's: a blank model
+and branch, an empty context bar, dim dashes for the figures, and no
+cost segment until its status lands. A finished delegate's card keeps
+its last status, dim, with the outcome beside the permission mode;
+without a stored status it shows the delegate's calls and elapsed time
+instead.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model
@@ -3437,7 +3460,6 @@ line is a list of spans:
 - `link` makes the span a link, opened on click as "Links" says.
 - `click` makes the span's cells a click target with that id ("Input and
   focus").
-Not built yet (click targets): see #2720.
 
 The terminal builds the cells and the plain text from the same spans, so what
 is drawn and what is selected, copied or searched cannot differ. It measures
@@ -3531,7 +3553,7 @@ it, every rebuild of the conversation would call Lua for every row. The timings
 do not carry over to Linux; the call counts do.
 
 ### Input and focus
-**Not built yet (focused-slot keys, clicks, focus, and extension slash commands): see #2720.**
+**Not built yet (focused-slot keys, focus, and extension slash commands): see #2720.**
 
 One slot has focus at a time: the input box, an open view, or the overlay on
 top. An extension's view or overlay takes focus when it opens.
@@ -3640,7 +3662,7 @@ and a timeout switches the extension off as a still one does.
   extension off until `/reload`, with one `extension_failed` notice, as a
   still renderer does.
 
-Not built yet (focused-slot key and click handlers): see #2720.
+Not built yet (focused-slot key handlers): see #2720.
 
 - **A timeout** switches the extension off in this terminal until `/reload`
   (the terminal command; the `reload` driver command acts on the session

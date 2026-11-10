@@ -96,7 +96,7 @@ fn six_hundred_skill_dirs_import_the_first_512_and_report_more_than_512() {
         &no_personal_sources,
     )
     .unwrap();
-    // docs/configuration.md, "Importing": at most 512 entries per source
+    // `docs/configuration.md`, "Importing": at most 512 entries per source
     // directory, one overflow line past 512, kept entries in name order,
     // which 512 unspecified.
     assert_eq!(planned.skills.len(), 512);
@@ -134,7 +134,7 @@ fn five_hundred_twelve_skill_dirs_report_nothing() {
         &no_personal_sources,
     )
     .unwrap();
-    // docs/configuration.md, "Importing": at most 512 entries per source
+    // `docs/configuration.md`, "Importing": at most 512 entries per source
     // directory, no overflow line at or under 512, kept entries in name
     // order, which 512 unspecified.
     assert_eq!(planned.skills.len(), 512);
@@ -166,7 +166,7 @@ fn a_commands_dir_past_512_reports_under_its_own_name() {
         &no_personal_sources,
     )
     .unwrap();
-    // docs/configuration.md, "Importing": at most 512 entries per source
+    // `docs/configuration.md`, "Importing": at most 512 entries per source
     // directory, one overflow line past 512, kept entries in name order,
     // which 512 unspecified.
     assert_eq!(planned.commands.len(), 512);
@@ -202,7 +202,7 @@ fn a_source_home_past_512_reports_under_the_source_name() {
     )
     .unwrap();
     let report = planned.report();
-    // docs/configuration.md, "Importing": one overflow line past 512 under
+    // `docs/configuration.md`, "Importing": one overflow line past 512 under
     // the source's own name, which 512 unspecified, so no total or
     // membership is pinned. Name order is promised only for kept entries
     // that are imported, so no order is asserted on these unmapped
@@ -228,7 +228,7 @@ fn a_three_skill_import_writes_each_item_plus_the_receipt() {
     }
     reset_write_count();
     let report = fixture.run(ImportSource::ClaudeCode).unwrap();
-    // docs/configuration.md, "Importing": under 512 entries the full count
+    // `docs/configuration.md`, "Importing": under 512 entries the full count
     // is kept, in name order.
     assert_eq!(
         report.imported.skills,
@@ -607,7 +607,7 @@ fn an_already_read_skill_is_left_behind_with_its_logged_path() {
         fixture.clock.as_ref(),
     )
     .unwrap();
-    // docs/configuration.md, "Importing": discovery already reads the
+    // `docs/configuration.md`, "Importing": discovery already reads the
     // skill from another personal source, so it is left behind with the
     // logged path, and nothing is written under `skills/` in Fiber home.
     // The docs promise no write count, so this pins only the reason and

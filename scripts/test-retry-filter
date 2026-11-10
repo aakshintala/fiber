@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for the `ci` nextest profile's retry filter (docs/testing/running.md,
+# Self-test for the `ci` nextest profile's retry filter (`docs/testing/running.md`,
 # "Flaky tests"): a failed binary-level test retries once and no other test
 # does. It builds a scratch package named `main` with an area-shaped test
 # binary (`tests/area/main.rs`), a single-file one (`tests/single.rs`) and a

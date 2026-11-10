@@ -164,6 +164,12 @@ fn error(id: &str, io: impl ToString) -> HostError {
     }
 }
 impl Host {
+    /// Tests only: a host that never started a keeper, so shutdown sends
+    /// nothing and no child exists to reap.
+    #[cfg(test)]
+    pub(crate) fn idle(clock: Arc<dyn Clock>) -> Arc<Self> {
+        Self::new(Arc::new(|| Err(std::io::Error::other("no keeper"))), clock)
+    }
     fn new(spawner: Spawner, clock: Arc<dyn Clock>) -> Arc<Self> {
         #[cfg(test)]
         let (client_sender, clients) = mpsc::channel();

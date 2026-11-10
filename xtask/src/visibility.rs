@@ -255,7 +255,7 @@ fn skip_macro_body(trees: &[TokenTree], i: usize) -> Option<usize> {
 /// declaration, since modules are out of scope.
 fn skip_inline_mod(trees: &[TokenTree], i: usize) -> Option<usize> {
     // Why an iterator: the same hand-stepped `at += 1` timeout family as
-    // the old qualifier loop (docs/testing/mutants.md, "Proving a test
+    // the old qualifier loop (`docs/testing/mutants.md`, "Proving a test
     // bites") — the `pub`-prefix stepping is walked with an iterator over
     // `trees[i..]` and resolved once from its remainder.
     let mut rest = trees.get(i..).unwrap_or(&[]).iter();

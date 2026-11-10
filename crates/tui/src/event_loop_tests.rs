@@ -2259,9 +2259,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             break line;
         }
     };
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -2361,9 +2361,9 @@ fn an_exit_sends_its_lines_then_quits() {
             break line;
         }
     };
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
@@ -3321,11 +3321,14 @@ fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>, wait: &Deadline) {
 
 #[test]
 fn with_no_model_the_picker_opens_at_start() {
+    // `docs/tui.md`, "First run": with no configured model, home draws
+    // before the catalogue resolves, then the picker opens with no row
+    // chosen and no implicit save.
     let mut pair = open();
     // The watcher drains the terminal past its markers, so later frames
-    // never fill the pty: the picker at start, its answered row, then
-    // the home chips naming the chosen model.
-    let frames = watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
+    // never fill the pty: home before the held catalogue resolves, its
+    // unselected picker row, then the home chips naming the chosen model.
+    let frames = watch(&pair.main, vec![b"shortcuts", b"qq", b"[zz/qq]"]);
     let slave = pair
         .slave
         .try_clone()
@@ -3372,21 +3375,27 @@ fn with_no_model_the_picker_opens_at_start() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The first frame shows the picker, which opened with no keypress.
-    watched(&frames, "the picker at start", &Deadline::after(DEADLINE));
-    // Opening saves nothing: the choice does, once Enter chooses it.
+    // The catalogue is still held: home, not the picker, draws first.
+    watched(
+        &frames,
+        "home before the catalogue resolves",
+        &Deadline::after(DEADLINE),
+    );
     assert!(seam.writes().is_empty());
     release
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
-    // The cached read answers, and its frame lists the one model: only
-    // then does one Enter choose, as an Enter before the folded answer
-    // keeps the picker open, sending nothing.
+    // The resolved catalogue opens the picker with its one model and no
+    // implicit save. Move onto that row explicitly before choosing it.
     watched(
         &frames,
-        "the answered catalogue",
+        "the answered catalogue and unselected picker",
         &Deadline::after(DEADLINE),
     );
+    assert!(seam.writes().is_empty());
+    pair.main
+        .write_all(b"\x1b[B")
+        .unwrap_or_else(|err| panic!("write: {err}"));
     pair.main
         .write_all(b"\r")
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -3446,8 +3455,7 @@ fn with_a_model_home_opens_as_before() {
 }
 
 /// A signal quits the loop with 128 plus its number, closing nothing
-/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`,
-/// "Exit codes").
+/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`, "Lifecycle").
 #[test]
 fn a_signal_quits_with_128_plus_its_number() {
     use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -3584,7 +3592,7 @@ fn attached_frame_waits_for_a_completed_tail_read() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435 ends the scope only at the installed-history draw.
+    // `docs/state.md`, "What each part holds" ends the scope only at the installed-history draw.
     assert!(!path.exists(), "no completed tail read means no line");
 }
 
@@ -3616,7 +3624,7 @@ fn attached_frame_waits_for_an_attached_session() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435 ends the scope at a draw holding attached-session history.
+    // `docs/state.md`, "What each part holds" ends the scope at a draw holding attached-session history.
     assert!(!path.exists(), "a home frame writes no attached-frame line");
 }
 
@@ -3649,7 +3657,7 @@ fn attached_frame_is_discarded_without_a_stream() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435: an attach with no stream writes no line.
+    // `docs/state.md`, "What each part holds": an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
 }
 

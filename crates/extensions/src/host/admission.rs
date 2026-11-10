@@ -250,7 +250,7 @@ pub(crate) fn exec_logged(ran_by: Option<&str>) -> bool {
 }
 
 /// How a process `host.http` in a callback running as `ran_by` is
-/// attributed (`docs/state.md`, "Diagnostic logs"): a provider function
+/// attributed (`docs/state.md`, "What each part holds"): a provider function
 /// keeps its eligible purpose with the provider's registered name, a
 /// provider function with no eligible purpose (`sign`, or any other
 /// future one) stays silent exactly as the Lua half stays silent, and

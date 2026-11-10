@@ -1,5 +1,5 @@
 //! An image pasted in `prompt` or `steer` (`docs/invocation.md`,
-//! "Commands"): decoded, processed once through the image child as it
+//! "The command line"): decoded, processed once through the image child as it
 //! enters, and logged by path (`docs/model-routing.md`, "Image limits").
 
 use base64::Engine as _;

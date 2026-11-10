@@ -34,16 +34,16 @@ pub use setup::observe_load;
 pub const MEMORY_CAP: usize = 1 << 20;
 
 /// The script Fiber runs when it creates the VM.
-// docs/configuration.md, "An extension's manifest".
+// `docs/configuration.md`, "An extension's manifest".
 const ENTRY: &str = "init.lua";
 
 /// How long reading, compiling and running the entry script may take. It is
 /// not a callback, so it declares no timeout of its own.
-// docs/extensions.md, "How an extension runs".
+// `docs/extensions.md`, "How an extension runs".
 pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long past a deadline the caller waits before it abandons the VM.
-// docs/extensions.md, "How an extension runs".
+// `docs/extensions.md`, "How an extension runs".
 const GRACE: Duration = Duration::from_secs(1);
 
 /// Instructions between two looks at the clock while a deadline is ahead.
@@ -53,8 +53,8 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 /// `coroutine.create`, `require`, `fiber.command`, `fiber.provider`,
 /// `fiber.hook`, `fiber.watch`, `fiber.tool` and `fiber.search_backend`, which fill the tables the prelude returns. Lua's own `wrap`
 /// is a separate C function that would make an unarmed coroutine.
-// A callback's timeout is in milliseconds (docs/extensions.md, "How an
-// extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
+// A callback's timeout is in milliseconds (`docs/extensions.md`, "How an
+// extension runs"). A hook's phase and `on_failure` are `docs/extensions.md`,
 // "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
 local create, load_module, rethrow_panic, loading = ...

@@ -329,7 +329,7 @@ fn empty<'c>(home: &Path, clock: &'c dyn Clock) -> Result<Plan<'c>, Error> {
 
 /// Fetches and checks what the manifest `root`'s dependencies need, against
 /// an empty installed set in the copy-local home `home` (`docs/extensions.md`,
-/// "Pinning"): the lowest tags meeting every minimum, committed there
+/// "Code a repository ships"): the lowest tags meeting every minimum, committed there
 /// before the copy's own install step runs. The root itself is never staged
 /// or committed: only its dependencies appear in the plan.
 pub(crate) fn plan_depends<'c>(
@@ -463,7 +463,7 @@ pub fn plan<'c>(
 
 /// Fetches and checks what every installed extension updates to, staging
 /// the whole home at once as `fiber update` prepares all members
-/// together (`docs/extensions.md`, "Updating"): one lock hold, each
+/// together (`docs/extensions.md`, "Staying current"): one lock hold, each
 /// member staged as an update-all run stages it alone, the same
 /// resolution settling every member, one commit putting them in place.
 /// Members the release's archives cover are staged from git too; the

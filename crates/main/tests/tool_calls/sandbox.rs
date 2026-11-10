@@ -674,8 +674,8 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         started["payload"]["confined"], true,
         "the change runs confined"
     );
-    // `docs/sandbox.md:64-73` promises restore and report of each changed
-    // protected path; `docs/events.md:683` defines restored paths as
+    // `docs/sandbox.md`, "Protected paths" promises restore and report of each changed
+    // protected path; `docs/events.md`, "`tool_call_completed`" defines restored paths as
     // workspace-relative. Both worktrees' `.fiber/` paths must remain distinct.
     let restored: std::collections::BTreeSet<&str> =
         completed["payload"]["details"]["protected_paths"]["restored"]
@@ -700,14 +700,14 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
                 .join("")
         })
         .unwrap_or_default();
-    // `docs/events.md:697-701` promises the completion report's warning
+    // `docs/events.md`, "`tool_call_completed`" promises the completion report's warning
     // line reaches the model through result text; the exact wording is not
     // specified by that contract.
     assert!(
         text.contains(".fiber"),
         "the result names the change: {text}"
     );
-    // `docs/sandbox.md:102-106` promises this warning wording and its
+    // `docs/sandbox.md`, "Protected paths" promises this warning wording and its
     // headless stderr destination.
     assert!(
         run.stderr.contains(
@@ -716,7 +716,7 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         "headless warns on stderr: {}",
         run.stderr
     );
-    // `docs/sandbox.md:64-73` promises each changed protected path is
+    // `docs/sandbox.md`, "Protected paths" promises each changed protected path is
     // restored to its recorded contents after the confined call.
     assert_eq!(
         fs::read(fiber.join("note.txt")).unwrap(),
@@ -728,7 +728,7 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         fs::read(linked.join(".fiber/note.txt")).unwrap(),
         b"linked original\n"
     );
-    // `docs/sandbox.md:102-106` promises the warning wording and its
+    // `docs/sandbox.md`, "Protected paths" promises the warning wording and its
     // headless stderr destination for each changed path.
     assert!(
         run.stderr
@@ -1237,7 +1237,7 @@ fn sandbox_lines(text: &str) -> Vec<serde_json::Value> {
 /// set aside by the shared helper, and pacing `job_delta` lines are
 /// ignored (`docs/testing.md`, "Event streams"). The streamed delta
 /// kinds carry chunking- and pacing-dependent counts no doc promises
-/// (`docs/tools.md`, "Progress"; `docs/events.md`, "Ephemeral"), so
+/// (`docs/tools.md`, "Progress"; `docs/events.md`, "Durable and ephemeral"), so
 /// they are excluded the same way: the boundary events keep exact counts.
 #[cfg(target_os = "linux")]
 fn sandbox_call_counts(lines: &[serde_json::Value], expected: &[&str]) {
@@ -1290,7 +1290,7 @@ fn sandbox_child_provider(setup: &Setup, server: &fakes::ProviderServer) {
     .unwrap();
 }
 
-/// docs/permissions.md, "The destructive-command guard": push stays
+/// `docs/permissions.md`, "The destructive-command guard": push stays
 /// reviewed even when the sandbox could run it on the confined fast path.
 #[cfg(target_os = "linux")]
 #[test]
@@ -1389,7 +1389,7 @@ fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
     assert!(run.stdout.contains("confined-ok"));
 }
 
-/// docs/sandbox.md, "What it cannot do": a linked-worktree delegate can
+/// `docs/sandbox.md`, "What it cannot do": a linked-worktree delegate can
 /// commit and create local branches. All refs and logs remain writable so
 /// a moved branch can be recovered, without granting the shared config.
 #[cfg(target_os = "linux")]
@@ -1533,7 +1533,7 @@ fn a_confined_worktree_delegate_commits_branches_and_recovers_a_reflog() {
     );
 }
 
-/// docs/delegates.md, "Permissions": each launch inherits effective
+/// `docs/delegates.md`, "Worktrees": each launch inherits effective
 /// settings, including a refresh during the parent session. The global
 /// enabled=false cannot explain a confined child: only the parent has -c.
 #[cfg(target_os = "linux")]
@@ -2105,6 +2105,87 @@ fn row_bytes(rows: &[serde_json::Value], name: &str) -> u64 {
         .get("bytes")
         .and_then(|bytes| bytes.as_u64())
         .expect("the row carries bytes")
+}
+
+/// The registry `bytes` a `preamble_built` wire definition counts as:
+/// inverts `wire_tools` (`crates/loop/src/prompt.rs`, the Responses
+/// `{"type": "function", ...}` shape) back to `ToolDefinition` field
+/// order (`crates/contract/src/provider.rs`: name, description,
+/// input_schema, deferred, hosted). Every wire key the payload carries
+/// is handled: `parameters` renames to `input_schema`, the wire-only
+/// `strict` flag and `type` tag are pinned to today's values (a
+/// `function` wire tool is never a hosted kind, and `hosted` stays
+/// absent exactly as the loop's `skip_serializing_if` leaves it), and
+/// any key the map does not know fails naming the key, so a wire-shape
+/// change breaks the test loudly instead of shifting the target.
+#[cfg(target_os = "linux")]
+fn registry_bytes(definition: &serde_json::Map<String, serde_json::Value>, deferred: bool) -> u64 {
+    let mut name = None;
+    let mut description = None;
+    let mut input_schema = None;
+    let mut strict = None;
+    for (key, value) in definition {
+        match key.as_str() {
+            "name" => name = Some(value.clone()),
+            "description" => description = Some(value.clone()),
+            "parameters" => input_schema = Some(value.clone()),
+            // (`docs/tools.md`, "Shell": the shell schema is outside the strict subset, so it
+            // is sent with `strict: false`.)
+            "strict" => strict = Some(value.clone()),
+            "type" => assert_eq!(
+                value.as_str(),
+                Some("function"),
+                "the wire tool stays a plain function: {value}"
+            ),
+            unknown => panic!("the wire definition carries an unknown key: {unknown}"),
+        }
+    }
+    assert_eq!(
+        strict.as_ref(),
+        Some(&serde_json::Value::Bool(false)),
+        "the wire strict flag stays false: {strict:?}"
+    );
+    let mut rebuilt = serde_json::Map::new();
+    rebuilt.insert("name".to_owned(), name.expect("the wire tool names itself"));
+    rebuilt.insert(
+        "description".to_owned(),
+        description.expect("the wire tool describes itself"),
+    );
+    rebuilt.insert(
+        "input_schema".to_owned(),
+        input_schema.expect("the wire tool carries parameters"),
+    );
+    rebuilt.insert("deferred".to_owned(), serde_json::Value::Bool(deferred));
+    serde_json::to_vec(&serde_json::Value::Object(rebuilt))
+        .expect("the rebuilt definition serializes")
+        .len() as u64
+}
+
+/// Polls the `tools` answer until the `shell` row bytes equal `expected`.
+/// Each attempt sends under its own command id so the match is that
+/// attempt's answer, never the first read's. One deadline bounds the whole
+/// wait (`docs/testing.md`, "Waits and timeouts"): on expiry the test fails
+/// naming what it waited for.
+#[cfg(target_os = "linux")]
+fn poll_rows_until(
+    live: &mut Live,
+    id_prefix: &str,
+    expected: u64,
+    deadline: &fakes::Deadline,
+) -> Vec<serde_json::Value> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let rows = live.tools_rows(&format!("{id_prefix}_{attempt}"));
+        let seen = row_bytes(&rows, "shell");
+        if seen == expected {
+            break rows;
+        }
+        assert!(
+            !deadline.left().is_zero(),
+            "the /tools rows refresh after the reload: shell still answers {seen}, want {expected}"
+        );
+    }
 }
 
 /// The `tool_call_started` line for the log's one `shell` call.
@@ -2936,13 +3017,27 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
     );
     // (`docs/invocation.md`, "What each command does": `tools` answers every declared tool. The
     // rebuild re-derives the catalogue and rows from the refreshed registry.)
-    let on_rows = live.tools_rows("tools_rl_on");
+    // The rebuilt build lands ahead of the refreshed rows, so a single read
+    // can still answer pre-reload sizes: poll the `tools` answer until the
+    // shell bytes equal the on-state definition the rebuild published. Each
+    // attempt sends under its own command id so the match is that attempt's
+    // answer, never the first read's. One deadline bounds the whole wait
+    // (`docs/testing.md`, "Waits and timeouts").
+    let on_expected = registry_bytes(
+        on_shell["definition"]
+            .as_object()
+            .expect("the on-state definition is a map"),
+        on_shell["deferred"]
+            .as_bool()
+            .expect("the on-state entry carries deferred"),
+    );
+    let fresh_on_rows = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let on_rows = poll_rows_until(&mut live, "tools_rl_on_fresh", on_expected, &fresh_on_rows);
     let on_names = row_names(&on_rows);
     assert!(
         has_row(&on_rows, "shell"),
         "the rows still declare shell: {on_names:?}"
     );
-    let on_row_bytes = row_bytes(&on_rows, "shell");
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "sandbox": {"enabled": false}}),
@@ -2986,23 +3081,20 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
     // tool.)
     // The rebuilt build lands ahead of the refreshed rows, so a single read
     // can still answer pre-reload sizes: poll the `tools` answer until the
-    // shell bytes move off the on-state value. Each attempt sends under its
-    // own command id so the match is that attempt's answer, never the first
-    // read's. One deadline bounds the whole wait (`docs/testing.md`, "Waits
-    // and timeouts").
+    // shell bytes equal the off-state definition the rebuild published. Each
+    // attempt sends under its own command id so the match is that attempt's
+    // answer, never the first read's. One deadline bounds the whole wait
+    // (`docs/testing.md`, "Waits and timeouts").
+    let off_expected = registry_bytes(
+        off_shell["definition"]
+            .as_object()
+            .expect("the off-state definition is a map"),
+        off_shell["deferred"]
+            .as_bool()
+            .expect("the off-state entry carries deferred"),
+    );
     let fresh_rows = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    let mut attempt = 0;
-    let off_rows = loop {
-        attempt += 1;
-        let rows = live.tools_rows(&format!("tools_rl_off_fresh_{attempt}"));
-        if row_bytes(&rows, "shell") != on_row_bytes {
-            break rows;
-        }
-        assert!(
-            !fresh_rows.left().is_zero(),
-            "the /tools rows refresh after the reload: shell still answers {on_row_bytes}"
-        );
-    };
+    let off_rows = poll_rows_until(&mut live, "tools_rl_off_fresh", off_expected, &fresh_rows);
     let off_names = row_names(&off_rows);
     assert_eq!(
         on_names, off_names,
@@ -3012,14 +3104,13 @@ fn reload_with_changed_sandbox_writes_flip_line_with_fresh_bytes() {
         !off_names.iter().any(|name| name == "tool_search"),
         "no stale search row: {off_names:?}"
     );
-    let off_row_bytes = row_bytes(&off_rows, "shell");
     assert_ne!(
-        on_row_bytes, off_row_bytes,
+        on_expected, off_expected,
         "the /tools shell bytes move with the reload"
     );
     assert!(
-        on_row_bytes > off_row_bytes,
-        "the on-state row carries the longer confined description: {on_row_bytes} vs {off_row_bytes}"
+        on_expected > off_expected,
+        "the on-state row carries the longer confined description: {on_expected} vs {off_expected}"
     );
     live.finish();
 }

@@ -45,7 +45,7 @@ fn provider_with_images(setup: &support::Setup, server: &ProviderServer) {
 }
 
 fn provider_with(setup: &support::Setup, model_extra: &Value, server: &ProviderServer) {
-    provider_full(setup, model_extra, server, None);
+    provider_full(setup, model_extra, server, None, "FIBER_TEST_FAKE_KEY");
 }
 
 /// [`provider_with`], with the fake model declaring thinking levels and
@@ -57,6 +57,7 @@ fn provider_with_panel(setup: &support::Setup, server: &ProviderServer, panel_wi
         &json!({"thinking_levels": ["low", "high"], "thinking_default": "high"}),
         server,
         Some(panel_width),
+        "FIBER_TEST_FAKE_KEY",
     );
 }
 
@@ -65,6 +66,7 @@ fn provider_full(
     model_extra: &Value,
     server: &ProviderServer,
     panel_width: Option<f64>,
+    credential_env: &str,
 ) {
     let source = setup.root.path().join("src");
     write_json(
@@ -80,7 +82,7 @@ fn provider_full(
         &source.join("providers/fake.json"),
         &json!({
             "name": "fake",
-            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "credential": {"env": credential_env},
             "models": [model]
         }),
     );
@@ -771,7 +773,7 @@ fn continue_with_no_session_is_a_usage_error() {
 /// Serves `a`'s hub on a test port and returns the live hub: the asks
 /// seed through it, and the client pairs to it. The test holds the
 /// handle and reaps it at its end; an installed hub never exits for
-/// being idle (docs/configuration.md:119), so no stop, socket wait or
+/// being idle (`docs/configuration.md`, "Keys"), so no stop, socket wait or
 /// timer is involved.
 fn installed_hub(a: &support::Setup) -> hub_start::Served {
     hub_start::serve_installed(
@@ -872,7 +874,7 @@ fn continue_hub_opens_the_latest_session_across_projects() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The second seed is the latest across projects
-    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // (`docs/invocation.md`, "Commands and flags": `continue --hub` opens the entry with the
     // greatest (`active`, `id`) across every project).
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
@@ -887,7 +889,7 @@ fn continue_hub_opens_the_latest_session_across_projects() {
 #[test]
 fn continue_hub_without_a_session_is_a_usage_error() {
     // The same owned hub fixture, with no sessions seeded on it: no
-    // eligible entry is the empty-hub usage error (docs/invocation.md:115:
+    // eligible entry is the empty-hub usage error (`docs/invocation.md`, "Commands and flags":
     // with no eligible entry it is the same usage error as an empty hub).
     let a = support::Setup::new();
     let served = installed_hub(&a);
@@ -906,8 +908,8 @@ fn continue_without_a_flag_uses_the_configured_hub() {
     let (a, served) = seeded_hub();
     let b = paired_client(&a, &served, true);
     // No `--hub`: `hub.default=box` selects the listed hub
-    // (docs/invocation.md:1268-1270: `hub.default` names the one used
-    // without `--hub`; docs/invocation.md:291: `--default` makes it the hub
+    // (`docs/invocation.md`, "Several hubs": `hub.default` names the one used
+    // without `--hub`; `docs/invocation.md`, "Commands and flags": `--default` makes it the hub
     // this client uses without `--hub`); the resumed session lives in
     // `other`, so guard it like the explicit-flag test.
     let _resumed = guard_other(&a);
@@ -915,7 +917,7 @@ fn continue_without_a_flag_uses_the_configured_hub() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The second seed is the latest across projects
-    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // (`docs/invocation.md`, "Commands and flags": `continue --hub` opens the entry with the
     // greatest (`active`, `id`) across every project).
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
@@ -932,7 +934,7 @@ fn continue_explicit_hub_overrides_the_configured_default() {
     let (a, served) = seeded_hub();
     let b = paired_client(&a, &served, true);
     // `hub.default=box` is configured, but the explicit flag wins
-    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // (`docs/invocation.md`, "Several hubs": `hub.default` names the one used
     // without `--hub`): the unknown hub fails instead of opening the
     // default hub's session.
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "nope"], &[]);
@@ -2499,8 +2501,7 @@ fn sighup_takes_the_normal_exit_path_with_129() {
 /// Sends `signal` to a terminal with one live session: the terminal
 /// takes its normal exit path, restoring the screen and printing one
 /// resume line for the live session, then exits with `code`
-/// (`docs/tui.md`, "On exit"; `docs/invocation.md`, "Three signals, one
-/// path"). The terminal's guard exits at once today, skipping the
+/// (`docs/tui.md`, "On exit"; `docs/invocation.md`, "Shutdown"). The terminal's guard exits at once today, skipping the
 /// restore and the lines, so the byte assertions fail until the fix.
 #[track_caller]
 fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {
@@ -3683,6 +3684,176 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
 }
 
 #[test]
+fn first_run_completed_setup_skips_login_and_model_picker() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    fs::remove_file(setup.home().join("config.json")).unwrap();
+    let configured = ask(
+        &setup,
+        &["setup", "--model", "fake/m", "--no-hub", "--no-completions"],
+    );
+    assert_eq!(configured.status.code(), Some(0), "{configured:?}");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    config["hub"]["idle_exit_ms"] = json!(200);
+    write_json(&setup.home().join("config.json"), &config);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    let grid = run.wait_screen("configured home", |grid| grid.contents.contains("›"));
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    // settled: `grid` is the grid the wait above returned.
+    assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    run.ready();
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn first_run_local_without_credential_opens_login_on_home() {
+    // `docs/tui.md`, "First run": with no usable credential a home launch
+    // opens on home with the `/login` overlay up, even with a model
+    // configured; Esc leaves home without it.
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
+    run.ready();
+    let grid = run.wait_screen("home with the first-run login", |grid| {
+        grid.contents.contains("Log in")
+    });
+    // settled: `grid` is the grid the login wait above returned.
+    assert!(grid.contents.contains("Log in"), "{grid:?}");
+    // settled: `grid` is the grid the login wait above returned.
+    assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    assert!(server.requests().is_empty(), "no billed call");
+    run.write(b"\x1b[27u");
+    let grid = run.wait_screen("home after closing the first-run login", |grid| {
+        grid.contents.contains("›") && !grid.contents.contains("Log in")
+    });
+    // settled: `grid` is the grid the close wait above returned.
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.write(b"/quit\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn first_run_remote_uses_hub_credential_without_client_key() {
+    let hub = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&hub, &server);
+    let served = installed_hub(&hub);
+    let client = paired_client(&hub, &served, false);
+    let mut run = terminal(
+        &client,
+        120,
+        32,
+        &["--hub", "box"],
+        &[("FIBER_TEST_FAKE_KEY", "")],
+    );
+    let grid = run.wait_screen("remote home with hub credential", |grid| {
+        grid.contents.contains("›")
+    });
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.ready();
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
+fn first_run_remote_ignores_client_environment_key() {
+    let hub = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_full(&hub, &json!({}), &server, None, "OPENCODE_API_KEY");
+    let served = installed_hub(&hub);
+    let client = paired_client(&hub, &served, false);
+    let mut run = terminal(
+        &client,
+        120,
+        32,
+        &["--hub", "box"],
+        &[("OPENCODE_API_KEY", "client-only")],
+    );
+    let grid = run.wait_screen("remote login from hub catalogue", |grid| {
+        grid.contents.contains("Log in")
+    });
+    assert!(grid.contents.contains("Log in"), "{grid:?}");
+    run.ready();
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
+fn first_run_remote_esc_on_login_draws_no_client_blocker() {
+    let hub = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&hub, &server);
+    let served = installed_hub(&hub);
+    let client = paired_client(&hub, &served, false);
+    let mut run = terminal(
+        &client,
+        120,
+        32,
+        &["--hub", "box"],
+        &[("FIBER_TEST_FAKE_KEY", "")],
+    );
+    // The remote reads the hub's import receipts, which the seeded
+    // client home does not cover, so the first-run import offer opens:
+    // say not now.
+    run.wait_screen("the first-run import offer", |grid| {
+        grid.contents.contains("Import settings")
+    });
+    run.ready();
+    run.write(b"\x1b[27u");
+    // The hub holds the credential, so the keyless client opens no
+    // overlay of its own: the remote terminal never reads the client's
+    // blocker. The workspace picker opened at startup (a remote home
+    // carries no workspace) and keeps the draft's keys: choose the
+    // hub's workspace first. Its `~/` listing was queued at startup,
+    // so typing `w` focuses the completion and Enter chooses it.
+    run.wait_screen("the workspace picker", |grid| {
+        grid.contents.contains("Workspaces")
+    });
+    // The hub listing lands after the keystroke when it was not
+    // cached: Enter only resolves once the `w` row focuses, so wait
+    // for the focused row before choosing it.
+    run.write(b"w");
+    run.wait_screen("the focused hub workspace", |grid| {
+        grid.contents.contains("› w")
+    });
+    run.write(b"\r");
+    let grid = run.wait_screen("the chosen hub workspace", |grid| {
+        grid.contents.contains("›") && !grid.contents.contains("[no workspace]")
+    });
+    // settled: `grid` is the grid the workspace wait above returned.
+    assert!(!grid.contents.contains("Workspaces"), "{grid:?}");
+    // settled: `grid` chose a workspace with no login overlay of its own.
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.ready();
+    run.write(b"/login\r");
+    run.wait_screen("the hub login view", |grid| {
+        grid.contents.contains("Log in")
+    });
+    run.write(b"\x1b[27u");
+    // Esc closes the login view without restoring the client's line:
+    // the hub sends no blocker on the wire (RULING-4402-4).
+    let grid = run.wait_screen("the login view closed", |grid| {
+        grid.contents.contains("›") && !grid.contents.contains("Log in")
+    });
+    // settled: `grid` is the grid the close wait above returned.
+    assert!(!grid.contents.contains("no key for fake"), "{grid:?}");
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
 fn pty_launch_uses_default_test_credential_before_caller_env() {
     let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -3703,23 +3874,17 @@ fn pty_launch_uses_default_test_credential_before_caller_env() {
     quit_live(run);
 
     let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
-    run.wait_screen("the caller-overridden keyless home", |grid| {
-        grid.contents.contains("Enter starts a session")
-    });
     run.ready();
-    run.write(b"say hi\r");
-    let grid = run.wait_screen("the keyless credential notice", |grid| {
-        grid.contents.contains("no key for fake")
-            && grid.contents.contains("FIBER_TEST_FAKE_KEY is empty")
+    run.wait_screen("the caller-overridden keyless login", |grid| {
+        grid.contents.contains("Log in")
     });
-    assert!(
-        grid.contents.contains("FIBER_TEST_FAKE_KEY is empty"),
-        "{grid:?}"
-    );
-    run.write(b"\x03");
-    run.wait_screen("the cleared keyless draft", |grid| {
-        !grid.contents.contains("say hi")
+    run.write(b"\x1b[27u");
+    let grid = run.wait_screen("home with the keyless blocker", |grid| {
+        grid.contents.contains("Enter starts a session")
+            && grid.contents.contains("no key for fake")
     });
+    // settled: `grid` is the grid the Esc wait above returned.
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
     run.write(b"/quit\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }

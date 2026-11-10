@@ -8,6 +8,7 @@ use super::{
 };
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, LoggedOutProvider, ModelEntry};
 use crate::keys::Key;
+use contract::commands::ModelArgs;
 
 fn entry(
     reference: &str,
@@ -63,6 +64,23 @@ fn view_of(picker: &ModelPicker) -> PickerView {
     picker
         .view(&ctx(None, 0, None))
         .expect("the picker is open")
+}
+
+#[test]
+fn first_run_picker_has_no_choice_until_explicit_navigation() {
+    // `docs/tui.md`, "First run": the first-run picker opens with no row
+    // chosen; `docs/tui.md`, "The model picker": Enter with no row
+    // focused does nothing until ↓ focuses one.
+    let mut picker = ModelPicker::default();
+    picker.catalogue.models = vec![entry("acme/only", &[], None, None)];
+    picker.open(Mode::Choose, None);
+    picker.unselect_for_first_run();
+
+    assert_eq!(view_of(&picker).focused, None);
+    assert_eq!(picker.choice(false), None);
+
+    picker.move_row(1);
+    assert!(picker.choice(false).is_some());
 }
 
 #[test]
@@ -699,11 +717,17 @@ fn session_only_saves_nothing() {
 fn command_args_carry_thinking_exactly_when_there_is_a_level() {
     assert_eq!(
         command_args(&choice("acme/m1", Some("high"), false)),
-        serde_json::json!({"model": "acme/m1", "thinking": "high"})
+        ModelArgs {
+            model: "acme/m1".to_owned(),
+            thinking: Some("high".to_owned()),
+        }
     );
     assert_eq!(
         command_args(&choice("zeta/z1", None, false)),
-        serde_json::json!({"model": "zeta/z1"})
+        ModelArgs {
+            model: "zeta/z1".to_owned(),
+            thinking: None,
+        }
     );
 }
 

@@ -205,3 +205,58 @@ fn an_id_with_equal_tops_keeps_its_first_rect() {
     let targets = vec![Hit { id, rect: first }, Hit { id, rect: second }];
     assert_eq!(positions(&targets), vec![(id, first)]);
 }
+
+#[test]
+fn click_order_and_identity() {
+    use TargetId::{Badge, Extension, Line, Notice};
+    let cache = crate::ext::cache::Cache::default();
+    let key = |slot: &str, id: &str| {
+        cache.intern_click(&contract::SessionId("s".into()), "test", slot, id)
+    };
+    let badge = key("ledger_row", "badge");
+    let pin = key("ledger_row", "pin");
+    // The same spelling in another slot mints another key: both stop.
+    let badge_notice = key("notice", "badge");
+    assert_ne!(badge, badge_notice, "slots scope their ids");
+    let targets = vec![
+        at(Line(Target::Group(1)), 0, 5, 40, 1),
+        at(Extension(badge), 0, 2, 4, 1),
+        at(Extension(badge), 0, 3, 4, 1),
+        at(Extension(badge_notice), 0, 4, 4, 1),
+        at(Extension(pin), 0, 2, 2, 1),
+        at(Notice(0), 50, 0, 10, 2),
+        at(Badge, 0, 9, 20, 1),
+    ];
+    // Each key stops once, at its topmost-leftmost rect, in row order
+    // with the built-ins.
+    let ordered = order(&targets, &Regions::default(), Area::Conversation);
+    assert_eq!(
+        ordered,
+        vec![
+            Notice(0),
+            Extension(badge),
+            Extension(pin),
+            Extension(badge_notice),
+            Line(Target::Group(1)),
+            Badge,
+        ]
+    );
+    // A redraw of the same frame keeps the order and the identity.
+    assert_eq!(
+        order(&targets, &Regions::default(), Area::Conversation),
+        ordered,
+        "a redraw stops the same keys in the same order"
+    );
+    let regions = Regions::default();
+    assert_eq!(
+        area_of(&targets, &regions, Extension(badge)),
+        Some(Area::Conversation)
+    );
+    assert_eq!(
+        positions(&targets)
+            .into_iter()
+            .find(|(id, _)| *id == Extension(badge))
+            .map(|(_, rect)| rect),
+        Some(ratatui::layout::Rect::new(0, 2, 4, 1))
+    );
+}

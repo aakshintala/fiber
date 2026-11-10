@@ -751,7 +751,7 @@ fn job_ends_are_written_before_moved_in_order() {
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
     let tail: Vec<EventKind> = lines.iter().rev().take(3).map(|line| line.kind()).collect();
-    // docs/events.md:1606: each running job ends before `moved`.
+    // `docs/events.md`, "Change workspace": each running job ends before `moved`.
     assert_eq!(
         tail,
         [

@@ -313,7 +313,7 @@ fn only_test_files_are_scanned() {
     }
 }
 
-/// `docs/ci.md`, "On Linux x86_64 alone", promises the check "reports each
+/// `docs/ci.md`, "The one-week trial", promises the check "reports each
 /// site by file path, then line": the assertion below pins that order and
 /// that each of the four sites is reported.
 #[test]

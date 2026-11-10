@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Compares one look test's final screen to a prototype capture
-# (docs/testing/screens.md, "Screens"): runs the named look test with a
+# (`docs/testing/screens.md`, "Screens"): runs the named look test with a
 # test-support switch that dumps the output through the last grid wait
 # the test completes, replays the dump
 # through the same `vt100` parser into a grid, and compares the grid to

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs zsh and fish on a Linux CI runner (docs/ci.md, "Job time limits").
+# Installs zsh and fish on a Linux CI runner (`docs/ci.md`, "Job time limits").
 # apt keeps partial archives, so retries resume downloads. The install stays
 # unbounded because killing dpkg mid-unpack leaves the dpkg lock held.
 #

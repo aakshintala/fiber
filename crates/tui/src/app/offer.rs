@@ -2,7 +2,7 @@
 //! "Approving what a repository ships"). The offer's state lives in
 //! [`crate::offer`]; this module routes input to it and sends its answer.
 
-use super::{App, Effect, Kind, mint};
+use super::{App, Effect, Kind};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::offer::{FileAction, OfferKey, Row, Spot};
@@ -99,7 +99,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
-        let id = mint();
+        let id = support::mint("c_");
         let retired = self.offer.source_asked();
         let line = self.offer.step_file(action, &id, &session);
         if let Some(line) = line {
@@ -129,7 +129,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
-        let id = mint();
+        let id = support::mint("c_");
         let asked = self.offer.source_asked();
         let Some(line) = self.offer.answer(&id, &session) else {
             return Effect::None;

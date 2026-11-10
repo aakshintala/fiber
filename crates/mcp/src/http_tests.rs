@@ -2843,7 +2843,7 @@ fn assert_mcp_shape(line: &HttpRequest) {
 
 #[test]
 fn an_observed_start_writes_one_mcp_line_per_post() {
-    // docs/state.md, "Diagnostic logs": one line per MCP POST the transport sends.
+    // `docs/state.md`, "What each part holds": one line per MCP POST the transport sends.
     let setup = Setup::new();
     let server = ProviderServer::start_responding(standard()).unwrap();
     let (remote, _) = setup.observed(&server, Duration::from_secs(5));
@@ -2898,7 +2898,7 @@ fn an_observed_start_writes_one_mcp_line_per_post() {
         .expect("the call answers");
     // The answer can reach the caller before the exchange thread writes its final diagnostic line.
     let lines = setup.lines.await_count(before + 1);
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    // `docs/state.md`, "What each part holds": one line per POST the transport sends, and one per GET or DELETE it sends.
     assert_eq!(lines.len(), before + 1, "one call writes one line");
     let line = lines.last().unwrap();
     assert_mcp_shape(line);
@@ -2950,7 +2950,7 @@ fn a_refused_exchange_writes_a_statusless_line() {
     );
     assert!(start.is_err(), "a refused server never starts");
     let lines = setup.lines();
-    // docs/state.md, "Diagnostic logs": a failure after the send writes one line without status or headers_ms.
+    // `docs/state.md`, "What each part holds": a failure after the send writes one line without status or headers_ms.
     assert_eq!(lines.len(), 1, "one refused post writes one line");
     let line = &lines[0];
     assert_mcp_shape(line);
@@ -2989,7 +2989,7 @@ fn an_initialize_4xx_writes_the_post_and_probe_lines() {
     );
     assert!(start.is_err(), "a legacy-only server never starts");
     let lines = setup.lines();
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    // `docs/state.md`, "What each part holds": one line per POST the transport sends, and one per GET or DELETE it sends.
     assert_eq!(lines.len(), 2, "the post and its probe: {lines:?}");
     let post = &lines[0];
     assert_mcp_shape(post);
@@ -3026,7 +3026,7 @@ fn the_pump_stop_with_a_session_writes_the_delete_line() {
     );
     // The stop joins the pump after its goodbye, so the line is written.
     let lines = setup.lines();
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends. In this fixture only the DELETE has an empty body and a 200 response.
+    // `docs/state.md`, "What each part holds": one line per POST the transport sends, and one per GET or DELETE it sends. In this fixture only the DELETE has an empty body and a 200 response.
     let goodbyes: Vec<_> = lines.iter().filter(|request| is_goodbye(request)).collect();
     assert_eq!(
         goodbyes.len(),
@@ -3090,7 +3090,7 @@ fn a_token_refresh_post_writes_an_mcp_line() {
     let lines = setup.lines.await_count(4);
     // The refresh runs inside the initialize exchange, before its post:
     // refresh, initialize, notifications/initialized, tools/list.
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    // `docs/state.md`, "What each part holds": one line per POST the transport sends, and one per GET or DELETE it sends.
     assert_eq!(lines.len(), 4, "{lines:?}");
     let refreshed = lines
         .iter()
@@ -3113,7 +3113,7 @@ fn a_token_refresh_post_writes_an_mcp_line() {
     );
     // The stop's goodbye is a fifth line, with no body either way.
     let lines = setup.lines.await_count(5);
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    // `docs/state.md`, "What each part holds": one line per POST the transport sends, and one per GET or DELETE it sends.
     assert_eq!(lines.len(), 5, "{lines:?}");
     let goodbye = lines.last().unwrap();
     assert_mcp_shape(goodbye);

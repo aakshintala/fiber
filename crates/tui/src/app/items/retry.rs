@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use contract::SessionId;
 
 use crate::app::App;
-use crate::home::Level;
+use contract::commands::SubscribeLevel;
 
 /// How long a `session_not_found` refusal waits before the subscribe goes
 /// out again: picked, not measured.
@@ -106,9 +106,9 @@ impl App {
                 continue;
             };
             let wanted = if self.open_delegate_session().as_ref() == Some(&session) {
-                Level::Full
+                SubscribeLevel::Full
             } else {
-                Level::Summary
+                SubscribeLevel::Summary
             };
             if !self.connected() {
                 self.items.wants.remove(&session);

@@ -845,16 +845,16 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
     // Two queued entries on the card with the title above, the hint
     // below and an edge row on each side, above the notice's row
-    // (docs/tui.md, "Steering": card; docs/tui.md, "The panel": panel).
-    assert_eq!(app.conversation_height(), 0); // docs/tui.md, "Steering": card takes its rows.
+    // (`docs/tui.md`, "Steering": card; `docs/tui.md`, "The panel": panel).
+    assert_eq!(app.conversation_height(), 0); // `docs/tui.md`, "Steering": card takes its rows.
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
 
 #[test]
 fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
-    let first = super::mint();
-    let second = super::mint();
+    let first = support::mint("c_");
+    let second = support::mint("c_");
     for id in [&first, &second] {
         let hex = id.strip_prefix("c_").unwrap_or_default();
         assert_eq!(hex.len(), 16, "{id}");
@@ -1017,7 +1017,7 @@ fn turn_started_asks_again_and_the_latest_answer_fills_the_list() {
     let mut app = app();
     let first = attached_asking(&mut app, now);
     let lines = app.on_line(turn_started(S_A, "hi"));
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(lines.len(), 1);
     let again = parse(&lines[0]);
     assert_eq!(again["command"], "commands");
@@ -1052,7 +1052,7 @@ fn each_replayed_turn_started_asks_commands_again() {
             envelope.seq = Some(contract::Seq(at));
         }
         let lines = app.on_line(line);
-        // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+        // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
         assert_eq!(lines.len(), 1, "replayed turn {at}");
         let asked = parse(&lines[0]);
         assert_eq!(asked["command"], "commands");
@@ -2743,6 +2743,23 @@ fn first_block_notice_session_with_no_row_shows_nothing() {
         Some("a_1"),
     ));
     assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn first_run_import_offer_waits_until_login_and_model_picker_close() {
+    // `docs/tui.md`, "First run": the import offer shows on home once, and
+    // only after the login overlay and the model picker have closed.
+    let mut app = home_app();
+    app.set_import_offer(true);
+    app.open_first_run_login();
+    assert!(shell_screen(&app).contains("Log in"));
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(app.model_picker_open());
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    assert!(!app.model_picker_open());
+    let screen = shell_screen(&app);
+    assert!(screen.contains("Import"), "{screen}");
 }
 
 /// A `!` run of `seq 1 N` as its `shell_command` line.

@@ -129,6 +129,38 @@ fn await_opened(path: &str, url: &str) {
 }
 
 #[test]
+fn first_run_waits_for_catalogue_credentials_and_repeats_without_a_marker() {
+    // `docs/tui.md`, "First run": nothing opens before the catalogue
+    // answers; a logged-out catalogue opens the login, a credentialed
+    // one opens the picker instead, on every launch with no marker.
+    let seam = seam();
+    let (mut lp, _rx, _dir, _out) = loop_with(&seam, None);
+    lp.app.defer_first_run();
+    assert!(!lp.app.config_view_open());
+    assert!(!lp.app.model_picker_open());
+
+    let mut logged_out = crate::catalogue::Catalogue::default();
+    logged_out
+        .logged_out
+        .push(crate::catalogue::LoggedOutProvider {
+            provider: "codex".to_owned(),
+            login: true,
+            hint: String::new(),
+        });
+    lp.app.on_models_inner(Ok(logged_out));
+    assert!(lp.app.config_view_open());
+    assert!(!lp.app.model_picker_open());
+
+    let (mut again, _rx, _dir, _out) = loop_with(&seam, None);
+    again.app.defer_first_run();
+    again
+        .app
+        .on_models_inner(Ok(crate::catalogue::Catalogue::default()));
+    assert!(!again.app.config_view_open());
+    assert!(again.app.model_picker_open());
+}
+
+#[test]
 fn the_waiting_login_opens_its_url_and_its_end_stores() {
     let seam = seam();
     let (mut lp, rx, dir, out) = loop_with(&seam, None);
