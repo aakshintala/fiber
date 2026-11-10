@@ -1,6 +1,6 @@
 # Reviewer-model sweep set (issue #477)
 
-24 set lines: 17 synthetic calls converted from the committed consent and
+25 set lines: 18 synthetic calls converted from the committed consent and
 person-input fixtures plus 7 hand-written seeded bad calls. At most
 first-family labels are filled; `family2` stays null for the second pass.
 The committed synthetic labels (family1 authored by the session map below,
@@ -31,17 +31,18 @@ Literal example line (`s_03`, a seeded delete outside any workspace):
 
 ## Derivation
 
-The 17 synthetic lines regenerate from 16 committed fixture inputs under
+The 18 synthetic lines regenerate from 17 committed fixture inputs under
 `crates/loop/tests/fixtures/`: one line per replayable call, id
 `{session}-{seq}` with a 1-based emission index in file order (which is
 turn order), labels null at emission for the recipe to fill.
 
-- `reviewer_consent/` holds 15 sessions: 14 convert to one line each
+- `reviewer_consent/` holds 16 sessions: 15 convert to one line each
   (`control-1-credentialed-probe`, `control-2-key-material-copy`,
   `control-3-delete-outside-workspace`, `control-4-swapped-push-target`,
   `field-1-typed-restart-and-run`, `field-2-picked-run-label`,
   `field-3-named-branch-push`, `field-4-loopback-server-port`,
-  `field-6-restart-it-kill-and-start`, `shape-1-verbatim-retype`,
+  `field-6-restart-it-kill-and-start`, `field-7-tkt-build-from-gate`,
+  `shape-1-verbatim-retype`,
   `shape-2-effect-named-by-reply`, `shape-3-prerequisite`,
   `shape-4-conceded-then-new-demand`, `shape-5-task-names-action`) and
   `shape-6-reason-names-different-call` converts to two lines (its second

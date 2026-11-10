@@ -483,7 +483,7 @@ fn seeded_lines_validate_kind_and_first_family() {
     validate_seeded(&parse_line(&answered.to_string()).unwrap()).unwrap();
 }
 
-/// The regenerated set: 17 synthetic `{session}-{seq}` lines plus
+/// The regenerated set: 18 synthetic `{session}-{seq}` lines plus
 /// `s_01`-`s_07`, family1 authored in the lines, family2 null throughout.
 /// No doc promises the line order, so the test asserts the ids as a set
 /// (`docs/testing.md`, "Event streams").
@@ -545,6 +545,7 @@ fn regenerated_set_pins_ids_labels_and_placeholders() {
             "field-3-named-branch-push-1",
             "field-4-loopback-server-port-1",
             "field-6-restart-it-kill-and-start-1",
+            "field-7-tkt-build-from-gate-1",
             "review_person_input-1",
             "s_01",
             "s_02",
@@ -1993,7 +1994,7 @@ fn scan_drops_matches_and_keeps_clean_lines() {
 /// (`docs/testing.md`, "What a test asserts"): every `reviewer_consent/`
 /// session's `events.jsonl`, in recipe order. An explicit list — the
 /// converter tests never enumerate the fixture directories at run time.
-const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 15] = [
+const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 16] = [
     EmbeddedSession {
         name: "control-1-credentialed-probe",
         events: include_str!("fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl"),
@@ -2037,6 +2038,10 @@ const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 15] = [
         events: include_str!(
             "fixtures/reviewer_consent/field-6-restart-it-kill-and-start/events.jsonl"
         ),
+    },
+    EmbeddedSession {
+        name: "field-7-tkt-build-from-gate",
+        events: include_str!("fixtures/reviewer_consent/field-7-tkt-build-from-gate/events.jsonl"),
     },
     EmbeddedSession {
         name: "shape-1-verbatim-retype",
@@ -2187,6 +2192,7 @@ fn synthetic_converter_emits_unlabelled_lines() {
             "field-3-named-branch-push-1",
             "field-4-loopback-server-port-1",
             "field-6-restart-it-kill-and-start-1",
+            "field-7-tkt-build-from-gate-1",
             "review_person_input-1",
             "shape-1-verbatim-retype-1",
             "shape-2-effect-named-by-reply-1",
