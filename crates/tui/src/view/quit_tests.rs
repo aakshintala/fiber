@@ -247,7 +247,7 @@ fn stripped(effect: &Effect) -> Effect {
                         object.remove("id");
                     }
                     crate::app::Sent {
-                        id: sent.id.clone(),
+                        id: contract::CommandId(String::new()),
                         line: line.to_string(),
                     }
                 })
@@ -276,7 +276,7 @@ fn stripped(effect: &Effect) -> Effect {
                         object.remove("id");
                     }
                     crate::app::Sent {
-                        id: sent.id.clone(),
+                        id: contract::CommandId(String::new()),
                         line: line.to_string(),
                     }
                 })
@@ -479,9 +479,10 @@ fn a_click_on_close_all_does_what_enter_does() {
     let by_click = app.on_click(TargetId::Home(Spot::Quit(QuitChoice::CloseAll)));
     // Command ids mint at random: the effects agree past them.
     assert_eq!(stripped(&by_key), stripped(&by_click));
-    let Effect::Send(lines) = by_click else {
+    let Effect::SendTracked(sents) = by_click else {
         panic!("the confirm click closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // `docs/tui.md`, "Quit": "Enter sends each live top-level session
     // `close` with `now`"; the subscribes the connection needs first
     // are not pinned.

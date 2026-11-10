@@ -1790,7 +1790,7 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
         "X's refusal survives its new id"
     );
     assert!(
-        matches!(app.view_image(2), Effect::Send(_)),
+        matches!(app.view_image(2), Effect::SendTracked(_)),
         "another image at id 2 sends"
     );
 }

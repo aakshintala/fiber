@@ -1093,8 +1093,10 @@ fn closing_the_panels_leaves_the_next_slash_panel_able_to_open() {
     let mut app = attached();
     type_text(&mut app, "/");
     // The panel asks the hub for the project's prompt history.
-    assert!(matches!(app.on_key(Key::CtrlR, now()), Effect::Send(lines)
-            if lines.iter().any(|line| line.contains("prompt_history"))));
+    assert!(
+        matches!(app.on_key(Key::CtrlR, now()), Effect::SendTracked(sents)
+            if sents.iter().any(|sent| sent.line.contains("prompt_history")))
+    );
     assert!(app.search_panel().is_some());
     app.close_completion_panels();
     assert!(app.search_panel().is_some());
