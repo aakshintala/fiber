@@ -1450,7 +1450,9 @@ fn fold_assigns_one_based_ids_in_file_order() {
 
 /// A folded entry keeps the start's rewrite attribution, so `rebuild`
 /// sends the same extension line the jig replay sends: the entry runs the
-/// rewritten arguments and names who changed them.
+/// rewritten arguments and names who changed them. The single replayable
+/// call folds to one entry (`docs/testing/fakes.md`, "Live calls and
+/// evals").
 #[test]
 fn fold_keeps_a_rewritten_start_attribution() {
     let roots = temp_roots();
