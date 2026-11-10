@@ -33,6 +33,7 @@ pub(crate) fn home_test_rows(screen: &HomeScreen) -> Vec<(u64, String)> {
             ListLine::Exited {
                 key, glyph, name, ..
             } => Some((*key, format!("{glyph}  {name}"))),
+            ListLine::ArchivedHead { .. } => None,
             ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => None,
         })
         .collect()
@@ -450,6 +451,26 @@ fn a_left_for_an_unknown_session_changes_nothing() {
     )));
     sessions.left(&SessionId("s_bbbbbbbbbbbbbbbb".to_owned()), Left::Exited);
     assert_eq!(shown(&sessions), ["✓  fix the parser"]);
+}
+
+#[test]
+fn a_left_for_an_archived_row_keeps_the_project_s_other_archived_rows() {
+    let mut sessions = Sessions::default();
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![
+            recent_row("s_a", "a", "exited", None),
+            recent_row("s_b", "b", "exited", None),
+        ]))
+        .0,
+    );
+    sessions.note_archived_total(PROJECT, 2);
+    sessions.left(&SessionId("s_a".to_owned()), Left::Exited);
+    // Only the leaving id drops out of the archived map: dropping the
+    // cleanup's `!` keeps just empty rows and fails the assertions below.
+    assert!(!sessions.is_archived(&SessionId("s_a".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_b".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
 }
 
 #[test]
@@ -1343,19 +1364,138 @@ fn keeper_ids_hold_sixteen_lowercase_hex_digits() {
 }
 
 #[test]
-fn the_close_all_count_line_names_all_four_numbers() {
-    // `docs/tui.md`, "Quit": the keeper part appends, singular then
-    // plural, and no keepers keeps today's string.
-    assert_eq!(
-        crate::home::close_all_count(0, 0, 0, 0),
-        "0 sessions, 0 working, 0 open elsewhere"
+fn archived_scoped_reconciles_an_exited_row_into_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+        true,
     );
-    assert_eq!(
-        crate::home::close_all_count(2, 1, 0, 1),
-        "2 sessions, 1 working, 0 open elsewhere, 1 keeper"
+    let key = sessions
+        .row(&SessionId("s_a".to_owned()))
+        .unwrap_or_else(|| panic!("the exited row"))
+        .key;
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
     );
-    assert_eq!(
-        crate::home::close_all_count(0, 0, 0, 2),
-        "0 sessions, 0 working, 0 open elsewhere, 2 keepers"
+    sessions.note_archived_total(PROJECT, 1);
+    // `docs/tui.md`, "The session list" (an archived session is on
+    // neither the exited rows nor the rail): the exited row leaves the
+    // exited list with its key and folds into the archived map, so the
+    // held count has a row to show in the fold. Skipping the duplicate
+    // keeps it under exited with no row in the fold and fails this.
+    assert!(sessions.all().iter().all(|row| row.id.0 != "s_a"));
+    let archived = sessions
+        .row(&SessionId("s_a".to_owned()))
+        .unwrap_or_else(|| panic!("the reconciled archived row"));
+    assert_eq!(archived.key, key);
+    assert!(sessions.is_archived(&SessionId("s_a".to_owned())));
+    assert!(sessions.cards().iter().all(|row| row.id.0 != "s_a"));
+    let sections = sessions.sections(Some(PROJECT));
+    assert!(sections[0].exited.is_empty());
+    assert_eq!(sections[0].archived.len(), 1);
+    assert_eq!(sections[0].archived_total, Some(1));
+    // A second archived page listing the same id again adds nothing.
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+    );
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
+fn archived_scoped_keeps_a_live_feed_row_out_of_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_live", PROJECT, 0));
+    // A stale archived answer naming the live id archives nothing: the
+    // live row stays on the feed and the rail, with no archived row.
+    // Moving it would fail the live assertions below.
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_live", "live", "exited", None)])).0,
+    );
+    assert!(!sessions.is_archived(&SessionId("s_live".to_owned())));
+    assert!(
+        sessions
+            .feed_row(&SessionId("s_live".to_owned()))
+            .is_some_and(|row| row.left.is_none())
+    );
+    assert!(sessions.cards().iter().any(|row| row.id.0 == "s_live"));
+}
+
+#[test]
+fn archived_scoped_reconciles_a_feed_exited_row_into_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_f", PROJECT, 0));
+    sessions.left(&SessionId("s_f".into()), Left::Exited);
+    let key = sessions
+        .row(&SessionId("s_f".to_owned()))
+        .unwrap_or_else(|| panic!("the feed exited row"))
+        .key;
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_f", "f", "exited", None)])).0,
+    );
+    // `docs/tui.md`, "The session list" (an archived session is on
+    // neither the exited rows nor the rail): the feed exited row leaves
+    // the feed with its key and folds into the archived map.
+    assert!(sessions.all().iter().all(|row| row.id.0 != "s_f"));
+    let archived = sessions
+        .row(&SessionId("s_f".to_owned()))
+        .unwrap_or_else(|| panic!("the reconciled archived row"))
+        .key;
+    assert_eq!(archived, key);
+    assert!(sessions.is_archived(&SessionId("s_f".to_owned())));
+}
+
+#[test]
+fn remove_keeps_other_projects_archived_rows_and_drops_empty_maps() {
+    let mut sessions = Sessions::default();
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    let (second, _) = recent_rows(&json!({"sessions": [project_row("s_p2", PROJECT)]}));
+    let (other, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.archived_scoped(PROJECT, first);
+    sessions.archived_scoped(PROJECT, second);
+    sessions.archived_scoped(OTHER, other);
+    sessions.note_archived_total(PROJECT, 2);
+    sessions.note_archived_total(OTHER, 1);
+    // Removing one of two archived rows keeps the other and the other
+    // project: `==` would keep only the removed id and fail the
+    // assertions below.
+    sessions.remove(&SessionId("s_p1".to_owned()));
+    assert!(!sessions.is_archived(&SessionId("s_p1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_p2".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+    assert_eq!(sessions.archived_loaded(OTHER), 1);
+    // Removing the other project's last archived row drops its empty
+    // map but keeps this project's row: keeping only empty maps would
+    // drop `s_p2` and fail the last assertion.
+    sessions.remove(&SessionId("s_o1".to_owned()));
+    assert!(!sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_p2".to_owned())));
+    assert_eq!(sessions.archived_loaded(OTHER), 0);
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
+fn status_unarchiving_cleans_only_the_emptied_archived_map() {
+    let mut sessions = Sessions::default();
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    let (other, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.archived_scoped(PROJECT, first);
+    sessions.archived_scoped(OTHER, other);
+    // A live status for one archived id unarchives it: its project map
+    // empties and drops, while the other project's row stays. Keeping
+    // only empty maps would drop `s_o1` and fail the last assertion.
+    sessions.status(section_row("s_p1", PROJECT, 0));
+    assert!(!sessions.is_archived(&SessionId("s_p1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 0);
+    assert_eq!(sessions.archived_loaded(OTHER), 1);
+    assert!(
+        sessions
+            .feed_row(&SessionId("s_p1".to_owned()))
+            .is_some_and(|row| row.left.is_none())
     );
 }
