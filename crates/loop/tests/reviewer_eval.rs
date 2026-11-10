@@ -485,17 +485,22 @@ fn seeded_lines_validate_kind_and_first_family() {
 
 /// The regenerated set's per-line contract: each line carries its session
 /// label (family1 authored in the line, family2 null throughout), the
-/// synthetic identity for synthetic lines, and placeholders only. The test
-/// checks every line it finds but never the set's membership or size: no
-/// doc promises the eval-corpus size (`docs/testing.md`, "Event streams"
-/// asserts an order or a count only where a doc promises it), and the eval
-/// set is a development instrument, not a merge gate
-/// (`docs/testing/fakes.md`, "Live calls and evals"). Ids stay unique, so
-/// a duplicated line still fails.
-#[test]
-fn regenerated_set_checks_labels_and_placeholders() {
-    let set = include_str!("fixtures/reviewer_eval/calls.jsonl");
+/// synthetic identity for synthetic lines, and placeholders only. The check
+/// runs over every line it finds and requires at least one, but never the
+/// set's membership or size: no doc promises the eval-corpus size
+/// (`docs/testing.md`, "Event streams" asserts an order or a count only
+/// where a doc promises it), and the eval set is a development instrument,
+/// not a merge gate (`docs/testing/fakes.md`, "Live calls and evals"). Ids
+/// stay unique, so a duplicated line still fails. The at-least-one-line
+/// guard keeps the per-line checks from passing on an empty set
+/// (`docs/testing.md`, "What a test asserts" asserts at least one positive
+/// fact).
+fn check_regenerated_set(set: &str) {
     let lines: Vec<&str> = set.lines().filter(|line| !line.trim().is_empty()).collect();
+    assert!(
+        !lines.is_empty(),
+        "the regenerated set holds at least one line"
+    );
     let mut ids = Vec::new();
     for line in &lines {
         let entry = parse_line(line).unwrap();
@@ -548,6 +553,17 @@ fn regenerated_set_checks_labels_and_placeholders() {
             "no unscrubbed owner value: {line}"
         );
     }
+}
+
+#[test]
+fn regenerated_set_checks_labels_and_placeholders() {
+    check_regenerated_set(include_str!("fixtures/reviewer_eval/calls.jsonl"));
+}
+
+#[test]
+#[should_panic(expected = "the regenerated set holds at least one line")]
+fn regenerated_set_rejects_an_empty_set() {
+    check_regenerated_set("");
 }
 
 #[test]
