@@ -62,8 +62,18 @@ impl HubEventKind {
             HubEventKind::Unknown(name) => name,
             // The table holds every known member, so this finds one; a
             // row dropped by mistake reads a placeholder the round-trip
-            // tests refuse.
-            known => KINDS
+            // tests refuse. Every member is named so a new one fails to
+            // compile here until the table grows with it.
+            known @ HubEventKind::HubHello
+            | known @ HubEventKind::Attention
+            | known @ HubEventKind::DeviceChanged
+            | known @ HubEventKind::SessionLeft
+            | known @ HubEventKind::SessionDeleted
+            | known @ HubEventKind::SessionArchived
+            | known @ HubEventKind::StreamClosed
+            | known @ HubEventKind::StreamReopened
+            | known @ HubEventKind::CommandAccepted
+            | known @ HubEventKind::CommandRejected => KINDS
                 .iter()
                 .find(|(_, kind)| kind == known)
                 .map_or("unknown", |(name, _)| name),
