@@ -997,16 +997,33 @@ fn import_source_reads_missing_and_empty_as_both() {
             "{line}"
         );
     }
-    for source in ["claude-code", "codex"] {
-        let line = format!(r#"{{"id":"c","command":"import","args":{{"source":"{source}"}}}}"#);
+    for (source, name) in [
+        (ImportSource::ClaudeCode, "claude-code"),
+        (ImportSource::Codex, "codex"),
+    ] {
+        let line = format!(r#"{{"id":"c","command":"import","args":{{"source":"{name}"}}}}"#);
+        assert_eq!(source.name(), name);
         assert_eq!(
             parse(&line)
                 .unwrap_or_else(|e| panic!("{line}: {e}"))
                 .command,
             Command::Import(ImportArgs {
-                source: Some(source.into())
+                source: Some(source)
             }),
             "{line}"
+        );
+        // Each name serialises back to its wire string, so the wire
+        // holds the same lowercase names in both directions.
+        assert_eq!(
+            serde_json::to_string(&CommandLine {
+                id: CommandId("c".into()),
+                command: Command::Import(ImportArgs {
+                    source: Some(source)
+                }),
+            })
+            .unwrap(),
+            line,
+            "{name}"
         );
     }
     // An absent source serialises as empty `args`, which reads back as
@@ -1048,6 +1065,22 @@ fn is_from_session_command_covers_the_set_and_nothing_near_it() {
         assert!(
             !is_from_session_command(command),
             "{command} is never refused"
+        );
+    }
+}
+
+/// An unknown source name is refused where the line is parsed, with the
+/// hub's message: any string but the two names, in any case or padding,
+/// fails the read.
+#[test]
+fn import_refuses_an_unknown_source_name_with_the_hub_message() {
+    for source in ["vim", "Claude-Code", "CODEX", " codex", "codex ", ""] {
+        let line = format!(r#"{{"id":"c","command":"import","args":{{"source":"{source}"}}}}"#);
+        let error = parse(&line).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "`source` must be `claude-code` or `codex`.",
+            "{line}"
         );
     }
 }

@@ -472,13 +472,48 @@ pub struct CredentialArgs {
     pub label: String,
 }
 
+/// Which harness an import copies: the wire names the harness in
+/// lowercase, and any other name is refused where the line is parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ImportSource {
+    /// Claude Code, read from `~/.claude`.
+    #[serde(rename = "claude-code")]
+    ClaudeCode,
+    /// Codex, read from `~/.codex`.
+    #[serde(rename = "codex")]
+    Codex,
+}
+
+impl ImportSource {
+    /// The wire name the receipt and the report use: `claude-code` or
+    /// `codex`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ImportSource {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "claude-code" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
+            _ => Err(D::Error::custom(
+                "`source` must be `claude-code` or `codex`.",
+            )),
+        }
+    }
+}
+
 /// The `args` of `import`: `claude-code` or `codex`; absent means both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImportArgs {
     /// The source to import; absent means both sources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub source: Option<ImportSource>,
 }
 
 /// The `args` of `quota`.
