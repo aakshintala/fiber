@@ -43,9 +43,18 @@ impl App {
                 self.push_notice(ErrorCode::IoFailed, error.clone());
             }
         }
-        let has_credential = result
-            .as_ref()
-            .is_ok_and(|catalogue| catalogue.logged_out.is_empty());
+        // A credential exists when no provider is logged out, or some
+        // installed (model-listed) provider is absent from the
+        // logged-out rows.
+        let has_credential = result.as_ref().is_ok_and(|catalogue| {
+            catalogue.logged_out.is_empty()
+                || catalogue.models.iter().any(|entry| {
+                    !catalogue
+                        .logged_out
+                        .iter()
+                        .any(|row| row.provider == entry.provider)
+                })
+        });
         let first_run = self.first_run_pending && result.is_ok();
         if first_run {
             self.first_run_pending = false;
