@@ -333,6 +333,14 @@ impl Outbox {
         self.hub_sent.push((id.clone(), line.to_owned()));
     }
 
+    /// Pairs a fold-cruising hub line with its carried id and returns
+    /// the line: one step for the fold tails that note each id and
+    /// send each line in order.
+    pub(crate) fn fold_line(&mut self, sent: Sent) -> String {
+        self.note_hub_sent(&sent.id, &sent.line);
+        sent.line
+    }
+
     /// The carried id of a fold-cruising hub line, if noted when it was
     /// built: a failed write settles by it instead of parsing the line.
     pub(crate) fn hub_id(&self, line: &str) -> Option<CommandId> {

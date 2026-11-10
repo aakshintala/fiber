@@ -460,10 +460,7 @@ impl App {
                             outbox,
                         )
                         .into_iter()
-                        .map(|sent| {
-                            outbox.note_hub_sent(&sent.id, &sent.line);
-                            sent.line
-                        })
+                        .map(|sent| outbox.fold_line(sent))
                         .collect();
                     Some(lines)
                 }
@@ -486,10 +483,7 @@ impl App {
                         home.recent
                             .follow_up_scoped(&project, &mut home.sessions, connected, outbox)
                             .into_iter()
-                            .map(|sent| {
-                                outbox.note_hub_sent(&sent.id, &sent.line);
-                                sent.line
-                            })
+                            .map(|sent| outbox.fold_line(sent))
                             .collect()
                     } else {
                         Vec::new()

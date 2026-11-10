@@ -33,10 +33,7 @@ impl App {
             let lines = self
                 .ask_recent_first(project.as_deref())
                 .into_iter()
-                .map(|sent| {
-                    self.outbox.note_hub_sent(&sent.id, &sent.line);
-                    sent.line
-                })
+                .map(|sent| self.outbox.fold_line(sent))
                 .collect();
             self.delete_command_finish(false);
             self.go_home();
@@ -78,10 +75,7 @@ impl App {
             let lines = self
                 .ask_recent_first(project.as_deref())
                 .into_iter()
-                .map(|sent| {
-                    self.outbox.note_hub_sent(&sent.id, &sent.line);
-                    sent.line
-                })
+                .map(|sent| self.outbox.fold_line(sent))
                 .collect();
             self.delete_command_finish(false);
             self.notices
@@ -94,10 +88,7 @@ impl App {
         let lines = self
             .ask_recent_first(project.as_deref())
             .into_iter()
-            .map(|sent| {
-                self.outbox.note_hub_sent(&sent.id, &sent.line);
-                sent.line
-            })
+            .map(|sent| self.outbox.fold_line(sent))
             .collect();
         self.delete_command_finish(true);
         self.notices.push(code, format!("Delete failed: {message}"));

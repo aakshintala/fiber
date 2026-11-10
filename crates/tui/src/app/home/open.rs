@@ -219,15 +219,7 @@ impl App {
         session: &SessionId,
         level: SubscribeLevel,
     ) -> String {
-        let (id, line) = subscribe_line(session, level, None);
-        self.outbox.wait(
-            &id,
-            Waiting::Subscribe {
-                session: session.clone(),
-                level,
-            },
-        );
-        line
+        self.subscribe_sent(session, level).line
     }
 
     /// A `subscribe` line for `session` at `level` with its command id

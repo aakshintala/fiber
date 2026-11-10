@@ -797,8 +797,7 @@ impl App {
         // The `sessions` snapshot cruises the fold: its id rides
         // paired, so a failed write settles by the carried id.
         for sent in self.sessions_outgoing() {
-            self.outbox.note_hub_sent(&sent.id, &sent.line);
-            lines.push(sent.line);
+            lines.push(self.outbox.fold_line(sent));
         }
         self.reconcile_attention();
         if matches!(&self.overlay, Overlay::Folding { landing: true, .. }) {
