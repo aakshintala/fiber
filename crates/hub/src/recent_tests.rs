@@ -617,7 +617,7 @@ fn an_archived_row_writes_the_flag_and_reads_back() {
 
 #[test]
 fn archived_partitions_pages_and_totals_by_newest_row() {
-    // Newest-first pages and their total (`docs/invocation.md`, "`recent`":
+    // Newest-first pages and their total (`docs/invocation.md`, "What the hub speaks":
     // "newest first" and "`total`, the number of rows the pages list").
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, Some("idle")));
