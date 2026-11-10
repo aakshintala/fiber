@@ -1100,6 +1100,9 @@ impl App {
         if let Some(effect) = self.built_in() {
             return effect;
         }
+        if self.first_run_no_credential && self.on_home() {
+            return self.open_first_run_login();
+        }
         // In an item view Enter steers the open delegate; a `/`
         // built-in already ran above, and anything it leaves (such as
         // `/close`) falls through to the attached session.

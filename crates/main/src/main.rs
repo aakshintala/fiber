@@ -1219,6 +1219,8 @@ fn terminal(
     // directory the terminal opens in: cloned before `launch` takes it.
     let feedback_home = home.clone();
     let feedback_workspace = workspace.clone();
+    let blocker_home = home.clone();
+    let blocker_workspace = workspace.clone();
     let feedback_version = cli::bare_version();
     let feedback_clock = Arc::clone(&clock);
     // The `doctor` output both the feedback writer and the `/doctor`
@@ -1290,6 +1292,15 @@ fn terminal(
     let doctor: contract::feedback::ReadDoctor =
         std::sync::Arc::new(move || report().map_err(|error| error.to_string()));
     launch.doctor = Some(doctor);
+    let doctor_blocker: contract::feedback::ReadDoctorBlocker = std::sync::Arc::new(move || {
+        ::cli::first_blocker(
+            &blocker_home,
+            &blocker_workspace,
+            &|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()),
+            &mcp::url_has_userinfo,
+        )
+    });
+    launch.doctor_blocker = Some(doctor_blocker);
     launch.open_at = open_at;
     match tui::run(
         tty,

@@ -44,6 +44,8 @@ struct Placed {
     logo_rows: usize,
     /// The blocker lines above the box, wrapped at its width.
     blockers: Vec<String>,
+    /// Original blocker index for each wrapped line.
+    blocker_indices: Vec<usize>,
     /// The ▄ edge row.
     box_top: u16,
     /// The first draft row.
@@ -72,11 +74,14 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let boxed = to_u16(height).saturating_add(3);
     // A rejected `start` draws its message above the box, wrapped at its
     // width, staying while the list fills.
-    let blockers: Vec<String> = screen
-        .blockers
-        .iter()
-        .flat_map(|line| wrap(line, usize::from(inner)))
-        .collect();
+    let mut blockers = Vec::new();
+    let mut blocker_indices = Vec::new();
+    for (index, line) in screen.blockers.iter().enumerate() {
+        for wrapped in wrap(line, usize::from(inner)) {
+            blockers.push(wrapped);
+            blocker_indices.push(index);
+        }
+    }
     let need = 12u16.saturating_add(to_u16(blockers.len()));
     let four = area.height >= need && area.width >= to_u16(logo::width_cells());
     let logo_rows = if four { 4 } else { 1 };
@@ -104,6 +109,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         logo,
         logo_rows,
         blockers,
+        blocker_indices,
         box_top,
         draft_top,
         shown,
@@ -613,7 +619,7 @@ pub(super) fn render(
     }
     // The blocker lines sit above the box, wrapped at its width.
     let mut blocker_y = placed.box_top.saturating_sub(to_u16(placed.blockers.len()));
-    for line in &placed.blockers {
+    for (line, index) in placed.blockers.iter().zip(&placed.blocker_indices) {
         put(
             buf,
             area,
@@ -623,6 +629,12 @@ pub(super) fn render(
             placed.width,
             Style::default(),
         );
+        if screen.blocker_keys.get(*index).copied().unwrap_or(false) {
+            targets.push(Target {
+                id: TargetId::Home(Spot::Blocker(*index)),
+                rect: Rect::new(placed.x, blocker_y, placed.width, 1),
+            });
+        }
         blocker_y = blocker_y.saturating_add(1);
     }
     // The box's edges above and below its draft and chip rows, with the

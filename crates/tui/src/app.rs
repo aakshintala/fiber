@@ -389,6 +389,10 @@ pub(crate) struct App {
     keyboard: keyboard::Keyboard,
     /// The model picker: the installed models and the reads it owes.
     model_picker: crate::model_picker::ModelPicker,
+    /// Startup is waiting for the first catalogue's credential status.
+    first_run_pending: bool,
+    /// The first catalogue established that no installed provider has a key.
+    first_run_no_credential: bool,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
@@ -506,6 +510,8 @@ impl App {
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),
             model_picker: crate::model_picker::ModelPicker::default(),
+            first_run_pending: false,
+            first_run_no_credential: false,
             opener: false,
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),

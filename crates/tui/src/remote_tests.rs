@@ -989,6 +989,7 @@ fn installation_preserves_local_seams_and_uses_the_clients_directory() {
         &crate::LaunchLocation::Remote { hub: "box".into() },
         Some(Arc::clone(&local)),
         None,
+        None,
         &router,
     );
     let remote = installed.remote.unwrap();
@@ -1000,6 +1001,7 @@ fn installation_preserves_local_seams_and_uses_the_clients_directory() {
         &crate::LaunchLocation::Remote { hub: "box".into() },
         None,
         None,
+        None,
         &router,
     );
     assert!(missing.remote.is_none());
@@ -1008,6 +1010,7 @@ fn installation_preserves_local_seams_and_uses_the_clients_directory() {
     let installed = seams(
         &crate::LaunchLocation::default(),
         Some(Arc::clone(&local)),
+        None,
         None,
         &router,
     );
@@ -1912,6 +1915,7 @@ fn remote_seams_replace_the_client_reader_and_drop_it_without_one() {
         &crate::LaunchLocation::Remote { hub: "box".into() },
         Some(local),
         Some(Arc::clone(&client)),
+        None,
         &router,
     );
     let reader = installed.models.as_ref().unwrap();
@@ -1923,6 +1927,7 @@ fn remote_seams_replace_the_client_reader_and_drop_it_without_one() {
         &crate::LaunchLocation::Remote { hub: "box".into() },
         None,
         Some(client),
+        None,
         &router,
     );
     assert!(missing.models.is_none());
@@ -1935,6 +1940,7 @@ fn remote_seams_replace_the_client_reader_and_drop_it_without_one() {
         &crate::LaunchLocation::default(),
         Some(local),
         Some(Arc::clone(&client)),
+        None,
         &router,
     );
     assert!(Arc::ptr_eq(kept.models.as_ref().unwrap(), &client));
@@ -1944,9 +1950,57 @@ fn remote_seams_replace_the_client_reader_and_drop_it_without_one() {
         &crate::LaunchLocation::Remote { hub: "box".into() },
         Some(local),
         None,
+        None,
         &router,
     );
     assert!(hubbed.models.is_some());
+}
+
+#[test]
+fn remote_seams_drop_the_blocker_reader_and_keep_it_locally() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let router = Router::new();
+    let local: Arc<dyn Configure> = Arc::new(Fake::new(vec![]));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&calls);
+    let client: contract::feedback::ReadDoctorBlocker = Arc::new(move || {
+        counting.fetch_add(1, Ordering::SeqCst);
+        None
+    });
+    // A remote terminal drops the client's blocker reader unread: the
+    // hub sends no blocker on the wire, so Esc restores none.
+    let remote = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        Some(local),
+        None,
+        Some(Arc::clone(&client)),
+        &router,
+    );
+    assert!(remote.doctor_blocker.is_none());
+    drop(remote);
+    // Without a seam the blocker reader is dropped unread too.
+    let missing = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        None,
+        None,
+        Some(Arc::clone(&client)),
+        &router,
+    );
+    assert!(missing.doctor_blocker.is_none());
+    drop(missing);
+    drop(client);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    // A local launch keeps the client's reader.
+    let local: Arc<dyn Configure> = Arc::new(Fake::new(vec![]));
+    let client: contract::feedback::ReadDoctorBlocker = Arc::new(|| None);
+    let kept = seams(
+        &crate::LaunchLocation::default(),
+        Some(local),
+        None,
+        Some(Arc::clone(&client)),
+        &router,
+    );
+    assert!(Arc::ptr_eq(kept.doctor_blocker.as_ref().unwrap(), &client));
 }
 
 #[test]

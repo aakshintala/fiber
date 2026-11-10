@@ -187,9 +187,16 @@ pub(crate) fn run_with(
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
     let router = crate::remote::Router::new();
-    let seams = crate::remote::seams(&launch.location, launch.configure.take(), models, &router);
+    let seams = crate::remote::seams(
+        &launch.location,
+        launch.configure.take(),
+        models,
+        std::mem::take(&mut launch.doctor_blocker),
+        &router,
+    );
     let extensions = launch.extensions.clone();
     let models = seams.models;
+    let doctor_blocker = seams.doctor_blocker;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
     } else if let Some(seam) = seams.seam {
@@ -202,10 +209,12 @@ pub(crate) fn run_with(
     // The doctor report reader `main` injected: taken out beside the
     // writer, for the same reason.
     app.set_doctor(std::mem::take(&mut launch.doctor));
-    // With no model configured the picker opens on home, before the
-    // first frame: saving the choice writes the config default. It stays
-    // shut when attaching to a session.
-    let pick_at_start = launch.model.is_none() && launch.open_at == crate::OpenAt::Home;
+    app.set_doctor_blocker(doctor_blocker);
+    // Every home launch defers the first-run flow until the catalogue
+    // reports credential state: with no usable credential the login
+    // opens on home, and Enter there opens it too (`docs/tui.md`,
+    // "First run"). It stays shut when attaching to a session.
+    let first_run_at_start = launch.open_at == crate::OpenAt::Home;
     // The viewer's copies live under Fiber home, taken before home
     // keeps the launch description.
     let images_dir = launch.images.clone();
@@ -231,8 +240,8 @@ pub(crate) fn run_with(
     let pending = app.configure_seam().import_pending();
     app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
-    if pick_at_start {
-        app.start_model_pick();
+    if first_run_at_start {
+        app.defer_first_run();
     }
     // One cell's pixels, for the placeholder grid, from the tty the
     // first frame already sized (`docs/tui.md`, "Images"). The measured

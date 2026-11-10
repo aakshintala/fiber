@@ -16,6 +16,18 @@ mod startup;
 pub(crate) use files::{age, clean, newest_crash, newest_error};
 pub(crate) use startup::startup;
 
+/// Reads the first startup blocker without building the doctor's full report.
+pub fn first_blocker(
+    home: &Path,
+    workspace: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    has_userinfo: &dyn Fn(&str) -> bool,
+) -> Option<(String, bool)> {
+    startup(home, workspace, &[], env, has_userinfo)
+        .blocker
+        .map(|blocker| (blocker.line, blocker.key))
+}
+
 #[cfg(test)]
 #[path = "doctor/doctor_tests.rs"]
 mod tests;
