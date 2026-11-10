@@ -278,7 +278,6 @@ crates/main/tests/session_turns/resume.rs	fiber-4313	plan	2026-11-10T13:42:34Z	r
 crates/main/tests/extension_host/extension_state_resume.rs	fiber-4313	plan	2026-11-10T13:42:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/bug-red	fiber-4313	plan	2026-11-10T13:42:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/feed.rs	fiber-4494	plan	2026-11-10T13:43:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/prompt/reviewer.md	fiber-4457	plan	2026-11-10T14:03:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/attach_fold.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/hub/listed.rs	fiber-4494	plan	2026-11-10T14:03:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
