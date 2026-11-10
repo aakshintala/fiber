@@ -175,6 +175,11 @@ fn settings_has_no_screen_reader_row() {
     // settled: slash_settings returns Effect::None, config_view_open()
     // holds, and draw_with renders synchronously, so the snapshotted
     // grid is the settled frame.
+    // The pinned order and count are the contract for this fixture, not
+    // incidental: the open tab holds its keys in the order read, then
+    // its screen rows (`settings_view.rs`, `items`), Key bindings ends
+    // Appearance (`docs/tui.md`, `/settings`, "Rows"; `SCREEN_ROWS`
+    // order), and the fake reads two Appearance keys in fixed order.
     for on_home in [true, false] {
         let mut app = if on_home {
             home(fake())
@@ -199,6 +204,8 @@ fn settings_has_no_screen_reader_row() {
         }
         if on_home {
             insta::assert_snapshot!("settings_has_no_screen_reader_row", text);
+        } else {
+            insta::assert_snapshot!("settings_has_no_screen_reader_row_attached", text);
         }
     }
 }
