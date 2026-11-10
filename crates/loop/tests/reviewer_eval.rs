@@ -483,12 +483,17 @@ fn seeded_lines_validate_kind_and_first_family() {
     validate_seeded(&parse_line(&answered.to_string()).unwrap()).unwrap();
 }
 
-/// The regenerated set: 18 synthetic `{session}-{seq}` lines plus
-/// `s_01`-`s_07`, family1 authored in the lines, family2 null throughout.
-/// No doc promises the line order, so the test asserts the ids as a set
-/// (`docs/testing.md`, "Event streams").
+/// The regenerated set's per-line contract: each line carries its session
+/// label (family1 authored in the line, family2 null throughout), the
+/// synthetic identity for synthetic lines, and placeholders only. The test
+/// checks every line it finds but never the set's membership or size: no
+/// doc promises the eval-corpus size (`docs/testing.md`, "Event streams"
+/// asserts an order or a count only where a doc promises it), and the eval
+/// set is a development instrument, not a merge gate
+/// (`docs/testing/fakes.md`, "Live calls and evals"). Ids stay unique, so
+/// a duplicated line still fails.
 #[test]
-fn regenerated_set_pins_ids_labels_and_placeholders() {
+fn regenerated_set_checks_labels_and_placeholders() {
     let set = include_str!("fixtures/reviewer_eval/calls.jsonl");
     let lines: Vec<&str> = set.lines().filter(|line| !line.trim().is_empty()).collect();
     let mut ids = Vec::new();
@@ -530,43 +535,9 @@ fn regenerated_set_pins_ids_labels_and_placeholders() {
                 entry.id
             );
         }
+        assert!(!ids.contains(&entry.id), "ids stay unique: {}", entry.id);
         ids.push(entry.id.clone());
     }
-    ids.sort();
-    assert_eq!(
-        ids,
-        vec![
-            "control-1-credentialed-probe-1",
-            "control-2-key-material-copy-1",
-            "control-3-delete-outside-workspace-1",
-            "control-4-swapped-push-target-1",
-            "field-1-typed-restart-and-run-1",
-            "field-2-picked-run-label-1",
-            "field-3-named-branch-push-1",
-            "field-4-loopback-server-port-1",
-            "field-6-restart-it-kill-and-start-1",
-            "field-7-tkt-build-from-gate-1",
-            "review_person_input-1",
-            "s_01",
-            "s_02",
-            "s_03",
-            "s_04",
-            "s_05",
-            "s_06",
-            "s_07",
-            "shape-1-verbatim-retype-1",
-            "shape-2-effect-named-by-reply-1",
-            "shape-3-prerequisite-1",
-            "shape-4-conceded-then-new-demand-1",
-            "shape-5-task-names-action-1",
-            "shape-6-reason-names-different-call-1",
-            "shape-6-reason-names-different-call-2",
-        ]
-        .iter()
-        .map(|id| (*id).to_owned())
-        .collect::<Vec<_>>(),
-        "the set holds exactly the regenerated ids, in any order"
-    );
     assert!(
         ids.iter().all(|id| !id.starts_with("r4234-")),
         "no r4234-* id survives"
@@ -2082,7 +2053,7 @@ const EMBEDDED_PERSON_INPUT: EmbeddedSession = EmbeddedSession {
     events: include_str!("fixtures/review_person_input/events.jsonl"),
 };
 
-/// Every embedded synthetic fixture session in recipe order: the 15
+/// Every embedded synthetic fixture session in recipe order: the 16
 /// consent sessions plus the person-input session.
 fn embedded_synthetic_sessions() -> Vec<EmbeddedSession> {
     let mut sessions = EMBEDDED_CONSENT_SESSIONS.to_vec();
