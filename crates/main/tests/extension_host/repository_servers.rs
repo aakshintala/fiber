@@ -101,7 +101,7 @@ const ASK_TOOL_TURN: [&str; 23] = [
 
 /// The verbatim count rule the multiset calls cite
 /// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {

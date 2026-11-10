@@ -3976,7 +3976,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         .iter()
         .filter(|command| command["command"] == "commands")
         .collect();
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
@@ -4095,9 +4095,8 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
         taken.push(count);
         count
     };
-    // docs/tui.md, "History and paging": queued hub lines share one frame
-    // in arrival order, up to 4,096 inputs (docs/testing.md, "Event
-    // streams"). Each count below derives from what the test queued under
+    // `docs/tui.md`, "History and paging": queued hub lines share one frame
+    // in arrival order, up to 4,096 inputs (`docs/testing.md`, "Event streams"). Each count below derives from what the test queued under
     // that cap: the ack plus `head` lines fill the first batch, exactly
     // `SHORT` lines sit behind the emptied channel, and the rest plus the
     // live lines land last.
@@ -4156,7 +4155,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
         .iter()
         .filter(|command| command["command"] == "commands")
         .collect();
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
@@ -4194,7 +4193,7 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
         .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
         .expect("the full subscribe");
     let replayed = &seen_commands[full_at + 1..];
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
     assert!(
         replayed
@@ -5646,7 +5645,7 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
     // the wait on the tick, or after, ending it on the key with the tick
     // still queued: either way the stash and the loss match, so drain to
     // the disconnect, acking a stray tick. One deadline for the whole
-    // drain (docs/testing.md, "Waits and timeouts"): a fresh deadline
+    // drain (`docs/testing.md`, "Waits and timeouts"): a fresh deadline
     // per receive would keep resetting the wait.
     let drain = Deadline::after(DEADLINE);
     loop {
@@ -5660,15 +5659,13 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
             Err(error) => panic!("waited {DEADLINE:?} for the disconnect: {error}"),
         }
     }
-    // The loss reconnects as after a disconnect (docs/tui.md, "History
-    // and paging", and "A dropped connection" for the banner and the
+    // The loss reconnects as after a disconnect (`docs/tui.md`, "History and paging", and "A dropped connection" for the banner and the
     // draft staying).
     assert_eq!(
         lp.app.banner().as_deref(),
         Some("Connection lost · reconnecting (attempt 1)…")
     );
-    // The key pressed during the wait waits stashed (docs/tui.md,
-    // "History and paging": stashed lines fold in order): every stashed
+    // The key pressed during the wait waits stashed (`docs/tui.md`, "History and paging": stashed lines fold in order): every stashed
     // line is that key, however many the wait held — no count, just
     // what the wait held.
     assert!(
@@ -5804,8 +5801,7 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
     assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
     assert!(!lp.hub.has_stream(), "the expired wait hangs up");
-    // The input at the deadline waits for after the loss (docs/tui.md,
-    // "History and paging": stashed lines fold in order): the matching
+    // The input at the deadline waits for after the loss (`docs/tui.md`, "History and paging": stashed lines fold in order): the matching
     // answer is among what the wait held, however many lines that is.
     assert!(
         lp.hub
@@ -6260,8 +6256,7 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
     }
 }
 
-/// The attach spans' boundary and state-machine cases (`docs/state.md`,
-/// "Diagnostic logs"), moved out of the production sources
+/// The attach spans' boundary and state-machine cases (`docs/state.md`, "What each part holds"), moved out of the production sources
 /// (`docs/code-quality.md`, "Size"): the event-loop wiring from
 /// `event_loop.rs` and the `Timing` state machine from `timing.rs`,
 /// landed here as one set of cases. The two inline modules shared most

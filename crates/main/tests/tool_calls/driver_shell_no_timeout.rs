@@ -141,7 +141,7 @@ fn agent_shell_timeout_stands_while_driver_shell_has_none() {
     let driver_command = format!("read -r _ < {}", shell_quote(&driver_fifo));
     let server = ProviderServer::start([
         // A pending approval lets the loop drain shell deliveries without
-        // ending the turn (docs/testing.md, "Waits and timeouts").
+        // ending the turn (`docs/testing.md`, "Waits and timeouts").
         stream(&[function_call(
             "call_1",
             "shell",

@@ -845,8 +845,8 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
     // Two queued entries on the card with the title above, the hint
     // below and an edge row on each side, above the notice's row
-    // (docs/tui.md, "Steering": card; docs/tui.md, "The panel": panel).
-    assert_eq!(app.conversation_height(), 0); // docs/tui.md, "Steering": card takes its rows.
+    // (`docs/tui.md`, "Steering": card; `docs/tui.md`, "The panel": panel).
+    assert_eq!(app.conversation_height(), 0); // `docs/tui.md`, "Steering": card takes its rows.
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
@@ -1017,7 +1017,7 @@ fn turn_started_asks_again_and_the_latest_answer_fills_the_list() {
     let mut app = app();
     let first = attached_asking(&mut app, now);
     let lines = app.on_line(turn_started(S_A, "hi"));
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(lines.len(), 1);
     let again = parse(&lines[0]);
     assert_eq!(again["command"], "commands");
@@ -1052,7 +1052,7 @@ fn each_replayed_turn_started_asks_commands_again() {
             envelope.seq = Some(contract::Seq(at));
         }
         let lines = app.on_line(line);
-        // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+        // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
         assert_eq!(lines.len(), 1, "replayed turn {at}");
         let asked = parse(&lines[0]);
         assert_eq!(asked["command"], "commands");

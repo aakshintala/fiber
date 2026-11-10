@@ -1,8 +1,7 @@
 //! The panel's Delegates card on the app side: its wheel (`docs/tui.md`,
 //! "The panel": the card "scrolls on its own under the mouse wheel")
 //! and its `summary` subscriptions to each running Fiber delegate
-//! (`docs/tui.md`, "The panel"; `docs/invocation.md`, "A delegate is
-//! reached on its own connection").
+//! (`docs/tui.md`, "The panel"; `docs/invocation.md`, "What each command does").
 
 use contract::Envelope;
 use contract::SessionId;
@@ -63,8 +62,7 @@ impl App {
 
     /// Each attached-session line after the fold: on the attached
     /// session's `session_status`, one `summary` subscribe per running
-    /// Fiber delegate (`docs/invocation.md`, "A delegate is reached on
-    /// its own connection"); on a delegate job's `job_completed`, that
+    /// Fiber delegate (`docs/invocation.md`, "What each command does"); on a delegate job's `job_completed`, that
     /// delegate's stored row goes, so a later run never shows a stale
     /// status (`docs/tui.md`, "The panel").
     pub(super) fn delegate_line(&mut self, envelope: &Envelope) -> Vec<String> {
@@ -112,8 +110,7 @@ impl App {
         let mut send = Vec::new();
         for (session, harness) in running {
             // Only a Fiber delegate streams over the hub's relay
-            // (`docs/invocation.md`, "A delegate is reached on its own
-            // connection").
+            // (`docs/invocation.md`, "What each command does").
             if harness != "fiber" {
                 continue;
             }

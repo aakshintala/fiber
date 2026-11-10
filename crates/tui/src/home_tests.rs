@@ -1101,7 +1101,7 @@ fn ids(sessions: &Sessions) -> Vec<&str> {
 fn recent_rows_returns_the_answer_total_when_it_is_an_integer() {
     let (rows, total) = recent_rows(&json!({"sessions": [], "total": 7}));
     assert!(rows.is_empty());
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(total, Some(7));
 }
 
@@ -1120,7 +1120,7 @@ fn recent_rows_leaves_the_total_empty_without_an_integer() {
     }
     // Sessions may be missing while the total is present: the rows are
     // empty and the total still parses.
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(recent_rows(&json!({"total": 7})), (Vec::new(), Some(7)));
 }
 
@@ -1132,7 +1132,7 @@ fn a_scoped_page_appends_without_touching_other_projects_rows() {
         true,
     );
     let (rows, total) = recent_rows(&json!({"sessions": [project_row("s_p", OTHER)], "total": 4}));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(total, Some(4));
     sessions.scoped(rows);
     sessions.note_total(OTHER, total.unwrap_or(0));
@@ -1141,9 +1141,9 @@ fn a_scoped_page_appends_without_touching_other_projects_rows() {
     let mut got = ids(&sessions);
     got.sort_unstable();
     assert_eq!(got, ["s_p", "s_u"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), Some(4));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(PROJECT), None);
     let sections = sessions.sections(Some(PROJECT));
     // `docs/tui.md`, "The session list" and `docs/tui.md`, "The session list" (order) and `docs/tui.md`, "The session list" (counts).
@@ -1198,9 +1198,9 @@ fn out_of_order_scoped_pages_keep_both_projects_rows() {
     let mut got = ids(&sessions);
     got.sort_unstable();
     assert_eq!(got, ["s_o1", "s_o2", "s_p1"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(PROJECT), Some(2));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), Some(3));
 }
 
@@ -1232,7 +1232,7 @@ fn scoped_folds_leave_the_unscoped_cursor_and_paging_alone() {
         sessions.last_recent().map(|row| row.id.0.as_str()),
         Some("s_c")
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), Some(9));
     sessions.recent(Vec::new(), false);
     assert!(!sessions.more());
@@ -1278,9 +1278,9 @@ fn totals_drop_together_while_rows_and_paging_stay() {
     sessions.note_total(OTHER, 2);
     sessions.mark_dirty(PROJECT);
     sessions.drop_all_totals();
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(PROJECT), None);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), None);
     assert!(!sessions.is_dirty(PROJECT));
     // `docs/tui.md`, "The session list" and `docs/tui.md`, "The session list" (order) and `docs/tui.md`, "The session list" (counts).

@@ -450,7 +450,7 @@ fn break_copy_source(setup: &Setup, rel: &str) {
     // Remove the finished pinned copy and its ready marker, keeping the
     // approval record: the next start must rebuild from the source.
     // The fixture declares exactly one hook, so exactly one approval file
-    // holds its hash (`docs/extensions.md`, "Pinning": approving copies
+    // holds its hash (`docs/extensions.md`, "Code a repository ships": approving copies
     // those files into Fiber home).
     let approvals: Vec<String> = fs::read_dir(setup.home().join("projects"))
         .unwrap()

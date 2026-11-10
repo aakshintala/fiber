@@ -1476,12 +1476,11 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     // Its prompt queues behind the held provider call, so the rejection
     // arrives once the loop drains: `closing`, not `busy`. `fiber ask`
     // queues `close` with its prompt (`Session::ask`), and
-    // docs/invocation.md, "Lifecycle" says "`close` ends the session
+    // `docs/invocation.md`, "Lifecycle" says "close` ends the session
     // whoever else is attached. It accepts no more prompts, finishes the
     // turn in flight, then any running jobs", so a second prompt to an
     // `ask` session is rejected `closing` (`loop::inbox`, `admit_running`;
-    // `closing` is a listed driver rejection in docs/invocation.md,
-    // "Driver commands"). `busy` applies to a session that was not sent
+    // `closing` is a listed driver rejection in `docs/invocation.md`, "What each command does"). `busy` applies to a session that was not sent
     // `close`, and takes the same attach path, covered at crate level in
     // `doors/tests/attach.rs`.
     server.release();
@@ -1922,8 +1921,7 @@ fn append_raw(dir: &Path, line: &contract::Envelope) {
 
 #[test]
 fn an_unreadable_line_before_the_last_compaction_does_not_fail_the_resume() {
-    // Only the window a resume actually needs is parsed (`docs/events.md`,
-    // "Only the window a consumer actually needs is parsed"): the
+    // Only the window a resume actually needs is parsed (`docs/events.md`, "Resume"): the
     // unreadable `reasoning_completed` line sits before the compaction turn's
     // `turn_started`, where the window starts, so the resume never reads
     // its payload.

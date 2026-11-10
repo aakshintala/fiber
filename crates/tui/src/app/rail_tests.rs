@@ -4021,8 +4021,7 @@ fn focus_cross(app: &mut App, session: &str) {
 fn the_walk_reaches_an_unreadable_cards_cross() {
     // The walk visits the card and its ✕. The doc leaves the stop order
     // open, so the test asserts the visited stops as a set
-    // (`docs/testing.md`, "A test asserts an order or a count only where
-    // a doc promises it"; `docs/tui.md`, "The rail" draws each card with
+    // (`docs/testing.md`, "What a test asserts"; `docs/tui.md`, "The rail" draws each card with
     // its ✕).
     let mut app = cannot_attach();
     stroke_press(&mut app, plain(Code::Left));

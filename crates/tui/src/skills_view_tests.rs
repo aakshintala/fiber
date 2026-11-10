@@ -156,7 +156,7 @@ fn before_the_answer_it_says_reading_and_has_no_rows() {
 fn rows_show_source_and_visibility() {
     // One row per skill (`docs/tui.md`, "Swapped views"); each row carries where its
     // skill comes from and whether the model can see it. Row order is not
-    // a contract — the answer's discovery order is `docs/invocation.md:474`
+    // a contract — the answer's discovery order is `docs/invocation.md`, "What each command does"
     // — so each check finds its row by skill name.
     let fake = fake_with(off(&[], &[]));
     let skills = opened(

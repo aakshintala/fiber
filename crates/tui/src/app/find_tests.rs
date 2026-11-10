@@ -72,7 +72,7 @@ fn started(app: &mut App, line: Line) -> Vec<String> {
             rest.push(sent);
         }
     }
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(asked.len(), 1, "{asked:?}");
     let answer = Line::Session(contract::Envelope {
         kind: EventKind::CommandAccepted,

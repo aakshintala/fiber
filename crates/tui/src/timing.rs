@@ -1,4 +1,4 @@
-//! The terminal's operation timers (`docs/state.md`, "Diagnostic logs"): the
+//! The terminal's operation timers (`docs/state.md`, "What each part holds"): the
 //! diagnostic writer the loop's timed scopes share. Every timed place goes
 //! through `diag::diag::timed`, so the terminal's lines match every other
 //! process's.

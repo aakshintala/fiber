@@ -150,7 +150,7 @@ fn fanout_projects(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
         .map(|line| {
-            // `docs/invocation.md:1102` (each fanout line is a scoped `recent`).
+            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`).
             assert_eq!(line["command"], "recent");
             line["args"]["project"]
                 .as_str()
@@ -342,7 +342,7 @@ fn more_with_the_link_down_sends_no_scoped_page() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 3}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     // `docs/tui.md`, "The session list" (More counts from the scoped total).
     let key = more_key(&app, "-w").expect("a more row");
@@ -410,7 +410,7 @@ fn page_recent_scopes_to_the_focused_project_not_its_neighbor() {
                 .is_empty()
         );
     }
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     assert_eq!(stored(&app, "-other"), Some(1));
     // The focused row is `-w`'s last loaded row and `-w` holds more, so
@@ -444,7 +444,7 @@ fn page_recent_from_the_last_row_with_more_held_scopes_the_page() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 2}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
     // One row loaded of two held: the last row pages its project. With
     // `!=` the focused row reads as not-the-last and the page stays
@@ -479,7 +479,7 @@ fn page_recent_off_the_last_row_sends_no_scoped_page() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 3}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     // The first row is not the project's last loaded row, so no scoped
     // page goes out. With `!=` the row reads as the last one, and with
@@ -508,7 +508,7 @@ fn page_recent_at_the_total_pages_the_unscoped_cursor() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 1}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // Loaded rows meet the held total: the next page stays unscoped past
     // the unscoped cursor. With `||`, `>=` or `==` the met total reads
@@ -541,7 +541,7 @@ fn page_recent_below_the_total_pages_the_unscoped_cursor() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 1}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  a", "○  b"]);
@@ -577,7 +577,7 @@ fn more_text_at_the_total_copies_nothing() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 2}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.

@@ -1742,7 +1742,7 @@ fn malformed_key_registrations_become_extension_failed_load_notices() {
         let (_dir, loader) = fixture();
         package(&loader, "a", None, Some(source));
         let (renderer, notices) = loader.load();
-        // docs/extensions.md:1526: any other shape records one rejection, reported as one load notice.
+        // `docs/extensions.md`, "Whole-screen keys": any other shape records one rejection, reported as one load notice.
         assert_eq!(notices.len(), 1, "{source}: {notices:?}");
         assert_eq!(notices[0].0, "extension_failed", "{source}: {notices:?}");
         assert!(
@@ -1787,7 +1787,7 @@ fn a_canonical_duplicate_keeps_the_first_registration() {
         ),
     );
     let (renderer, notices) = loader.load();
-    // docs/extensions.md:1529-1530 and `docs/tui.md`, "When two extensions want one slot": the first registration wins; a later one is skipped with one notice.
+    // `docs/extensions.md`, "Whole-screen keys" and `docs/tui.md`, "When two extensions want one slot": the first registration wins; a later one is skipped with one notice.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "extension_failed");
     assert!(notices[0].1.contains("twice"), "{notices:?}");

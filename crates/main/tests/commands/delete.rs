@@ -628,7 +628,7 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
         ],
         &[],
         None,
-        "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails",
+        r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#,
     );
     // Each turn opens its one step before the assistant message
     // (`docs/loop.md`, "One step": step 1 writes `step_started`, step 4

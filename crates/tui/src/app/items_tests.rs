@@ -1115,7 +1115,7 @@ fn a_closed_completed_job_shows_its_protected_paths_warning_when_opened() {
     open(&mut app, "j_2");
     app.set_size(120, 32);
     let (rows, _) = rendered(&app, 120, 32);
-    // `docs/events.md:699-701`: the adopted report's warning line renders
+    // `docs/events.md`, "`tool_call_completed`": the adopted report's warning line renders
     // under the open job's output, including after the job has completed.
     assert!(
         rows.iter().any(|row| row.contains("Protected path .fiber")),

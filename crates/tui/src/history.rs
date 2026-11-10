@@ -1,8 +1,7 @@
 //! Prompt recall and search: ↑ and ↓ in the input box, and the Ctrl+R panel
 //! (`docs/tui.md`, "The input box"). The entries are this session's prompts
 //! as the terminal saw them, then the project's prompt history read through
-//! the hub's `prompt_history`, page by page (`docs/state.md`, "Prompt
-//! history").
+//! the hub's `prompt_history`, page by page (`docs/state.md`, "Fiber home").
 
 #[cfg(any(debug_assertions, test))]
 use std::cell::Cell;

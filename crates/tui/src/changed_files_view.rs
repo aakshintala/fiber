@@ -23,8 +23,7 @@ pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, 
     paths
 }
 
-/// The shell line for `path`'s diff against HEAD (docs/tui.md, "Swapped
-/// views"). Single quotes keep paths literal to the shell; embedded quotes
+/// The shell line for `path`'s diff against HEAD (`docs/tui.md`, "Swapped views"). Single quotes keep paths literal to the shell; embedded quotes
 /// close, escape a quote, and reopen the word.
 pub(crate) fn diff_command(path: &str) -> String {
     let quoted = format!("'{}'", path.replace('\'', "'\\''"));

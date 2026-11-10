@@ -791,7 +791,7 @@ fn parts_inner(
     {
         // One notice names the unavailable case; deny/write overlap is a
         // bad configuration, every other case a tool error
-        // (`docs/errors.md`, "Sandbox").
+        // (`docs/sandbox.md`, "How read denies are built").
         startup_notices.push(contract::events::Notice {
             code: unavailable.code(),
             message: format!("sandbox unavailable: {unavailable}"),

@@ -1,5 +1,4 @@
-//! Binary-level `mcp.connect` journeys (`docs/state.md`, "Diagnostic
-//! logs"): the built `fiber` times one MCP connection attempt per actual
+//! Binary-level `mcp.connect` journeys (`docs/state.md`, "What each part holds"): the built `fiber` times one MCP connection attempt per actual
 //! start through the installed timer. At debug an `ask` with a stdio or
 //! HTTP server writes `mcp.connect` with only `op` and `ms`; at info it
 //! writes no `op_timing` at all. Cached first use, resumed first use and

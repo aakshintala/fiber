@@ -1,5 +1,4 @@
-//! Part 8 tool phase timers at the binary level (`docs/state.md`,
-//! "Diagnostic logs"): the built `fiber` runs `ask` against the fake
+//! Part 8 tool phase timers at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask` against the fake
 //! provider server with an ordinary Lua hook fixture. At `debug` a tool
 //! call writes `tool.permission`, one `tool.hooks` line per actual
 //! before/check/after dispatch, and `tool.run`, each with exactly `op`,

@@ -1186,7 +1186,7 @@ fn terminal(
     let diag_home = home.clone();
     // The terminal's diagnostic writer: one process, one file. Built once
     // here and shared with the terminal, so the error path below writes to
-    // the same file a run would have (`docs/state.md`, "Diagnostic logs").
+    // the same file a run would have (`docs/state.md`, "What each part holds").
     let diag = Arc::new(log::diag::Diag::new(
         &diag_home,
         log::diag::Process::Tui,
@@ -1305,7 +1305,7 @@ fn terminal(
             let failure = failed(error.code(), error.to_string());
             // The terminal never started: one `error` line in
             // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
-            // startup failure does (`docs/state.md`, "Diagnostic logs").
+            // startup failure does (`docs/state.md`, "What each part holds").
             let code = serde_json::to_value(&failure.code)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))
