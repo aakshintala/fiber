@@ -644,7 +644,7 @@ fn hello_sends_feed_then_recent_once() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "feed");
     assert_eq!(lines[1]["command"], "recent");
-    assert!(lines[1].get("args").is_none());
+    assert_eq!(lines[1]["args"], json!({}));
     assert_ne!(lines[0]["id"], lines[1]["id"]);
 }
 
@@ -2986,7 +2986,7 @@ fn the_first_recent_page_names_no_project() {
     let id = lines[1]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
-    assert_eq!(lines[1], json!({"id": id, "command": "recent"}));
+    assert_eq!(lines[1], json!({"id": id, "command": "recent", "args": {}}));
 }
 
 #[test]
@@ -3004,9 +3004,10 @@ fn down_from_the_last_row_asks_the_next_page_before_the_last_loaded_recent_row()
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     // ↓ on the last row asks the next page at once.
-    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
@@ -3057,9 +3058,10 @@ fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
     answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     // An empty older page ends paging.
     assert!(
@@ -3944,7 +3946,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "recent");
-    assert!(lines[0].get("args").is_none());
+    assert_eq!(lines[0]["args"], json!({}));
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
@@ -4605,7 +4607,7 @@ fn an_accepted_delete_asks_the_first_page_unscoped() {
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "recent");
-    assert!(lines[0].get("args").is_none());
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -4622,9 +4624,10 @@ fn the_next_page_in_git_is_unscoped() {
     answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
@@ -5529,7 +5532,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     // already have asks in flight.
     let recent_id = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("recent id"));
     assert!(
@@ -5641,7 +5644,7 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
     let outgoing = commands(app.on_line(accepted(&delete, json!({}))));
     let refill = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .unwrap_or_else(|| panic!("the unscoped refill"));
     let refill_id = line_id(refill).to_owned();
     let scoped: Vec<Value> = outgoing
@@ -5704,7 +5707,7 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
     assert!(
         lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent" && line.get("args") == Some(&json!({}))),
         "an unscoped refill went out: {lines:?}"
     );
     assert!(
@@ -5937,9 +5940,10 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
     );
     answer_scoped_empty(&mut app, &fanout, 3);
     let key = more_key(&app, "-w").expect("a more row");
-    let Effect::Send(lines) = app.home_click(Spot::More(key)) else {
+    let Effect::SendTracked(sents) = app.home_click(Spot::More(key)) else {
         panic!("More opens the next scoped page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // `docs/tui.md`, "The session list" (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
@@ -5996,9 +6000,10 @@ fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
     drawn(&mut app);
     app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter on More pages the project");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // `docs/tui.md`, "The session list" (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
@@ -6940,9 +6945,10 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
     // The older unscoped page holds the same project: no scoped retry.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     let page_id = page["id"].as_str().unwrap_or_else(|| panic!("page id"));
     assert!(page["args"].get("project").is_none());
@@ -6979,9 +6985,10 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
     // page stays unscoped.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     let page_id = page["id"].as_str().unwrap_or_else(|| panic!("page id"));
     assert_eq!(page["args"]["before"], "s_aaaaaaaaaaaaaaaa");
@@ -7037,10 +7044,11 @@ fn out_of_order_scoped_answers_leave_the_unscoped_cursor() {
     // Both projects hold exactly their loaded rows, so paging stays on
     // the unscoped cursor: the last unscoped row.
     let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the unscoped cursor pages");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
     assert_eq!(page["args"]["before"], "s_bbbbbbbbbbbbbbbb");
     assert!(page["args"].get("project").is_none());
@@ -7279,10 +7287,11 @@ fn the_recent_tags_are_the_only_record() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     ));
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row asks the next page");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     let page_id = line_id(&page).to_owned();
     assert_eq!(
         app.outbox.waiting(&page_id),
@@ -7292,7 +7301,7 @@ fn the_recent_tags_are_the_only_record() {
     assert_eq!(app.page_recent(key), None);
     // Its tag settles out of band, and the next ask goes out.
     app.outbox.settled(&page_id);
-    assert!(matches!(app.page_recent(key), Some(Effect::Send(_))));
+    assert!(matches!(app.page_recent(key), Some(Effect::SendTracked(_))));
 }
 
 #[test]
@@ -7304,10 +7313,11 @@ fn a_page_ask_is_not_a_first_ask() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     ));
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row asks the next page");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     app.on_line(accepted(
         line_id(&page),
         json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")]}),
@@ -7332,7 +7342,12 @@ fn one_scoped_ask_per_project_comes_from_the_tags() {
     assert_eq!(scoped_tag_ids(&app, "-w"), ids);
     // The tag settles out of band: the project is asked again.
     app.outbox.settled(&ids[0]);
-    let sent = commands(app.scoped_first("-w"));
+    let sent = commands(
+        app.scoped_first("-w")
+            .into_iter()
+            .map(|sent| sent.line)
+            .collect(),
+    );
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["args"]["project"], "-w");
     assert_eq!(scoped_tag_ids(&app, "-w").len(), 1);
@@ -7347,10 +7362,11 @@ fn a_reconnect_settles_scoped_tags_and_keeps_the_unscoped_ones() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     ));
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row asks the next page");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     let page_id = line_id(&page).to_owned();
     let old_scoped = scoped_tag_ids(&app, "-w");
     assert_eq!(old_scoped.len(), 1);
@@ -7579,4 +7595,33 @@ fn set_home_replaces_the_seeded_home() {
     });
     app.settle();
     assert_eq!(app.chrome().layout().expect("a layout").rail, None);
+}
+
+#[test]
+fn a_failed_feed_fold_settles_by_its_carried_id() {
+    let mut app = home_with(80, 24, launch());
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // Hello's feed and first page cruise the fold, paired as built.
+    let lines: Vec<String> = app.on_line(hello());
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"feed\""))
+        .expect("a feed line");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("feed id");
+    // Tamper with the feed line's JSON id, then pair the tampered line
+    // as a builder whose line and id diverge would: settlement must
+    // follow the carried id, never the line's JSON.
+    let tampered = lines[at].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    let mut failed = lines;
+    failed[at] = tampered;
+    app.write_failed(&failed);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
 }

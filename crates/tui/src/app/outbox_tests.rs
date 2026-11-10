@@ -958,3 +958,37 @@ fn a_second_answer_for_one_id_changes_nothing() {
     assert!(second.is_empty());
     assert_eq!(app.outbox.waiting(&id), None);
 }
+
+#[test]
+fn hub_pairs_live_exactly_as_long_as_their_waits() {
+    let mut outbox = up();
+    let id = contract::CommandId("c_1".to_owned());
+    outbox.wait("c_1", Waiting::Feed);
+    outbox.note_hub_sent(&id, "line");
+    assert_eq!(outbox.hub_id("line"), Some(id.clone()));
+    // Settling the wait purges the pair: a later failure parses.
+    outbox.settled("c_1");
+    assert_eq!(outbox.hub_id("line"), None);
+}
+
+#[test]
+fn settle_where_and_forget_purge_their_hub_pairs() {
+    let mut outbox = up();
+    let scoped = contract::CommandId("c_s1".to_owned());
+    outbox.wait("c_s1", Waiting::Recent(RecentAsk::Scoped("p1".to_owned())));
+    outbox.note_hub_sent(&scoped, "scoped one");
+    let first = contract::CommandId("c_first".to_owned());
+    outbox.wait("c_first", Waiting::Recent(RecentAsk::First));
+    outbox.note_hub_sent(&first, "first");
+    // The disconnect path forgets abandoned waits the same way.
+    let abandoned = contract::CommandId("c_gone".to_owned());
+    outbox.wait("c_gone", Waiting::Abandoned);
+    outbox.note_hub_sent(&abandoned, "gone");
+    outbox.settle_where(|owner| matches!(owner, Waiting::Recent(RecentAsk::Scoped(_))));
+    assert_eq!(outbox.hub_id("scoped one"), None);
+    assert_eq!(outbox.hub_id("first"), Some(first));
+    outbox.forget(&Waiting::Recent(RecentAsk::First));
+    assert_eq!(outbox.hub_id("first"), None);
+    outbox.forget(&Waiting::Abandoned);
+    assert_eq!(outbox.hub_id("gone"), None);
+}

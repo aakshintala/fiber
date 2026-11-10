@@ -1540,3 +1540,36 @@ fn a_stale_directories_tag_does_not_fold_into_a_reopened_picker() {
     answer(&mut app, &second[0].0, &["fresh"], "/w");
     assert_eq!(completions(&app), ["fresh".to_owned()]);
 }
+
+#[test]
+fn a_failed_directories_ask_settles_by_its_carried_id() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // Typing queues the picker's ask, paired as built: each keystroke
+    // sends what it queued.
+    let mut lines = Vec::new();
+    for ch in "/a".chars() {
+        if let Effect::Send(sent) = key(&mut app, Key::Char(ch)) {
+            lines.extend(sent);
+        }
+    }
+    assert!(!lines.is_empty());
+    let carried: String = serde_json::from_str::<Value>(&lines[0])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("directories id");
+    // Tamper with the ask's JSON id, then pair the tampered line as a
+    // builder whose line and id diverge would: settlement must follow
+    // the carried id, never the line's JSON.
+    let tampered = lines[0].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[0]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    let mut failed = lines;
+    failed[0] = tampered;
+    app.write_failed(&failed);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
+}

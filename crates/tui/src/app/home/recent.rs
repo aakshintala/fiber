@@ -3,15 +3,15 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::super::{
-    App, Effect,
-    outbox::{Outbox, RecentAsk, Waiting},
-};
+use super::super::outbox::{Outbox, RecentAsk, Waiting};
+use super::super::{App, Effect, Sent, hub_line};
 use super::{refusal, refusal_code};
 use crate::home::{Row, Sessions, recent_rows};
+use contract::CommandId;
 use contract::ErrorCode;
+use contract::commands::hub::{HubCommand, NoArgs};
 
 /// The home feed and recent-page requests waiting for their answers.
 /// Each one lives only as its outbox `Feed` or `Recent` tag.
@@ -83,19 +83,22 @@ impl Recent {
     /// Takes the one-time feed and first unscoped page, if not sent yet.
     /// The call after `fed` is cleared settles the old feed and unscoped
     /// recent tags.
-    pub(super) fn first_asks(&mut self, outbox: &mut Outbox) -> Option<Vec<String>> {
+    pub(super) fn first_asks(&mut self, outbox: &mut Outbox) -> Option<Vec<Sent>> {
         if self.fed {
             return None;
         }
         self.fed = true;
         outbox.settle_where(|waiting| matches!(waiting, Waiting::Feed));
         settle_unscoped(outbox);
-        let feed = support::mint("c_");
-        let recent = support::mint("c_");
-        outbox.wait(&feed, Waiting::Feed);
-        outbox.wait(&recent, Waiting::Recent(RecentAsk::First));
+        let feed = CommandId(support::mint("c_"));
+        let recent = CommandId(support::mint("c_"));
+        outbox.wait(&feed.0, Waiting::Feed);
+        outbox.wait(&recent.0, Waiting::Recent(RecentAsk::First));
         Some(vec![
-            json!({"id": feed, "command": "feed"}).to_string(),
+            Sent {
+                line: hub_line(&feed, HubCommand::Feed(NoArgs {})),
+                id: feed,
+            },
             recent_line(&recent, None, None),
         ])
     }
@@ -163,13 +166,13 @@ impl Recent {
         sessions: &mut Sessions,
         connected: bool,
         outbox: &mut Outbox,
-    ) -> Vec<String> {
+    ) -> Vec<Sent> {
         if !connected {
             return Vec::new();
         }
-        let id = support::mint("c_");
+        let id = CommandId(support::mint("c_"));
         settle_unscoped(outbox);
-        outbox.wait(&id, Waiting::Recent(RecentAsk::First));
+        outbox.wait(&id.0, Waiting::Recent(RecentAsk::First));
         let mut out = vec![recent_line(&id, None, None)];
         if let Some(project) = delete_project {
             out.extend(self.scoped_first(project, sessions, connected, outbox));
@@ -188,7 +191,7 @@ impl Recent {
         sessions: &mut Sessions,
         connected: bool,
         outbox: &mut Outbox,
-    ) -> Vec<String> {
+    ) -> Vec<Sent> {
         if project.is_empty() || !connected {
             return Vec::new();
         }
@@ -196,8 +199,11 @@ impl Recent {
             sessions.mark_dirty(project);
             return Vec::new();
         }
-        let id = support::mint("c_");
-        outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
+        let id = CommandId(support::mint("c_"));
+        outbox.wait(
+            &id.0,
+            Waiting::Recent(RecentAsk::Scoped(project.to_owned())),
+        );
         vec![recent_line(&id, Some(project), None)]
     }
 
@@ -213,7 +219,7 @@ impl Recent {
         launch_project: Option<&str>,
         connected: bool,
         outbox: &mut Outbox,
-    ) -> Vec<String> {
+    ) -> Vec<Sent> {
         if !connected {
             return Vec::new();
         }
@@ -257,7 +263,7 @@ impl Recent {
         sessions: &mut Sessions,
         connected: bool,
         outbox: &mut Outbox,
-    ) -> Vec<String> {
+    ) -> Vec<Sent> {
         if !sessions.is_dirty(project) {
             return Vec::new();
         }
@@ -276,15 +282,18 @@ impl Recent {
         before: Option<&str>,
         connected: bool,
         outbox: &mut Outbox,
-    ) -> Option<String> {
+    ) -> Option<Sent> {
         if project.is_empty() || !connected {
             return None;
         }
         if scoped_out(outbox, project) {
             return None;
         }
-        let id = support::mint("c_");
-        outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
+        let id = CommandId(support::mint("c_"));
+        outbox.wait(
+            &id.0,
+            Waiting::Recent(RecentAsk::Scoped(project.to_owned())),
+        );
         Some(recent_line(&id, Some(project), before))
     }
 
@@ -300,7 +309,7 @@ impl Recent {
         sessions: &mut Sessions,
         connected: bool,
         outbox: &mut Outbox,
-    ) -> Option<String> {
+    ) -> Option<Sent> {
         // The scoped page wins while the project holds more: the held
         // total is that count's source of truth.
         let scoped = sessions.by_key(focused).and_then(|row| {
@@ -326,8 +335,8 @@ impl Recent {
             .id
             .0
             .clone();
-        let id = support::mint("c_");
-        outbox.wait(&id, Waiting::Recent(RecentAsk::Page));
+        let id = CommandId(support::mint("c_"));
+        outbox.wait(&id.0, Waiting::Recent(RecentAsk::Page));
         Some(recent_line(&id, None, Some(before.as_str())))
     }
 
@@ -340,7 +349,7 @@ impl Recent {
         sessions: &Sessions,
         launch_project: Option<&str>,
         outbox: &mut Outbox,
-    ) -> Vec<String> {
+    ) -> Vec<Sent> {
         self.fed = false;
         outbox.settle_where(|waiting| matches!(waiting, Waiting::Recent(RecentAsk::Scoped(_))));
         let projects: Vec<String> = sessions
@@ -353,8 +362,8 @@ impl Recent {
             if project.is_empty() {
                 continue;
             }
-            let id = support::mint("c_");
-            outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.clone())));
+            let id = CommandId(support::mint("c_"));
+            outbox.wait(&id.0, Waiting::Recent(RecentAsk::Scoped(project.clone())));
             out.push(recent_line(&id, Some(&project), None));
         }
         out
@@ -367,7 +376,7 @@ impl App {
     /// of duplicating the ask: the answer sends exactly one follow-up.
     /// Nothing goes out with no home, with the link down, or for an
     /// empty project.
-    pub(super) fn scoped_first(&mut self, project: &str) -> Vec<String> {
+    pub(super) fn scoped_first(&mut self, project: &str) -> Vec<Sent> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
         let home = &mut self.home;
@@ -377,7 +386,7 @@ impl App {
 
     /// Asks the next scoped page for a project, without marking an
     /// in-flight ask dirty.
-    pub(super) fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
+    pub(super) fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<Sent> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
         let home = &mut self.home;
@@ -390,7 +399,7 @@ impl App {
     /// Asks the first unscoped `recent` page again: an accepted delete
     /// fills the gap it left. It also asks the scoped `recent` for the
     /// deleted row's project, or marks it dirty while one is in flight.
-    pub(super) fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
+    pub(super) fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<Sent> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
         let home = &mut self.home;
@@ -440,13 +449,22 @@ impl App {
                     // first page per newly seen project.
                     let home = &mut self.home;
                     let launch_project = home.launch_project().map(str::to_owned);
-                    let lines = home.recent.fan_out_scoped(
-                        &before,
-                        &mut home.sessions,
-                        launch_project.as_deref(),
-                        connected,
-                        &mut self.outbox,
-                    );
+                    let outbox = &mut self.outbox;
+                    let lines = home
+                        .recent
+                        .fan_out_scoped(
+                            &before,
+                            &mut home.sessions,
+                            launch_project.as_deref(),
+                            connected,
+                            outbox,
+                        )
+                        .into_iter()
+                        .map(|sent| {
+                            outbox.note_hub_sent(&sent.id, &sent.line);
+                            sent.line
+                        })
+                        .collect();
                     Some(lines)
                 }
                 Err(notice) => {
@@ -463,13 +481,16 @@ impl App {
                         home.recent
                             .answer_scoped(&project, rows, total, &mut home.sessions);
                     home.refill_picker();
+                    let outbox = &mut self.outbox;
                     let lines = if dirty {
-                        home.recent.follow_up_scoped(
-                            &project,
-                            &mut home.sessions,
-                            connected,
-                            &mut self.outbox,
-                        )
+                        home.recent
+                            .follow_up_scoped(&project, &mut home.sessions, connected, outbox)
+                            .into_iter()
+                            .map(|sent| {
+                                outbox.note_hub_sent(&sent.id, &sent.line);
+                                sent.line
+                            })
+                            .collect()
                     } else {
                         Vec::new()
                     };
@@ -493,10 +514,10 @@ impl App {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
         let home = &mut self.home;
-        let line = home
+        let sent = home
             .recent
             .page_recent(focused, &mut home.sessions, connected, outbox)?;
-        Some(Effect::Send(vec![line]))
+        Some(Effect::SendTracked(vec![sent]))
     }
 }
 
@@ -516,20 +537,21 @@ fn scoped_result(payload: &serde_json::Map<String, Value>) -> Option<(Vec<Row>, 
     Some((rows, total?))
 }
 
-/// A `recent` line: the first page, or past `before`. `project` scopes
-/// the ask to one project, `before` pages past a row; each rides only
-/// when set, so the unscoped first page carries no `args`.
-fn recent_line(id: &str, project: Option<&str>, before: Option<&str>) -> String {
-    let mut args = serde_json::Map::new();
-    if let Some(project) = project {
-        args.insert("project".to_owned(), Value::String(project.to_owned()));
-    }
-    if let Some(before) = before {
-        args.insert("before".to_owned(), Value::String(before.to_owned()));
-    }
-    if args.is_empty() {
-        json!({"id": id, "command": "recent"}).to_string()
-    } else {
-        json!({"id": id, "command": "recent", "args": Value::Object(args)}).to_string()
+/// A `recent` line with its command id carried alongside: the first
+/// page, or past `before`. `project` scopes the ask to one project,
+/// `before` pages past a row; each rides only when set. An arg-less
+/// ask writes an empty `args`, as the hub reads a missing `args` and
+/// `{}` the same.
+fn recent_line(id: &CommandId, project: Option<&str>, before: Option<&str>) -> Sent {
+    Sent {
+        line: hub_line(
+            id,
+            HubCommand::Recent(contract::commands::hub::Recent {
+                before: before.map(str::to_owned),
+                project: project.map(str::to_owned),
+                archived: None,
+            }),
+        ),
+        id: id.clone(),
     }
 }

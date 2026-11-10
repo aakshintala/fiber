@@ -1171,3 +1171,33 @@ fn a_reset_after_reconnect_leaves_no_untagged_feature_id() {
     assert!(after.iter().any(|line| line["command"] == "feed"));
     assert!(after.iter().any(|line| line["command"] == "recent"));
 }
+
+#[test]
+fn a_failed_sessions_fold_settles_by_its_carried_id() {
+    let mut app = home();
+    linked(&mut app);
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // The reconnect's hello carries the sessions snapshot, paired on
+    // the fold's tail.
+    let mut lines = reconnect(&mut app);
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"sessions\""))
+        .expect("a sessions line");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("sessions id");
+    // Tamper with the sessions line's JSON id, then pair the tampered
+    // line as a builder whose line and id diverge would: settlement
+    // must follow the carried id, never the line's JSON.
+    let tampered = lines[at].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    lines[at] = tampered;
+    app.write_failed(&lines);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
+}

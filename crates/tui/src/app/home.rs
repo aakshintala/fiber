@@ -637,11 +637,20 @@ impl App {
         asks.extend(self.start_model_pick());
         let home = &mut self.home;
         let outbox = &mut self.outbox;
-        let Some(mut out) = home.recent.first_asks(outbox) else {
+        let Some(sent) = home.recent.first_asks(outbox) else {
             let mut out = home.subs.take_outbox();
             out.append(&mut asks);
             return out;
         };
+        // The feed and first page cruise the fold: each id rides
+        // paired, so a failed write settles by the carried id.
+        let mut out: Vec<String> = sent
+            .into_iter()
+            .map(|sent| {
+                outbox.note_hub_sent(&sent.id, &sent.line);
+                sent.line
+            })
+            .collect();
         // A reconnect queues its scoped refetch before this pass: the
         // asks ride here, beside the sessions request that follows.
         out.extend(home.subs.take_outbox());
@@ -700,15 +709,25 @@ impl App {
                         .sessions
                         .row(&exited)
                         .map(|row| row.project.clone());
-                    let mut lines = project
+                    // Both asks cruise the fold: each id rides paired,
+                    // so a failed write settles by the carried id.
+                    let mut lines: Vec<String> = Vec::new();
+                    for sent in project
                         .map(|project| self.scoped_first(&project))
-                        .unwrap_or_default();
+                        .unwrap_or_default()
+                    {
+                        self.outbox.note_hub_sent(&sent.id, &sent.line);
+                        lines.push(sent.line);
+                    }
                     if how == Left::Exited {
                         self.rail_state.note_exited(&exited);
                     }
                     // The command's confirmed stops retire here: only an
                     // exit permits its one delete.
-                    lines.extend(self.delete_command_session_left(&exited));
+                    for sent in self.delete_command_session_left(&exited) {
+                        self.outbox.note_hub_sent(&sent.id, &sent.line);
+                        lines.push(sent.line);
+                    }
                     Some(lines)
                 } else if matches!(
                     kind,
@@ -927,8 +946,11 @@ impl App {
                     if let Some(project) = fresh
                         && self.home.sessions.total_for(&project).is_none()
                     {
-                        for line in self.scoped_first(&project) {
-                            self.home.subs.queue(line);
+                        // The queued ask cruises the fold: its id rides
+                        // paired, so a failed write settles by it.
+                        for sent in self.scoped_first(&project) {
+                            self.outbox.note_hub_sent(&sent.id, &sent.line);
+                            self.home.subs.queue(sent.line);
                         }
                     }
                     self.note_feed(&session);
@@ -1321,7 +1343,7 @@ impl App {
                 if let Some((project, before)) = next {
                     let lines = self.scoped_page(&project, before.as_deref());
                     if !lines.is_empty() {
-                        return Effect::Send(lines);
+                        return Effect::SendTracked(lines);
                     }
                 }
                 Effect::None

@@ -600,10 +600,19 @@ impl App {
                 if accepted {
                     self.clear_prompt(&id);
                     // The row's project goes with the refresh: the
-                    // removal below erases where to re-ask.
+                    // removal below erases where to re-ask. The refill
+                    // cruises the fold: each id rides paired, so a
+                    // failed write settles by the carried id.
                     let project = self.home.sessions.row(&id).map(|row| row.project.clone());
                     self.home.sessions.remove(&id);
-                    return self.ask_recent_first(project.as_deref());
+                    return self
+                        .ask_recent_first(project.as_deref())
+                        .into_iter()
+                        .map(|sent| {
+                            self.outbox.note_hub_sent(&sent.id, &sent.line);
+                            sent.line
+                        })
+                        .collect();
                 }
                 let (code, message) = refusal_parts(payload);
                 if code == ErrorCode::SessionHasDependents || code == ErrorCode::StaleRequest {

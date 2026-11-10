@@ -376,16 +376,38 @@ impl App {
     /// Drops from `closing` every session whose `close` line was not
     /// written: a close never sent keeps its resume line on exit. A
     /// command stop that never went out ends in its stop uncertainty.
+    /// A fold-cruising hub line settles by the id noted when it was
+    /// built; a session line parses its id as before.
     pub(crate) fn home_unsent(&mut self, unsent: &[String]) {
         let ids: Vec<String> = unsent
             .iter()
             .filter_map(|line| {
-                serde_json::from_str::<Value>(line)
-                    .ok()
-                    .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+                self.outbox.hub_id(line).map(|id| id.0).or_else(|| {
+                    serde_json::from_str::<Value>(line)
+                        .ok()
+                        .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+                })
             })
             .collect();
         self.home_unsent_ids(&ids);
+    }
+
+    /// Test entry point: parks a close id for `session`, as the quit
+    /// question's closes do.
+    #[cfg(test)]
+    pub(crate) fn park_closing(&mut self, session: SessionId, id: String) {
+        self.home.questions.closing.push((session, id));
+    }
+
+    /// Test entry point: the sessions with a parked close.
+    #[cfg(test)]
+    pub(crate) fn closing_sessions(&self) -> Vec<String> {
+        self.home
+            .questions
+            .closing
+            .iter()
+            .map(|(session, _)| session.0.clone())
+            .collect()
     }
 
     /// Drops from `closing` every session whose tracked `close` was not

@@ -350,7 +350,7 @@ impl App {
     /// and crashed retire a waiting session. Once none wait, the one
     /// existing delete goes out with the confirmed set. Never a second
     /// delete.
-    pub(in crate::app) fn delete_command_session_left(&mut self, id: &SessionId) -> Vec<String> {
+    pub(in crate::app) fn delete_command_session_left(&mut self, id: &SessionId) -> Vec<Sent> {
         let home = &mut self.home;
         let complete = match &mut home.questions.delete_command.state {
             State::Stopping { waiting, .. } => {
@@ -376,10 +376,10 @@ impl App {
             Some(sets) => sets,
             None => return Vec::new(),
         };
-        // The delete cruises the fold with the session batch, in
-        // line form.
+        // The delete cruises the fold with the session batch: the
+        // mixer pairs its id, so a failed write settles by it.
         self.delete_command_send(target, sessions, name)
-            .map(|sent| vec![sent.line])
+            .map(|sent| vec![sent])
             .unwrap_or_default()
     }
 

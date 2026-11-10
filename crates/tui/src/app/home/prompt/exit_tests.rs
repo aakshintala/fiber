@@ -1478,3 +1478,31 @@ fn quit_close_session_answer_settles_its_tag() {
     assert!(app.on_line(answer).is_empty());
     assert_eq!(app.outbox.waiting(id), None);
 }
+
+#[test]
+fn a_failed_quit_close_all_settles_closes_by_their_carried_ids() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    assert!(!sents.is_empty());
+    assert!(!app.home.questions.closing.is_empty());
+    // Tamper with every close's JSON id: the failure must settle by
+    // the carried ids, never by parsing the tampered lines.
+    let tampered: Vec<crate::app::Sent> = sents
+        .into_iter()
+        .map(|sent| {
+            let line = sent.line.replacen(&sent.id.0, "c_tampered", 1);
+            assert_ne!(line, sent.line);
+            crate::app::Sent { id: sent.id, line }
+        })
+        .collect();
+    app.write_failed_tracked(&tampered);
+    assert!(app.home.questions.closing.is_empty());
+    assert!(app.outbox.pending.is_empty());
+    assert!(app.outbox.waiting("c_tampered").is_none());
+}

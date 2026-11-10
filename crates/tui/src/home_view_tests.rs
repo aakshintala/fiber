@@ -403,7 +403,9 @@ fn home_with_an_archived_session_shows_only_ordinary_rows() {
     }
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
@@ -511,7 +513,9 @@ fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
         .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     assert!(
@@ -574,7 +578,9 @@ fn home_header_counts_loaded_rows_without_a_total() {
         .collect();
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(accepted(
