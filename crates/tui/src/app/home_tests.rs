@@ -7573,6 +7573,8 @@ fn load_exited(app: &mut App, session: &str, name: &str) {
         .into_iter()
         .filter(|line| line["command"] == "recent")
         .collect();
+    // (`docs/tui.md`, "The session list"): a new project's counts are
+    // asked when it first appears, with one ask of each in flight.
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert_eq!(asked[0]["args"]["project"], "-w");
     let scoped = asked[0]["id"]
@@ -7580,6 +7582,9 @@ fn load_exited(app: &mut App, session: &str, name: &str) {
         .unwrap_or_else(|| panic!("scoped id"));
     app.on_line(accepted(scoped, json!({"sessions": [], "total": 0})));
     let reasked: Vec<Value> = commands(app.on_line(left(session, "exited")));
+    // (`docs/tui.md`, "The session list"): the counts are re-asked when
+    // one of the project's sessions leaves, with one ask of each in
+    // flight.
     assert_eq!(reasked.len(), 1, "{reasked:?}");
     let scoped = reasked[0]["id"]
         .as_str()
@@ -7591,8 +7596,9 @@ fn load_exited(app: &mut App, session: &str, name: &str) {
 }
 
 /// The forgot line drops the loaded exited row and re-asks that
-/// project's counts: one scoped `recent` first page, no unscoped
-/// refill. The view renders without the forgotten row.
+/// project's counts (`docs/tui.md`, "The session list"): one scoped
+/// `recent` first page, no unscoped refill. The view renders without the
+/// forgotten row.
 fn forgot_drops_the_loaded_exited_row(kind: &str) {
     let mut app = home_with(80, 24, launch());
     load_exited(&mut app, "s_aaaaaaaaaaaaaaaa", "fix the parser");
@@ -7627,7 +7633,8 @@ fn forgot_for_an_unknown_session_still_reasks_its_project() {
     let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
     assert!(app.on_line(accepted(feed, json!({}))).is_empty());
     // No row is loaded, and no scoped ask is in flight: the unknown id
-    // drops nothing but still re-asks its project's counts.
+    // drops nothing but still re-asks its project's counts
+    // (`docs/tui.md`, "The session list").
     let sent = commands(app.on_line(forgot("session_deleted", "s_dddddddddddddddd", "-w")));
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0]["command"], "recent");

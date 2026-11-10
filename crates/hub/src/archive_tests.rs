@@ -536,8 +536,9 @@ impl Sub {
     }
 
     /// The next line, which must be the hub's `kind` line for `id` in
-    /// `project`: no code path enqueues one before the fix, so the read
-    /// times out there.
+    /// `project` (`docs/invocation.md`, "What the hub speaks"): every
+    /// archived session is told to every feed subscriber. No code path
+    /// enqueues one before the fix, so the read times out there.
     fn forgot(&mut self, kind: &str, id: &str, project: &str) {
         let mut text = String::new();
         self.read
@@ -740,8 +741,9 @@ fn two_clients_see_fresh_and_retry_archive_lines() {
     for sub in [&mut first, &mut second] {
         sub.forgot("session_archived", &testkit::id(9), "-w");
     }
-    // A retry archives nothing new but notifies again: the second call
-    // site sends its own line.
+    // (`docs/invocation.md`, "What the hub speaks"): a retry that writes
+    // nothing still tells every feed subscriber, so the second call site
+    // sends its own line.
     assert_eq!(
         call(&hub, serde_json::json!({"session": testkit::id(9)})),
         Ok(None)

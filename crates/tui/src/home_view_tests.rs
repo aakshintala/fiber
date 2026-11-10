@@ -4372,6 +4372,8 @@ fn home_after_forgot_drops_the_row() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
         .collect();
+    // (`docs/tui.md`, "The session list"): the deleted session re-asks
+    // its project's counts, with one ask of each in flight.
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0]["command"], "recent");
     assert_eq!(sent[0]["args"]["project"], "-w");

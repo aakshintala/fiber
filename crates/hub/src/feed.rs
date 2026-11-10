@@ -370,25 +370,14 @@ impl Feed {
         }
     }
 
-    /// Drops a deleted session's entry and tells every subscriber: the
-    /// row is already gone, so the terminal drops its row and re-asks
-    /// that project's counts.
-    pub(crate) fn forget_deleted(&self, session: &str, project: &str) {
-        self.forget(session, project, Forgotten::Deleted);
-    }
-
-    /// Drops an archived session's entry and tells every subscriber,
-    /// like [`Feed::forget_deleted`].
-    pub(crate) fn forget_archived(&self, session: &str, project: &str) {
-        self.forget(session, project, Forgotten::Archived);
-    }
-
-    /// Drops any entry for `session`: its directory was deleted or
-    /// archived. One line per call names the session and its project,
-    /// under the same state guard as the removal, so a subscriber never
-    /// sees the line for an entry that comes back. After `stop` the
-    /// fanout is emptied and a late call removes only.
-    fn forget(&self, session: &str, project: &str, kind: Forgotten) {
+    /// Drops a deleted or archived session's entry and tells every
+    /// subscriber: the row is already gone, so the terminal drops its
+    /// row and re-asks that project's counts. One line per call names
+    /// the session and its project, under the same state guard as the
+    /// removal, so a subscriber never sees the line for an entry that
+    /// comes back. After `stop` the fanout is emptied and a late call
+    /// removes only.
+    pub(crate) fn forget(&self, session: &str, project: &str, kind: Forgotten) {
         let mut state = lock(&self.state);
         if state.stopped {
             return;

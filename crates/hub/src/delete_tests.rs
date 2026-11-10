@@ -1296,8 +1296,10 @@ fn two_clients_see_each_cascade_line_with_its_own_project() {
         ),
         Ok(None)
     );
-    // The removal loop notifies in reverse discovery order, each id with
-    // its own project: a shared project here would keep the rows.
+    // (`docs/invocation.md`, "What the hub speaks"): with `cascade` the
+    // lines arrive in removal order, each dependent before the session
+    // it continues, each id with its own project: a shared project here
+    // would keep the rows.
     for sub in [&mut first, &mut second] {
         let moved = sub.line("the cascade's line for the child");
         assert_eq!(moved["kind"], "session_deleted", "{moved}");
@@ -1330,8 +1332,10 @@ fn a_cascade_delete_notifies_removed_sessions_before_an_io_failure() {
     fs::set_permissions(&root, perms).unwrap();
     assert_eq!(failed.code(), ErrorCode::IoFailed);
     assert!(failed.message().contains(&id(1)), "{}", failed.message());
-    // The child went first with its own project, while the failed
-    // parent's directory stays: notify-per-removal, not after the loop.
+    // (`docs/invocation.md`, "What the hub speaks"): every removed
+    // session is told as it is removed. The child went first with its own
+    // project, while the failed parent's directory stays:
+    // notify-per-removal, not after the loop.
     let line = sub.line("the cascade's line for the removed child");
     assert_eq!(line["kind"], "session_deleted", "{line}");
     assert_eq!(line["payload"]["session_id"], id(3), "{line}");

@@ -635,6 +635,9 @@ fn start_and_close(
     });
     assert_eq!(left.last().unwrap()["payload"]["how"], "exited");
     guard.wait_gone();
+    // (`docs/invocation.md`, "What the hub speaks"): the exited session
+    // is the project's whole `recent` page and is in the `sessions`
+    // listing.
     assert_eq!(recent(watch, &json!({"project": key})), [id.as_str()]);
     assert!(listed(watch).contains(&id));
     (id, key)
@@ -653,8 +656,10 @@ fn two_clients_see_a_delete_line_and_the_row_leaves() {
     let workspace = setup.root.path().join("wa");
     fs::create_dir_all(&workspace).unwrap();
     let (id, key) = start_and_close(&setup, &control, &watch, &workspace);
-    // The delete broadcasts to every subscriber, carrying the session's
-    // own project; the row leaves the listing and the scoped total drops.
+    // (`docs/invocation.md`, "What the hub speaks"): the delete
+    // broadcasts to every subscriber, carrying the session's own
+    // project; the row leaves the `sessions` listing, the scoped
+    // `recent` page empties and its `total` drops to 0.
     control.send(&format!(
         r#"{{"id":"c_delete","command":"delete","args":{{"session":"{id}"}}}}"#
     ));
@@ -687,9 +692,10 @@ fn two_clients_see_an_archive_line_and_the_row_leaves() {
     let workspace = setup.root.path().join("wa");
     fs::create_dir_all(&workspace).unwrap();
     let (id, key) = start_and_close(&setup, &control, &watch, &workspace);
-    // The archive broadcasts to every subscriber, carrying the
-    // session's own project; the row leaves the default listing and the
-    // scoped total drops.
+    // (`docs/invocation.md`, "What the hub speaks"): the archive
+    // broadcasts to every subscriber, carrying the session's own
+    // project; the row leaves the default listing, the scoped `recent`
+    // page empties and its `total` drops to 0.
     control.send(&format!(
         r#"{{"id":"c_archive","command":"archive","args":{{"session":"{id}"}}}}"#
     ));

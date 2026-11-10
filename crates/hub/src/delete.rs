@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::connection::{Hub, Refused};
-use crate::feed::invalid;
+use crate::feed::{Forgotten, invalid};
 use crate::relay::valid_session_id;
 use crate::resume::not_found;
 
@@ -71,7 +71,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // reverse no survivor points at a removed session.
     for ((id, project, dir), lock) in set.iter().zip(locks.iter()).rev() {
         log::delete_session(dir, lock).map_err(|error| io_failed(id, &error))?;
-        hub.feed.forget_deleted(&id.0, project);
+        hub.feed.forget(&id.0, project, Forgotten::Deleted);
     }
     drop(locks);
     Ok(None)

@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use support::lock;
 
 use crate::connection::{Hub, Refused};
-use crate::feed::invalid;
+use crate::feed::{Forgotten, invalid};
 use crate::recent::{self, Left, RecentRow};
 use crate::relay::valid_session_id;
 use crate::resume::not_found;
@@ -69,7 +69,7 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
                 .unwrap_or_else(|| missing_row(hub, &dir, &session));
             recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
         }
-        hub.feed.forget_archived(&session.0, &project);
+        hub.feed.forget(&session.0, &project, Forgotten::Archived);
         return Ok(None);
     }
     log.append(&Event::Archived(Empty {}), None, None)
@@ -81,7 +81,7 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
     // The index is derived state, not a second record of truth: a failed
     // append refuses without rolling back the log's event.
     recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
-    hub.feed.forget_archived(&session.0, &project);
+    hub.feed.forget(&session.0, &project, Forgotten::Archived);
     Ok(None)
 }
 
