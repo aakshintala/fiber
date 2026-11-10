@@ -296,3 +296,17 @@ crates/support/examples/framing.rs	fiber-4445	plan	2026-11-10T16:44:48Z	roundhou
 crates/support/tests/support/framing_input.rs	fiber-4445	plan	2026-11-10T16:44:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/support/tests/framing_jig.rs	fiber-4445	plan	2026-11-10T16:44:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/support/mod.rs	fiber-4334	plan	2026-11-10T17:18:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/src/client.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/doors/src/drive.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/fake.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/prune_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/connection_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/configure/remote.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/configure/remote_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/outbox.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/commands.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/import_report_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/commands_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/items_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/outbox_tests.rs	fiber-4557	plan	2026-11-10T17:28:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
