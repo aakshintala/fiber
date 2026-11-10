@@ -200,8 +200,9 @@ pub(crate) struct Kept {
 /// command id: the hooks install offer's retry resends them unchanged.
 /// `hub_sent` pairs every fold-cruising hub line with the id it went
 /// out under, so a failed write settles by the carried id instead of
-/// parsing it back out of the line; entries live exactly as long as the
-/// command's waits.
+/// parsing it back out of the line; an entry lives until the command
+/// settles, purged with its wait or with its pending entry, whichever
+/// goes first.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
     /// Feature owners, independent of generic draft settlement, in the
@@ -341,24 +342,27 @@ impl Outbox {
             .map(|(id, _)| id.clone())
     }
 
-    /// Drops a command's hub-line pairs: entries live exactly as long as
-    /// the command's waits, so a missed purge degrades to the parse
-    /// fallback for that line, never to a wrong id.
+    /// Drops a command's hub-line pairs: a missed purge degrades to the
+    /// parse fallback for that line, never to a wrong id.
     fn purge_hub(&mut self, id: &str) {
         self.hub_sent.retain(|(sent, _)| sent.0 != id);
     }
 
     /// Pops a pending command, returning the kind and draft applying its
     /// failure needs, without reaching the queue, the offer, the phase
-    /// or the draft.
+    /// or the draft. Its hub-line pair goes with the entry, so a later
+    /// disconnect cannot settle by it again.
     pub(crate) fn fail(&mut self, id: &str) -> Option<(Kind, Draft)> {
+        self.purge_hub(id);
         self.starts.remove(id);
         self.pending.remove(id)
     }
 
     /// A command's answer: its pending entry closes, and its line is no
-    /// longer kept for resending.
+    /// longer kept for resending. Its hub-line pair goes with the
+    /// entry, so a repeated disconnect retains no completed line.
     pub(crate) fn answered(&mut self, id: &str) -> Option<(Kind, Draft)> {
+        self.purge_hub(id);
         self.kept.retain(|kept| kept.id != id);
         self.starts.remove(id);
         self.pending.remove(id)

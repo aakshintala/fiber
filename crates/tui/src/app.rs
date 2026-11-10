@@ -1038,12 +1038,18 @@ impl App {
 
     /// Handles the route without settling; the caller owns the layout pass.
     pub(crate) fn write_failed_inner(&mut self, unsent: &[String]) {
+        // A fold-cruising hub line settles by the id noted when it was
+        // built: capture the carried ids before the disconnect below
+        // drops their registry entries with their waits. A session line
+        // parses its id as before.
+        let carried: Vec<Option<String>> = unsent
+            .iter()
+            .map(|line| self.outbox.hub_id(line).map(|id| id.0))
+            .collect();
         self.home_unsent(unsent);
         self.disconnected_inner();
-        for line in unsent {
-            // A fold-cruising hub line settles by the id noted when it
-            // was built; a session line parses its id as before.
-            if let Some(id) = self.outbox.hub_id(line).map(|id| id.0).or_else(|| {
+        for (line, id) in unsent.iter().zip(carried) {
+            if let Some(id) = id.or_else(|| {
                 serde_json::from_str::<Value>(line)
                     .ok()
                     .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
@@ -1690,12 +1696,11 @@ impl App {
         match hub.kind() {
             HubEventKind::HubHello if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.hub_hello_version(&hub.payload);
-                // Held lines carry their ids into the fold: each is
-                // paired in the registry, so a failed flush settles by
-                // the carried id.
+                // Held lines already carry their ids: each was paired
+                // in the registry when held, so a failed flush settles
+                // by the carried id with no second note.
                 let mut lines = Vec::new();
                 for sent in std::mem::take(&mut self.outbox.held) {
-                    self.outbox.note_hub_sent(&sent.id, &sent.line);
                     lines.push(sent.line);
                 }
                 lines.extend(self.reconnected());

@@ -1201,3 +1201,75 @@ fn a_failed_sessions_fold_settles_by_its_carried_id() {
     app.write_failed(&lines);
     assert!(app.closing_sessions().contains(&"s_9".to_owned()));
 }
+
+#[test]
+fn a_failed_sessions_write_ignores_the_forged_line_id() {
+    let mut app = home();
+    linked(&mut app);
+    // A live steer wait with a pending entry: settling by the forged
+    // line id would wrongly settle and fail it, while the carried
+    // sessions id settles nothing.
+    app.outbox.wait("c_live", crate::app::Waiting::Steer);
+    app.outbox.insert(
+        "c_live".to_owned(),
+        crate::app::Kind::Prompt,
+        crate::input::Draft::default(),
+    );
+    // The reconnect's hello carries the sessions snapshot, paired on
+    // the fold's tail.
+    let mut lines = reconnect(&mut app);
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"sessions\""))
+        .expect("a sessions line");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("sessions id");
+    // Forge the sessions line's JSON id to the live command's: the
+    // disconnect below purges the carried pair with its wait, so only
+    // the id captured before the disconnect may settle.
+    let tampered = lines[at].replacen(&carried, "c_live", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    lines[at] = tampered;
+    app.write_failed(&lines);
+    // Settlement followed the carried sessions id: the live command
+    // keeps its wait and its pending entry.
+    assert_eq!(
+        app.outbox.waiting("c_live"),
+        Some(crate::app::Waiting::Steer)
+    );
+    assert!(app.outbox.pending.contains_key("c_live"));
+}
+
+#[test]
+fn a_flushed_held_start_leaves_no_registry_entry_once_answered() {
+    let mut app = home();
+    // Enter before the hub connects: the start is held, paired in the
+    // registry once at hold time.
+    assert_eq!(enter(&mut app, "hi"), Effect::None);
+    // The hello flushes the held start with no second note.
+    let out = fold(&mut app, hello());
+    let start = out
+        .iter()
+        .find(|line| line.contains("\"start\""))
+        .expect("a held start")
+        .clone();
+    let id: String = serde_json::from_str::<Value>(&start)
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("start id");
+    // The accept answers the start and purges its pair ...
+    fold(
+        &mut app,
+        hub(
+            "command_accepted",
+            json!({"command_id": id, "result": {"session_id": S_A}}),
+        ),
+    );
+    // ... so a second disconnect retains no completed line.
+    app.disconnected();
+    assert_eq!(app.outbox.hub_id(&start), None);
+}
