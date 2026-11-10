@@ -650,6 +650,17 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
         serde_json::from_str(&text).unwrap()
     };
     assert_eq!(snapshot["kind"], "session_status");
+    // The snapshot closes with the keepers line, empty: no probe is set
+    // in these tests (`docs/events.md`, "Hub feed").
+    let keepers: Value = {
+        let mut text = String::new();
+        sub.read
+            .read_line(&mut text)
+            .expect("the snapshot keepers line arrives");
+        serde_json::from_str(&text).unwrap()
+    };
+    assert_eq!(keepers["kind"], "keepers");
+    assert_eq!(keepers["payload"], serde_json::json!({"keepers": []}));
     temp.sessions.pop().unwrap().close();
     sub.left(&testkit::id(10), "crashed");
     let id = testkit::id(10);
