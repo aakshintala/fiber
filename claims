@@ -345,3 +345,6 @@ crates/main/tests/screens/main.rs	fiber-2720	plan	2026-11-09T23:13:26Z	Amoghs-Ma
 crates/tui/src/app/select.rs	fiber-2720	plan	2026-11-09T23:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/select_tests.rs	fiber-2720	plan	2026-11-09T23:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/extensions.md	fiber-2720	plan	2026-11-09T23:58:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app_mouse_tests.rs	fiber-2720	plan	2026-11-10T00:10:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-extension-keys	
+crates/tui/src/view/item_tests.rs	fiber-2720	plan	2026-11-10T00:10:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-extension-keys	
+crates/main/tests/screens/tui_click_extension.rs	fiber-2720	plan	2026-11-10T00:10:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/2720-extension-keys	
