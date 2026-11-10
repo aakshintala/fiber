@@ -165,8 +165,12 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
 | `tui.panel.width` | 21 | no | The panel's share of the screen's width, in percent, kept from 30 to 60 columns; dragging its edge writes it. |
 | `tui.theme` | none | no | The theme's name: `auto`, `dark`, `light` or the name of a theme file in Fiber home's `themes/` or an installed, enabled extension's `themes/`. A switched-off extension's themes are not listed, and naming one reads as a missing file. With none or `auto`, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
-| `tui.reduced_motion` | false | no | Whether every animation takes its still form. On whenever a screen reader is detected (`docs/tui.md`, "Reduced motion"). |
-| `tui.screen_reader` | detected | no | Forces the flat screen-reader mode on or off; `--screen-reader` sets it true (`docs/tui.md`, "Screen readers"). |
+| `tui.reduced_motion` | false | no | Whether every animation takes its still form. Detection is not built yet (see #1506) (`docs/tui.md`, "Reduced motion"). |
+
+**Not built yet: see #1506.**
+
+| Key | Default | Needs approval | What it sets |
+|---|---|---|---|
 | `tui.attention.notification` | true | no | Whether the terminal sends an OSC 9 desktop notification when a session starts waiting on the person (`docs/tui.md`, "Getting the person's attention"). |
 | `tui.attention.bell` | true | no | Whether it rings the bell where OSC 9 is not supported. |
 | `tui.attention.title` | true | no | Whether the terminal title shows the session's state. |
