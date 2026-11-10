@@ -998,6 +998,89 @@ fn two_services_without_endpoints_group_into_one_notice() {
     assert_eq!(listed, ["databricks/databricks-gpt-6-sol"], "{listed:?}");
 }
 
+/// A warm model cache names the endpoint-less service once: the first ask
+/// persists the marked omission, and a later ask turn carries exactly one
+/// `model_omitted` notice event for it — the cache admission drains the
+/// mark silently and only the Lua admission emits
+/// (`docs/model-routing.md`, "Model discovery").
+#[test]
+fn a_warm_cache_names_the_omission_once_on_a_later_ask() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(
+        [
+            Response::status(200, services_body().to_string()),
+            Response::status(200, catalog_body().to_string()),
+            Response::status(
+                200,
+                json!({"endpoints": [{"name": "claude-opus-5"}, {"name": "gpt-6-sol"}]})
+                    .to_string(),
+            ),
+        ]
+        .into_iter()
+        .chain([hello(), hello()]),
+    )
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    // The first turn discovers and warms the model cache; the omission is
+    // one notice on its stream.
+    let first = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(&host),
+    );
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let first_notices: Vec<&Value> = first
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(first_notices.len(), 1, "{first_notices:?}");
+    assert_eq!(first_notices[0]["payload"]["code"], "model_omitted");
+
+    // A later turn on the warm cache carries exactly one `model_omitted`
+    // notice event for the omitted service, with the same code, message
+    // and extension as the cold turn.
+    let ask = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(&host),
+    );
+    assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
+    let stream: Vec<Value> = ask
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "extension_log")
+        .cloned()
+        .collect();
+    let notices: Vec<&Value> = stream
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "model_omitted");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The model `databricks/databricks-glm-5.3` was left out of the model \
+         list: no serving endpoint with a matching name."
+    );
+    assert_eq!(
+        notices[0]["payload"]["extension"],
+        "github.com/aakshintala/fiber/providers/databricks"
+    );
+    let rest: Vec<Value> = stream
+        .into_iter()
+        .filter(|line| line["kind"] != "notice")
+        .collect();
+    support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
+    assert_eq!(ask.text_completed(), "Hello.");
+    assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
+}
+
 /// Every service backed by an endpoint turns with no omission line in the
 /// diagnostic log.
 #[test]

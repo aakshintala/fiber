@@ -540,8 +540,13 @@ impl Providers {
             for mut data in datas {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
+                // A warm cache feeds this admission and `add_lua` with the
+                // same marked list, so the marks drain here without emitting:
+                // each omission draws its one `model_omitted` notice there,
+                // not twice. A static list still emits through `admit`.
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
+                    let _ = leave_out_omitted(&data.name, &manifest.name, &mut data.models);
                 }
                 notices.extend(providers.admit(&data.name, &manifest.name, &mut data.models));
                 // One extension's addenda are read into a local buffer
