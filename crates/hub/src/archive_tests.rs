@@ -540,7 +540,7 @@ fn join<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
     thread::spawn(move || {
         tx.send(handle.join()).unwrap_or(());
     });
-    Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
+    Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN) // ruling: #4311
         .recv(&rx)
         .unwrap_or_else(|_| panic!("{what} never finished"))
         .unwrap_or_else(|_| panic!("{what} panicked"))

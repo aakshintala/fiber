@@ -1640,7 +1640,9 @@ fn run_archive(
         ))
         .unwrap_or(());
     });
-    Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .unwrap()
 }
 
 /// The default-set and archived-set queries a remote resolution sends.
@@ -1775,7 +1777,7 @@ fn archive_exits_zero_on_success_and_one_on_refusal() {
         let output = fakes::rerun_prepared(
             &format!("{name}::archive_exits_zero_on_success_and_one_on_refusal"),
             &[("FIBER_CLI_ARCHIVE_CHILD", case)],
-            Deadline::after(HUB_DEADLINE),
+            Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN), // ruling: #4311
             |command| {
                 command
                     .env("FIBER_HOME", setup.home())

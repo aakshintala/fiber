@@ -96,7 +96,9 @@ impl FakeHub {
         self.got
             .iter()
             .map(|got| {
-                let line = Deadline::after(HUB_DEADLINE).recv(got).unwrap();
+                let line = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(got)
+                    .unwrap();
                 serde_json::from_str(&line).unwrap()
             })
             .collect()
@@ -732,7 +734,9 @@ fn a_failing_archived_query_fails_the_resolution() {
         tx.send(resolved).unwrap_or(());
     });
     let resolved: Result<contract::SessionId, CliError> =
-        Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap();
     let failure = resolved.unwrap_err();
     assert!(
         matches!(
