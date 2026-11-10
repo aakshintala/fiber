@@ -1652,9 +1652,11 @@ fn a_delegate_transcript_open_mid_pass_leaves_the_pass_on_the_attached_screen() 
         stashed: Some(stashed),
         message: None,
     });
-    // The stashed parent stays frozen while the item scrolls with its bar.
+    // The stashed parent stays frozen; while the opening pass runs no
+    // scroll bar draws, and the counts are exact again with the landing
+    // (`docs/tui.md`, "History and paging").
     assert!(app.attached_screen().frozen());
-    assert!(app.counts_exact());
+    assert!(!app.counts_exact());
     app.screen.scroll_rows(true, 1, 5);
     assert_ne!(app.screen.top(), item_top);
     let item_total = app.screen.pages().index().total();
