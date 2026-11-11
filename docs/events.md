@@ -771,7 +771,7 @@ Resume replays the same lines from the same field, so what the person saw
 never depends on who rewrote the text (`docs/sandbox.md`, "Protected paths").
 
 A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
-`tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
+`tool_call_started` for rewritten arguments, on `permission_requested` for the arguments under review, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
 rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
 for a changed final message, on `job_completed` for a changed completion notice,
 and on a `turn_started` message and `steering_applied` for
@@ -799,6 +799,8 @@ Durable. The envelope's `action_id` is the tool call.
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
 | `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
+| `arguments` | object | no | the arguments under review, when a `before_tool` hook rewrote them |
+| `changed_by` | `changed_by` | no | with `arguments` |
 
 #### `permission_resolved`
 

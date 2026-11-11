@@ -413,6 +413,76 @@ fn a_blocked_rewritten_call_logs_the_arguments_it_was_judged_with() {
     assert!(tool.runs().is_empty());
 }
 
+/// A reviewer escalation on a rewritten call writes the rewrite onto the
+/// request: the person judges the arguments that will run.
+#[test]
+fn permission_requested_rewrite_on_a_reviewer_escalation_carries_the_rewritten_arguments() {
+    let tool = Arc::new(PathTool::reviewed());
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("probe", json!({"path": "a.txt"}))]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let hooks = Arc::new(FakeHooks::rewriting(json!({"path": "b.txt"})));
+    hook(Arc::clone(&hooks), &mut session);
+    let _reviewer = session.reviewer_limits(
+        reviewer_texts(&["check", "block no"]),
+        r#loop::BlockLimits {
+            consecutive: 1,
+            session: 20,
+        },
+    );
+    let watcher = session.log.watch();
+    let mut looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = looped.turn();
+        let _sent = done.send((looped, outcome));
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    let (_, until) = support::read_until(watcher, "a permission_requested line", |line| {
+        line.kind() == EventKind::PermissionRequested
+    });
+    let request_id = until.last().unwrap().payload["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    session.inbox.send(reply_allow(&request_id)).unwrap();
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended in time");
+    session.looped = Some(looped);
+    assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        turn_kinds(&lines),
+        first_turn_kinds(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            2
+        )
+    );
+    let requested = line(&lines, "permission_requested");
+    assert_eq!(requested.payload["step"], "review");
+    assert_eq!(
+        requested.payload["escalation"]["cause"],
+        "consecutive_blocks"
+    );
+    assert_eq!(requested.payload["arguments"], json!({"path": "b.txt"}));
+    assert_eq!(requested.payload["changed_by"], json!(["fiber.test/guard"]));
+    assert_eq!(
+        tool.runs(),
+        vec![json!({"path": "b.txt"}).as_object().unwrap().clone()]
+    );
+}
+
 #[test]
 fn an_unrewritten_reviewed_call_has_no_rewrite_line() {
     let tool = Arc::new(PathTool::reviewed());
@@ -749,6 +819,8 @@ fn review_request(
                 prefix: rule_subject.to_owned(),
             }),
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 

@@ -376,6 +376,8 @@ fn requested_permission(id: &str) -> Event {
                 prefix: "npm".to_owned(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 

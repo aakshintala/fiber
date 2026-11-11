@@ -8,6 +8,10 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value};
 
+use crate::models_dev_corrections::{
+    CORRECTIONS, Correction, check_corrections, names_package, parse_corrections,
+    render_corrections,
+};
 use crate::models_dev_table::{PACKAGES, Package, ProtocolRule};
 
 /// The models.dev catalog the generator reads when `--from` is absent.
@@ -616,6 +620,7 @@ pub(crate) fn merge_databricks_thinking(
         models: rows.len(),
     })
 }
+
 /// One generated model: its derived fields, then the table layers, with a
 /// later key replacing an earlier one.
 fn generate_model(
@@ -698,10 +703,19 @@ fn generate_model(
 
 /// Every package's file from `catalog` (full or trimmed), plus one line
 /// per left-out model. Models are sorted by id, keys are sorted, and
-/// numbers keep models.dev's spelling.
-pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generated, String> {
+/// numbers keep models.dev's spelling. `corrections` apply over the
+/// derived and table values of the models they name; an entry every
+/// field of which already matches is pruned, and the survivors return
+/// for the run to rewrite the file with.
+pub(crate) fn generate(
+    catalog: &Value,
+    packages: &[Package],
+    corrections: &[Correction],
+) -> Result<(Generated, Vec<Correction>), String> {
+    check_corrections(packages, corrections)?;
     let mut outputs = Vec::new();
     let mut left_out = Vec::new();
+    let mut pruned: Vec<usize> = Vec::new();
     for package in packages {
         let source = package.source;
         let provider = catalog
@@ -753,6 +767,32 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
                 ));
             }
         }
+        for (index, correction) in corrections.iter().enumerate() {
+            if !names_package(package, &correction.package) {
+                continue;
+            }
+            let Some((_, built)) = generated
+                .iter_mut()
+                .find(|built| built.0 == correction.model)
+            else {
+                return Err(format!(
+                    "{}: correction for `{}` matches no generated model",
+                    stem(package),
+                    correction.model
+                ));
+            };
+            let agreed = correction
+                .fields
+                .iter()
+                .all(|(key, value)| built.get(key) == Some(value));
+            if agreed {
+                pruned.push(index);
+            } else {
+                for (key, value) in &correction.fields {
+                    built.insert(key.clone(), value.clone());
+                }
+            }
+        }
         let provider_layer = layer(package, package.provider)?;
         if let Some(reviewer) = provider_layer.get("reviewer_model").and_then(Value::as_str)
             && !generated.iter().any(|model| model.0 == reviewer)
@@ -780,7 +820,13 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
             models: generated.len(),
         });
     }
-    Ok((outputs, left_out))
+    let mut survivors = Vec::with_capacity(corrections.len());
+    for (index, correction) in corrections.iter().enumerate() {
+        if !pruned.contains(&index) {
+            survivors.push(correction.clone());
+        }
+    }
+    Ok(((outputs, left_out), survivors))
 }
 
 /// `curl -fsSL --max-time 120 <url>` writing the body to stdout.
@@ -809,10 +855,13 @@ pub(crate) fn fetch(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// `cargo xtask models-dev [--from FILE]`: reads `FILE`, or fetches
-/// `MODELS_DEV_URL`, then trims and generates. Only when trim, generate and
-/// the Databricks thinking table all succeed does it write `SNAPSHOT` and every `Output` under `root` (creating parent
-/// directories). Prints `<path>: <n> models` per file to stdout and each
-/// left-out line to stderr.
+/// `MODELS_DEV_URL`, then trims and generates with the cited corrections
+/// file read from `root`. Only when trim, generate and the Databricks
+/// thinking table all succeed does it write `SNAPSHOT`, every `Output`
+/// and the corrections file under `root` (creating parent
+/// directories): an unchanged corrections file keeps its bytes, while a
+/// prune rewrites it with the survivors. Prints `<path>: <n> models` per
+/// file to stdout and each left-out line to stderr.
 pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
     let (source, bytes) = match from {
         Some(path) => (
@@ -824,15 +873,25 @@ pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
     let catalog: Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("{source}: {error}"))?;
     let trimmed = trim(&catalog)?;
-    let (outputs, left_out) = generate(&trimmed, &PACKAGES)?;
+    let corrections_path = root.join(CORRECTIONS);
+    let corrections_text = std::fs::read_to_string(&corrections_path)
+        .map_err(|error| format!("{}: {error}", corrections_path.display()))?;
+    let corrections = parse_corrections(CORRECTIONS, &corrections_text)?;
+    let ((outputs, left_out), survivors) = generate(&trimmed, &PACKAGES, &corrections)?;
     let thinking = databricks_thinking(&PACKAGES)?;
     let snapshot =
         serde_json::to_string_pretty(&trimmed).map_err(|error| format!("{source}: {error}"))?;
+    let corrections_text = if survivors.len() == corrections.len() {
+        corrections_text
+    } else {
+        render_corrections(&survivors)
+    };
     let mut writes = vec![(root.join(SNAPSHOT), snapshot + "\n")];
     for output in &outputs {
         writes.push((root.join(output.path), output.text.clone()));
     }
     writes.push((root.join(thinking.path), thinking.text.clone()));
+    writes.push((corrections_path, corrections_text));
     for (path, text) in &writes {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
