@@ -5932,3 +5932,82 @@ fn a_history_without_from_takes_the_last_page() {
     assert!(starter.resumed().is_empty(), "no process starts");
     drop(held);
 }
+
+#[test]
+fn a_history_with_an_unreadable_log_is_log_corrupt() {
+    // The log exists but cannot be opened: the count fails `log_corrupt`,
+    // not `session_not_found`. Replacing the `NotFound` guard with `true`
+    // would answer `session_not_found` here.
+    use std::os::unix::fs::PermissionsExt as _;
+    let (held, dir) = crate::testkit::with_run("gone-workspace-unreadable-log");
+    let sid = crate::testkit::id(51);
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[gone_line(&sid, 1, "fiber_exited", json!({}))],
+    );
+    let session_dir = dir.join("projects").join("-w").join("sessions").join(&sid);
+    let log = session_dir.join("events.jsonl");
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root bypasses file modes, so the mode row cannot fail there: skip
+    // rather than fail, as `log`'s own unreadable tests note.
+    if std::fs::File::open(&log).is_ok() {
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(held);
+        return;
+    }
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let refused = history_direct(&hub, &sid, &session_dir, json!({}), "c_hist");
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "log_corrupt", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"],
+        format!("The log of session `{sid}` cannot be replayed."),
+        "{refused}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_window_ignores_lines_past_to() {
+    // Lines past `to_seq` are never read: a corrupt line beyond the
+    // window still answers the window. Widening the span (`-` to `+`)
+    // would read into it and refuse `invalid_arguments` here.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-past-to");
+    let sid = crate::testkit::id(52);
+    let workspace = dir.join("gone-w");
+    let mut last = Vec::new();
+    for seq in 1..=7 {
+        last.push(gone_line(&sid, seq, "turn_started", json!({})));
+    }
+    last.push("not json".to_owned());
+    last.push(gone_line(&sid, 8, "turn_started", json!({})));
+    last.push(gone_line(&sid, 9, "fiber_exited", json!({})));
+    write_gone_log(&dir, &sid, &workspace, &last);
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let (reader, _writer, relays) = route_gone(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_win", "command": "history", "args": {"from_seq": 5, "to_seq": 7}}),
+        ),
+        "c_win",
+    );
+    let mut lines = BufReader::new(reader);
+    let answered = next_client_line(&mut lines, "the history answer");
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [5, 6, 7], "{answered}");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(relays);
+    drop(held);
+}

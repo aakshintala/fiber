@@ -19,7 +19,6 @@ use crate::support;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -703,11 +702,18 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         !message.contains(first.path.to_string_lossy().as_ref()),
         "{message}"
     );
-    // No live tail follows the completed fold: the bounded receive
-    // times out rather than closing. It runs only after the refusal
-    // above proved the replay drained, so the window starts at a known
-    // edge instead of an arbitrary point.
-    assert_silent(&client);
+    // No live tail follows the completed fold: a second refused `prompt`
+    // is the controlled signal. Its gather holds every line between the
+    // two refusals, so anything but the second refusal is a live-tail
+    // leak, with no silence wait involved.
+    send_prompt(&client, "c_prompt2", &first.id, "hi again");
+    let second = until(&client, "the second prompt refusal", |line| {
+        line["kind"] == "command_rejected"
+    });
+    support::assert_kinds_multiset(&second, &["command_rejected"], &[], None, COUNT_DOC);
+    let second_rejected = second.last().unwrap();
+    assert_eq!(second_rejected["payload"]["command_id"], "c_prompt2");
+    assert_eq!(second_rejected["payload"]["code"], "io_failed");
     // Nothing created, the log untouched, no lock left, no resume.
     assert!(!setup.home().join("run").join(&first.id).exists());
     assert!(!first.path.exists());
@@ -741,25 +747,4 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         .take()
         .expect("the hub ran")
         .kill_and_wait();
-}
-
-/// Nothing arrives past the fold, so the silence bound is kept by
-/// name (`docs/testing.md`, "Waits and timeouts").
-const ABSENT: Duration = Duration::from_secs(3);
-
-/// Asserts no line arrives within `ABSENT`: the read times out rather
-/// than closing, so the stream holds no live tail.
-fn assert_silent(client: &Socket) {
-    let mut read = client.read.lock().unwrap();
-    read.get_mut().set_read_timeout(Some(ABSENT)).unwrap();
-    let mut line = String::new();
-    match std::io::BufRead::read_line(&mut *read, &mut line) {
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            ) => {}
-        Ok(0) => panic!("the socket closed instead of staying silent"),
-        other => panic!("the tail stays silent: {other:?}"),
-    }
 }

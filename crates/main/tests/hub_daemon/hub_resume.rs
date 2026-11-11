@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource};
 use contract::{JobId, SessionId};
@@ -348,23 +347,6 @@ fn history(id: &str, session: &str, args: Value) -> Value {
 /// `session_id`.
 fn archive(id: &str, session: &str) -> Value {
     json!({"id": id, "command": "archive", "args": {"session": session}})
-}
-
-/// Nothing arrives past the fold, so the silence bound is kept by
-/// name (`docs/testing.md`, "Waits and timeouts").
-const ABSENT: Duration = Duration::from_secs(3);
-
-/// Asserts no line arrives within `ABSENT`: the read times out rather
-/// than closing, so the stream holds no live tail.
-fn assert_silent(client: &Socket) {
-    let mut read = client.read.lock().unwrap();
-    read.get_mut().set_read_timeout(Some(ABSENT)).unwrap();
-    let mut line = String::new();
-    match std::io::BufRead::read_line(&mut *read, &mut line) {
-        Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {}
-        Ok(0) => panic!("the socket closed instead of staying silent"),
-        other => panic!("the tail stays silent: {other:?}"),
-    }
 }
 
 fn close(session: &str) -> Value {
@@ -948,17 +930,21 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
         format!("Session {child} could not resume: {workspace} no longer exists"),
         "{rejected}"
     );
-    // No live tail follows the completed fold: the bounded receive
-    // times out rather than closing. It runs only after the refusal
-    // above proved the replay drained, so the window starts at a known
-    // edge instead of an arbitrary point.
-    assert_silent(&client);
+    // No live tail follows the completed fold: the next command's
+    // answer is the controlled signal. Its gather holds every line
+    // between the refusal and the answer, so anything but the answer
+    // is a live-tail leak, with no silence wait involved.
     // `history` pages the gone session's own log and its forked-from
     // parent's, as the session would.
     client.send(&history("c_hist", child, json!({})));
     let answered = until_hub(&client, "the history answer", |line| {
         acknowledges(line, "c_hist")
     });
+    assert_eq!(
+        answered.len(),
+        1,
+        "no tail between the refusal and the history answer: {answered:?}"
+    );
     let answered = answered.last().unwrap();
     let seqs: Vec<_> = answered["payload"]["result"]["lines"]
         .as_array()
@@ -975,6 +961,11 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     let answered = until_hub(&client, "the parent page", |line| {
         acknowledges(line, "c_par")
     });
+    assert_eq!(
+        answered.len(),
+        1,
+        "no tail between the history answers: {answered:?}"
+    );
     let answered = answered.last().unwrap();
     let parent_lines = answered["payload"]["result"]["lines"].as_array().unwrap();
     assert!(
@@ -1002,6 +993,11 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     let archived = until_hub(&client, "the archive answer", |line| {
         acknowledges(line, "c_arch")
     });
+    assert_eq!(
+        archived.len(),
+        1,
+        "no tail between the history page and the archive answer: {archived:?}"
+    );
     assert_eq!(archived.last().unwrap()["kind"], "command_accepted");
     let log = setup.log(child);
     assert_eq!(log.last().unwrap()["kind"], "archived", "{log:?}");
@@ -1015,6 +1011,11 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     let rejected = until_hub(&client, "the second refusal", |line| {
         line["kind"] == "command_rejected"
     });
+    assert_eq!(
+        rejected.len(),
+        1,
+        "no tail between the archive answer and the second refusal: {rejected:?}"
+    );
     let rejected = rejected.last().unwrap();
     assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
     assert!(!setup.home().join("run").join(child).exists());
@@ -1026,6 +1027,11 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     let acked = until_hub(&client, "the archived replay", |line| {
         acknowledges(line, "c_sub2")
     });
+    assert_eq!(
+        acked.len(),
+        1,
+        "no tail between the second refusal and the archived replay: {acked:?}"
+    );
     let accept = acked.last().unwrap();
     assert_eq!(accept["payload"]["command_id"], "c_sub2", "{accept}");
     let last = accept["payload"]["result"]["last_seq"]

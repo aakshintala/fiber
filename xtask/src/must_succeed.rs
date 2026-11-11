@@ -100,16 +100,6 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         ABSENT,
     ),
     kept("crates/cli/src/doctor/files_tests.rs", "ABSENT", ABSENT),
-    kept(
-        "crates/main/tests/hub_daemon/hub_resume.rs",
-        "ABSENT",
-        ABSENT,
-    ),
-    kept(
-        "crates/main/tests/hub_daemon/hub_start_worktree.rs",
-        "ABSENT",
-        ABSENT,
-    ),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.
