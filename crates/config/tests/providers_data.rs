@@ -92,7 +92,12 @@ fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
     let levels = vec![Minimal, Low, Medium, High, Xhigh, Max];
     let muse = config::read_providers(&package("muse")).unwrap();
     let muse = muse.iter().find(|p| p.name == "muse").unwrap();
-    for id in ["muse-spark-1.3", "muse-spark-1.3-contributor"] {
+    for id in [
+        "muse-spark-1.3",
+        "muse-spark-1.3-contributor",
+        "muse-ember-1.0",
+        "muse-wonder-1.0",
+    ] {
         let model = muse.models.iter().find(|m| m.id == id).unwrap();
         assert_eq!(model.thinking_levels, levels, "{id}");
         assert_eq!(model.thinking_default, None, "{id}");
