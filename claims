@@ -363,3 +363,6 @@ crates/tui/src/event_loop_tests.rs	fiber-4593	plan	2026-11-11T02:50:17Z	roundhou
 providers/databricks/thinking.lua	fiber-4614	plan	2026-11-11T03:09:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/config/tests/providers_data.rs	fiber-4614	plan	2026-11-11T03:09:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/tests/first_party_providers.rs	fiber-4614	plan	2026-11-11T03:09:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+research/muse-thinking/README.md	fiber-4614	plan	2026-11-11T03:10:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+research/muse-thinking/raw/muse-ember-1.0.json	fiber-4614	plan	2026-11-11T03:10:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+research/muse-thinking/raw/muse-wonder-1.0.json	fiber-4614	plan	2026-11-11T03:10:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
