@@ -672,7 +672,7 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
     );
     // No live tail follows the fold: the bounded receive times out
     // rather than closing.
-    assert_silent(&client, std::time::Duration::from_secs(3));
+    assert_silent(&client);
     // Any other command still reaches the resume guard: `prompt` is
     // refused with the existing shape naming the repository, and the
     // confirmed failure keeps no wrapper period.
@@ -732,11 +732,15 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         .kill_and_wait();
 }
 
-/// Asserts no line arrives within `bound`: the read times out rather
+/// Asserts no line arrives within 3 s: the read times out rather
 /// than closing, so the stream holds no live tail.
-fn assert_silent(client: &Socket, bound: std::time::Duration) {
+fn assert_silent(client: &Socket) {
     let mut read = client.read.lock().unwrap();
-    match support::read_line(&mut read, Deadline::after(bound), "the live tail") {
+    match support::read_line(
+        &mut read,
+        Deadline::after(std::time::Duration::from_secs(3)),
+        "the live tail",
+    ) {
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
         other => panic!("the tail stays silent: {other:?}"),
     }

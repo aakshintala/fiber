@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource};
 use contract::{JobId, SessionId};
@@ -350,11 +349,15 @@ fn archive(id: &str, session: &str) -> Value {
     json!({"id": id, "command": "archive", "args": {"session": session}})
 }
 
-/// Asserts no line arrives within `bound`: the read times out rather
-/// than closing, so the stream holds no live tail.
-fn assert_silent(client: &Socket, bound: Duration) {
+/// Asserts no line arrives within 3 s: the read times out rather than
+/// closing, so the stream holds no live tail.
+fn assert_silent(client: &Socket) {
     let mut read = client.read.lock().unwrap();
-    match support::read_line(&mut read, Deadline::after(bound), "the live tail") {
+    match support::read_line(
+        &mut read,
+        Deadline::after(std::time::Duration::from_secs(3)),
+        "the live tail",
+    ) {
         Err(error) if error.kind() == ErrorKind::TimedOut => {}
         other => panic!("the tail stays silent: {other:?}"),
     }
@@ -918,7 +921,7 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     );
     // No live tail follows the fold: the bounded receive times out
     // rather than closing.
-    assert_silent(&client, Duration::from_secs(3));
+    assert_silent(&client);
     // `history` pages the gone session's own log and its forked-from
     // parent's, as the session would.
     client.send(&history("c_hist", child, json!({})));
