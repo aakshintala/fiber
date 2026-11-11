@@ -87,16 +87,14 @@ fn install_lua(setup: &Setup, short: &str, init: &str) {
             "fiber": "0.1.0", "api": 1}),
     );
     std::fs::write(source.join("init.lua"), init).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// `fiber ask --model scripted/s.json hi`.

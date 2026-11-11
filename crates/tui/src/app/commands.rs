@@ -16,6 +16,7 @@ use contract::{CommandId, SessionId};
 
 use super::{App, Effect, Kind, Link, Phase, Sent, Surface, hub_line, session_line};
 use crate::editor::{OpenFile, Target};
+use crate::ext::KeyOutcome;
 use crate::import_report::ImportSource;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
@@ -853,6 +854,26 @@ impl App {
         self.completion.generation
     }
 
+    /// Runs the TUI winner for `name` with `rest`: a handled command
+    /// clears the draft and sends nothing; anything else is consumed
+    /// silently with the draft preserved — the failure already has its
+    /// notice, and a conflict's merge notice stands. A TUI name never
+    /// reaches the driver command path.
+    fn run_tui_command(&mut self, name: &str, rest: &str) -> Effect {
+        let ctx = self.command_ctx();
+        let outcome = self.handle.get().map(|renderer| {
+            let outcome = renderer.run_tui_command(&ctx, name, rest.trim());
+            for (code, text) in renderer.take_pending() {
+                self.push_notice(ErrorCode::from_name(&code), text);
+            }
+            outcome
+        });
+        if outcome == Some(KeyOutcome::Handled) {
+            self.draft.clear();
+        }
+        Effect::None
+    }
+
     /// Runs the draft when its first word is an extension command or a
     /// built-in command; `None` when it is neither, and the draft goes out
     /// as typed. A draft holding an image is never a command: Enter sends
@@ -865,6 +886,19 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
+        if self.completion.tui_conflicts.contains(name) {
+            // A conflicted name runs nowhere: consumed, nothing sent,
+            // no second notice, draft preserved.
+            return Some(Effect::None);
+        }
+        if self
+            .completion
+            .tui_commands
+            .iter()
+            .any(|command| command.name == name)
+        {
+            return Some(self.run_tui_command(name, rest));
+        }
         let extension = self
             .completion
             .extensions
@@ -949,9 +983,15 @@ impl App {
             self.outbox.settled(&asked);
         }
         self.offer = crate::offer::Offer::default();
-        self.completion.slash_rows = slash::rows(&[]);
+        self.completion.session_answer.clear();
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        // The session rows go with the session; the TUI rows refresh for
+        // home, which holds every loaded winner with no half gate.
+        self.refresh_tui_commands();
+        if self.handle.get().is_none() {
+            self.merge_slash_rows();
+        }
         self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
@@ -1041,9 +1081,11 @@ impl App {
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`, `extensions_loaded`, and `turn_started`; its answer,
     /// and no older one, fills the `/` list.
-    /// Until it answers, the list holds the built-ins only.
+    /// Until it answers, the list holds the built-ins and the TUI
+    /// commands only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let line = self.completion.ask_commands(session);
+        self.merge_slash_rows();
         if let Some(id) = &self.completion.commands_id {
             self.outbox.wait(id, super::outbox::Waiting::Commands);
         }
@@ -1051,9 +1093,12 @@ impl App {
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
-    /// sent replaces the session's rows of the `/` list.
+    /// sent replaces the session's rows of the `/` list, re-resolved
+    /// against the TUI commands.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        self.completion.commands_answered(accepted);
+        if self.completion.commands_answered(accepted) {
+            self.merge_slash_rows();
+        }
     }
 
     /// Whether the draft starts with an unknown slash command: its first
@@ -1089,6 +1134,11 @@ impl App {
             .iter()
             .any(|row| row.name == name || row.aliases.iter().any(|alias| alias == name))
         {
+            return false;
+        }
+        // A conflicted name has no row: without this `on_enter` refuses
+        // it as unknown before `built_in` consumes it.
+        if self.completion.tui_conflicts.contains(name) {
             return false;
         }
         self.push_notice(
