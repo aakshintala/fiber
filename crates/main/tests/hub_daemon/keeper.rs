@@ -10,7 +10,7 @@
 use crate::support;
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write as _};
+use std::io::{BufRead, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::Child;
@@ -54,7 +54,8 @@ fn probe(
 }
 
 /// The expiry-time session-log read keeps at most this many bytes from the
-/// end of the events log: a bounded tail, never the full read.
+/// end of the events log: a bounded tail read by seeking to the end, so
+/// the read's size never grows with the log.
 const SESSION_LOG_TAIL_CAP: usize = 64 * 1024;
 
 /// One line naming what one `fakes::matching` listing saw: pids mean the
@@ -109,6 +110,32 @@ fn session_log_tail(read: &std::io::Result<Vec<u8>>) -> String {
     format!("session log tail:\n{}", lines.join("\n"))
 }
 
+/// The session events log's last bytes, read bounded: at most
+/// `SESSION_LOG_TAIL_CAP` bytes from the end through one seek and one
+/// capped read, never the full file. Past the cap the window's leading
+/// fragment drops here, so [`session_log_tail`] sees the same complete
+/// lines the full read's window would have held. A missing or unreadable
+/// log is `Err`, which the tail renders as `unknown`.
+fn read_bounded_tail(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(SESSION_LOG_TAIL_CAP as u64);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    // At most the cap, even when the file grows past its metadata length
+    // between the two calls.
+    file.take(SESSION_LOG_TAIL_CAP as u64)
+        .read_to_end(&mut bytes)?;
+    if start > 0 {
+        if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes = bytes[end + 1..].to_vec();
+        } else {
+            bytes.clear();
+        }
+    }
+    Ok(bytes)
+}
+
 /// The expiry-time keeper sample: one `fakes::matching` listing under the
 /// session's keeper pattern plus one bounded tail read of the session
 /// events log, each run once on the expiry path, never in a loop. No
@@ -116,7 +143,7 @@ fn session_log_tail(read: &std::io::Result<Vec<u8>>) -> String {
 fn keeper_state_at_expiry(pattern: &str, setup: &Setup, id: &str) -> String {
     // One-shot sample spelling the fakes per-`pgrep` budget (2500 ms).
     let listing = fakes::matching(pattern, std::time::Duration::from_millis(2_500));
-    let log = fs::read(session_dir(setup, id).join("events.jsonl"));
+    let log = read_bounded_tail(&session_dir(setup, id).join("events.jsonl"));
     format!(
         "{}\n{}",
         keeper_sample_line(&listing),
@@ -1992,9 +2019,15 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
     assert_eq!(unit.len(), 64);
     let at_cap = unit.repeat(SESSION_LOG_TAIL_CAP / 64);
     assert_eq!(at_cap.len(), SESSION_LOG_TAIL_CAP);
+    // At exactly the cap the whole log renders: the header plus every
+    // input line, nothing dropped and nothing read past the cap.
+    let expected = format!("session log tail:\n{}", at_cap.trim_end());
     let rendered = session_log_tail(&Ok(at_cap.into_bytes()));
     assert!(rendered.contains("\"pad\":\""), "{rendered}");
-    assert_eq!(rendered.lines().count(), 1025, "{rendered}");
+    assert_eq!(
+        rendered, expected,
+        "at the cap the tail holds the whole log",
+    );
     let filler = "x".repeat(SESSION_LOG_TAIL_CAP + 1);
     let cut = format!("{filler}\n{line}");
     let rendered = session_log_tail(&Ok(cut.into_bytes()));
@@ -2025,6 +2058,32 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
         session_log_tail(&Ok(vec![b'x'; SESSION_LOG_TAIL_CAP + 1])),
         "session log tail: (no complete lines)"
     );
+    // The expiry read itself is bounded: a short log reads whole, a log
+    // past the cap reads only its tail, and a missing log is the error
+    // the tail renders as unknown.
+    let dir = setup.workspace();
+    let short = dir.join("short.jsonl");
+    fs::write(&short, b"{\"a\":1}\n").unwrap();
+    assert_eq!(read_bounded_tail(&short).unwrap(), b"{\"a\":1}\n");
+    assert!(read_bounded_tail(&dir.join("missing.jsonl")).is_err());
+    let big = dir.join("big.jsonl");
+    let filler = "z".repeat(SESSION_LOG_TAIL_CAP + 4096);
+    fs::write(&big, format!("{filler}\n{line}")).unwrap();
+    let tail = read_bounded_tail(&big).unwrap();
+    assert!(
+        tail.len() <= SESSION_LOG_TAIL_CAP,
+        "the expiry read stays within the cap: {}",
+        tail.len()
+    );
+    assert_eq!(
+        session_log_tail(&Ok(tail)),
+        format!("session log tail:\n{}", line.trim_end())
+    );
+    // Past the cap with no complete line at all, the read normalizes to
+    // empty, which renders as no complete lines rather than unknown.
+    let noeol = dir.join("noeol.jsonl");
+    fs::write(&noeol, vec![b'x'; SESSION_LOG_TAIL_CAP + 16]).unwrap();
+    assert_eq!(read_bounded_tail(&noeol).unwrap(), b"");
 }
 
 #[test]
