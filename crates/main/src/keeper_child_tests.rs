@@ -615,6 +615,86 @@ fn takeover_start_marker_failure_carries_on_and_poisons() {
 }
 
 #[test]
+fn takeover_appends_started_then_bound() {
+    // `docs/events.md`, "Jobs" and `docs/tools.md`, "The keeper" promise the
+    // takeover order: the start record lands before the bound record.
+    let clock = fakes::clock::FakeClock::new();
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-takeover-order",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "the keeper to hold the log");
+    let lines = log::read(&session_dir(&keeper)).expect("log lines");
+    let mut seen_started = false;
+    let mut bound_after_started = false;
+    for line in &lines {
+        match line.kind() {
+            EventKind::KeeperStarted => seen_started = true,
+            EventKind::KeeperBound if seen_started => bound_after_started = true,
+            _ => {}
+        }
+    }
+    assert!(
+        seen_started && bound_after_started,
+        "the takeover appends keeper_started before keeper_bound: {:?}",
+        lines.iter().map(|line| line.kind()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn takeover_window_shows_started_without_bound() {
+    // A keeper dead between the start append and `bind` leaves the start
+    // record with no bound record: the barrier lands the takeover in that
+    // window, like the held-keeper tests land theirs.
+    let clock = fakes::clock::FakeClock::new();
+    let (held, held_rx) = ready_signal();
+    let (before, gate) = barrier();
+    let hooks = super::Hooks {
+        held: Some(held),
+        before_bind: Some(before),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-died-before-bind",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    gate.armed.store(true, Ordering::SeqCst);
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&gate.arrived, "the takeover to reach bind");
+    let lines = log::read(&session_dir(&keeper)).expect("log lines");
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert!(
+        kinds.contains(&EventKind::KeeperStarted),
+        "the window shows the start record: {kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&EventKind::KeeperBound),
+        "the window shows no bound record: {kinds:?}"
+    );
+    gate.go.send(()).expect("release the takeover");
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "the keeper to hold the log");
+}
+
+#[test]
 fn keeper_control_ignores_torn_tail_and_proceeds_to_takeover() {
     // The session can die mid-`send` (body and framing `\n` are separate
     // syscalls), leaving a final chunk with no newline. That torn tail proves
