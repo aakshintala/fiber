@@ -3117,6 +3117,9 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("hub.idle_exit_ms", "3540000"), "59 min (custom)");
     assert_eq!(number("hub.idle_exit_ms", "86400000"), "24 h (custom)");
     assert_eq!(number("retry.max_delay_ms", "0"), "0 min (custom)");
+    // A negative delay stays in seconds: the whole-unit words are for
+    // values the stepping lists hold.
+    assert_eq!(number("retry.max_delay_ms", "-60000"), "-60 s (custom)");
     // Durations keep their unit word; off-list values read custom.
     assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
     assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
@@ -3124,7 +3127,16 @@ fn a_number_row_shows_its_unit_in_row_text() {
         text("model_lists.refresh_after", Text, "\"90m\""),
         "90 min (custom)"
     );
+    assert_eq!(
+        text("model_lists.refresh_after", Text, "\"90s\""),
+        "90 s (custom)"
+    );
+    // A lone unit with no count keeps its raw text.
+    assert_eq!(text("model_lists.refresh_after", Text, "\"h\""), "h");
     assert_eq!(text("model_lists.refresh_after", Text, "\"soon\""), "soon");
+    // Only the refresh row reads duration words: any other Text row keeps
+    // its raw text even when it ends in a duration unit.
+    assert_eq!(text("tui.editor", Text, "\"24h\""), "24h");
     // A non-ASCII value never splits a character boundary: it keeps its
     // raw text instead of panicking.
     assert_eq!(text("model_lists.refresh_after", Text, "\"é\""), "é");

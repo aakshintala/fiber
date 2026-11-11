@@ -194,21 +194,17 @@ impl List {
         let to = if *key == Key::Up {
             if self.selected == 0 {
                 last
-            } else if self.selected <= last {
-                self.selected - 1
             } else {
-                // Past the end (a blurred or stale selection): fall
-                // through to the clamp below, as before.
+                // Past the end (a blurred or stale selection) still steps
+                // down one; the clamp below keeps it, as before.
                 self.selected.saturating_sub(1)
             }
         } else if *key == Key::Down {
             if self.selected == last {
                 0
-            } else if self.selected < last {
-                self.selected + 1
             } else {
-                // Past the end (a blurred or stale selection): fall
-                // through to the clamp below, as before.
+                // Past the end (a blurred or stale selection) still steps
+                // up one; the clamp below keeps it, as before.
                 self.selected.saturating_add(1)
             }
         } else if *key == Key::PageUp {

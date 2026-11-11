@@ -2217,7 +2217,9 @@ fn counted(n: f64, one: &str, many: &str) -> String {
 }
 
 /// Milliseconds in the doc's words: whole hours, else whole minutes,
-/// else whole or fractional seconds.
+/// else whole or fractional seconds. The seconds arm is the fallback
+/// itself: a whole count of seconds reads the same either way, so no
+/// extra branch pins it.
 fn ms_text(ms: f64) -> String {
     if ms.fract() == 0.0 && ms >= 0.0 {
         if ms != 0.0 && ms % 3_600_000.0 == 0.0 {
@@ -2225,9 +2227,6 @@ fn ms_text(ms: f64) -> String {
         }
         if ms % 60_000.0 == 0.0 {
             return format!("{} min", ms / 60_000.0);
-        }
-        if ms % 1_000.0 == 0.0 {
-            return format!("{} s", ms / 1_000.0);
         }
     }
     format!("{} s", trimmed(ms / 1_000.0))
