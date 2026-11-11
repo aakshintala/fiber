@@ -3874,3 +3874,189 @@ fn command_unknown_name_is_not_handled() {
     );
     assert!(renderer.take_pending().is_empty());
 }
+
+/// A focus handler that is `body`, timeout 100 ms.
+fn focus_source(body: &str) -> String {
+    format!("fiber.on_focus({{ timeout = 100, run = function(input) {body} end }})")
+}
+
+#[test]
+fn focus_rejection_notices_once_at_load() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some("fiber.on_focus(5)"));
+    let (_, notices) = loader.load();
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; loading skips it.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "extension_failed");
+    assert!(notices[0].1.contains("fiber.on_focus"), "{notices:?}");
+}
+
+#[test]
+fn focus_dispatch_runs_winners_in_name_order() {
+    let (_dir, loader) = fixture();
+    for name in ["a", "b"] {
+        package(
+            &loader,
+            name,
+            None,
+            Some(&focus_source(&format!("error('{name}-boom')"))),
+        );
+    }
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    // Load order is name order, and every winner runs in turn.
+    assert_eq!(pending.len(), 2, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    assert!(pending[0].1.contains("a-boom"), "{pending:?}");
+    assert_eq!(pending[1].0, "hook_failed");
+    assert!(pending[1].1.contains("extension b"), "{pending:?}");
+    assert!(pending[1].1.contains("b-boom"), "{pending:?}");
+    // A second failure is silent until `/reload`.
+    renderer.on_focus(&ctx(None));
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn focus_error_hook_failed_once_until_reload() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&focus_source("error('boom')")));
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": one `hook_failed` notice per extension until `/reload`.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    assert!(pending[0].1.contains("boom"), "{pending:?}");
+    renderer.on_focus(&ctx(None));
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn focus_home_omits_and_session_carries_session_id() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&focus_source(
+            "if input.session_id ~= nil then error('saw-id') end",
+        )),
+    );
+    package(
+        &loader,
+        "b",
+        None,
+        Some(&focus_source(
+            "if input.session_id == nil then error('saw-nil') end",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // Home sends no `session_id` key and Lua reads nil.
+    renderer.on_focus(&home_ctx());
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension b"), "{pending:?}");
+    assert!(pending[0].1.contains("saw-nil"), "{pending:?}");
+    // A session screen carries the session on screen.
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    assert!(pending[0].1.contains("saw-id"), "{pending:?}");
+}
+
+#[test]
+fn focus_inert_half_skipped_silently() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "ranged",
+        Some(json!({"min":"v2.0.0"})),
+        Some(&focus_source("error('ran')")),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // An inert half never reaches the VM: an erroring handler stays silent.
+    renderer.on_focus(&ctx(Some(vec![("ranged", "v1.0.0")])));
+    assert!(renderer.take_pending().is_empty());
+    // A compatible half runs the handler.
+    renderer.on_focus(&ctx(Some(vec![("ranged", "v2.0.0")])));
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension ranged"), "{pending:?}");
+}
+
+#[test]
+fn focus_without_registration_is_silent() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.slot('notice', {timeout=100, render=function() return {} end})"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    renderer.on_focus(&home_ctx());
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "no code under test waits on the clock (ruling 6179403686): the provider thread only moves the fake past the deadline the post-perform check reads"
+)]
+fn focus_timeout_switches_off_with_one_notice() {
+    let dir = fakes::TempDir::new("fiber-tui-focus-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let clock = FakeClock::new();
+    let server = fakes::ProviderServer::start_responding({
+        let clock = clock.clone();
+        move |_| {
+            // On request arrival the provider moves the fake past the
+            // deadline; the instant answer keeps the test off the wall clock.
+            clock.advance(std::time::Duration::from_millis(150));
+            fakes::Response::status(200, "x")
+        }
+    })
+    .expect("the server starts");
+    let url = server.url();
+    let loader = Loader::new(sources, clock);
+    package(
+        &loader,
+        "slow",
+        None,
+        Some(&format!(
+            "fiber.on_focus({{ timeout = 100, run = function(input) host.http({{url = '{url}'}}) end }})"
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": a timeout switches the extension off until `/reload`, with one notice.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_failed");
+    assert!(pending[0].1.contains("extension slow"), "{pending:?}");
+    assert!(pending[0].1.contains("switched off"), "{pending:?}");
+    // Switched off: a later focus run answers silently.
+    renderer.on_focus(&ctx(None));
+    assert!(renderer.take_pending().is_empty());
+}

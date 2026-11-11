@@ -328,6 +328,13 @@ pub trait Renderer: std::fmt::Debug {
     fn on_click(&self, _ctx: &SessionCtx, _slot: &str, _id: &str) -> KeyOutcome {
         KeyOutcome::NotHandled
     }
+    /// Runs every loaded focus handler for the session on screen:
+    /// `session_id` when a session is on screen, none on home. The
+    /// return is ignored and notices travel via `take_pending`
+    /// (`docs/tui.md`, "Input and focus"). The default draws nothing
+    /// and notices nothing, so renderers without focus handlers need
+    /// no edit.
+    fn on_focus(&self, _ctx: &SessionCtx) {}
     /// The eligible slash commands for the `/` list, in final-name
     /// order (`docs/extensions.md`, "Commands and screens"). The
     /// default registers no command.
