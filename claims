@@ -368,3 +368,5 @@ crates/tui/src/event_loop_focus_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	ro
 crates/tui/src/keys_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/tui.md	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/extensions.md	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/Cargo.toml	fiber-4628	plan	2026-11-11T16:46:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/Cargo.toml	fiber-4628	plan	2026-11-11T16:46:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
