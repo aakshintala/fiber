@@ -805,7 +805,8 @@ fills it, and the declared variable when one exists.
   while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
 - On Databricks, open-weight chat services reject `max_completion_tokens`
   with a 400 and take `max_tokens`, while the GPT and Gemini services on
-  the same route take `max_completion_tokens`.
+  the same route take `max_completion_tokens`
+  (`research/databricks-gateway-probe`).
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
