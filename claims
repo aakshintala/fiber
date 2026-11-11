@@ -317,3 +317,5 @@ crates/tui/src/view.rs	fiber-4596	plan	2026-11-11T08:56:56Z	roundhouse-7010-plus
 docs/ci.md	fiber-4630	plan	2026-11-11T09:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/doc-citations.allow	fiber-4618	plan	2026-11-11T09:42:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 research/databricks-gateway-probe/README.md	fiber-4610	plan	2026-11-11T09:54:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/models_dev.rs	fiber-4633	plan	2026-11-11T10:19:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_tests.rs	fiber-4633	plan	2026-11-11T10:19:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
