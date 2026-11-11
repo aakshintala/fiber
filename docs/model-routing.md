@@ -803,6 +803,9 @@ fills it, and the declared variable when one exists.
   `: OPENROUTER PROCESSING` comment lines to the stream.
 - On Databricks, `gemini-4-argon` rejects `reasoning_effort` with a 400
   while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
+- On Databricks, open-weight chat services reject `max_completion_tokens`
+  with a 400 and take `max_tokens`, while the GPT and Gemini services on
+  the same route take `max_completion_tokens`.
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
@@ -832,7 +835,10 @@ models work only through its Anthropic route, because its default route rejects
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. A
 `gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
-carries `compat.gemini` on the protocol already chosen. All of that is data.
+carries `compat.gemini` on the protocol already chosen. A service whose
+catalog row's `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`
+carries `compat.max_tokens`, so its output limit goes in `max_tokens`.
+All of that is data.
 
 ### Model discovery
 
