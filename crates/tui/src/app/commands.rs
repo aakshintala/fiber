@@ -815,8 +815,13 @@ impl App {
 
     /// A key the draft takes: a character or Backspace, which may open or
     /// search the `@` panel, or ↑ ↓ by wrapped row and then through earlier
-    /// prompts. `None` for any other key.
+    /// prompts. `None` for any other key. While a read-only session is
+    /// attached the draft takes nothing, so typing, Backspace, recall
+    /// and `@` search change nothing and no completion can open.
     pub(super) fn draft_key(&mut self, key: &Key) -> Option<Effect> {
+        if self.unwritable().is_some() {
+            return None;
+        }
         match key {
             Key::Char(ch) => Some(self.type_char(*ch)),
             Key::Backspace => Some(self.backspace()),

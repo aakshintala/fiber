@@ -1213,6 +1213,98 @@ fn enter_on_a_read_only_session_sends_nothing_and_keeps_the_draft() {
 }
 
 #[test]
+fn typing_backspace_recall_and_at_search_change_nothing_while_read_only() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    assert!(app.input().expand().is_empty());
+    let now = fakes::clock::FakeClock::new().now();
+    // Typing, `@` search, Backspace and recall change nothing, so no
+    // completion can open: `draft_key` takes nothing while unwritable.
+    assert_eq!(app.on_key(crate::keys::Key::Char('h'), now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Char('@'), now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Backspace, now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Down, now), Effect::None);
+    assert!(app.input().expand().is_empty(), "the draft stays empty");
+    assert!(app.completions().is_none(), "no completion opens");
+    assert!(!app.files_open(), "no `@` panel opens");
+}
+
+#[test]
+fn set_unwritable_clears_an_open_completion_panel() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    // The `/` panel opens before the read-only attach.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(crate::keys::Key::Char('/'), now), Effect::None);
+    assert!(
+        app.completions().is_some(),
+        "the `/` panel opens before the attach"
+    );
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out: {retry:?}");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    assert!(
+        app.completions().is_none(),
+        "the panel closes on the read-only attach"
+    );
+}
+
+#[test]
+fn esc_with_an_open_completion_goes_home_from_read_only() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    // A panel open before the attach cannot linger to take Esc first:
+    // `set_unwritable` clears it, so Esc reaches the go-home path.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(crate::keys::Key::Char('/'), now), Effect::None);
+    assert!(app.completions().is_some());
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert!(app.completions().is_none());
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.session().is_none(), "Esc leaves the session");
+    assert!(app.on_home(), "Esc goes home");
+    assert!(app.unwritable().is_none());
+}
+
+#[test]
 fn a_near_miss_io_failed_refusal_renders_verbatim() {
     for (code, message) in [
         (

@@ -291,9 +291,11 @@ impl App {
 
     /// Records `session` as read only with the hub's missing workspace
     /// path: the conversation shows its replayed log, and the terminal
-    /// sends it nothing.
-    pub(in crate::app) fn set_unwritable(&mut self, session: SessionId, path: String) {
+    /// sends it nothing. Any open completion panel closes, so a panel
+    /// open before the attach cannot linger to take Esc first.
+    pub(crate) fn set_unwritable(&mut self, session: SessionId, path: String) {
         self.home.subs.set_unwritable(session, path);
+        self.close_completion_panels();
     }
 
     /// Clears the read-only mark, as leaving, going home and the reset do
@@ -605,9 +607,7 @@ impl App {
                             Some(Opening::Retry { session, .. }) => session,
                             _ => return Some(Vec::new()),
                         };
-                        self.home
-                            .subs
-                            .set_unwritable(session.clone(), path.to_owned());
+                        self.set_unwritable(session.clone(), path.to_owned());
                         self.notices.clear_code(ErrorCode::StreamClosed, &session.0);
                     }
                     None => {
