@@ -340,3 +340,4 @@ crates/tui/src/keys_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-70
 crates/tui/src/app/keyboard_screen_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
 crates/tui/src/view/key_map_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
 crates/tui/src/event_loop_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
+crates/main/tests/hub_daemon/keeper.rs	fiber-4601	plan	2026-11-11T08:43:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
