@@ -379,9 +379,9 @@ fn changed_files_editor_remote() {
     run.write(b"\x1b[D");
     run.wait_bytes(list_from, FRAME_END, "the returned list frame");
     let grid = run.wait_screen("the refreshed row", |screen| {
-        shows(screen, "Enter show diff") && shows(screen, "only-on-a.txt · +2 −0")
+        shows(screen, "open in editor") && shows(screen, "    M  only-on-a.txt  +2 −0")
     });
-    let _ = row_with(&grid, "only-on-a.txt · +2 −0");
+    let _ = row_with(&grid, "only-on-a.txt");
     // A second Ctrl+G fetches the edited file; a hub-side edit in
     // mid-editor leaves the copy unwritten with the changed-file
     // notice, and the view still rereads the diff and numstat.
