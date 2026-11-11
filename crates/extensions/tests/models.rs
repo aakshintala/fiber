@@ -877,6 +877,66 @@ fn a_disabled_process_package_warm_cache_names_an_invalid_model_once() {
 }
 
 #[test]
+fn add_lua_suppresses_only_the_invalid_the_load_reported() {
+    let setup = Setup::new();
+    // Static data with one invalid model: the load emits its notice and
+    // records its identity. A later admission reports only invalid the
+    // load did not report (`docs/model-routing.md`, "Model discovery").
+    let data = json!({ "name": "acme", "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": [
+        {"id": "bad", "protocol": "openai-responses",
+         "base_url": "http://127.0.0.1:1/v1"},
+        {"id": "ok", "protocol": "openai-responses",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
+    ]});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(load_notices.len(), 1, "{load_notices:?}");
+    assert_eq!(load_notices[0].code, ErrorCode::ModelInvalid);
+    // `models()` repeats the load-reported invalid beside a new invalid
+    // with another reason: only the new one is reported.
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        &[
+            "{ { id = \"bad\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\" }, ",
+            "{ id = \"bad2\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000, extra_body = { tools = 1 } }, ",
+            "{ id = \"ok\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } }",
+        ]
+        .concat(),
+    );
+    let lua_notices = providers.add_lua(
+        "acme",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/bad2").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let lua_invalid: Vec<_> = lua_notices
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+        .collect();
+    assert_eq!(lua_invalid.len(), 1, "{lua_notices:?}");
+    assert_eq!(
+        lua_invalid[0].message,
+        "The model `acme/bad2` names `tools` in its `extra_body`, a field Fiber builds itself."
+    );
+    assert_ne!(lua_invalid[0].message, load_notices[0].message);
+}
+
+#[test]
 fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     let list = json!([
         {"id": "bad", "protocol": "anthropic-messages",
