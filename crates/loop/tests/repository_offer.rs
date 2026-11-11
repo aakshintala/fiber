@@ -1192,6 +1192,8 @@ fn standing_ask() -> Event {
                 prefix: "run tests".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 

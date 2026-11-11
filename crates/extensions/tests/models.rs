@@ -1238,6 +1238,78 @@ fn a_failing_models_leaves_no_models_with_the_errors_code() {
 }
 
 #[test]
+fn a_failing_models_records_one_discovery_failure_beside_its_notice() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(&setup, "ext", "error(\"boom\")");
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    // The notice path keeps working as it does now.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+    // The failure is recorded beside it, with the same code and message.
+    let failures = providers.take_discovery_failures();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[0].error.code, ErrorCode::ExtensionFailed);
+    assert_eq!(failures[0].error.message, notices[0].message);
+    // The drain reports once: a second call finds nothing left.
+    assert!(providers.take_discovery_failures().is_empty());
+}
+
+#[test]
+fn two_failing_registrations_of_one_provider_record_two_failures() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(&setup, "ext", "error(\"boom\")");
+    let first = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(first.len(), 1, "{first:?}");
+    // A second extension registering the same provider name whose
+    // `models()` also fails records again: no dedupe, one entry per
+    // failing registration, each carrying its own extension.
+    let again = lua_acme(&setup, "ext2", "error(\"boom\")");
+    let second = providers.add_lua(
+        "other-ext",
+        &again,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(second.len(), 1, "{second:?}");
+    let failures = providers.take_discovery_failures();
+    assert_eq!(failures.len(), 2);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[1].provider, "acme");
+    assert_eq!(failures[1].extension.as_deref(), Some("other-ext"));
+}
+
+#[test]
 fn a_failing_models_keeps_the_data_files_models() {
     let setup = Setup::new();
     let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);

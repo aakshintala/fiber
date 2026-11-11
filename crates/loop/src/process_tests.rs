@@ -154,6 +154,8 @@ fn permission(id: &str) -> Event {
                 prefix: "npm".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
