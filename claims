@@ -384,3 +384,5 @@ xtask/tests/models-dev.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook
 crates/extensions/src/extension_tools_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/hooks_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/search_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tools/src/shell/sandbox/sandbox_tests.rs	fiber-4681	plan	2026-11-11T23:03:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/tool_calls/sandbox.rs	fiber-4681	plan	2026-11-11T23:03:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
