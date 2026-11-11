@@ -366,6 +366,54 @@ fn deferred_tools_spend_the_strict_budget_and_tool_search_takes_none() {
     assert!(sent[21].get("defer_loading").is_none());
 }
 
+fn no_strict_endpoint(server: &ProviderServer) -> Endpoint {
+    Endpoint {
+        compat: provider::Compat {
+            no_strict: true,
+            ..provider::Compat::default()
+        },
+        ..endpoint(server)
+    }
+}
+
+#[test]
+fn a_no_strict_model_sends_tools_with_no_strict_key() {
+    // The Databricks gateway rejects `strict` even as `false` on
+    // `claude-opus-4-1`, so its tools carry no `strict` key at all: not a
+    // fitting tool, not a deferred one, not the loose `tool_search`, not a
+    // hosted one, and not the tools past the 20-tool budget.
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let protocol = Messages::new(no_strict_endpoint(&server)).deferred_tools(true);
+    let mut tools: Vec<ToolDefinition> = (0..21)
+        .map(|i| strict_tool(&format!("tool_{i:02}"), i == 0))
+        .collect();
+    tools.push(search_tool(false));
+    tools.push(ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({"type": "object"}),
+        deferred: true,
+        hosted: Some("web_search_20250305".into()),
+    });
+    let wired = wired(&protocol, &tools);
+    assert_eq!(wired.len(), 23);
+    for tool in &wired {
+        assert!(tool.get("strict").is_none(), "{tool}");
+    }
+    let mut req = request();
+    req.tools = tools;
+    run(protocol.call(&req)).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(sent, Value::Array(wired));
+    let sent = sent.as_array().unwrap();
+    assert_eq!(sent[0]["defer_loading"], true);
+    assert!(sent[21].get("defer_loading").is_none());
+    assert_eq!(
+        sent[22],
+        json!({"name": "web_search", "type": "web_search_20250305"})
+    );
+}
+
 /// Every probe recording compiled into this test, in the order the old
 /// directory walk read them: the raw directory sorted by file name.
 /// Names are repo-relative paths, used as parse labels.
