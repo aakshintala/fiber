@@ -490,7 +490,8 @@ impl ProcessExtension {
         Arc::new(
             move |args: Value,
                   scope: Option<crate::lua::CredentialFor>,
-                  caller: &dyn contract::tool::Cancel| {
+                  caller: &dyn contract::tool::Cancel,
+                  _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 requests::run_request(
                     &shared,
                     requests::Dispatch {

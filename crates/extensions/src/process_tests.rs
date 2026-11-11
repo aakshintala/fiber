@@ -1550,7 +1550,7 @@ fn positional_references_share_the_generation_triple() {
     let positional = registry.set_handler(
         &CommandId("c1".to_owned()),
         "1",
-        Shared::new(|_, _, _| Ok(Some(json!({"positional": true})))),
+        Shared::new(|_, _, _, _| Ok(Some(json!({"positional": true})))),
     );
     assert_eq!(positional.command, CommandId("c1".to_owned()));
     assert_eq!(positional.key, "1");
@@ -4322,6 +4322,137 @@ fn production_services(
     })
 }
 
+#[derive(Default)]
+struct InnerCallRecords(Mutex<Vec<(String, String, Value)>>);
+
+impl contract::tool::InnerCalls for InnerCallRecords {
+    fn run(
+        &self,
+        extension: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Box<contract::events::ToolCallCompleted>, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((extension.to_owned(), name.to_owned(), arguments));
+        Ok(Box::new(contract::events::ToolCallCompleted {
+            status: contract::events::CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: Vec::new(),
+            details: None,
+            artifact: None,
+            kept: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            hosts_surfaced: Vec::new(),
+            provider_item: None,
+            loaded: None,
+            protected_paths: None,
+        }))
+    }
+}
+
+/// A process tool callback uses its own runner and refuses calls without an anchor.
+#[test]
+fn process_tool_runner_threading() {
+    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use crate::host::admission::CallbackContext;
+
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let services = NativeHostServices {
+        runtime: Runtime::new(Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: Mutex::new(None),
+        delegate: Mutex::new(None),
+        tool_runner: Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: Mutex::new(None),
+        diagnostics: None,
+    };
+    let context = ProcessContext {
+        run: ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let deadline = Some(std::time::Instant::now() + Duration::from_secs(10));
+    let callback = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("tool-runner".to_owned()),
+        "tool parent".to_owned(),
+        deadline,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let runner = Arc::new(InnerCallRecords::default());
+    let callback = callback.with_inner_calls(Some(
+        Arc::clone(&runner) as Arc<dyn contract::tool::InnerCalls>
+    ));
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        HostOperation::Tool {
+            name: "read".to_owned(),
+            arguments: json!({"path": "README.md"}),
+        },
+        &callback.cancel,
+    )
+    .expect("the inner tool completes");
+    assert_eq!(answer.unwrap()["status"], "completed");
+    assert_eq!(
+        *runner.0.lock().unwrap(),
+        vec![(
+            "fiber.test/proc".to_owned(),
+            "read".to_owned(),
+            json!({"path": "README.md"})
+        )]
+    );
+    assert_eq!(callback.ran_by(), Some("tool parent"));
+    assert_eq!(callback.deadline, deadline);
+
+    let anchorless = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("tool-runner-no-anchor".to_owned()),
+        "watcher 3".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    )
+    .with_inner_calls(Some(
+        Arc::clone(&runner) as Arc<dyn contract::tool::InnerCalls>
+    ));
+    let Err((code, message)) = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &anchorless,
+        HostOperation::Tool {
+            name: "read".to_owned(),
+            arguments: json!({}),
+        },
+        &anchorless.cancel,
+    ) else {
+        panic!("an anchorless callback cannot make an inner call");
+    };
+    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert_eq!(message, "host.tool: called outside a running tool call");
+    assert_eq!(runner.0.lock().unwrap().len(), 1);
+}
+
 /// Process host-call admission matches the shared Lua callback policy.
 #[test]
 fn process_admission_parity() {
@@ -6571,7 +6702,8 @@ fn rebound_runs_replace_stale_references() {
         Arc::new(
             move |_args: Value,
                   scope: Option<crate::lua::CredentialFor>,
-                  _cancel: &dyn contract::tool::Cancel| {
+                  _cancel: &dyn contract::tool::Cancel,
+                  _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 *seen_handler.lock().unwrap() = scope;
                 Ok(Some(
                     json!({"token": "tok-rebound", "expires_at": FRESH_EXPIRES}),

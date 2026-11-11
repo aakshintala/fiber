@@ -245,8 +245,8 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                let returned =
-                    invoke(arg, scope, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))?;
+                let returned = invoke(arg, scope, &cancel, None)?
+                    .ok_or_else(|| no_answer(func, &resolved.owner))?;
                 accept(returned).map(|(value, changed)| (value, Vec::new(), changed))
             }
         }
@@ -276,7 +276,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, None),
         }
     }
 
@@ -306,7 +306,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, None),
         }
     }
 
@@ -334,7 +334,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(args, scope, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
+                invoke(args, scope, &cancel, None)?.ok_or_else(|| no_answer(func, &resolved.owner))
             }
         }
     }
@@ -362,7 +362,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, None),
         }
     }
 
@@ -438,7 +438,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(arg, scope, &cancel).ok()??;
+                invoke(arg, scope, &cancel, None).ok()??;
                 Some((0, lock(&self.inner).clock.now()))
             }
         }
@@ -469,7 +469,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(arg, scope, &cancel).map(|_| ())
+                invoke(arg, scope, &cancel, None).map(|_| ())
             }
         }
     }
