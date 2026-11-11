@@ -28,6 +28,8 @@ use support::{Setup, TRUECOLOUR, write_json};
 
 /// `error` in the dark theme.
 const ERROR: Colour = Colour::Rgb(255, 93, 115);
+/// The dark page: the panel tint (`docs/tui.md`, "Themes").
+const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
 /// `accent` in the dark theme: a focused row's mark and label.
 const ACCENT: Colour = Colour::Rgb(110, 170, 254);
@@ -570,6 +572,59 @@ fn the_settings_view_matches_the_doc() {
     assert_eq!(detail + 1, footer, "{}", grid.contents);
     // settled: "the Compaction tokens row whole" checked the text is absent.
     assert!(!grid.contents.contains("Ctrl+G opens the file"));
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn dark_settings_body_sits_on_the_panel_tint() {
+    // Every swapped view draws on the page: the dark page paints on the
+    // panel tint, so the terminal's own background shows nowhere
+    // (`docs/tui.md`, "Themes").
+    let setup = tools_setup(json!({}));
+    let mut run = turned(&setup);
+    run.write(b"/settings\r");
+    let keys = "←→ tab · / search · Enter change · Tab layer · Delete reset";
+    // debt: two "the settings tabs" predicates stay (this one and
+    // the_settings_view_matches_the_doc's); the grid-read ratchet caps
+    // per-file unmarked reads (look.rs 163, this file 50;
+    // xtask/src/screen_ratchet.rs) and a per-file helper's reads count
+    // where it is defined, so a shared helper waits for a third
+    // predicate; support/ is outside the fence.
+    let grid = run.wait_screen("the settings tabs", |grid| {
+        let (Some(note), Some(bar), Some(footer)) = (
+            find_row(grid, "Changes save automatically"),
+            find_row(grid, "Appearance"),
+            find_row(grid, "Delete reset"),
+        ) else {
+            return false;
+        };
+        is_dim(grid, note, "Changes save automatically")
+            // The tab bar sits below the dim note: the view's name row,
+            // then "Changes save automatically" dim, then the tab bar
+            // (`docs/tui.md`, "Swapped views").
+            && bar > note
+            && is_bold(grid, bar, "Appearance")
+            && col_at_or(grid, bar, "Models").is_some()
+            && !is_bold(grid, bar, "Models")
+            && grid.rows[usize::from(footer)].trim() == keys
+            && is_bold(grid, footer, "Enter")
+            && col_at_or(grid, footer, "change").is_some()
+            && !is_bold(grid, footer, "change")
+    });
+    // settled: "the settings tabs" checked the bar row and the note.
+    let note = row_with(&grid, "Changes save automatically");
+    // The note row's trailing cells are blank page: the panel tint.
+    let last = (0..160)
+        .rfind(|x| grid.cell(*x, note).symbol.as_str() != " ")
+        .expect("the note row's text");
+    // settled: "the settings tabs" checked the note text with no input
+    // since.
+    for x in last + 1..160 {
+        let cell = grid.cell(x, note);
+        assert_eq!(cell.symbol.as_str(), " ", "body cell ({x}, {note})");
+        assert_eq!(cell.bg, PAGE, "body cell ({x}, {note})");
+    }
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }
