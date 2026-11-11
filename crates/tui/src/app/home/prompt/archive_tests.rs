@@ -394,6 +394,56 @@ fn archive_answer_missing_result_shows_the_malformed_notice() {
 }
 
 #[test]
+fn malformed_previews_show_the_preview_notice_and_finish() {
+    // No `result` in the discovery answer: the missing-result arm
+    // finishes the command with the preview notice, so an empty
+    // `archive_command_malformed_preview` would leave no notice and
+    // keep the discovery running.
+    let mut app = attached();
+    let command = discovery(&mut app);
+    let missing = Line::Hub(contract::HubLine {
+        kind: HubEventKind::CommandAccepted,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [("command_id".to_owned(), Value::String(command.clone()))]
+            .into_iter()
+            .collect(),
+    });
+    let out = fold_lines(&mut app, missing);
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(
+        app.notice(),
+        Some("Not archived: the hub's preview was invalid. Nothing was archived.")
+    );
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    // An invalid preview folds through the validated-sets arm the same
+    // way: each of these fails `validated_sets`, so each must finish
+    // with the same notice.
+    for result in [
+        json!({"sessions": [], "held": []}),
+        json!({"sessions": [B], "held": []}),
+        json!({"sessions": [A]}),
+    ] {
+        let mut app = attached();
+        let command = discovery(&mut app);
+        let out = fold_lines(&mut app, accepted(&command, result.clone()));
+        assert!(out.is_empty(), "{result}: {out:?}");
+        assert_eq!(
+            app.notice(),
+            Some("Not archived: the hub's preview was invalid. Nothing was archived."),
+            "{result}"
+        );
+        assert!(
+            matches!(app.home.questions.archive_command.state, State::Idle),
+            "{result}"
+        );
+    }
+}
+
+#[test]
 fn unanswered_archive_is_uncertain_and_is_not_retried() {
     let mut app = attached();
     let _lines = start(&mut app, &[A], &[A]);
