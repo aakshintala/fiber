@@ -1809,11 +1809,11 @@ fn setup_terminal_run_prints_other_notices_but_no_model_unconfigured() {
     assert_eq!(child_result(&stdout, "notices"), 0, "{stderr:?}");
     let segment = child_segment(&stderr, "### case notices\n");
     let lines: Vec<&str> = segment.lines().collect();
-    // The invalid notice prints once, and the first question follows it.
-    assert_eq!(segment.matches("bad/m1").count(), 1, "{segment:?}");
-    assert!(lines[0].contains("bad/m1"), "{segment:?}");
-    assert!(lines[0].contains("context_window"), "{segment:?}");
-    assert_eq!(lines[1], "Providers:", "{segment:?}");
+    // A cache-substituted invalid list drains silently at load, and the
+    // setup terminal never runs `add_lua`, so no invalid notice prints:
+    // the first question follows no notice.
+    assert_eq!(segment.matches("bad/m1").count(), 0, "{segment:?}");
+    assert_eq!(lines[0], "Providers:", "{segment:?}");
     assert!(!segment.contains("acme/m"), "{segment:?}");
     assert!(!segment.contains(UNCONFIGURED_HOST), "{segment:?}");
     assert!(!segment.contains("the setting `"), "{segment:?}");

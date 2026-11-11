@@ -767,9 +767,9 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
         providers.resolve("acme/bad").unwrap_err(),
         Error::UnknownModel { .. }
     ));
-    assert_eq!(notices.len(), 1, "{notices:?}");
-    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
-    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+    // A cache-substituted invalid list drains silently at load: its one
+    // `model_invalid` notice per reason is drawn in `add_lua`, never here.
+    assert!(notices.is_empty(), "{notices:?}");
 }
 
 #[test]
