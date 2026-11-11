@@ -2200,7 +2200,7 @@ fn as_number(text: &str) -> Option<f64> {
 /// integers, the rest with their decimals.
 fn trimmed(n: f64) -> String {
     if n.fract() == 0.0 {
-        format!("{}", n as i64)
+        format!("{n:.0}")
     } else {
         format!("{n:.3}")
             .trim_end_matches('0')
@@ -2220,15 +2220,14 @@ fn counted(n: f64, one: &str, many: &str) -> String {
 /// else whole or fractional seconds.
 fn ms_text(ms: f64) -> String {
     if ms.fract() == 0.0 && ms >= 0.0 {
-        let whole = ms as i64;
-        if whole != 0 && whole % 3_600_000 == 0 {
-            return format!("{} h", whole / 3_600_000);
+        if ms != 0.0 && ms % 3_600_000.0 == 0.0 {
+            return format!("{} h", ms / 3_600_000.0);
         }
-        if whole % 60_000 == 0 {
-            return format!("{} min", whole / 60_000);
+        if ms % 60_000.0 == 0.0 {
+            return format!("{} min", ms / 60_000.0);
         }
-        if whole % 1_000 == 0 {
-            return format!("{} s", whole / 1_000);
+        if ms % 1_000.0 == 0.0 {
+            return format!("{} s", ms / 1_000.0);
         }
     }
     format!("{} s", trimmed(ms / 1_000.0))
@@ -2237,12 +2236,11 @@ fn ms_text(ms: f64) -> String {
 /// A token count in thousands or millions, as the list spells them.
 fn tokens_text(n: f64) -> String {
     if n.fract() == 0.0 && n > 0.0 {
-        let whole = n as i64;
-        if whole % 1_000_000 == 0 {
-            return format!("{}M tokens", whole / 1_000_000);
+        if n % 1_000_000.0 == 0.0 {
+            return format!("{}M tokens", n / 1_000_000.0);
         }
-        if whole % 1_000 == 0 {
-            return format!("{}k tokens", whole / 1_000);
+        if n % 1_000.0 == 0.0 {
+            return format!("{}k tokens", n / 1_000.0);
         }
     }
     format!("{} tokens", trimmed(n))
