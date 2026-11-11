@@ -801,6 +801,10 @@ fills it, and the declared variable when one exists.
 - Tool-call deltas from `gpt-6-luna` and from OpenRouter with
   `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.
+- A gateway serving Gemini returns a tool call's `extra_content` (such as
+  `extra_content.google.thought_signature`) on the call; Fiber replays it
+  back on that call when `compat.gemini` is set, and never sends it without
+  the flag.
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
