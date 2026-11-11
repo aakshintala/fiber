@@ -149,16 +149,14 @@ pub(crate) fn install_test_provider_with_headers(
         &json!({"name": "test", "models": [{"id": "m1", "protocol": "openai-responses",
                 "base_url": format!("{server_url}/v1"), "context_window": 100000}]}),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    super::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "test",

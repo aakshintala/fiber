@@ -88,10 +88,21 @@ fn left(session: &str, how: &str) -> Line {
 
 /// The lines an effect sends, parsed; none for any other effect.
 fn sent(effect: Effect) -> Vec<Value> {
-    if let Effect::Send(lines) = effect {
-        commands(lines)
-    } else {
-        Vec::new()
+    match effect {
+        Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
+        Effect::None
+        | Effect::Quit
+        | Effect::ExitTracked(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::FindPause { .. }
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::OpenFile(_) => Vec::new(),
     }
 }
 

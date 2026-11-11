@@ -45,6 +45,8 @@ pub enum HubCommand {
     Start(Start),
     /// Archives an exited session.
     Archive(Archive),
+    /// Copies another harness's configuration into Fiber home, once.
+    Import(super::ImportArgs),
     /// Deletes an exited session.
     Delete(Delete),
     /// Prunes the hub's machine.

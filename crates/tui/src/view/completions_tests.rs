@@ -197,6 +197,7 @@ fn slash_keys_alias_spans_match_only_the_queried_alias() {
         description: "Opens the rebinding screen.".to_owned(),
         hint: None,
         tag: "command".to_owned(),
+        extension: false,
     };
     for (query, matched, unmatched) in [
         ("keymap", "keymap", "keybindings"),
@@ -658,6 +659,7 @@ fn windowed() -> Vec<crate::slash::Row> {
             description: format!("Does n{n}."),
             hint: None,
             tag: "skill".to_owned(),
+            extension: false,
         })
         .collect()
 }

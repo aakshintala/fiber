@@ -237,16 +237,19 @@ fn a_click_on_a_choice_does_what_its_key_does() {
 /// sessions and args agree.
 fn stripped(effect: &Effect) -> Effect {
     match effect {
-        Effect::Exit(lines) => Effect::Exit(
-            lines
+        Effect::ExitTracked(sents) => Effect::ExitTracked(
+            sents
                 .iter()
-                .map(|line| {
+                .map(|sent| {
                     let mut line: serde_json::Value =
-                        serde_json::from_str(line).unwrap_or_default();
+                        serde_json::from_str(&sent.line).unwrap_or_default();
                     if let Some(object) = line.as_object_mut() {
                         object.remove("id");
                     }
-                    line.to_string()
+                    crate::app::Sent {
+                        id: contract::CommandId(String::new()),
+                        line: line.to_string(),
+                    }
                 })
                 .collect(),
         ),
@@ -260,6 +263,22 @@ fn stripped(effect: &Effect) -> Effect {
                         object.remove("id");
                     }
                     line.to_string()
+                })
+                .collect(),
+        ),
+        Effect::SendTracked(sents) => Effect::SendTracked(
+            sents
+                .iter()
+                .map(|sent| {
+                    let mut line: serde_json::Value =
+                        serde_json::from_str(&sent.line).unwrap_or_default();
+                    if let Some(object) = line.as_object_mut() {
+                        object.remove("id");
+                    }
+                    crate::app::Sent {
+                        id: contract::CommandId(String::new()),
+                        line: line.to_string(),
+                    }
                 })
                 .collect(),
         ),
@@ -476,9 +495,10 @@ fn close_all_with_only_keepers_shows_the_count_and_sends_the_stop() {
         shown.contains("0 sessions, 0 working, 0 open elsewhere, 1 keeper"),
         "{shown}"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter stops the keepers");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let mut stops: Vec<serde_json::Value> = Vec::new();
     for line in &lines {
         let line: serde_json::Value = serde_json::from_str(line).unwrap_or_default();
@@ -514,9 +534,10 @@ fn a_click_on_close_all_does_what_enter_does() {
     let by_click = app.on_click(TargetId::Home(Spot::Quit(QuitChoice::CloseAll)));
     // Command ids mint at random: the effects agree past them.
     assert_eq!(stripped(&by_key), stripped(&by_click));
-    let Effect::Send(lines) = by_click else {
+    let Effect::SendTracked(sents) = by_click else {
         panic!("the confirm click closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // `docs/tui.md`, "Quit": "Enter sends each live top-level session
     // `close` with `now`"; the subscribes the connection needs first
     // are not pinned.
