@@ -529,7 +529,7 @@ fn dark_settings_body_sits_on_the_panel_tint() {
         is_dim(grid, note, "Changes save automatically")
             // The tab bar sits below the dim note: the view's name row,
             // then "Changes save automatically" dim, then the tab bar
-            // (`docs/tui.md`, "/settings Top rows").
+            // (`docs/tui.md`, "Swapped views").
             && bar > note
             && is_bold(grid, bar, "Appearance")
             && col_at_or(grid, bar, "Models").is_some()
