@@ -301,7 +301,12 @@ fn resets(fake: &Fake) -> Vec<(Layer, String, String)> {
 fn drawn(settings: &Settings, usage: Option<u64>, width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(usize::from(width), usize::from(height), usage);
+    let frame = settings.frame(
+        usize::from(width),
+        usize::from(height),
+        usage,
+        usize::from(width),
+    );
     render(&frame, area, &mut buf, &mut Vec::new());
     text_of(&buf, width, height)
 }
@@ -371,7 +376,7 @@ fn the_view_opens_on_appearance_with_the_autosave_line_and_tab_bar() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30% of screen width  project
+|  Rail width    30% of screen width · 24 columns  project
 |
 |  Theme         Default
 |
@@ -405,7 +410,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30% of screen width  project
+|  Rail width    30% of screen width · 24 columns  project
 |
 |  Theme         Default
 |
@@ -578,7 +583,7 @@ fn the_open_tab_is_bold_on_an_accent_fill() {
     let settings = tab(&fake, SettingsTab::Models);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     render(&frame, area, &mut buf, &mut Vec::new());
     let bar = (0..24u16)
         .find(|y| {
@@ -630,7 +635,7 @@ fn a_models_tab_pins_each_cell_style_by_meaning() {
     let settings = tab(&fake, SettingsTab::Models);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     render(&frame, area, &mut buf, &mut Vec::new());
     let row_of = |label: &str| {
         (0..24u16)
@@ -700,7 +705,7 @@ fn a_layer_tag_and_a_boolean_keep_their_roles() {
     let settings = at(&fake, "sandbox.enabled");
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     render(&frame, area, &mut buf, &mut Vec::new());
     let row_of = |label: &str| {
         (0..24u16)
@@ -724,7 +729,7 @@ fn a_layer_tag_and_a_boolean_keep_their_roles() {
     let fake = Fake::new(rows());
     let settings = at(&fake, "tui.attention.bell");
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     render(&frame, area, &mut buf, &mut Vec::new());
     let row = (0..24u16)
         .find(|y| {
@@ -1300,7 +1305,7 @@ fn a_saved_write_rereads_and_says_the_file() {
     assert!(matches!(settings.mode, super::Mode::Rows));
     assert_eq!(fake.reads().len(), reads + 1);
     assert_eq!(settings.said, ["Saved to project config."]);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     assert!(frame.below.iter().any(|line| {
         line.contains("compaction.tokens")
             && line.contains("changing compaction.tokens needs a reload")
@@ -1796,7 +1801,7 @@ fn a_refused_reset_says_why_and_leaves_the_row() {
     assert_eq!(settings.said, ["changed meanwhile"]);
     assert_eq!(
         row_of(&screen(&settings), "Rail width"),
-        "› Rail width 30% of screen width project"
+        "› Rail width 30% of screen width · 24 columns project"
     );
 }
 
@@ -2020,7 +2025,12 @@ fn the_renderer_targets_each_drawn_line_so_a_click_lands_on_the_row_it_shows() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    render(&settings.frame(80, 24, None), area, &mut buf, &mut targets);
+    render(
+        &settings.frame(80, 24, None, 80),
+        area,
+        &mut buf,
+        &mut targets,
+    );
     let shown = text_of(&buf, 80, 24);
     for label in ["Default model", "Scoped models", "Credentials"] {
         let y =
@@ -2131,7 +2141,7 @@ fn a_list_opens_its_own_page_titled_with_its_label() {
 |Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back
 "#,
     );
-    assert_eq!(settings.frame(80, 24, None).title, "Scoped models");
+    assert_eq!(settings.frame(80, 24, None, 80).title, "Scoped models");
 }
 
 #[test]
@@ -2206,7 +2216,7 @@ fn an_empty_list_shows_only_add_and_an_object_list_shows_path_and_required() {
 fn the_pages_footer_has_the_documented_words_with_bold_keys() {
     let fake = Fake::new(rows());
     let settings = page(&fake, "scoped_models");
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     assert_eq!(
         frame.footer,
         "Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back"
@@ -2702,7 +2712,7 @@ fn choosing_a_theme_writes_the_global_tui_theme_queues_it_and_returns_to_the_tab
 |
 |  Hover         [x] On
 |
-|  Rail width    30% of screen width  project
+|  Rail width    30% of screen width · 24 columns  project
 |
 |› Theme         Default
 |
@@ -3111,6 +3121,57 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("tui.rail.width", "\"wide\""), "wide");
 }
 
+/// A width row ends with its columns on the terminal: the share's
+/// columns after the region's limits, read from the terminal width
+/// while the draw width keeps the room and the cut (`docs/tui.md`,
+/// `/settings`, "Controls").
+#[test]
+fn a_width_row_counts_columns_for_its_width() {
+    use SettingControl::Number;
+    let mut all = with("tui.rail.width", value("15"), "project");
+    all.push(on(
+        SettingsTab::Appearance,
+        "Panel width",
+        "tui.panel.width",
+        value("21"),
+        "project",
+        PERSON,
+        Number,
+    ));
+    let fake = Fake::new(all);
+    let settings = tab(&fake, SettingsTab::Appearance);
+    let row_text = |terminal: usize, draw: u16, label: &str| {
+        let area = Rect::new(0, 0, draw, 24);
+        let mut buf = Buffer::empty(area);
+        let frame = settings.frame(usize::from(draw), 24, None, terminal);
+        render(&frame, area, &mut buf, &mut Vec::new());
+        text_of(&buf, draw, 24)
+            .lines()
+            .map(str::to_owned)
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("no {label} row"))
+    };
+    // The rail's 15% reads 33 columns on 220 and 24 on 160.
+    let rail = row_text(220, 220, "Rail width");
+    assert!(rail.contains("15% of screen width · 33 columns"), "{rail}");
+    let rail = row_text(160, 160, "Rail width");
+    assert!(rail.contains("· 24 columns"), "{rail}");
+    // The panel's 21% reads 46 columns on 220.
+    let panel = row_text(220, 220, "Panel width");
+    assert!(
+        panel.contains("21% of screen width · 46 columns"),
+        "{panel}"
+    );
+    // Rail attached: the suffix reads the terminal width while the
+    // draw width keeps the room and the cut.
+    let attached = row_text(220, 44, "Rail width");
+    assert!(attached.contains("· 33 columns"), "{attached}");
+    assert!(attached.contains('…'), "{attached}");
+    // A terminal wider than u16 saturates instead of wrapping.
+    let wide = row_text(100_000, 220, "Rail width");
+    assert!(wide.contains("· 48 columns"), "{wide}");
+}
+
 #[test]
 fn a_value_is_cut_to_the_room_left_after_the_label_and_the_layer_tag() {
     let long = "a".repeat(40);
@@ -3126,7 +3187,7 @@ fn a_value_is_cut_to_the_room_left_after_the_label_and_the_layer_tag() {
     // "project" and its gap leave 13 columns of the 26 past the label.
     let width = layout.label_col + 26;
     // `at` focused this row above.
-    let cells = settings.cells(item, &layout, width, false, true);
+    let cells = settings.cells(item, &layout, width, false, true, width);
     assert_eq!(cells[1].0.chars().count(), 13, "{cells:?}");
     assert!(cells[1].0.ends_with('…'), "{cells:?}");
     assert_eq!(cells[2].0, "  project");
@@ -3280,7 +3341,12 @@ fn query_of(settings: &Settings) -> String {
 fn assert_annotation(settings: &Settings, width: u16, height: u16, name: &str) {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(usize::from(width), usize::from(height), None);
+    let frame = settings.frame(
+        usize::from(width),
+        usize::from(height),
+        None,
+        usize::from(width),
+    );
     render(&frame, area, &mut buf, &mut Vec::new());
     let found = (0..height).find_map(|y| {
         let line: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
@@ -3693,7 +3759,7 @@ fn settings_search_escape_keeps_the_match_in_its_tab_and_closes_next() {
 |
 |  Hover          [x] On                                               Appearance
 |
-|  Rail width     30% of screen width  project                         Appearance
+|  Rail width     30% of screen width · 24 columns  project            Appearance
 |
 |  Theme          Default                                              Appearance
 |
@@ -4107,7 +4173,7 @@ fn settings_search_controls_pointer_and_wheel_follow_the_displayed_rows() {
     // for it.
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     let mut targets = Vec::new();
     render(&frame, area, &mut buf, &mut targets);
     let at = frame

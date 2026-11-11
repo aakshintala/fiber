@@ -15,6 +15,7 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
+use crate::layout::{PANEL_CEILING, PANEL_FLOOR, RAIL_CEILING, RAIL_FLOOR, share_of};
 use crate::swapped::{Chrome, Frame, GUTTER, Ink, Inline, List, Span, Spot, rows_height};
 use crate::text;
 use crate::theme::Role;
@@ -893,9 +894,13 @@ impl Settings {
         }
     }
 
-    /// The body rows that fit at `ctx`'s size.
+    /// The body rows that fit at `ctx`'s size. The frame is only
+    /// measured, never drawn, so the suffix reads the draw width.
     fn shown(&self, ctx: &Ctx<'_>) -> usize {
-        rows_height(&self.frame(ctx.width, ctx.height, ctx.usage), ctx.height)
+        rows_height(
+            &self.frame(ctx.width, ctx.height, ctx.usage, ctx.width),
+            ctx.height,
+        )
     }
 }
 
@@ -1831,7 +1836,13 @@ fn footer(parts: &[(&str, &str)]) -> (String, Vec<Span>) {
 
 impl Settings {
     /// The frame to draw at `width` by `height`.
-    pub(crate) fn frame(&self, width: usize, height: usize, usage: Option<u64>) -> Frame {
+    pub(crate) fn frame(
+        &self,
+        width: usize,
+        height: usize,
+        usage: Option<u64>,
+        suffix_width: usize,
+    ) -> Frame {
         if let Some(page) = &self.page {
             return self.page_frame(page, width, height);
         }
@@ -1865,12 +1876,18 @@ impl Settings {
                 footer: "↑↓ move · Enter choose · Esc back".to_owned(),
                 chrome: None,
             },
-            Mode::Rows | Mode::Field(_) => self.rows_frame(width, height, usage),
+            Mode::Rows | Mode::Field(_) => self.rows_frame(width, height, usage, suffix_width),
         }
     }
 
     /// The open tab.
-    fn rows_frame(&self, width: usize, height: usize, usage: Option<u64>) -> Frame {
+    fn rows_frame(
+        &self,
+        width: usize,
+        height: usize,
+        usage: Option<u64>,
+        suffix_width: usize,
+    ) -> Frame {
         let layout = self.layout(width, height, usage);
         let list = if layout.takes.is_empty() {
             self.list.blur()
@@ -1894,6 +1911,7 @@ impl Settings {
                     width,
                     editing.is_some_and(|(line, _)| line == at),
                     layout.focus == Some(at),
+                    suffix_width,
                 ),
             })
             .collect();
@@ -1935,6 +1953,23 @@ impl Settings {
         }
     }
 
+    /// A rail or panel width row's columns on a `suffix_width`-wide
+    /// terminal: the share's columns after the region's limits. `None`
+    /// for any other row, or when the row holds no share to count.
+    fn width_columns(key: &str, shown: &Shown, suffix_width: usize) -> Option<u16> {
+        let (floor, ceiling) = match key {
+            "tui.rail.width" => (RAIL_FLOOR, RAIL_CEILING),
+            "tui.panel.width" => (PANEL_FLOOR, PANEL_CEILING),
+            _ => return None,
+        };
+        let Shown::Value(text) = shown else {
+            return None;
+        };
+        let share = as_number(text)?;
+        let terminal = u16::try_from(suffix_width).unwrap_or(u16::MAX);
+        Some(share_of(terminal, share, floor, ceiling))
+    }
+
     /// Whether a boolean row is set on: `[x] On` reads in `added`,
     /// `[ ] Off` dim.
     fn boolean_on(row: &SettingRow) -> Option<bool> {
@@ -1951,8 +1986,10 @@ impl Settings {
     /// when that is not global. The focused row's label is bold in
     /// `accent`; its value is bold in `info`, an unset value dim, a
     /// layer tag in `attention`, `[x] On` in `added`, `[ ] Off` dim,
-    /// and a screen row's value in `secondary`. A row being edited keeps
-    /// its label only; the field draws over its value.
+    /// and a screen row's value in `secondary`. A width row's value
+    /// ends with its columns on a `suffix_width`-wide terminal. A row
+    /// being edited keeps its label only; the field draws over its
+    /// value.
     fn cells(
         &self,
         item: Item,
@@ -1960,6 +1997,7 @@ impl Settings {
         width: usize,
         editing: bool,
         focused: bool,
+        suffix_width: usize,
     ) -> Vec<(String, Option<Spot>, Ink)> {
         let label = text::cut(&self.label_of(item), layout.label_col, "…");
         let pad = layout
@@ -2015,16 +2053,32 @@ impl Settings {
             };
             tab.map(tab_name).unwrap_or_default().to_owned()
         });
+        // A width row ends with its columns on the terminal, read from
+        // the terminal width; the room and the cut below still read the
+        // draw width.
+        let suffix = match item {
+            Item::Screen(_) => None,
+            Item::Key(at) => self.row(at).and_then(|row| {
+                Self::width_columns(&row.key, &row.value, suffix_width)
+                    .map(|columns| format!(" · {columns} columns"))
+            }),
+        };
         let annotation_room = annotation
             .as_ref()
             .map_or(0, |name| text::width(name) + GAP);
         let tag_room = tag.as_ref().map_or(0, |tag| text::width(tag) + GAP);
+        let suffix_room = suffix.as_ref().map_or(0, |suffix| text::width(suffix));
         let room = width
-            .saturating_sub(GUTTER + layout.label_col + GAP + tag_room + annotation_room)
+            .saturating_sub(
+                GUTTER + layout.label_col + GAP + tag_room + annotation_room + suffix_room,
+            )
             .max(1);
         let shown = text::cut(&value, room, "…");
-        let mut used = GUTTER + layout.label_col + GAP + text::width(&shown);
+        let mut used = GUTTER + layout.label_col + GAP + text::width(&shown) + suffix_room;
         cells.push((shown, None, value_ink));
+        if let Some(suffix) = suffix {
+            cells.push((suffix, None, value_ink));
+        }
         if let Some(tag) = tag {
             used = used.saturating_add(GAP + text::width(&tag));
             cells.push((
