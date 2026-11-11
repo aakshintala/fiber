@@ -1033,8 +1033,8 @@ impl Log {
 
     /// Replaces the event file with a read-only handle on it, so the next
     /// write fails for real. Test-only.
-    #[cfg(test)]
-    pub(crate) fn break_writes(&self) {
+    #[cfg(any(test, feature = "fault-hooks"))]
+    pub fn break_writes(&self) {
         let mut inner = self.lock();
         let path = inner.dir.join(EVENTS);
         inner.events = OpenOptions::new()

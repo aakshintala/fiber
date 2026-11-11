@@ -117,6 +117,9 @@ struct Hooks {
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
     held: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs after a takeover opens the log and before it appends its start
+    /// record, so a test fails that append.
+    before_start_append: Option<Box<dyn Fn(&Log) + Send + Sync>>,
     /// Runs after a candidate registered and before it contends for the log,
     /// so a test lands the last job's exit in that window.
     registered: Option<Box<dyn Fn() + Send + Sync>>,
@@ -237,6 +240,10 @@ impl Runtime {
                         &format!("keeper {}", std::process::id()),
                     ) {
                         Ok(held) => {
+                            #[cfg(test)]
+                            if let Some(hook) = &self.hooks.before_start_append {
+                                hook(&held);
+                            }
                             let completed = log::read(&dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *lock(&self.logged) = completed

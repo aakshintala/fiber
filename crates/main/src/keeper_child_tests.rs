@@ -570,6 +570,51 @@ fn keeper_no_job_crash_spawns_no_watcher() {
 }
 
 #[test]
+fn takeover_start_marker_failure_carries_on_and_poisons() {
+    // RULING-4628-8's test as unblocked by RULING-4628-9: fail the
+    // start-marker append for real at the open fd, then check the keeper
+    // carries on past it and the next durable append reports the stopped log.
+    let clock = fakes::clock::FakeClock::new();
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        before_start_append: Some(Box::new(|held: &log::Log| held.break_writes())),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, runtime) = serve_keeper_with(
+        "keeper-marker-poison",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    crash(&mut keeper);
+    // The takeover carries on past the failed marker append: the held hook
+    // fires and the driver thread reports no error.
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "the keeper to hold the log");
+    assert!(
+        keeper.result.try_recv().is_err(),
+        "the keeper carries on after a failed marker append"
+    );
+    // The failed marker write stopped the log, so the next durable append
+    // reports the poison instead of writing.
+    let append = super::lock(&runtime.log);
+    let held_log = append.as_ref().expect("the keeper holds the log");
+    let failed = held_log.log.append(
+        &contract::events::Event::StepStarted(contract::events::Empty {}),
+        None,
+        None,
+    );
+    assert!(
+        matches!(failed, Err(log::Error::Poisoned { .. })),
+        "a stopped log reports Poisoned, got {failed:?}"
+    );
+}
+
+#[test]
 fn keeper_control_ignores_torn_tail_and_proceeds_to_takeover() {
     // The session can die mid-`send` (body and framing `\n` are separate
     // syscalls), leaving a final chunk with no newline. That torn tail proves
