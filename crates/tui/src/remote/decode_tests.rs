@@ -234,6 +234,11 @@ fn login_target_labels_decode_present_and_missing_as_marks() {
     assert_eq!(rows[1].label, None);
     // A null label is not a mark: the row fails like any mistyped field.
     assert!(targets(&json!({"targets":[{"name":"a","kind":"key","label":null}]})).is_none());
+    // Secrets are never marked: a secret carrying a label fails like a
+    // mistyped field, so a contradictory payload never becomes a marked
+    // secret in the view.
+    assert!(targets(&json!({"targets":[{"name":"s","kind":"secret","label":"work"}]})).is_none());
+    assert!(targets(&json!({"targets":[{"name":"s","kind":"secret"}]})).is_some());
 }
 
 #[test]

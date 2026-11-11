@@ -1303,15 +1303,26 @@ fn login_signed_in_first_80x24() {
     ]);
     let login = Login::open(&ctx(&fake));
     // `docs/tui.md`, "Logging in": the two signed-in providers list
-    // first, then the two unsigned rows.
-    assert_eq!(
-        login
-            .targets
-            .iter()
-            .map(|target| target.name.as_str())
-            .collect::<Vec<_>>(),
-        ["acme", "zeta", "codex", "acme.api_key"]
-    );
+    // first, then the two unsigned rows. The doc promises only this
+    // grouping, so the test checks grouping and marks, never the order
+    // within a group. The snapshot below shows one example order.
+    assert_eq!(login.targets.len(), 4);
+    assert!(login.targets[0].label.is_some());
+    assert!(login.targets[1].label.is_some());
+    assert!(login.targets[2].label.is_none());
+    assert!(login.targets[3].label.is_none());
+    let mut signed: Vec<&str> = login.targets[..2]
+        .iter()
+        .map(|target| target.name.as_str())
+        .collect();
+    signed.sort_unstable();
+    assert_eq!(signed, ["acme", "zeta"]);
+    // Providers group before secrets: the unsigned provider precedes
+    // the secret.
+    assert_eq!(login.targets[2].name.as_str(), "codex");
+    assert_eq!(login.targets[2].kind, LoginKind::Browser);
+    assert_eq!(login.targets[3].name.as_str(), "acme.api_key");
+    assert_eq!(login.targets[3].kind, LoginKind::Secret);
     assert_eq!(
         login
             .targets
@@ -1366,14 +1377,18 @@ fn login_signed_in_first_80x24() {
         let len = u16::try_from(tag.len()).unwrap();
         (0..len).map(move |dx| (x + dx, y))
     };
-    let focused_y = row_y("✓ default");
+    // Focus is the first sorted target, whichever signed-in provider it
+    // is: the test never pins which.
+    let focused_mark = format!("✓ {}", login.targets[0].label.as_deref().unwrap());
+    let focused_y = row_y(&focused_mark);
     let (mark_x, _) = marks
         .iter()
         .find(|(_, my)| *my == focused_y)
         .copied()
         .unwrap();
     assert!(buf[(mark_x, focused_y)].modifier.contains(Modifier::BOLD));
-    let other_y = row_y("✓ ZETA_KEY");
+    let other_mark = format!("✓ {}", login.targets[1].label.as_deref().unwrap());
+    let other_y = row_y(&other_mark);
     let (other_x, _) = marks
         .iter()
         .find(|(_, my)| *my == other_y)
@@ -1390,15 +1405,21 @@ fn login_signed_in_first_80x24() {
         assert!(!cell.modifier.contains(Modifier::BOLD));
     }
     // The focused row keeps `bold` on its tag with the bar.
-    for (x, y) in tag_cells(row_y("acme"), "key") {
+    for (x, y) in tag_cells(focused_y, "key") {
         assert!(
             buf[(x, y)].modifier.contains(Modifier::BOLD),
             "the focused tag keeps bold with the bar"
         );
     }
     // Every row can be picked, so a signed-in provider can be signed
-    // in again or under another label.
-    for (downs, name) in [(0, "acme"), (1, "zeta"), (2, "codex"), (3, "acme.api_key")] {
+    // in again or under another label. The walk follows the sorted
+    // targets' own order, whatever it is.
+    let order: Vec<String> = login
+        .targets
+        .iter()
+        .map(|target| target.name.clone())
+        .collect();
+    for (downs, name) in order.iter().enumerate() {
         let mut picked = Login::open(&ctx(&fake));
         for _ in 0..downs {
             press(&mut picked, &fake, &[Key::Down]);

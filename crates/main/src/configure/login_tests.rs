@@ -537,21 +537,15 @@ fn the_mark_shows_the_default_label_when_another_label_proves_the_login() {
 }
 
 #[test]
-fn the_mark_names_the_first_set_variable_of_a_function_provider() {
-    // A function provider's mark is the first nonempty variable in
-    // declaration order, else nothing when no credential proves the
-    // login.
+fn the_mark_names_a_set_variable_of_a_function_provider() {
+    // A function provider's mark names a nonempty variable when one
+    // proves the login (`docs/model-routing.md`, "A provider whose
+    // credential comes from a function"): an empty value proves
+    // nothing, so the mark falls through, else nothing when no
+    // credential proves the login. The doc promises no order between
+    // two set variables, so the test never sets both.
     let setup = Setup::new();
     setup.install_function("acme", &["ACME_ONE", "ACME_TWO"], &[]);
-    // Both set: declaration order wins, not value order.
-    assert_eq!(
-        marked(&setup, "acme", &|var| match var {
-            "ACME_ONE" => Some("sk-a".to_owned()),
-            "ACME_TWO" => Some("sk-b".to_owned()),
-            _ => None,
-        }),
-        Some("ACME_ONE".to_owned())
-    );
     // An empty first variable falls through to the second.
     assert_eq!(
         marked(&setup, "acme", &|var| match var {
@@ -580,9 +574,11 @@ fn the_mark_falls_back_to_the_default_label_on_paths_only_presence() {
 }
 
 #[test]
-fn login_targets_leaves_unsigned_rows_unmarked_in_declaration_order() {
-    // Providers keep declaration order with `None` marks, secrets stay
-    // last: the view sorts, the seam never does.
+fn login_targets_leaves_unsigned_rows_unmarked() {
+    // The seam marks what `has_credential` proves and leaves the rest
+    // `None`; secrets stay unmarked. `docs/tui.md`, "Logging in",
+    // promises only the Providers/Secrets grouping, so the test checks
+    // grouping and marks, never the providers' order.
     let setup = Setup::new();
     setup.install("acme");
     setup.install("beta");
@@ -591,14 +587,23 @@ fn login_targets_leaves_unsigned_rows_unmarked_in_declaration_order() {
         .unwrap();
     setup.declare("acme-secrets", &["acme.api_key"]);
     let rows = Seam::new(setup.home()).login_targets().unwrap();
+    assert_eq!(rows.len(), 3);
+    // Secrets group last.
+    assert_eq!(rows[2].name.as_str(), "acme.api_key");
+    assert_eq!(rows[2].kind, LoginKind::Secret);
+    assert_eq!(rows[2].label, None);
+    // The two providers come first in some order, with beta marked and
+    // acme unmarked.
+    let mut first: Vec<(&str, LoginKind, Option<String>)> = rows[..2]
+        .iter()
+        .map(|row| (row.name.as_str(), row.kind, row.label.clone()))
+        .collect();
+    first.sort_by(|left, right| left.0.cmp(right.0));
     assert_eq!(
-        rows.iter()
-            .map(|row| (row.name.as_str(), row.kind, row.label.clone()))
-            .collect::<Vec<_>>(),
+        first,
         [
             ("acme", LoginKind::Key, None),
             ("beta", LoginKind::Key, Some("default".to_owned())),
-            ("acme.api_key", LoginKind::Secret, None),
         ]
     );
 }

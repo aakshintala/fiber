@@ -207,15 +207,23 @@ pub(super) fn targets(value: &Value) -> Option<Vec<LoginTarget>> {
         .as_array()?
         .iter()
         .map(|target| {
+            let kind = match target.get("kind")?.as_str()? {
+                "key" => LoginKind::Key,
+                "browser" => LoginKind::Browser,
+                "secret" => LoginKind::Secret,
+                _ => return None,
+            };
+            let label: Option<String> = optional!(target, "label")?;
+            // Secrets are never marked (`docs/tui.md`, "Logging in"):
+            // a secret carrying a label is a mistyped payload, like a
+            // null label.
+            if matches!(kind, LoginKind::Secret) && label.is_some() {
+                return None;
+            }
             Some(LoginTarget {
                 name: read!(target, "name")?,
-                kind: match target.get("kind")?.as_str()? {
-                    "key" => LoginKind::Key,
-                    "browser" => LoginKind::Browser,
-                    "secret" => LoginKind::Secret,
-                    _ => return None,
-                },
-                label: optional!(target, "label")?,
+                kind,
+                label,
             })
         })
         .collect()

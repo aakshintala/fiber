@@ -493,14 +493,16 @@ impl Login {
             .saturating_sub(tag)
             .saturating_sub(mark);
         // One choice row per target, each exactly one row: the cut
-        // names leave every tag a single row at any area width.
-        let mut cut: Vec<(usize, String, &'static str)> = Vec::new();
+        // names leave every tag a single row; it carries the target
+        // index for the mark.
+        let mut cut: Vec<(usize, usize, String, &'static str)> = Vec::new();
         for (at, item) in self.items.iter().enumerate() {
             if let Item::Target(t) = *item
                 && let Some(target) = self.targets.get(t)
             {
                 cut.push((
                     at,
+                    t,
                     format::cut(&target.name, budget),
                     match target.kind {
                         LoginKind::Browser => "browser",
@@ -512,16 +514,16 @@ impl Login {
         }
         let listed: Vec<(&str, &str)> = cut
             .iter()
-            .map(|(_, name, tag)| (name.as_str(), *tag))
+            .map(|(_, _, name, tag)| (name.as_str(), *tag))
             .collect();
         let focused = cut
             .iter()
-            .position(|(at, _, _)| *at == self.selected)
+            .position(|(at, _, _, _)| *at == self.selected)
             .unwrap_or(0);
         let mut choices = overlay::choices(&listed, focused, u16::MAX);
         // Each target row takes clicks over its whole row; headings,
         // the gap and the note carry none.
-        for (row, (at, _, _)) in choices.iter_mut().zip(cut.iter()) {
+        for (row, (at, t, _, _)) in choices.iter_mut().zip(cut.iter()) {
             row.targets
                 .push((0, u16::MAX, TargetId::View(Spot::Row(*at))));
             // The tag draws in the text colour, not dim; a signed-in
@@ -535,13 +537,10 @@ impl Login {
             {
                 tag.style = Style::new();
             }
-            let label = match self.items.get(*at) {
-                Some(Item::Target(t)) => self
-                    .targets
-                    .get(*t)
-                    .and_then(|target| target.label.as_deref()),
-                _ => None,
-            };
+            let label = self
+                .targets
+                .get(*t)
+                .and_then(|target| target.label.as_deref());
             if let Some(label) = label {
                 let mut mark = Style::new().fg(Role::Success.color());
                 if row.barred {
