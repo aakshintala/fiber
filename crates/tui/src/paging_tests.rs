@@ -582,6 +582,7 @@ fn refolding_leaves_session_state_alone() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -590,7 +591,7 @@ fn refolding_leaves_session_state_alone() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -1555,6 +1556,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1563,7 +1565,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("expected a sent line"),

@@ -734,7 +734,7 @@ fn the_quit_question_takes_keys_over_the_picker() {
     // `c` closes them; with the hub up it sends the closes, then quits.
     assert!(matches!(
         quitting().on_key(Key::Char('c'), now()),
-        Effect::Exit(_)
+        Effect::ExitTracked(_)
     ));
     // Esc stays, keeping the picker open with its selection.
     let mut app = quitting();
@@ -2123,8 +2123,21 @@ fn type_draft(app: &mut App, text: &str) {
 
 /// The `start` line an Enter on home sent, parsed.
 fn started(effect: Effect) -> serde_json::Value {
-    let Effect::Send(lines) = effect else {
-        panic!("Enter on home sends the start, got {effect:?}");
+    let lines = match effect {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter on home sends the start"),
     };
     let start = lines
         .iter()
@@ -2237,10 +2250,12 @@ fn merged(
     app: &mut App,
     layer: Vec<String>,
     choice: Option<crate::model_picker::Choice>,
-) -> serde_json::Value {
+) -> contract::commands::hub::Start {
     app.launch_overrides = layer;
     app.model_picker.start_model = choice;
-    let mut args = app.start_args();
+    let mut args = app
+        .start_args()
+        .unwrap_or_else(|| panic!("a workspace names the start"));
     app.with_start_model(&mut args);
     args
 }
@@ -2255,10 +2270,13 @@ fn a_session_only_choice_rides_beside_unrelated_layer_keys() {
         vec!["model=cli/m".to_owned(), "retry.attempts=2".to_owned()],
         Some(held("acme/m1", Some("low"))),
     );
-    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(args.model, Some("acme/m1".to_owned()));
     assert_eq!(
-        args["overrides"],
-        json!(["retry.attempts=2", "models.\"acme/m1\".thinking=low"])
+        args.overrides,
+        Some(vec![
+            "retry.attempts=2".to_owned(),
+            "models.\"acme/m1\".thinking=low".to_owned()
+        ])
     );
 }
 
@@ -2272,16 +2290,16 @@ fn a_session_only_choice_without_a_level_keeps_unrelated_layer_keys() {
         vec!["model=cli/m".to_owned(), "budget.usd=10".to_owned()],
         Some(held("acme/m1", None)),
     );
-    assert_eq!(args["model"], json!("acme/m1"));
-    assert_eq!(args["overrides"], json!(["budget.usd=10"]));
+    assert_eq!(args.model, Some("acme/m1".to_owned()));
+    assert_eq!(args.overrides, Some(vec!["budget.usd=10".to_owned()]));
     // Nothing left to merge, the key is absent, as without a layer.
     let args = merged(
         &mut app,
         vec!["model=cli/m".to_owned()],
         Some(held("acme/m1", None)),
     );
-    assert_eq!(args["model"], json!("acme/m1"));
-    assert!(args.get("overrides").is_none());
+    assert_eq!(args.model, Some("acme/m1".to_owned()));
+    assert_eq!(args.overrides, None);
 }
 
 #[test]
@@ -2298,10 +2316,13 @@ fn a_launch_thinking_key_for_the_chosen_model_yields_to_the_choice() {
         ],
         Some(held("acme/m1", Some("low"))),
     );
-    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(args.model, Some("acme/m1".to_owned()));
     assert_eq!(
-        args["overrides"],
-        json!(["retry.attempts=2", "models.\"acme/m1\".thinking=low"])
+        args.overrides,
+        Some(vec![
+            "retry.attempts=2".to_owned(),
+            "models.\"acme/m1\".thinking=low".to_owned()
+        ])
     );
     // Without a chosen level the layer's thinking key stands.
     let args = merged(
@@ -2309,8 +2330,11 @@ fn a_launch_thinking_key_for_the_chosen_model_yields_to_the_choice() {
         vec!["models.acme/m1.thinking=high".to_owned()],
         Some(held("acme/m1", None)),
     );
-    assert_eq!(args["model"], json!("acme/m1"));
-    assert_eq!(args["overrides"], json!(["models.acme/m1.thinking=high"]));
+    assert_eq!(args.model, Some("acme/m1".to_owned()));
+    assert_eq!(
+        args.overrides,
+        Some(vec!["models.acme/m1.thinking=high".to_owned()])
+    );
 }
 
 #[test]
@@ -2324,10 +2348,13 @@ fn a_canonical_thinking_key_for_a_dotted_reference_yields_to_the_choice() {
         "retry.attempts=2".to_owned(),
     ];
     let args = merged(&mut app, layer.clone(), Some(held("acme/m.1", Some("low"))));
-    assert_eq!(args["model"], json!("acme/m.1"));
+    assert_eq!(args.model, Some("acme/m.1".to_owned()));
     assert_eq!(
-        args["overrides"],
-        json!(["retry.attempts=2", "models.\"acme/m.1\".thinking=low"]),
+        args.overrides,
+        Some(vec![
+            "retry.attempts=2".to_owned(),
+            "models.\"acme/m.1\".thinking=low".to_owned()
+        ]),
         "{layer:?}"
     );
 }
@@ -2340,10 +2367,10 @@ fn a_canonical_thinking_key_with_a_quoted_value_yields_to_the_choice() {
     // choice's level.
     let layer = vec!["models.acme/m1.thinking=\"high\"".to_owned()];
     let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
-    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(args.model, Some("acme/m1".to_owned()));
     assert_eq!(
-        args["overrides"],
-        json!(["models.\"acme/m1\".thinking=low"]),
+        args.overrides,
+        Some(vec!["models.\"acme/m1\".thinking=low".to_owned()]),
         "{layer:?}"
     );
 }
@@ -2352,8 +2379,8 @@ fn a_canonical_thinking_key_with_a_quoted_value_yields_to_the_choice() {
 fn with_no_choice_the_layer_rides_untouched() {
     let mut app = home();
     let args = merged(&mut app, vec!["model=cli/m".to_owned()], None);
-    assert!(args.get("model").is_none());
-    assert_eq!(args["overrides"], json!(["model=cli/m"]));
+    assert_eq!(args.model, None);
+    assert_eq!(args.overrides, Some(vec!["model=cli/m".to_owned()]));
 }
 
 #[test]
@@ -2365,8 +2392,21 @@ fn the_start_model_clears_once_start_is_accepted() {
     assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(app.model_picker.start_model.is_some());
     type_draft(&mut app, "hi");
-    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
-        panic!("Enter on home sends the start");
+    let lines = match app.on_key(Key::Enter, now()) {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter on home sends the start"),
     };
     let id = lines
         .iter()
@@ -5617,4 +5657,27 @@ fn a_name_click_in_a_settings_picker_saves_the_reference_to_the_row() {
     );
     assert!(!app.model_picker_open());
     assert!(app.config_view_open());
+}
+
+#[test]
+fn start_writes_the_hand_built_wire_bytes() {
+    use crate::app::hub_line;
+    use contract::CommandId;
+    use contract::commands::hub::{HubCommand, Start};
+    let line = hub_line(
+        &CommandId("c_1".to_owned()),
+        HubCommand::Start(Start {
+            workspace: "/w".to_owned(),
+            model: None,
+            overrides: None,
+            worktree: None,
+            continues: None,
+            supervised: None,
+            content: None,
+        }),
+    );
+    assert_eq!(
+        line,
+        r#"{"args":{"workspace":"/w"},"command":"start","id":"c_1"}"#
+    );
 }

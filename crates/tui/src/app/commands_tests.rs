@@ -2370,6 +2370,68 @@ fn a_malformed_accept_leaves_a_non_import_entry_pending() {
     );
 }
 
+/// A home app with the link down: Enter holds the start for `hub_hello`.
+fn unlinked() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
+}
+
+#[test]
+fn a_failed_hello_flush_settles_the_start_by_its_carried_id() {
+    let mut app = unlinked();
+    type_text(&mut app, "hi");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.outbox.held.len(), 1);
+    let carried = app.outbox.held[0].id.0.clone();
+    // Tamper with the held line's JSON id: the failure must settle by
+    // the carried id, never by parsing the tampered line.
+    let tampered = app.outbox.held[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, app.outbox.held[0].line);
+    app.outbox.held[0].line = tampered.clone();
+    // Hello flushes the held start; failing the flush settles the
+    // carried start: the draft is back, the phase is starting, and no
+    // entry waits on either id.
+    let flushed: Vec<String> = app.on_line(hub_line("hub_hello", json!({})));
+    assert!(flushed.contains(&tampered));
+    app.write_failed(&flushed);
+    assert!(app.outbox.pending.is_empty());
+    assert!(app.outbox.waiting("c_tampered").is_none());
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, crate::app::Phase::Starting));
+}
+
+#[test]
+fn a_failed_tracked_start_settles_by_its_carried_id() {
+    let mut app = connected();
+    type_text(&mut app, "hi");
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the start");
+    };
+    assert_eq!(sents.len(), 1);
+    let carried = sents[0].id.0.clone();
+    // Tamper with the start's JSON id: the failure must settle by the
+    // carried id, never by parsing the tampered line.
+    let tampered = sents[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, sents[0].line);
+    let sent = crate::app::Sent {
+        id: contract::CommandId(carried),
+        line: tampered,
+    };
+    app.write_failed_tracked(std::slice::from_ref(&sent));
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, crate::app::Phase::Starting));
+}
+
 /// A renderer recording TUI command runs as `(name, session, args)`:
 /// the adapter's dispatch as the terminal sees it.
 #[derive(Debug)]

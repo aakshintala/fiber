@@ -1,6 +1,8 @@
 //! Routes connection answers before they enter the loop's bounded queue.
 
 use contract::HubEventKind;
+use contract::commands::hub::{HubCommand, HubCommandLine};
+use contract::{CommandId, HubLine};
 use std::collections::HashMap;
 use std::fmt;
 use std::os::unix::net::UnixStream;
@@ -8,8 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 
-use contract::HubLine;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::Input;
 use crate::link::{self, Line};
@@ -141,10 +142,18 @@ impl Router {
     fn write(
         &self,
         epoch: Option<u64>,
-        command: &str,
-        args: Value,
+        command: HubCommand,
         answer: Answer,
     ) -> Result<u64, AskError> {
+        let id = support::mint("c_");
+        let line = serde_json::to_value(HubCommandLine {
+            id: CommandId(id.clone()),
+            command,
+        })
+        // A command line is strings, numbers and maps, so writing it
+        // cannot fail; a failure answers like a lost write, with
+        // nothing registered.
+        .map_err(|_| AskError::Lost)?;
         let (id, stream, epoch) = {
             let mut state = support::lock(&self.state);
             let stream = state.stream.as_ref().ok_or(AskError::Detached)?;
@@ -152,36 +161,23 @@ impl Router {
                 return Err(AskError::OtherConnection);
             }
             let stream = stream.try_clone().map_err(|_| AskError::Lost)?;
-            let id = support::mint("c_");
             state.requests.insert(id.clone(), answer);
             (id, stream, state.epoch)
         };
-        let mut line = serde_json::Map::from_iter([
-            ("id".into(), json!(id)),
-            ("command".into(), json!(command)),
-        ]);
-        if args != json!({}) {
-            drop(line.insert("args".into(), args));
-        }
-        if link::write_line(&stream, &Value::Object(line).to_string()).is_err() {
+        if link::write_line(&stream, &line.to_string()).is_err() {
             support::lock(&self.state).requests.remove(&id);
             return Err(AskError::Lost);
         }
         Ok(epoch)
     }
-    pub(crate) fn send(&self, command: &str, args: Value) -> Result<Pending, AskError> {
+    pub(crate) fn send(&self, command: HubCommand) -> Result<Pending, AskError> {
         let (tx, rx) = mpsc::channel();
-        let epoch = self.write(None, command, args, Answer::Wait(tx))?;
+        let epoch = self.write(None, command, Answer::Wait(tx))?;
         Ok(Pending { epoch, rx })
     }
-    pub(crate) fn send_on(
-        &self,
-        epoch: u64,
-        command: &str,
-        args: Value,
-    ) -> Result<Pending, AskError> {
+    pub(crate) fn send_on(&self, epoch: u64, command: HubCommand) -> Result<Pending, AskError> {
         let (tx, rx) = mpsc::channel();
-        let epoch = self.write(Some(epoch), command, args, Answer::Wait(tx))?;
+        let epoch = self.write(Some(epoch), command, Answer::Wait(tx))?;
         Ok(Pending { epoch, rx })
     }
     // Mutating cfg(test) waiter accounting changes no consumer-visible result.
@@ -211,22 +207,17 @@ impl Router {
             }
         }
     }
-    pub(crate) fn ask(
-        &self,
-        command: &str,
-        args: Value,
-        caller: Caller<'_>,
-    ) -> Result<HubLine, AskError> {
+    pub(crate) fn ask(&self, command: HubCommand, caller: Caller<'_>) -> Result<HubLine, AskError> {
         match caller {
             Caller::Loop => {
                 let _lend = self.lend();
-                self.send(command, args)?.wait()
+                self.send(command)?.wait()
             }
             Caller::Worker(cancel) => loop {
                 if cancel.is_set() {
                     return Err(AskError::Cancelled);
                 }
-                match self.send(command, args.clone()) {
+                match self.send(command.clone()) {
                     Err(AskError::Detached) => {
                         self.wait_link(cancel)?;
                         #[cfg(test)]
@@ -242,9 +233,8 @@ impl Router {
             },
         }
     }
-    pub(crate) fn ask_into(&self, command: &str, args: Value, map: Map) -> Result<(), AskError> {
-        self.write(None, command, args, Answer::Map(map))
-            .map(|_| ())
+    pub(crate) fn ask_into(&self, command: HubCommand, map: Map) -> Result<(), AskError> {
+        self.write(None, command, Answer::Map(map)).map(|_| ())
     }
     pub(crate) fn route(&self, line: &Line) -> bool {
         let Line::Hub(line) = line else {

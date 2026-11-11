@@ -199,10 +199,10 @@ fn clear_choice_click_uses_the_drawn_screen_target() {
         true,
         now,
     );
-    let Effect::Send(lines) = effect else {
+    let Effect::SendTracked(sents) = effect else {
         panic!("clicking clear sends the start");
     };
-    assert!(lines[0].contains("\"command\":\"start\""));
+    assert!(sents[0].line.contains("\"command\":\"start\""));
     assert!(!app.clear_open());
 }
 
