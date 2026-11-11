@@ -1117,6 +1117,7 @@ struct WorkerPause {
 /// shut. The test collects the worker with `finish` through a deadline;
 /// dropping joins only an already-finished worker, without panicking.
 struct Relay {
+    #[cfg(target_os = "linux")]
     events: mpsc::Receiver<RelayEvent>,
     release: Option<mpsc::Sender<()>>,
     proceed: Option<mpsc::Sender<()>>,
@@ -1140,16 +1141,6 @@ fn send_event(send: &mpsc::Sender<RelayEvent>, event: RelayEvent) {
 }
 
 impl Relay {
-    /// Moves the keeper's socket at `original` to another short path in the
-    /// same directory and binds the relay at the original path, so the
-    /// session's first dial reaches the relay instead of being refused by
-    /// the moved-away keeper. The upstream connection opens at once,
-    /// before the resume starts; every channel exists before either
-    /// forwarding thread starts.
-    fn start(original: PathBuf) -> Self {
-        Self::launch(original, None, None)
-    }
-
     /// A relay whose worker parks after accept, before registering its
     /// sockets: the test learns the park through the returned receiver and
     /// releases it by shutting the relay down, which drops the pause
@@ -1203,22 +1194,16 @@ impl Relay {
                 Ok(()) | Err(_) => {}
             }
         });
+        #[cfg(not(target_os = "linux"))]
+        drop(events);
         Self {
+            #[cfg(target_os = "linux")]
             events,
             release: Some(release_send),
             proceed,
             shared,
             finished,
             worker: Some(worker),
-        }
-    }
-
-    /// Forwards the held Adopted upstream.
-    fn release(&mut self) {
-        if let Some(send) = self.release.take() {
-            match send.send(()) {
-                Ok(()) | Err(_) => {}
-            }
         }
     }
 
@@ -1262,6 +1247,28 @@ impl Relay {
             }
         }
         outcome
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Relay {
+    /// Moves the keeper's socket at `original` to another short path in the
+    /// same directory and binds the relay at the original path, so the
+    /// session's first dial reaches the relay instead of being refused by
+    /// the moved-away keeper. The upstream connection opens at once,
+    /// before the resume starts; every channel exists before either
+    /// forwarding thread starts.
+    fn start(original: PathBuf) -> Self {
+        Self::launch(original, None, None)
+    }
+
+    /// Forwards the held Adopted upstream.
+    fn release(&mut self) {
+        if let Some(send) = self.release.take() {
+            match send.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 }
 
