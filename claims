@@ -322,3 +322,6 @@ crates/provider/src/endpoint_tests.rs	fiber-4617	plan	2026-11-11T13:24:29Z	round
 crates/provider/tests/anthropic.rs	fiber-4617	plan	2026-11-11T13:24:29Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/databricks/tests/models-deferred-tools.json	fiber-4617	plan	2026-11-11T13:24:29Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/keeper_child_tests.rs	fiber-4646	plan	2026-11-11T13:34:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/providers/databricks.lua	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/provider/src/openai_completions.rs	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
