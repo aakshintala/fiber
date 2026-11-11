@@ -446,9 +446,9 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   and messages are the start's, `depth_exceeded`, `invalid_arguments`,
   `credential_missing` and `tool_error` (`docs/errors.md`).
   From a command, a hook, a timer or a tool call it starts the delegate;
-  from a provider function, a search function or an effects function it
-  raises `invalid_arguments` (`host.delegate: not available here`) and
-  starts nothing. While the entry script runs it raises `closing`.
+  from a watcher, a provider function, a search function or an effects
+  function it raises `invalid_arguments` (`host.delegate: not available
+  here`) and starts nothing. While the entry script runs it raises `closing`.
   Once the session's end has begun stopping its jobs, on a normal end, a
   shutdown or a rewind, it raises `closing` and starts nothing. The end
   wakes nothing and is not shown to the model, `jobs list` lists the job,
@@ -1758,10 +1758,12 @@ each to finish, within its timeout. That is where a worklog or a memory
 written at session end runs. It writes to the extension's data directory
 (`docs/state.md`, "What each part holds"), not to extension state: these
 deliveries come after `fiber_exited`, the last line the log takes, so
-`state.set`, `state.unset`, `host.drive` and `host.delegate` fail with
-code `closing`. A process extension then has its manifest's
-`exit_timeout_ms` to finish, and after that gets the shutdown sequence every
-child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
+`state.set`, `state.unset`, `host.model` and `host.drive` fail with code
+`closing`. `host.delegate` is refused to a watcher at any time, so there
+it fails with `invalid_arguments`, not `closing`. A process extension
+then has its manifest's `exit_timeout_ms` to finish, and after that gets
+the shutdown sequence every child gets: SIGTERM, 800 ms, then SIGKILL
+(`docs/invocation.md`, "Shutdown").
 
 Before replaying, the drain waits until no watcher delivery is still
 queued or running: a durable delivery the live fan-out already covered
