@@ -1099,3 +1099,54 @@ fn import_refuses_anything_but_its_two_source_names() {
         assert!(parse(&line.to_string()).is_err(), "{line}");
     }
 }
+
+/// The shared unknown-source predicate is true only for a lone unknown
+/// string `source` on `import`: the two known names read, and any other
+/// command or shape keeps the generic mapping.
+#[test]
+fn unknown_import_source_names_only_a_lone_unknown_string_source() {
+    for source in ["vim", "claude_code", ""] {
+        let args = json!({"source": source});
+        assert!(
+            is_unknown_import_source("import", Some(&args)),
+            "unknown {source:?}"
+        );
+    }
+    for source in ["claude-code", "codex"] {
+        let args = json!({"source": source});
+        assert!(
+            !is_unknown_import_source("import", Some(&args)),
+            "known {source:?}"
+        );
+    }
+    // Any other command keeps the generic mapping, even with a lone
+    // unknown string `source`.
+    for command in ["cancel", "prompt", "Import", ""] {
+        let args = json!({"source": "vim"});
+        assert!(
+            !is_unknown_import_source(command, Some(&args)),
+            "command {command:?}"
+        );
+    }
+    // Any other shape keeps the generic mapping on `import` itself.
+    assert!(!is_unknown_import_source("import", None));
+    for args in [
+        json!("vim"),
+        json!(["source"]),
+        json!(null),
+        json!(1),
+        json!({}),
+        json!({"future": 1}),
+        json!({"source": "vim", "extra": 1}),
+        json!({"source": "claude-code", "source2": "codex"}),
+        json!({"source": 1}),
+        json!({"source": null}),
+        json!({"source": ["codex"]}),
+        json!({"source": {"name": "codex"}}),
+    ] {
+        assert!(
+            !is_unknown_import_source("import", Some(&args)),
+            "shape {args}"
+        );
+    }
+}
