@@ -176,9 +176,9 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 if *model != reference {
                     waiting = None;
                 } else if endpoint.compat.gemini
-                    && let Some(extra) = waiting.take()
+                    && let (Some(extra), Some(map)) = (waiting.take(), call.as_object_mut())
                 {
-                    call["extra_content"] = extra;
+                    map.insert("extra_content".into(), extra);
                 }
                 match m.get_mut("tool_calls") {
                     Some(Value::Array(calls)) => calls.push(call),
