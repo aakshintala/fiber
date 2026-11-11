@@ -2728,6 +2728,39 @@ fn malformed_unknown_and_forwarded_lines() {
     );
 }
 
+/// A refused import line answers `invalid_arguments` with the hub's
+/// sentence: the refusal dispatches, and the wire answer carries the
+/// refusal's message, not UNFIT.
+#[test]
+fn refused_import_source_answers_invalid_arguments_with_the_hub_message() {
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c", "command": "import", "args": {"source": "vim"}}},
+        {"repeat": {"count": 1, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
+    ])
+    .to_string();
+    let out = fakes::TempDir::new("fiber-process-wire");
+    let out_path = out.path().join("answers.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the wire answers");
+    assert_eq!(answers.as_array().unwrap().len(), 1);
+    assert_eq!(answers[0]["kind"], json!("command_rejected"));
+    assert_eq!(answers[0]["payload"]["command_id"], json!("c"));
+    assert_eq!(answers[0]["payload"]["code"], json!("invalid_arguments"));
+    assert_eq!(
+        answers[0]["payload"]["message"],
+        json!("`source` must be `claude-code` or `codex`.")
+    );
+}
+
 /// With no driver the session is closing, and `host.drive` raises it.
 #[test]
 fn drive_without_a_driver_closes() {
