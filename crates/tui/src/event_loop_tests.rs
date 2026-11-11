@@ -2421,7 +2421,7 @@ const RESTORE: &[u8] =
 
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
-/// watched pty chunks. The pty is 160 columns wide so the whole foot
+/// watched pty chunks. The pty is 200 columns wide so the whole foot
 /// hint shows, naming the rebound key.
 #[track_caller]
 fn spawn_run_with_launch(
@@ -2429,7 +2429,7 @@ fn spawn_run_with_launch(
     markers: Vec<&'static [u8]>,
     started: super::Launch,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    spawn_run_with_launch_at_height(hub, markers, started, 160, 12)
+    spawn_run_with_launch_at_height(hub, markers, started, 200, 12)
 }
 
 /// Runs the terminal at a height that leaves its home rows visible.

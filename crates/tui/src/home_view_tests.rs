@@ -1438,19 +1438,19 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
 #[test]
 fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     use ratatui::style::Modifier;
-    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit";
+    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit";
     // Wide: the whole foot fits, centred, each key bold and the rest dim.
-    let app = home(160, 48);
-    let area = Rect::new(0, 0, 160, 48);
+    let app = home(200, 48);
+    let area = Rect::new(0, 0, 200, 48);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let frame = text(&buf);
     let row = frame.lines().nth(47).expect("foot row");
     assert!(row.contains(foot), "{row}");
     let start = row.find("Enter").expect("foot starts");
-    assert_eq!(start, (160 - crate::format::width(foot)) / 2);
+    assert_eq!(start, (200 - crate::format::width(foot)) / 2);
     let y = 47u16;
-    for key in ["Enter", "↑↓", "Delete", "F1", "Ctrl+C"] {
+    for key in ["Enter", "↑↓", "Shift+↑↓", "Delete", "F1", "Ctrl+C"] {
         let at = row.find(key).unwrap_or_else(|| panic!("{key} shows"));
         let x = u16::try_from(row[..at].chars().count()).expect("foot x");
         for dx in 0..key.chars().count() {
