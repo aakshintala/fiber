@@ -1210,17 +1210,18 @@ impl Settings {
         }
     }
 
-    /// Moves to the next or previous tab; the first and last stop.
+    /// Moves to the next or previous tab, wrapping past either end:
+    /// past the last tab to the first, past the first to the last.
     fn step_tab(&mut self, forward: bool, ctx: &Ctx<'_>) {
+        let count = SettingsTab::ALL.len();
         let at = SettingsTab::ALL
             .iter()
             .position(|tab| *tab == self.tab)
             .unwrap_or(0);
         let to = if forward {
-            at.saturating_add(1)
-                .min(SettingsTab::ALL.len().saturating_sub(1))
+            (at + 1) % count
         } else {
-            at.saturating_sub(1)
+            (at + count - 1) % count
         };
         if let Some(tab) = SettingsTab::ALL.get(to).copied()
             && tab != self.tab

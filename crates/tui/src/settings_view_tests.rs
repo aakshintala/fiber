@@ -742,17 +742,20 @@ fn a_layer_tag_and_a_boolean_keep_their_roles() {
 }
 
 #[test]
-fn left_and_right_move_between_tabs_and_stop_at_the_ends() {
+fn left_and_right_wrap_between_the_first_and_last_tabs() {
     let fake = Fake::new(rows());
     let mut settings = open(&fake);
+    // Left on the first tab wraps to the last.
     edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(settings.tab, SettingsTab::Advanced);
+    // Right on the last tab wraps to the first.
+    edit(&mut settings, &fake, Edit::Right);
     assert_eq!(settings.tab, SettingsTab::Appearance);
+    // Between tabs it still steps one at a time.
     for want in &SettingsTab::ALL[1..] {
         edit(&mut settings, &fake, Edit::Right);
         assert_eq!(settings.tab, *want);
     }
-    edit(&mut settings, &fake, Edit::Right);
-    assert_eq!(settings.tab, SettingsTab::Advanced);
     edit(&mut settings, &fake, Edit::Left);
     assert_eq!(settings.tab, SettingsTab::Sessions);
 }
@@ -1881,7 +1884,7 @@ fn ctrl_g_opens_the_focused_rows_file_and_the_global_one_for_a_default() {
 }
 
 #[test]
-fn up_and_down_move_the_focus_by_row_and_a_move_clears_what_was_said() {
+fn up_and_down_wrap_between_the_first_and_last_rows() {
     let fake = Fake::new(rows());
     let mut settings = tab(&fake, SettingsTab::Models);
     one(&mut settings, &fake, Key::Down);
@@ -1889,21 +1892,78 @@ fn up_and_down_move_the_focus_by_row_and_a_move_clears_what_was_said() {
         settings.focus,
         Some(super::Focus::Key("model_lists.refresh_after".to_owned()))
     );
+    // A move clears what was said.
     settings.said = vec!["Saved.".to_owned()];
     one(&mut settings, &fake, Key::Down);
     assert!(settings.said.is_empty());
-    // Past the last row the focus stays; past the first too.
-    for _ in 0..10 {
+    // Down the last two rows to the screen row ending the tab.
+    for _ in 0..2 {
         one(&mut settings, &fake, Key::Down);
     }
     assert_eq!(
         settings.focus,
         Some(super::Focus::Screen(Screen::Credentials))
     );
-    for _ in 0..10 {
-        one(&mut settings, &fake, Key::Up);
-    }
+    // ↓ on the last row wraps to the first.
+    one(&mut settings, &fake, Key::Down);
     assert_eq!(settings.focus, Some(super::Focus::Key("model".to_owned())));
+    // ↑ on the first row wraps to the last.
+    one(&mut settings, &fake, Key::Up);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(Screen::Credentials))
+    );
+    // Pages stay clamped at either end.
+    one(&mut settings, &fake, Key::PageDown);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(Screen::Credentials))
+    );
+    one(&mut settings, &fake, Key::Up);
+    one(&mut settings, &fake, Key::PageUp);
+    assert_eq!(settings.focus, Some(super::Focus::Key("model".to_owned())));
+}
+
+/// The list sub-page wraps ↑↓ past either end while pages stay
+/// clamped (`docs/tui.md`, "Swapped views").
+#[test]
+fn a_sub_page_wraps_up_and_down_past_either_end() {
+    let fake = Fake::new(rows());
+    let mut settings = page(&fake, "scoped_models");
+    assert_eq!(page_at(&settings), 0);
+    // ↑ on the first entry wraps to "+ Add" past the last.
+    one(&mut settings, &fake, Key::Up);
+    assert_eq!(page_at(&settings), 2);
+    // ↓ on "+ Add" wraps to the first entry.
+    one(&mut settings, &fake, Key::Down);
+    assert_eq!(page_at(&settings), 0);
+    // Between entries it still steps.
+    one(&mut settings, &fake, Key::Down);
+    assert_eq!(page_at(&settings), 1);
+    // Pages stay clamped at either end.
+    one(&mut settings, &fake, Key::PageUp);
+    assert_eq!(page_at(&settings), 0);
+    one(&mut settings, &fake, Key::PageDown);
+    assert_eq!(page_at(&settings), 2);
+    one(&mut settings, &fake, Key::PageDown);
+    assert_eq!(page_at(&settings), 2);
+}
+
+/// The theme choices wrap ↑↓ past either end, and the preview
+/// follows the wrapped choice.
+#[test]
+fn the_theme_choices_wrap_up_and_down_past_either_end() {
+    let fake = themed(rows());
+    let mut settings = theme_choices(&fake);
+    assert_eq!(choice_at(&settings), 0);
+    // ↑ on the first choice wraps to the last and previews it.
+    let act = one(&mut settings, &fake, Key::Up);
+    assert_eq!(choice_at(&settings), 4);
+    assert!(matches!(act, Act::Theme(_)), "{act:?}");
+    // ↓ on the last choice wraps to the first.
+    let act = one(&mut settings, &fake, Key::Down);
+    assert_eq!(choice_at(&settings), 0);
+    assert!(matches!(act, Act::Theme(_)), "{act:?}");
 }
 
 #[test]
@@ -2027,6 +2087,11 @@ fn entries(settings: &Settings) -> Vec<serde_json::Value> {
         .as_ref()
         .map(|page| page.entries.clone())
         .unwrap_or_default()
+}
+
+/// The sub-page's focused row.
+fn page_at(settings: &Settings) -> usize {
+    settings.page.as_ref().unwrap().list.selected()
 }
 
 fn extensions(shown: &str) -> Vec<SettingRow> {
@@ -2547,6 +2612,14 @@ fn names(settings: &Settings) -> Vec<String> {
         super::Mode::Choices { names, .. } => names.clone(),
         super::Mode::Rows | super::Mode::Field(_) => Vec::new(),
     }
+}
+
+/// The theme choices' focused row.
+fn choice_at(settings: &Settings) -> usize {
+    let super::Mode::Choices { list, .. } = &settings.mode else {
+        panic!("no choices");
+    };
+    list.selected()
 }
 
 #[test]
