@@ -7861,14 +7861,12 @@ fn archived_a_missing_workspace_refusal_retries_then_renders_verbatim() {
     let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
     // The exact missing-workspace shape retries once, with a fresh id,
     // instead of failing the open.
-    let retry: Vec<Value> = commands(
-        app.on_line(session_refused(
-            "s_bbbbbbbbbbbbbbbb",
-            ack,
-            "io_failed",
-            message,
-        )),
-    );
+    let retry: Vec<Value> = commands(app.on_line(session_refused(
+        "s_bbbbbbbbbbbbbbbb",
+        ack,
+        "io_failed",
+        message,
+    )));
     assert_eq!(retry.len(), 1, "exactly one retry goes out: {retry:?}");
     assert_eq!(retry[0]["command"], "subscribe", "{retry:?}");
     assert_eq!(retry[0]["args"], json!({"level": "full"}), "{retry:?}");
@@ -8026,12 +8024,8 @@ fn open_read_only(app: &mut App, session: &str, path: &str) {
         .as_str()
         .unwrap_or_else(|| panic!("summary id"));
     let message = format!("Session {session} could not resume: {path} no longer exists");
-    let retry: Vec<Value> = commands(app.on_line(session_refused(
-        session,
-        first,
-        "io_failed",
-        &message,
-    )));
+    let retry: Vec<Value> =
+        commands(app.on_line(session_refused(session, first, "io_failed", &message)));
     assert_eq!(retry.len(), 1, "exactly one retry goes out");
     assert_eq!(retry[0]["args"], json!({"level": "full"}));
     let second = retry[0]["id"]

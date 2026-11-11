@@ -1069,7 +1069,11 @@ fn a_missing_workspace_refusal_retries_full_and_opens_read_only() {
         ))
         .is_empty()
     );
-    assert_eq!(app.unwritable(), Some("/w"), "the path lands beside the pass");
+    assert_eq!(
+        app.unwritable(),
+        Some("/w"),
+        "the path lands beside the pass"
+    );
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
     assert!(!app.on_home());
     assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")), "the gate ends");
@@ -1138,7 +1142,10 @@ fn esc_on_a_read_only_session_goes_home_with_the_row_in_place() {
     app.on_key(crate::keys::Key::Esc, now);
     assert!(app.session().is_none(), "Esc leaves the session");
     assert!(app.on_home(), "Esc goes home");
-    assert!(app.unwritable().is_none(), "the mark clears on the way home");
+    assert!(
+        app.unwritable().is_none(),
+        "the mark clears on the way home"
+    );
     let row = app
         .home
         .sessions
