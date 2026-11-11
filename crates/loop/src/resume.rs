@@ -118,6 +118,11 @@ pub struct Resumed {
     /// backfill resolves its jobs through this. Jobs with no mapping (another
     /// harness, a missing line) resolve to skip-and-continue.
     pub(crate) delegate_sessions: HashMap<JobId, SessionId>,
+    /// The settled finish's worktree inspection: `Some` on the
+    /// session-process resume path, which reports the delegate's worktree
+    /// at settle time; `None` (rewind, tests, any caller without a session
+    /// process) settles with no worktree.
+    pub settle_finish: Option<contract::jobs::FinishWorktree>,
     /// The repository's offers: the session's skips and the pending offer.
     pub(crate) offers: crate::offer::Folded,
     /// Whether the person's name pins the session: the fold of every
@@ -169,6 +174,15 @@ impl Resumed {
     /// session's file tools from this, and replay never touches disk bytes.
     pub fn seen_files(&self) -> &BTreeMap<PathBuf, u64> {
         &self.seen_files
+    }
+
+    /// Takes the jobs a keeper handed over out of the jobs this resume would
+    /// mark `orphaned`: they run again, so their ends are the session's to
+    /// deliver (`docs/events.md`, "Resume"). Only the named jobs leave the
+    /// list; the replay, the delegate sessions, the usage ledger and the
+    /// window are not touched, and a job not in the list is ignored.
+    pub fn keep_jobs(&mut self, ids: &[JobId]) {
+        self.orphans.retain(|orphan| !ids.contains(&orphan.job_id));
     }
 }
 
@@ -371,6 +385,7 @@ impl Loop {
             model: recorded_model,
             exit,
             supervised,
+            settle_finish,
             ..
         } = resumed;
         let mut lines = crate::history::read_window(&session.log, window, end)?;
@@ -470,7 +485,8 @@ impl Loop {
         // Each orphan settled from its delegate's own log, before any
         // line this resume writes; what the settle cannot match keeps the
         // orphaned completion.
-        let settled = resumed.settle_orphans(&delegate_sessions, &orphans)?;
+        let settled =
+            resumed.settle_orphans(&delegate_sessions, &orphans, settle_finish.as_ref())?;
         resumed.mark_orphans(settled)?;
         // The backfill's missing copies, after the orphaned `job_completed`
         // lines and before `resumed_label` or any new turn write.
@@ -641,6 +657,7 @@ impl Loop {
         &self,
         sessions: &HashMap<JobId, SessionId>,
         orphans: &[JobCompleted],
+        finish: Option<&contract::jobs::FinishWorktree>,
     ) -> Result<Vec<OrphanEnd>, Error> {
         let mut settled = Vec::with_capacity(orphans.len());
         for orphan in orphans {
@@ -657,14 +674,24 @@ impl Loop {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
             }
-            let Some(exited) = self.settle_exit(&dir)? else {
+            let lines = self.final_usage(&dir)?;
+            let Some(exited) = Self::settle_exit(&lines) else {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
             };
-            // debt: worktree is None on a settled finish; the live path sets it (run.rs:653). Fix is tracked in #4313: settle builds EndWorktree { path, branch, base: None, remove: false } from session_started.worktree and calls the injected FinishWorktree outside the pure fold. Keep remove: false: a resumed run reports only; its session process owns removal (crates/doors/src/isolation.rs:190).
             // No delivery hook runs on a settle, so the file holds the
             // message as the delegate wrote it.
             let mut finished = exited.delegate_finished(&orphan.job_id);
+            // A resumed run reports only; its session process owns removal
+            // (crates/doors/src/isolation.rs:190).
+            if let (Some(recorded), Some(finish)) = (Self::settle_worktree(&lines), finish) {
+                finished.worktree = Some(finish(contract::jobs::EndWorktree {
+                    path: PathBuf::from(recorded.path),
+                    branch: recorded.branch,
+                    base: None,
+                    remove: false,
+                }));
+            }
             finished.artifact_absolute = Some(
                 dir.join(contract::events::FINAL_MESSAGE)
                     .to_string_lossy()
@@ -680,16 +707,29 @@ impl Loop {
         Ok(settled)
     }
 
+    /// The delegate log's opening `session_started` worktree, when its first
+    /// line is one and records a worktree: an isolated delegate's own
+    /// worktree, read from the same lines the exit below settles from, with
+    /// no new read. A readable first line that is not `session_started`
+    /// reads as no worktree, while the exit still settles.
+    fn settle_worktree(lines: &[Envelope]) -> Option<contract::shapes::Worktree> {
+        let first = lines.first()?;
+        match Event::from_envelope(first) {
+            Ok(Some(Event::SessionStarted(started))) => started.worktree,
+            _ => None,
+        }
+    }
+
     /// The delegate log's latest run's exit: the `fiber_exited` after its
     /// last `fiber_started`, or `None` when the latest run wrote none. The
     /// match is by run, never by file position: an exit from an earlier run
     /// never settles the job, while a log with no `fiber_started` reads as
     /// one run throughout. A torn tail reads as its good prefix, as
     /// [`final_usage`] does, so an exit before the tear still settles.
-    fn settle_exit(&self, dir: &Path) -> Result<Option<FiberExited>, Error> {
+    fn settle_exit(lines: &[Envelope]) -> Option<FiberExited> {
         let mut exit = None;
-        for line in self.final_usage(dir)? {
-            let Ok(Some(event)) = Event::from_envelope(&line) else {
+        for line in lines {
+            let Ok(Some(event)) = Event::from_envelope(line) else {
                 continue;
             };
             if matches!(event, Event::FiberStarted(_)) {
@@ -698,7 +738,7 @@ impl Loop {
                 exit = Some(exited);
             }
         }
-        Ok(exit)
+        exit
     }
 }
 
@@ -1110,6 +1150,10 @@ fn hook_failure(completed: &TurnCompleted) -> bool {
         Some(contract::ErrorCode::HookFailed) | Some(contract::ErrorCode::BudgetExceeded)
     )
 }
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod started_arguments_tests {

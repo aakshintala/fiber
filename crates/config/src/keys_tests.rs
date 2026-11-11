@@ -211,7 +211,6 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "tui.panel.width",
             "tui.theme",
             "tui.reduced_motion",
-            "tui.screen_reader",
             "tui.hover",
             "tui.inline_images",
             "tui.logo_glyph",

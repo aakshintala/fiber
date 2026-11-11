@@ -92,6 +92,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         reviewed: Vec::new(),
         orphans: Vec::new(),
         delegate_sessions: HashMap::new(),
+        settle_finish: None,
         offers: crate::offer::Folded::default(),
         naming: crate::naming::Naming::default(),
         fired: crate::quota_notice::Fired::default(),

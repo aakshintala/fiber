@@ -1,6 +1,6 @@
 //! Home's data: the session rows, the subscriptions and what home draws (`docs/tui.md`, "Home").
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use contract::commands::SubscribeLevel;
@@ -29,6 +29,10 @@ pub(crate) enum Spot {
     Start(u64),
     /// Reveal the remaining exited sessions in this project.
     More(u64),
+    /// The archived fold head: clicking it, or Enter on it while
+    /// focused, lists the project's archived rows in place, and again
+    /// folds them.
+    Archived(u64),
     /// The workspace chip: clicking it opens the workspace picker.
     Workspace,
     /// The new worktree switch: clicking it, or Enter on it while
@@ -63,11 +67,13 @@ pub(crate) enum Spot {
 
 impl Spot {
     /// Whether the spot is a list stop: an entry and its cross normalize
-    /// to the entry, and `More` stays its own stop.
+    /// to the entry, and `More` and the archived head stay their own
+    /// stops.
     pub(crate) fn list_stop(self) -> Option<Spot> {
         match self {
             Spot::Entry(key) | Spot::Stop(key) => Some(Spot::Entry(key)),
             Spot::More(key) => Some(Spot::More(key)),
+            Spot::Archived(key) => Some(Spot::Archived(key)),
             Spot::Start(_)
             | Spot::Workspace
             | Spot::Worktree
@@ -92,6 +98,7 @@ impl Spot {
             | Spot::Stop(_)
             | Spot::Start(_)
             | Spot::More(_)
+            | Spot::Archived(_)
             | Spot::Pick(_)
             | Spot::Blocker(_)
             | Spot::Keep
@@ -388,6 +395,13 @@ pub(crate) enum ListLine {
         key: u64,
         count: usize,
     },
+    ArchivedHead {
+        /// The fold head's target: a representative row key of its
+        /// project.
+        key: u64,
+        /// The hub's archived count, else the loaded archived rows.
+        count: usize,
+    },
 }
 
 /// What the open workspace picker draws (`docs/tui.md`, "Home").
@@ -543,6 +557,19 @@ pub(crate) struct Sessions {
     /// Projects with a trigger while their scoped ask is in flight: the
     /// answer sends exactly one follow-up and clears the flag.
     dirty: std::collections::BTreeSet<String>,
+    /// Archived rows per project, newest first, from the archived scoped
+    /// `recent`: an archived session is on neither the exited rows nor
+    /// the rail (`docs/tui.md`, "The session list").
+    archived: BTreeMap<String, Vec<Row>>,
+    /// The hub's archived scoped `recent` total per project: the only
+    /// source of a project's archived count.
+    archived_totals: HashMap<String, usize>,
+    /// Projects with a trigger while their archived ask is in flight:
+    /// the answer sends exactly one follow-up and clears the flag.
+    archived_dirty: std::collections::BTreeSet<String>,
+    /// Projects whose archived fold is open: their archived rows draw
+    /// as exited rows under the fold head.
+    archived_open: std::collections::BTreeSet<String>,
     /// The last row of the unscoped `recent` pages: `page_recent` sends
     /// its id as `before`. Scoped folds and pages never move it.
     unscoped_last: Option<SessionId>,
@@ -559,6 +586,13 @@ pub(crate) struct Section<'a> {
     /// The hub's scoped total for the project: `None` means count the
     /// loaded rows.
     pub(crate) total: Option<usize>,
+    /// Loaded archived rows, newest first.
+    pub(crate) archived: Vec<&'a Row>,
+    /// Shown archived rows while the fold is open.
+    pub(crate) shown_archived: usize,
+    /// The hub's archived scoped total for the project: `None` means
+    /// count the loaded archived rows.
+    pub(crate) archived_total: Option<usize>,
 }
 
 impl Section<'_> {
@@ -581,9 +615,16 @@ impl Sessions {
 
     /// Project sections: launch first, live projects in feed order, exited-only
     /// projects by their earliest loaded start, with loaded order breaking ties.
+    /// A project holding only archived sessions still seeds a section,
+    /// so its fold has somewhere to draw (`docs/tui.md`, "The session
+    /// list").
     pub(crate) fn sections(&self, launch_project: Option<&str>) -> Vec<Section<'_>> {
         let mut sections: Vec<Section<'_>> = Vec::new();
-        for row in self.all() {
+        let live_recent = self.all();
+        for row in live_recent
+            .into_iter()
+            .chain(self.archived.values().flatten())
+        {
             if sections
                 .iter()
                 .any(|section| section.project == row.project)
@@ -619,6 +660,17 @@ impl Sessions {
                 .unwrap_or(&row.project)
                 .to_owned();
             let total = self.totals.get(&row.project).copied();
+            let archived: Vec<&Row> = self
+                .archived
+                .get(row.project.as_str())
+                .map(|rows| rows.iter().collect())
+                .unwrap_or_default();
+            let shown_archived = if self.archived_open.contains(&row.project) {
+                archived.len()
+            } else {
+                0
+            };
+            let archived_total = self.archived_totals.get(&row.project).copied();
             sections.push(Section {
                 project: &row.project,
                 name,
@@ -627,6 +679,9 @@ impl Sessions {
                 exited,
                 shown_exited,
                 total,
+                archived,
+                shown_archived,
+                archived_total,
             });
         }
         sections.sort_by_key(|section| {
@@ -662,6 +717,20 @@ impl Sessions {
     /// deliver every status, by separate writers, and a tool call and its
     /// approval can share a millisecond).
     pub(crate) fn status(&mut self, row: Row) {
+        // A status for an archived id unarchives it locally: the row
+        // leaves the archived map and folds live, keeping its key, so
+        // no id ever shows in both lists (`docs/tui.md`, "The session
+        // list": opening an archived row resumes it the same way, which
+        // unarchives it).
+        let mut unarchived = None;
+        for rows in self.archived.values_mut() {
+            if let Some(at) = rows.iter().position(|kept| kept.id == row.id) {
+                unarchived = Some(rows.remove(at).key);
+            }
+        }
+        if unarchived.is_some() {
+            self.archived.retain(|_, rows| !rows.is_empty());
+        }
         if let Some(existing) = self.feed.iter_mut().find(|feed| feed.id == row.id) {
             if existing.left.is_some() {
                 match (existing.status.as_ref(), row.status.as_ref()) {
@@ -694,13 +763,14 @@ impl Sessions {
             return;
         }
         let mut row = row;
-        row.key = self.fresh();
+        row.key = unarchived.unwrap_or_else(|| self.fresh());
         row.left = None;
         self.feed.push(row);
     }
 
     /// Marks `id` left, keeping its position; an unknown id changes
-    /// nothing.
+    /// nothing, except that an archived id leaves the archived map, so
+    /// no id ever shows in both lists.
     pub(crate) fn left(&mut self, id: &SessionId, how: Left) {
         for row in self.feed.iter_mut().chain(self.recent.iter_mut()) {
             if row.id == *id {
@@ -708,6 +778,10 @@ impl Sessions {
                 return;
             }
         }
+        for rows in self.archived.values_mut() {
+            rows.retain(|row| row.id != *id);
+        }
+        self.archived.retain(|_, rows| !rows.is_empty());
     }
 
     /// Folds an unscoped `recent` page into the rows: the first page
@@ -792,6 +866,8 @@ impl Sessions {
     pub(crate) fn drop_all_totals(&mut self) {
         self.totals.clear();
         self.dirty.clear();
+        self.archived_totals.clear();
+        self.archived_dirty.clear();
     }
 
     /// Marks `project` dirty: a trigger arrived while its scoped ask is
@@ -810,6 +886,119 @@ impl Sessions {
     /// Whether `project` owes exactly one follow-up scoped ask.
     pub(crate) fn is_dirty(&self, project: &str) -> bool {
         self.dirty.contains(project)
+    }
+
+    /// Appends an archived project-scoped `recent` page: rows of other
+    /// projects stay untouched. An id an earlier archived page already
+    /// listed is skipped, so archived pages accumulate newest first. An
+    /// exited row already loaded moves into the archived map with its
+    /// key, so an archived session is on neither the exited rows nor the
+    /// rail (`docs/tui.md`, "The session list"). A live feed duplicate
+    /// is skipped, so a stale archived answer never archives a live
+    /// session. Never touches the unscoped cursor or `more()`.
+    pub(crate) fn archived_scoped(&mut self, project: &str, rows: Vec<Row>) {
+        // The hub already scoped the page to the project, so the fold
+        // only deduplicates.
+        for mut row in rows {
+            if self
+                .archived
+                .get(project)
+                .is_some_and(|kept| kept.iter().any(|kept| kept.id == row.id))
+            {
+                continue;
+            }
+            if self
+                .feed
+                .iter()
+                .find(|feed| feed.id == row.id)
+                .is_some_and(|feed| feed.left.is_none())
+            {
+                continue;
+            }
+            let key = if let Some(at) = self.feed.iter().position(|feed| feed.id == row.id) {
+                self.feed.remove(at).key
+            } else if let Some(at) = self.recent.iter().position(|recent| recent.id == row.id) {
+                self.recent.remove(at).key
+            } else {
+                self.fresh()
+            };
+            row.key = key;
+            self.archived
+                .entry(project.to_owned())
+                .or_default()
+                .push(row);
+        }
+    }
+
+    /// Stores an archived scoped answer's total keyed by project: the
+    /// only source of that project's archived count.
+    pub(crate) fn note_archived_total(&mut self, project: &str, total: usize) {
+        self.archived_totals.insert(project.to_owned(), total);
+    }
+
+    /// The stored archived scoped total for `project`: `None` means
+    /// count the loaded archived rows.
+    pub(crate) fn archived_total_for(&self, project: &str) -> Option<usize> {
+        self.archived_totals.get(project).copied()
+    }
+
+    /// Marks `project` archived-dirty: a trigger arrived while its
+    /// archived ask is in flight, so the answer sends exactly one
+    /// follow-up. The caller marks only while an ask for the project is
+    /// in flight.
+    pub(crate) fn mark_archived_dirty(&mut self, project: &str) {
+        self.archived_dirty.insert(project.to_owned());
+    }
+
+    /// Clears `project`'s archived-dirty flag: its follow-up went out,
+    /// or its answer is dropped without one.
+    pub(crate) fn clear_archived_dirty(&mut self, project: &str) {
+        self.archived_dirty.remove(project);
+    }
+
+    /// Whether `project` owes exactly one follow-up archived ask.
+    pub(crate) fn is_archived_dirty(&self, project: &str) -> bool {
+        self.archived_dirty.contains(project)
+    }
+
+    /// Opens `project`'s archived fold: its archived rows draw.
+    pub(crate) fn open_archived(&mut self, project: &str) {
+        self.archived_open.insert(project.to_owned());
+    }
+
+    /// Closes `project`'s archived fold: only its head draws.
+    pub(crate) fn close_archived(&mut self, project: &str) {
+        self.archived_open.remove(project);
+    }
+
+    /// Whether `project`'s archived fold is open.
+    pub(crate) fn is_archived_open(&self, project: &str) -> bool {
+        self.archived_open.contains(project)
+    }
+
+    /// Whether any archived row is loaded: an archived-only project
+    /// still draws its section.
+    pub(crate) fn has_archived(&self) -> bool {
+        self.archived.values().any(|rows| !rows.is_empty())
+    }
+
+    /// Whether `id` names a loaded archived row.
+    pub(crate) fn is_archived(&self, id: &SessionId) -> bool {
+        self.archived.values().flatten().any(|row| row.id == *id)
+    }
+
+    /// How many archived rows are loaded for `project`.
+    pub(crate) fn archived_loaded(&self, project: &str) -> usize {
+        self.archived.get(project).map(Vec::len).unwrap_or(0)
+    }
+
+    /// The last loaded archived row's id for `project`: the next
+    /// archived page's cursor.
+    pub(crate) fn archived_before(&self, project: &str) -> Option<SessionId> {
+        self.archived
+            .get(project)
+            .and_then(|rows| rows.last())
+            .map(|row| row.id.clone())
     }
 
     /// The live feed rows, in feed order.
@@ -867,27 +1056,35 @@ impl Sessions {
         self.feed.iter().find(|row| row.id == *id)
     }
 
-    /// The row for `id`, live or exited.
+    /// The row for `id`, live, exited or archived.
     pub(crate) fn row(&self, id: &SessionId) -> Option<&Row> {
         self.feed
             .iter()
             .chain(self.recent.iter())
+            .chain(self.archived.values().flatten())
             .find(|row| row.id == *id)
     }
 
-    /// The row with `key`, live or exited; a key naming no row opens
-    /// nothing.
+    /// The row with `key`, live, exited or archived; a key naming no
+    /// row opens nothing.
     pub(crate) fn by_key(&self, key: u64) -> Option<&Row> {
         self.feed
             .iter()
             .chain(self.recent.iter())
+            .chain(self.archived.values().flatten())
             .find(|row| row.key == key)
     }
 
     /// A refusal shows on the row, in place of its detail, as well as a
-    /// notice; an unknown id changes nothing.
+    /// notice; an unknown id changes nothing. Archived rows draw, so
+    /// they show notes the same way.
     pub(crate) fn note(&mut self, id: &SessionId, note: String) {
-        for row in self.feed.iter_mut().chain(self.recent.iter_mut()) {
+        for row in self
+            .feed
+            .iter_mut()
+            .chain(self.recent.iter_mut())
+            .chain(self.archived.values_mut().flatten())
+        {
             if row.id == *id {
                 row.note = Some(note);
                 return;
@@ -895,11 +1092,15 @@ impl Sessions {
         }
     }
 
-    /// Drops the row for `id`, live or exited: an accepted delete. A
-    /// first-page `recent` asked again fills the gap.
+    /// Drops the row for `id`, live, exited or archived: an accepted
+    /// delete. A first-page `recent` asked again fills the gap.
     pub(crate) fn remove(&mut self, id: &SessionId) {
         self.feed.retain(|row| row.id != *id);
         self.recent.retain(|row| row.id != *id);
+        self.archived
+            .values_mut()
+            .for_each(|rows| rows.retain(|row| row.id != *id));
+        self.archived.retain(|_, rows| !rows.is_empty());
     }
 
     /// The next key: unique, never reused, even after a row drops.

@@ -1078,17 +1078,6 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
-        "tui.screen_reader",
-        Bool,
-        NO,
-        None,
-        tabbed(
-            SettingsTab::Appearance,
-            "Screen reader mode",
-            "Forces the flat screen-reader mode on or off; unset detects a screen reader.",
-        ),
-    ),
-    key(
         "tui.attention.notification",
         Bool,
         NO,
