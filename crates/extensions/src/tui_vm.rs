@@ -89,7 +89,7 @@ pub struct Span {
 // at registration, while the VM stores the validated raw value.
 const PRELUDE: &str = r#"
 local create, loading, valid = ...
-local slots, violations, key_bindings, key_rejections, commands, command_rejections = {}, {}, {}, {}, {}, {}
+local slots, violations, key_bindings, key_rejections, commands, command_rejections, focus, focus_rejections = {}, {}, {}, {}, {}, {}, {}, {}
 local seen_keys = {}
 local resume, pack, unpack = coroutine.resume, table.pack, table.unpack
 
@@ -294,9 +294,46 @@ fiber = {
     end
     commands[name] = { timeout = spec.timeout, run = spec.run, description = description }
   end,
+  -- A malformed registration records one rejection and skips it,
+  -- leaving the extension loaded; the adapter reports each with one
+  -- notice. A second registration keeps the first
+  -- (`docs/extensions.md`, "Commands and screens").
+  on_focus = function(spec)
+    if not loading() then
+      error("fiber.on_focus: registers only while the extension loads", 2)
+    end
+    local function reject(reason)
+      focus_rejections[#focus_rejections + 1] = {
+        reason = "fiber.on_focus: " .. reason,
+      }
+    end
+    if type(spec) ~= "table" then
+      reject("takes a table of `timeout` and `run`")
+      return
+    end
+    if spec.timeout == nil then
+      reject("missing `timeout`")
+      return
+    end
+    if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+      reject("`timeout` must be a whole number of milliseconds above 0")
+      return
+    end
+    if type(spec.run) ~= "function" then
+      reject("`run` must be a function")
+      return
+    end
+    -- One registration: the table holds it at index 1, so the host
+    -- reads back what the script filled in after the prelude returned.
+    if focus[1] ~= nil then
+      reject("registered twice; loading keeps the first registration")
+      return
+    end
+    focus[1] = { timeout = spec.timeout, run = spec.run }
+  end,
 }
 
-return slots, violations, key_bindings, key_rejections, commands, command_rejections
+return slots, violations, key_bindings, key_rejections, commands, command_rejections, focus, focus_rejections
 "#;
 
 /// A registered slot: its declared timeout, its renderer, the raw
@@ -364,6 +401,22 @@ pub struct KeyBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRejection {
     /// What was wrong, naming the offending field.
+    pub reason: String,
+}
+
+/// One registered focus handler: the callback with its declared timeout.
+struct FocusReg {
+    /// The declared timeout.
+    timeout: Duration,
+    /// The callback.
+    run: Function,
+}
+
+/// One skipped `fiber.on_focus` registration: its reason names the
+/// offending field, so the adapter reports it with one notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusRejection {
+    /// What was wrong, or that a second registration was skipped.
     pub reason: String,
 }
 
@@ -438,6 +491,16 @@ pub struct TuiVm {
     commands: BTreeMap<String, CommandReg>,
     /// The skipped command registrations, taken once by the loader.
     command_rejections: Cell<Vec<CommandRejection>>,
+    /// The registered focus handler: extension-level, at most one, so a
+    /// second registration keeps the first.
+    focus: Option<FocusReg>,
+    /// The skipped `fiber.on_focus` registrations, taken once by the loader.
+    focus_rejections: Cell<Vec<FocusRejection>>,
+    /// The bound of the last `host.http` request the focus drive sent,
+    /// `None` when it sent none. Tests only: the seam the hang case
+    /// reads back.
+    #[cfg(test)]
+    last_http_bound: Cell<Option<Duration>>,
     /// Set by a timeout: the VM answers nothing until the caller drops it
     /// (`docs/tui.md`, "When an extension fails").
     off: bool,
@@ -526,14 +589,16 @@ impl TuiVm {
         let valid = lua
             .create_function(|_, name: String| Ok(slot_name_ok(&name)))
             .map_err(lua_error)?;
-        let (registered, violations, bound, rejected, commanded, command_rejected): (
-            Table,
-            Table,
-            Table,
-            Table,
-            Table,
-            Table,
-        ) = lua
+        let (
+            registered,
+            violations,
+            bound,
+            rejected,
+            commanded,
+            command_rejected,
+            focused,
+            focus_rejected,
+        ): (Table, Table, Table, Table, Table, Table, Table, Table) = lua
             .load(PRELUDE)
             .set_name("=prelude")
             .call((create, is_loading, valid))
@@ -601,6 +666,27 @@ impl TuiVm {
                 reason: entry.raw_get("reason").map_err(lua_error)?,
             });
         }
+        let mut skipped_focus = Vec::new();
+        for number in 1..=focus_rejected.raw_len() {
+            let entry: Table = focus_rejected.raw_get(number).map_err(lua_error)?;
+            skipped_focus.push(FocusRejection {
+                reason: entry.raw_get("reason").map_err(lua_error)?,
+            });
+        }
+        // The script fills the focus table after the prelude returns, so
+        // the host reads its entry back: a plain local would still hold
+        // its prelude-time value.
+        let spec: Option<Table> = focused.raw_get(1).map_err(lua_error)?;
+        let focus = spec
+            .map(|spec| {
+                let timeout: mlua::Integer = spec.raw_get("timeout").map_err(lua_error)?;
+                let timeout = u64::try_from(timeout)
+                    .map(Duration::from_millis)
+                    .map_err(|_| shape("`timeout` must be a whole number above 0"))?;
+                let run: Function = spec.raw_get("run").map_err(lua_error)?;
+                Ok::<FocusReg, Error>(FocusReg { timeout, run })
+            })
+            .transpose()?;
         let mut commands = BTreeMap::new();
         for entry in commanded.pairs::<String, Table>() {
             let (name, spec) = entry.map_err(lua_error)?;
@@ -665,6 +751,10 @@ impl TuiVm {
             key_rejections: Cell::new(skipped),
             commands,
             command_rejections: Cell::new(skipped_commands),
+            focus,
+            focus_rejections: Cell::new(skipped_focus),
+            #[cfg(test)]
+            last_http_bound: Cell::new(None),
             off: false,
         })
     }
@@ -729,10 +819,155 @@ impl TuiVm {
         self.command_rejections.take()
     }
 
+    /// The skipped `fiber.on_focus` registrations, taken once: the loader
+    /// reports each with one notice. A second call finds none.
+    pub fn focus_rejections(&self) -> Vec<FocusRejection> {
+        self.focus_rejections.take()
+    }
+
+    /// The bound of the last `host.http` request the focus drive sent,
+    /// `None` when it sent none.
+    #[cfg(test)]
+    pub(crate) fn last_http_bound(&self) -> Option<Duration> {
+        self.last_http_bound.get()
+    }
+
     /// The Lua state, for tests to register host callbacks against.
     #[cfg(test)]
     pub(crate) fn lua(&self) -> &Lua {
         &self.lua
+    }
+
+    /// Runs the focus handler with the session on screen: `session_id`
+    /// when a session is on screen, none on home, where Lua reads nil
+    /// (`docs/extensions.md`, "Commands and screens"). Its return value
+    /// is ignored: `true`, `false` and `nil` pass, and any other value is
+    /// the existing wrong-shape failure. A `host.http` yield performs
+    /// blocking on this thread and resumes with the reply; any other
+    /// yield is a rejected host call the terminal cannot answer. A
+    /// timeout switches the VM off: every later call is [`Error::TuiOff`].
+    /// No registration answers done with no notice.
+    pub fn run_focus(&mut self, session_id: Option<&str>) -> Result<(), Error> {
+        if self.off {
+            return Err(Error::TuiOff);
+        }
+        let Some(registered) = self.focus.as_ref() else {
+            return Ok(());
+        };
+        let (timeout, run) = (registered.timeout, registered.run.clone());
+        let arg = self
+            .lua
+            .create_table()
+            .and_then(|input| {
+                if let Some(session_id) = session_id {
+                    input.raw_set("session_id", session_id)?;
+                }
+                Ok(input)
+            })
+            .map_err(lua_error)?;
+        // Only `host.http` answers on the terminal thread: the scoped
+        // global leaves renderers and key handlers without host calls.
+        let host_table = self.lua.create_table().map_err(lua_error)?;
+        let tag = self.lua.create_table().map_err(lua_error)?;
+        let failure = crate::host::failure::install(&self.lua).map_err(lua_error)?;
+        self.lua
+            .load(crate::host::HTTP)
+            .set_name("=host.http")
+            .call::<()>((host_table.clone(), tag.clone(), failure.failure.clone()))
+            .map_err(lua_error)?;
+        let globals = self.lua.globals();
+        globals.raw_set("host", host_table).map_err(lua_error)?;
+        let outcome = self.drive_focus(run, timeout, arg, tag);
+        globals
+            .raw_set("host", mlua::Value::Nil)
+            .map_err(lua_error)?;
+        outcome
+    }
+
+    /// Drives the focus callback to its return, answering `host.http`
+    /// yields blocking on this thread and rejecting every other yield as
+    /// a host call the terminal cannot answer. A finish past the deadline
+    /// answers the timeout and switches the VM off, whatever path it took.
+    fn drive_focus(
+        &mut self,
+        run: Function,
+        timeout: Duration,
+        arg: Table,
+        tag: Table,
+    ) -> Result<(), Error> {
+        let thread = self.lua.create_thread(run).map_err(lua_error)?;
+        self.deadline.arm(&thread).map_err(lua_error)?;
+        // `None` when the timeout is too large to add to an `Instant`: such
+        // a callback is never cut off.
+        let at = self.clock.now().checked_add(timeout);
+        self.deadline.restore(at);
+        let mut args = MultiValue::from_vec(vec![mlua::Value::Table(arg)]);
+        loop {
+            let resumed = thread.resume::<MultiValue>(args);
+            if self.deadline.passed() {
+                self.deadline.restore(None);
+                self.off = true;
+                return Err(Error::TuiTimeout);
+            }
+            let values = resumed.map_err(lua_error)?;
+            if !thread.is_resumable() {
+                self.deadline.restore(None);
+                let returned = values.into_iter().next().unwrap_or(mlua::Value::Nil);
+                return match returned {
+                    mlua::Value::Boolean(_) | mlua::Value::Nil => Ok(()),
+                    _ => Err(shape("a focus handler returns only true, false or nil")),
+                };
+            }
+            let mut yielded = values.iter();
+            let (first, second) = (yielded.next(), yielded.next());
+            let resumed_http = match (first, second) {
+                (Some(tagged), Some(mlua::Value::String(kind))) => {
+                    tagged
+                        .equals(&mlua::Value::Table(tag.clone()))
+                        .map_err(lua_error)?
+                        && kind.to_str().map_err(lua_error)? == "http"
+                }
+                _ => false,
+            };
+            if !resumed_http {
+                self.deadline.restore(None);
+                let message = match second {
+                    Some(mlua::Value::String(kind)) => kind
+                        .to_str()
+                        .map(|kind| format!("a focus handler makes no host.{kind} call"))
+                        .unwrap_or_else(|_| "a focus handler makes no host call".to_owned()),
+                    _ => "a focus handler makes no host call".to_owned(),
+                };
+                return Err(Error::TuiLua(message));
+            }
+            let now = self.clock.now();
+            let bound = at.map_or(timeout, |deadline| {
+                crate::lua::http_bound(timeout, deadline, now)
+            });
+            let request = crate::host::request_from(
+                "http",
+                yielded.next(),
+                Some(bound),
+                std::path::Path::new(""),
+                MEMORY_CAP,
+            )
+            .map_err(lua_error)?;
+            let Some(crate::host::Request::Http(request)) = request else {
+                self.deadline.restore(None);
+                return Err(Error::TuiLua(
+                    "a focus handler makes no host call".to_owned(),
+                ));
+            };
+            #[cfg(test)]
+            self.last_http_bound.set(request.timeout);
+            let result = crate::host::perform(&request);
+            args = crate::host::resume_values(
+                &self.lua,
+                &self.clock,
+                crate::host::Reply::Http(result),
+            )
+            .map_err(lua_error)?;
+        }
     }
 
     // The shared deadline/arm/resume/off/match for key and click

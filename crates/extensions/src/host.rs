@@ -77,7 +77,7 @@ pub(crate) struct HostContext {
 /// coroutine with the reply (`docs/extensions.md`, "How an extension runs").
 /// Every host call that waits yields the tag and its
 /// kind, as [`Request`] lists.
-const HTTP: &str = r#"
+pub(crate) const HTTP: &str = r#"
 local host, tag, failure = ...
 function host.http(opts)
   if type(opts) ~= "table" or type(opts.url) ~= "string" then

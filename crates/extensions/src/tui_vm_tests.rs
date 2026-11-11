@@ -10,8 +10,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::tui_vm::{
-    CommandRejection, KeyBinding, KeyForm, KeyRejection, RenderOut, SLOT_NAMES, SLOT_PREFIXES,
-    Span, TuiCommand, TuiVm,
+    CommandRejection, FocusRejection, KeyBinding, KeyForm, KeyRejection, RenderOut, SLOT_NAMES,
+    SLOT_PREFIXES, Span, TuiCommand, TuiVm,
 };
 use crate::{Error, ErrorCode};
 
@@ -1774,4 +1774,319 @@ fn command_rejections_are_taken_once() {
     assert_eq!(vm.command_rejections().len(), 1);
     // The loader reports each rejection once: a second take finds none.
     assert!(vm.command_rejections().is_empty());
+}
+
+/// A VM with the focus handler `body`, timeout 100 ms.
+fn focusing(body: &str) -> (Arc<FakeClock>, TuiVm) {
+    vm(&format!(
+        "fiber.on_focus({{ timeout = 100, run = function(input) {body} end }})"
+    ))
+}
+
+/// The focus rejections `source` records: the load succeeds, holding no registration.
+fn focus_rejections(source: &str) -> Vec<FocusRejection> {
+    let (_, vm) = vm(source);
+    vm.focus_rejections()
+}
+
+/// Runs the focus handler for session `s1`.
+fn focus(vm: &mut TuiVm) -> Result<(), Error> {
+    vm.run_focus(Some("s1"))
+}
+
+/// Runs the focus handler for session `s1`, moving the clock by `by` from
+/// inside `ticked`: the handler has started, and the clock moves only then.
+fn focus_advancing(vm: &mut TuiVm, clock: Arc<FakeClock>, by: Duration) -> Result<(), Error> {
+    vm.lua()
+        .globals()
+        .set(
+            "ticked",
+            vm.lua()
+                .create_function(move |_, ()| {
+                    tick(&clock, by);
+                    Ok(())
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    vm.run_focus(Some("s1"))
+}
+
+#[test]
+fn focus_registers_with_timeout_and_run() {
+    let rejected = focus_rejections(
+        "fiber.on_focus({ timeout = 100, run = function(input) seen = input.session_id end })",
+    );
+    // `docs/extensions.md`, "Commands and screens": one well-formed registration loads with no rejection.
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let (_, mut vm) = focusing("seen = input.session_id");
+    focus(&mut vm).expect("the focus run answers");
+    let seen: String = vm.lua().globals().get("seen").expect("the handler ran");
+    assert_eq!(seen, "s1");
+}
+
+#[test]
+fn focus_rejects_a_non_table_spec() {
+    for spec in ["5", "nil", "'run'"] {
+        let rejected = focus_rejections(&format!("fiber.on_focus({spec})"));
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; the load continues.
+        assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
+        assert!(rejected[0].reason.contains("table"), "{spec}: {rejected:?}");
+        let (_, mut vm) = vm(&format!("fiber.on_focus({spec})"));
+        assert!(vm.run_focus(Some("s1")).is_ok(), "{spec}");
+    }
+}
+
+#[test]
+fn focus_rejects_a_missing_or_bad_timeout() {
+    for spec in [
+        "{}",
+        "{ run = function() end }",
+        "{ timeout = 0, run = function() end }",
+        "{ timeout = -1, run = function() end }",
+        "{ timeout = 1.5, run = function() end }",
+        "{ timeout = '100', run = function() end }",
+    ] {
+        let rejected = focus_rejections(&format!("fiber.on_focus({spec})"));
+        // `docs/extensions.md`, "Commands and screens": the timeout is whole milliseconds above 0.
+        assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
+        assert!(
+            rejected[0].reason.contains("timeout"),
+            "{spec}: {rejected:?}"
+        );
+        let (_, mut vm) = vm(&format!("fiber.on_focus({spec})"));
+        assert!(vm.run_focus(Some("s1")).is_ok(), "{spec}");
+    }
+}
+
+#[test]
+fn focus_rejects_a_non_function_run() {
+    for spec in [
+        "{ timeout = 100 }",
+        "{ timeout = 100, run = 'yes' }",
+        "{ timeout = 100, run = nil }",
+    ] {
+        let rejected = focus_rejections(&format!("fiber.on_focus({spec})"));
+        // `docs/extensions.md`, "Commands and screens": `run` is a function.
+        assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
+        assert!(rejected[0].reason.contains("run"), "{spec}: {rejected:?}");
+        let (_, mut vm) = vm(&format!("fiber.on_focus({spec})"));
+        assert!(vm.run_focus(Some("s1")).is_ok(), "{spec}");
+    }
+}
+
+#[test]
+fn focus_second_call_keeps_the_first() {
+    let source = "fiber.on_focus({ timeout = 100, run = function() first = true end })\n\
+         fiber.on_focus({ timeout = 100, run = function() second = true end })";
+    let rejected = focus_rejections(source);
+    // `docs/extensions.md`, "Commands and screens": a second call records one rejection and is skipped.
+    assert_eq!(rejected.len(), 1, "{rejected:?}");
+    assert!(rejected[0].reason.contains("twice"), "{rejected:?}");
+    let (_, mut vm) = vm(source);
+    focus(&mut vm).expect("the focus run answers");
+    let globals = vm.lua().globals();
+    assert!(globals.get::<bool>("first").expect("the first handler ran"));
+    assert!(
+        globals
+            .get::<Option<bool>>("second")
+            .expect("the read answers")
+            .is_none()
+    );
+}
+
+#[test]
+fn focus_receives_only_the_session_id() {
+    let (_, mut vm) = focusing("seen = input.session_id");
+    focus(&mut vm).expect("the focus run answers");
+    let seen: String = vm.lua().globals().get("seen").expect("the handler ran");
+    assert_eq!(seen, "s1");
+}
+
+#[test]
+fn focus_none_omits_the_session_id() {
+    let (_, mut vm) = focusing("seen = input.session_id");
+    vm.run_focus(None).expect("the home run answers");
+    // Home sends no `session_id` key and Lua reads nil: no previous
+    // session's identity is reused.
+    let seen: Option<String> = vm.lua().globals().get("seen").expect("the read answers");
+    assert!(seen.is_none());
+}
+
+#[test]
+fn focus_ignores_true_false_and_nil() {
+    for body in ["return true", "return false", "return nil", "return"] {
+        let (_, mut vm) = focusing(body);
+        focus(&mut vm).expect("the return is ignored");
+    }
+}
+
+#[test]
+fn focus_wrong_shape_is_a_shape_error() {
+    for body in ["return 5", "return 'handled'", "return {}"] {
+        let (_, mut vm) = focusing(body);
+        // RULING-2720-7 Q3 pattern: any other value is the existing wrong-shape failure.
+        assert!(matches!(focus(&mut vm), Err(Error::TuiShape(_))), "{body}");
+        // A wrong shape leaves the VM on.
+        assert!(matches!(focus(&mut vm), Err(Error::TuiShape(_))), "{body}");
+    }
+}
+
+#[test]
+fn focus_lua_error_is_a_lua_error() {
+    let (_, mut vm) = focusing("error('boom')");
+    let Err(Error::TuiLua(message)) = focus(&mut vm) else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("boom"), "{message}");
+    // An error leaves the VM on.
+    assert!(matches!(focus(&mut vm), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn focus_rejected_yield_names_the_host_call() {
+    let (_, mut vm) = focusing("coroutine.yield({}, 'drive', {})");
+    let Err(Error::TuiLua(message)) = focus(&mut vm) else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("host.drive"), "{message}");
+    // A rejected host call is an error, not a switch-off: the VM stays on.
+    assert!(matches!(focus(&mut vm), Err(Error::TuiLua(_))));
+    let (_, mut bare) = focusing("coroutine.yield()");
+    let Err(Error::TuiLua(message)) = focus(&mut bare) else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("host call"), "{message}");
+}
+
+#[test]
+fn focus_non_http_host_call_fails() {
+    let (_, mut vm) = focusing("host.fs.read('x')");
+    // RULING-2720-10: `on_focus` may call `host.http`; any other host call raises a Lua error.
+    assert!(matches!(focus(&mut vm), Err(Error::TuiLua(_))));
+    assert!(matches!(focus(&mut vm), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn focus_http_suspends_for_the_reply() {
+    use fakes::{Deadline, MUST_SUCCEED_WITHIN, ProviderServer, Response};
+    let server =
+        ProviderServer::start([Response::status(200, "hello")]).expect("the server starts");
+    let url = server.url();
+    let (_, mut vm) = vm(&format!(
+        "fiber.on_focus({{ timeout = 500, run = function(input) \
+         local res = host.http({{url = '{url}'}}) seen = res.body .. ':' .. res.status end }})"
+    ));
+    focus(&mut vm).expect("the focus run answers");
+    // The one wall-clock wait: the loopback answer lands at once.
+    assert!(
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "the request arrived"
+    );
+    let seen: String = vm
+        .lua()
+        .globals()
+        .get("seen")
+        .expect("the reply reached Lua");
+    assert_eq!(seen, "hello:200");
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(vm.last_http_bound(), Some(500 * MS));
+}
+
+#[test]
+fn focus_http_bound_pins_the_computed_form() {
+    use crate::lua::http_bound;
+    use contract::clock::Clock;
+    let clock = FakeClock::new();
+    let start = clock.now();
+    // A fresh start returns the declared timeout.
+    assert_eq!(http_bound(100 * MS, start + 100 * MS, start), 100 * MS);
+    // Near the deadline the bound is the declared timeout, not the grace.
+    tick(&clock, 90 * MS);
+    assert_eq!(
+        http_bound(100 * MS, start + 100 * MS, clock.now()),
+        100 * MS
+    );
+    // The grace is one second past the deadline, per the doc bound.
+    assert_eq!(http_bound(5000 * MS, start + 100 * MS, start), 1100 * MS);
+    // Far past the abandon point the bound fails fast at zero.
+    tick(&clock, 5000 * MS);
+    assert_eq!(
+        http_bound(100 * MS, start + 100 * MS, clock.now()),
+        Duration::ZERO
+    );
+}
+
+#[test]
+fn focus_near_deadline_hang_ends_in_timeout() {
+    use fakes::{ProviderServer, Response};
+    let source = "fiber.on_focus({ timeout = 100, run = function(input) ticked() host.http({url = 'URL'}) end })";
+    let clock = FakeClock::new();
+    let server = ProviderServer::start_responding({
+        let clock = Arc::clone(&clock);
+        move |_| {
+            // On request arrival the provider moves the fake past the
+            // deadline; the held response never answers.
+            tick(&clock, 30 * MS);
+            Response::status(200, "late")
+        }
+    })
+    .expect("the server starts");
+    server.hold();
+    let url = server.url();
+    let script = source.replace("URL", &url);
+    let loader_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let mut vm = TuiVm::load("test", &script, loader_clock).expect("the script loads");
+    // The yield fires 90 ms in, so the recorded bound is 100 ms; the
+    // provider advances past the deadline while the transfer waits, and
+    // the post-perform check trips the timeout with no wall-clock timing asserted.
+    let result = focus_advancing(&mut vm, clock, 90 * MS);
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
+    assert_eq!(vm.last_http_bound(), Some(100 * MS));
+    assert_eq!(server.requests().len(), 1);
+    let later = vm.run_focus(Some("s1"));
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
+}
+
+#[test]
+fn focus_deadline_at_99_100_101() {
+    let source = "fiber.on_focus({ timeout = 100, run = function() ticked() end })";
+    let (clock, mut early) = vm(source);
+    focus_advancing(&mut early, clock, 99 * MS).expect("99 ms in answers");
+    let (clock, mut timed) = vm(source);
+    let timed_out = focus_advancing(&mut timed, clock, 100 * MS);
+    // `docs/tui.md`, "When an extension fails": a handler that passes its timeout switches the extension off.
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    let later = focus(&mut timed);
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
+    let (clock, mut past) = vm(source);
+    let timed_out = focus_advancing(&mut past, clock, 101 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+}
+
+#[test]
+fn focus_timeout_switches_off_across_handlers() {
+    let source = "fiber.key('ctrl+o', { timeout = 100, run = function() return true end })\n\
+         fiber.on_focus({ timeout = 100, run = function() ticked() end })";
+    let (clock, mut vm) = vm(source);
+    let timed_out = focus_advancing(&mut vm, clock, 100 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    // One shared off latch: a later key run answers switched-off too.
+    assert!(matches!(run(&mut vm, "ctrl+o"), Err(Error::TuiOff)));
+}
+
+#[test]
+fn focus_without_registration_is_a_noop() {
+    let (_, mut vm) = notice("return { { { text = 'ok' } } }");
+    assert!(vm.run_focus(Some("s1")).is_ok());
+    assert!(vm.run_focus(None).is_ok());
+    assert!(vm.focus_rejections().is_empty());
+}
+
+#[test]
+fn focus_rejections_are_taken_once() {
+    let (_, vm) = vm("fiber.on_focus(5)");
+    assert_eq!(vm.focus_rejections().len(), 1);
+    // The loader reports each rejection once: a second take finds none.
+    assert!(vm.focus_rejections().is_empty());
 }
