@@ -8006,3 +8006,159 @@ fn archived_head_keys_and_text_follow_their_own_project() {
         assert_eq!(*key, row_key(&app, first), "head key for {project}");
     }
 }
+
+/// Renders the attached screen at 80x24 and returns its text, one row
+/// per line.
+fn screen_text(app: &mut App) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    app.drawn(&targets);
+    crate::view::text(&buf)
+}
+
+/// Opens the exited row read only: the first-stage refusal retries
+/// once, and the hub accept carrying the missing path attaches without
+/// resuming.
+fn open_read_only(app: &mut App, session: &str, path: &str) {
+    let lines = open_first(app);
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = format!("Session {session} could not resume: {path} no longer exists");
+    let retry: Vec<Value> = commands(app.on_line(session_refused(
+        session,
+        first,
+        "io_failed",
+        &message,
+    )));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out");
+    assert_eq!(retry[0]["args"], json!({"level": "full"}));
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            second,
+            json!({"last_seq": 3, "workspace_gone": path})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some(path));
+}
+
+#[test]
+fn read_only_open_shows_the_bar_with_no_input_box_or_card() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    open_read_only(&mut app, "s_aaaaaaaaaaaaaaaa", "/w");
+    assert!(!app.on_home());
+    assert!(app.pass_open(), "the fold boundary is recorded");
+    let text = screen_text(&mut app);
+    // The one-row bar replaces the input box: the missing path and the
+    // note, dim, with no draft rows and no cursor.
+    assert!(
+        text.contains("`/w` no longer exists. Read only."),
+        "the bar row: {text}"
+    );
+    assert!(
+        app.input().expand().is_empty(),
+        "no draft rows behind the bar"
+    );
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    assert!(
+        crate::view::cursor(&app, area).is_none(),
+        "no cursor over the bar"
+    );
+    // No rail card appears for the read-only session.
+    assert!(app.home.sessions.cards().is_empty(), "no rail card");
+    // The row keeps its place and its exited mark, with no note.
+    assert_eq!(listed(&app), ["○  old work"]);
+    let row = app
+        .home
+        .sessions
+        .row(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+        .unwrap_or_else(|| panic!("the row stays"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited"
+    );
+    assert!(row.note.is_none(), "no row note");
+    assert!(row.status.is_none(), "no folded status yet");
+    // A replayed status reaches the conversation but never touches the
+    // rows: the archived-or-exited row stays put with no status folded.
+    let before = listed(&app);
+    let _ = app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "old work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(listed(&app), before, "the row keeps its place");
+    let row = app
+        .home
+        .sessions
+        .row(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+        .unwrap_or_else(|| panic!("the row stays"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "no left clearing"
+    );
+    assert!(row.status.is_none(), "no row-status fold");
+    // Esc returns home with the row in place.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.session().is_none(), "Esc leaves the session");
+    assert!(app.on_home(), "Esc goes home");
+    assert_eq!(listed(&app), ["○  old work"], "the row stays home");
+}
+
+#[test]
+fn read_only_archived_row_stays_archived_out_of_the_feed() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
+    let retry: Vec<Value> = commands(app.on_line(session_refused(
+        "s_bbbbbbbbbbbbbbbb",
+        ack,
+        "io_failed",
+        message,
+    )));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            second,
+            "io_failed",
+            message
+        ))
+        .is_empty()
+    );
+    assert!(app.on_home());
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(
+        app.home.sessions.is_archived(&id),
+        "the archived row stays archived"
+    );
+    // The archived row never enters the feed.
+    assert_eq!(listed(&app), ["○  old work"]);
+    assert!(
+        !listed(&app).iter().any(|line| line.contains("filed work")),
+        "stays out of the feed: {:?}",
+        listed(&app)
+    );
+    let text = screen_text(&mut app);
+    assert!(
+        !text.contains("filed work"),
+        "the archived row draws nowhere: {text}"
+    );
+}
