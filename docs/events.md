@@ -1231,6 +1231,7 @@ Durable.
 | `servers` | object | yes | `kept`, `restarted`, `started` and `stopped`, each an array of server names |
 | `extensions` | array of strings | yes | the extensions reloaded |
 | `failed` | array | no | each server that failed: `server`, `reason` and `error`, as on `mcp_server_failed` |
+| `extension_failures` | array | no | one entry per failing registration: `provider`, optional `extension` (present exactly when the mirrored notice names one) and `error`; the old list stands |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
 follows it. The next model request misses the prompt cache. A reload that

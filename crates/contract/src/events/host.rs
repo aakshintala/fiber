@@ -56,6 +56,9 @@ pub struct Reloaded {
     /// Each server that failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed: Option<Vec<ReloadFailure>>,
+    /// Each provider whose model discovery failed; its old list stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_failures: Option<Vec<ExtensionFailure>>,
 }
 
 /// The servers a reload kept, restarted, started and stopped, by name.
@@ -79,6 +82,20 @@ pub struct ReloadFailure {
     /// Why it failed.
     pub reason: ServerFailure,
     /// The error.
+    pub error: Failure,
+}
+
+/// A provider whose model discovery failed during a reload, as its
+/// `extension_failed` notice says: the old catalogue still lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionFailure {
+    /// The provider's name.
+    pub provider: String,
+    /// The extension's name, present exactly when the mirrored notice
+    /// names one, absent otherwise, never null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    /// The discovery error.
     pub error: Failure,
 }
 

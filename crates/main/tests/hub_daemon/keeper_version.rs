@@ -9,6 +9,7 @@
     reason = "binary test assertions"
 )]
 
+use super::keeper::wait_for_refuse_only_socket;
 use crate::support;
 
 use std::fs;
@@ -183,11 +184,7 @@ fn a_resume_against_a_newer_keeper_declines_naming_its_version_then_recovers() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, &setup, id);
     let dir = session_dir(&setup, id);
     // The keeper was spawned from this build's binary, so its `fiber_started`
     // is the latest; forging that line stands in for a newer keeper.
