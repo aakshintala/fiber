@@ -11,7 +11,6 @@ use crate::host::admission::CallbackContext;
 
 use super::{
     ConfigScope, DataScope, HostOperation, NativeHostServices, ProcessContext, ProcessHostServices,
-    ToolCall,
 };
 
 mod oauth;
@@ -268,7 +267,6 @@ impl NativeHostServices {
         callback: &CallbackContext,
         name: &str,
         arguments: Value,
-        cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if callback.tool_anchor().is_none() {
             return Err((
@@ -276,7 +274,7 @@ impl NativeHostServices {
                 "host.tool: called outside a running tool call".to_owned(),
             ));
         }
-        let runner = support::lock(&self.tool_runner).clone();
+        let runner = callback.inner_calls.clone();
         let Some(runner) = runner else {
             return Err((
                 contract::ErrorCode::InvalidArguments,
@@ -284,16 +282,7 @@ impl NativeHostServices {
             ));
         };
         let completed = runner
-            .run(
-                &ToolCall {
-                    extension: context.extension.clone(),
-                    name: name.to_owned(),
-                    arguments,
-                    ran_by: callback.ran_by().unwrap_or("a timer").to_owned(),
-                    deadline: callback.deadline,
-                },
-                cancel,
-            )
+            .run(&context.extension, name, arguments)
             .map_err(|message| (contract::ErrorCode::InvalidArguments, message))?;
         crate::host::tool::outcome(&completed)
             .map(Some)
@@ -848,7 +837,7 @@ impl ProcessHostServices for NativeHostServices {
                 Ok(None)
             }
             HostOperation::Tool { name, arguments } => {
-                self.tool(context, callback, &name, arguments, cancel)
+                self.tool(context, callback, &name, arguments)
             }
             HostOperation::Model { request } => self.model(context, callback, request, cancel),
             HostOperation::Delegate {

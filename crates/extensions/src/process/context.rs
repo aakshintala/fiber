@@ -353,37 +353,6 @@ pub(crate) enum DataScope {
     Project,
 }
 
-/// One inner tool call: what the runner service runs, inheriting the
-/// outer callback's attribution, deadline and cancellation.
-#[derive(Debug, Clone)]
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(crate) struct ToolCall {
-    /// The extension whose tool runs.
-    pub extension: String,
-    /// The tool's name.
-    pub name: String,
-    /// Its arguments.
-    pub arguments: Value,
-    /// What the outer callback runs as.
-    pub ran_by: String,
-    /// The outer callback's end.
-    pub deadline: Option<std::time::Instant>,
-}
-
-/// Runs one inner tool call to completion, as the runner behind
-/// `host.tool` does in Lua. Tests stand a stub behind this trait; the
-/// session wires its runner when connected.
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(crate) trait ToolRunner: Send + Sync {
-    /// Runs `call`'s tool, stopped by `cancel`. The error is raised as
-    /// the calling code's string, as in Lua.
-    fn run(
-        &self,
-        call: &ToolCall,
-        cancel: &dyn Cancel,
-    ) -> Result<Box<contract::events::ToolCallCompleted>, String>;
-}
-
 /// The services one process host or state call runs through: the decoded
 /// operation runs under `callback` in `context`, stopped by `cancel`.
 /// `None` answers nothing, `{}`; `Some` answers `{ value }`.
@@ -421,8 +390,6 @@ pub(crate) struct NativeHostServices {
     pub model: Mutex<Option<Arc<dyn contract::model::HostModel>>>,
     /// Starts delegates; installed by the session after spawn.
     pub delegate: Mutex<Option<Arc<dyn contract::extension::HostDelegate>>>,
-    /// Runs inner tools; installed by the session after spawn.
-    pub tool_runner: Mutex<Option<Arc<dyn ToolRunner>>>,
     /// The manifest's declared secret names.
     pub secrets: Vec<String>,
     /// Answers scripted host calls before any real effect: set for case

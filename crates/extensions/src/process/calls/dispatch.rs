@@ -491,7 +491,7 @@ impl ProcessExtension {
             move |args: Value,
                   scope: Option<crate::lua::CredentialFor>,
                   caller: &dyn contract::tool::Cancel,
-                  _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
+                  inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 requests::run_request(
                     &shared,
                     requests::Dispatch {
@@ -503,6 +503,7 @@ impl ProcessExtension {
                         timeout,
                         state_call: None,
                         credential: scope,
+                        inner_calls,
                     },
                     caller,
                 )

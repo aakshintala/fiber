@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use contract::RequestId;
 use contract::clock::Clock;
-use contract::tool::Cancel;
+use contract::tool::{Cancel, InnerCalls};
 
 use crate::Error;
 use crate::runtime::FunctionRef;
@@ -225,6 +225,22 @@ impl Table {
         state_call: Option<u64>,
         credential: Option<crate::lua::CredentialFor>,
     ) -> Minted {
+        self.mint_with_inner_calls(
+            kind, extension, ran_by, deadline, state_call, credential, None,
+        )
+    }
+
+    /// Mints a pending request carrying the outer tool call's inner runner.
+    pub(crate) fn mint_with_inner_calls(
+        &self,
+        kind: RequestKind,
+        extension: &str,
+        ran_by: String,
+        deadline: Option<Instant>,
+        state_call: Option<u64>,
+        credential: Option<crate::lua::CredentialFor>,
+        inner_calls: Option<Arc<dyn InnerCalls>>,
+    ) -> Minted {
         let mut inner = support::lock(&self.inner);
         let sequence = inner.next_request_id;
         inner.next_request_id = sequence.wrapping_add(1);
@@ -244,7 +260,8 @@ impl Table {
             cancel.clone(),
             state_call,
             credential,
-        );
+        )
+        .with_inner_calls(inner_calls);
         let wait = WaitCell::new();
         inner.pending.insert(
             id.clone(),
@@ -607,13 +624,14 @@ pub(crate) fn run_request(
     // Only the dispatcher that runs a provider's `credential()` sets a
     // scope: every other dispatch carries `None`, and a
     // `host.oauth.refresh` under it is refused.
-    let minted = shared.table.mint(
+    let minted = shared.table.mint_with_inner_calls(
         dispatch.kind,
         &shared.owner,
         dispatch.ran_by,
         deadline,
         dispatch.state_call,
         dispatch.credential,
+        dispatch.inner_calls,
     );
     let id = minted.id;
     if dispatch.kind == RequestKind::Stream {
@@ -682,7 +700,7 @@ pub(crate) fn run_request(
 /// What one dispatch sends: the request's kind, whom it answers, what it
 /// runs as, its arguments, its timeout and its hook transaction. One
 /// value carries the dispatch so the send path stays narrow.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Dispatch {
     /// Ordered behind the stream gate, or concurrent with everything.
     pub kind: RequestKind,
@@ -703,6 +721,8 @@ pub(crate) struct Dispatch {
     /// What a `host.oauth.refresh` under this request refreshes: set
     /// only by the dispatcher that runs a provider's `credential()`.
     pub credential: Option<crate::lua::CredentialFor>,
+    /// The outer tool callback's per-call inner runner.
+    pub inner_calls: Option<Arc<dyn InnerCalls>>,
 }
 
 impl Dispatch {
@@ -727,6 +747,7 @@ impl Dispatch {
             timeout,
             state_call,
             credential: None,
+            inner_calls: None,
         }
     }
 
@@ -745,6 +766,7 @@ impl Dispatch {
             timeout,
             state_call: None,
             credential: None,
+            inner_calls: None,
         }
     }
 }

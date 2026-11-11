@@ -281,10 +281,8 @@ impl Runtime {
     }
 
     /// Runs the tool behind `func` as [`Runtime::tool_run`] does, with
-    /// `runner` for the inner calls the callback makes. A process callback
-    /// has no inner-call runner yet, so the runner is the model's path
-    /// alone and the call runs anyway. `scope` is the invocation's
-    /// credential, carried to the process handler.
+    /// `runner` for the inner calls the callback makes. `scope` is the
+    /// invocation's credential, carried to the process handler.
     pub(crate) fn tool_run_asking(
         &self,
         func: &FunctionRef,
@@ -306,7 +304,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, None),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, runner),
         }
     }
 
