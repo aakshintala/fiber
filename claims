@@ -333,3 +333,8 @@ crates/tui/src/app/home/prompt/delete_tests.rs	fiber-4491	plan	2026-11-11T01:02:
 crates/tui/src/app/home/scoped_page_tests.rs	fiber-4491	plan	2026-11-11T01:02:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/prompt/stop_tests.rs	fiber-4491	plan	2026-11-11T01:02:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/prompt/exit_tests.rs	fiber-4491	plan	2026-11-11T01:02:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/settings_view.rs	fiber-4618	plan	2026-11-11T01:11:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/settings_view_tests.rs	fiber-4618	plan	2026-11-11T01:11:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/swapped.rs	fiber-4618	plan	2026-11-11T01:11:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/swapped_tests.rs	fiber-4618	plan	2026-11-11T01:11:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4618	plan	2026-11-11T01:11:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
