@@ -2306,11 +2306,12 @@ fn shift_backspace_and_delete_ask_then_delete() {
     insta::assert_snapshot!("archive_delete_question", screen(&app, 80, 24));
     // Enter deletes exactly that session.
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    assert_eq!(sents.len(), 1);
     let line: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "delete");
     assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
 }
