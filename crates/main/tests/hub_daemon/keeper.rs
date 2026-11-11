@@ -2023,7 +2023,7 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
     // read past the cap. Assert the cap by length and the content by its
     // edges, without pinning all 1,024 generated lines to a count no doc
     // promises. Failures report lengths and the first differing offset,
-    // never the whole ~64 KiB tail (docs/testing.md, "What a test asserts").
+    // never the whole ~64 KiB tail (`docs/testing.md`, "What a test asserts").
     let rendered = session_log_tail(&Ok(at_cap.into_bytes()));
     let header = "session log tail:\n";
     let first_line = unit.trim_end();
