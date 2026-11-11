@@ -4658,7 +4658,12 @@ fn focused_name(app: &App) -> String {
         .find_map(|line| match line {
             ListLine::Live { key: row, name, .. } if row == key => Some(name),
             ListLine::Exited { key: row, name, .. } if row == key => Some(name),
-            _ => None,
+            ListLine::Live { .. }
+            | ListLine::Exited { .. }
+            | ListLine::Head { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::More { .. }
+            | ListLine::ArchivedHead { .. } => None,
         })
         .unwrap_or_else(|| panic!("row {key}"))
 }
