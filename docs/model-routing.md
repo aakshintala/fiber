@@ -803,6 +803,18 @@ fills it, and the declared variable when one exists.
   `: OPENROUTER PROCESSING` comment lines to the stream.
 - On Databricks, `gemini-4-argon` rejects `reasoning_effort` with a 400
   while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
+- A gateway serving Gemini returns a tool call's `extra_content` (such as
+  `extra_content.google.thought_signature`) on the call; the last delta
+  carrying one wins. Fiber decodes each such call with its carrier
+  immediately before it, an empty-text `Reasoning` holding the verbatim
+  `{"extra_content": ...}`, the calls in stream order. Under
+  `compat.gemini` a bare `{"extra_content": ...}` carrier waits for its own
+  model's next tool call and replays back byte-identical on that call only,
+  in conversation order; a user turn, a tool result or a foreign-model call
+  clears it, a trailing carrier is dropped, and without the flag no
+  `extra_content` is ever sent. A wider object is no carrier: it merges
+  into the assistant message as before, and a foreign model's carrier never
+  merges.
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
