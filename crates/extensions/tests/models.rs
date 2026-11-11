@@ -18,6 +18,49 @@ use extensions::{Error, ModelsArg, Providers, leave_out_invalid, leave_out_omitt
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, NoLock};
 use serde_json::json;
+use std::time::Duration;
+
+#[test]
+fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
+    let mut models: Vec<ModelData> =
+        serde_json::from_value(provider("acme", &["m1", "m2"])["models"].clone()).unwrap();
+    models[0].context_window = Some(100);
+    let meta = extensions::models_dev::CatalogMeta {
+        source: Some("acme".into()),
+        ..Default::default()
+    };
+    let catalog = json!({"acme": {"m1": {"name":"Live", "limit":{"context":200}}}});
+    let merged = extensions::models_dev::merge(models, &meta, &catalog);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].name.as_deref(), Some("Live"));
+    assert_eq!(merged[0].context_window, Some(200));
+    assert_eq!(merged[1].context_window, Some(1000));
+}
+
+#[test]
+fn models_dev_fetch_decision_respects_switch_and_missing_cache() {
+    let setup = Setup::new();
+    let now = fakes::clock::FakeClock::new().wall();
+    assert!(!extensions::models_dev::should_fetch(
+        &setup.home(),
+        false,
+        Some(Duration::from_secs(60)),
+        now
+    ));
+    assert!(extensions::models_dev::should_fetch(
+        &setup.home(),
+        true,
+        Some(Duration::from_secs(60)),
+        now
+    ));
+    config::write_models_dev(&setup.home(), b"{}").unwrap();
+    assert!(!extensions::models_dev::should_fetch(
+        &setup.home(),
+        true,
+        Some(Duration::from_secs(60)),
+        now
+    ));
+}
 
 #[test]
 fn switched_on_lists_presence_without_acquiring_or_losing_identity() {
