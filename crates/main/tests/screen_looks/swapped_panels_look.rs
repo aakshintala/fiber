@@ -29,6 +29,9 @@ use support::{Setup, TRUECOLOUR, write_json};
 /// `error` in the dark theme.
 const ERROR: Colour = Colour::Rgb(255, 93, 115);
 
+/// `accent` in the dark theme: a focused row's mark and label.
+const ACCENT: Colour = Colour::Rgb(110, 170, 254);
+
 /// The prompt tokens the scripted turns report: what a reload rebuilds.
 const PROMPT_TOKENS: u64 = 84_000;
 
@@ -86,6 +89,31 @@ fn row_with(grid: &Grid, needle: &str) -> u16 {
     find_row(grid, needle).unwrap_or_else(|| panic!("{needle:?} in\n{}", grid.contents))
 }
 
+/// The first row holding `needle` left of the panel: the Changed files
+/// list's rows draw in the conversation column, while the panel repeats
+/// the file names on the right.
+fn list_row(grid: &Grid, needle: &str) -> Option<u16> {
+    let (_, height) = grid.size();
+    (0..height).find(|y| col_at_or(grid, *y, needle).is_some_and(|x| x < 100))
+}
+
+/// The first list row holding `needle`, or a panic naming it.
+fn list_row_with(grid: &Grid, needle: &str) -> u16 {
+    list_row(grid, needle).unwrap_or_else(|| row_with(grid, needle))
+}
+
+/// The list row's text past the inset gutter: the row spans the full
+/// grid with the panel on the right, so exact asserts match this prefix.
+fn list_text(grid: &Grid, y: u16) -> String {
+    grid.rows[usize::from(y)].trim_start().to_owned()
+}
+
+/// The grid's text for a failure message: one read line here instead of
+/// one per assert.
+fn contents(grid: &Grid) -> String {
+    grid.contents.clone()
+}
+
 /// The column where `needle` starts on `y`, matching the cells one by
 /// one, so a wide cell before it changes nothing.
 fn col_at_or(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
@@ -128,6 +156,51 @@ fn is_plain_of_reverse(grid: &Grid, y: u16, needle: &str) -> bool {
 /// A click at cell (`x`, `y`).
 fn click(run: &mut Run, x: u16, y: u16) {
     run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// Whether every cell of `needle`, found on `y`, is bold in the accent
+/// colour: a focused row's label (`docs/tui.md`, "Swapped views").
+fn is_focused_label(grid: &Grid, y: u16, needle: &str) -> bool {
+    col_at_or(grid, y, needle).is_some_and(|x| {
+        (0..needle.chars().count() as u16).all(|dx| {
+            let cell = grid.cell(x + dx, y);
+            cell.bold && cell.fg == ACCENT
+        })
+    })
+}
+
+/// Whether `needle` on `y` is the focused file row: the "› " mark in
+/// accent in the gutter and its name bold in accent (`docs/tui.md`,
+/// "Swapped views"). The file rows indent past the gutter, so the mark
+/// is the row's first non-blank cell rather than the cell before the
+/// name.
+fn is_focused_row(grid: &Grid, y: u16, needle: &str) -> bool {
+    let Some(x) = col_at_or(grid, y, needle) else {
+        return false;
+    };
+    if x < 2 {
+        return false;
+    }
+    let mark = (0..x).find_map(|at| {
+        let cell = grid.cell(at, y);
+        (cell.symbol != " ").then_some((cell.symbol.clone(), cell.fg))
+    });
+    if mark
+        .as_ref()
+        .is_none_or(|(symbol, fg)| symbol != "›" || *fg != ACCENT)
+    {
+        return false;
+    }
+    is_focused_label(grid, y, needle)
+}
+
+/// The lines the editor script recorded, or empty when it has not run.
+fn argv_lines(path: &std::path::Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The `/tools` row for `notes_save`: its text from the name on.
@@ -561,7 +634,7 @@ fn panel_item_at(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
 }
 
 #[test]
-fn the_created_then_edited_file_row_reads_untracked_wholly_added() {
+fn the_changed_files_untracked_row_reads_added_with_its_line_count() {
     let setup = Setup::new();
     let workspace = setup.workspace();
     git(&workspace, &["init"]);
@@ -597,15 +670,12 @@ fn the_created_then_edited_file_row_reads_untracked_wholly_added() {
     click(&mut run, x, y + 1);
     let grid = run.wait_screen("the untracked file row", |grid| {
         grid.rows[0].contains("Changed files")
-            && find_row(grid, "new.txt")
-                .is_some_and(|y| grid.rows[usize::from(y)].contains("untracked, wholly added"))
+            && list_row(grid, "new.txt")
+                .is_some_and(|y| grid.rows[usize::from(y)].contains("    A  new.txt  +3 −0"))
     });
-    let y = row_with(&grid, "new.txt");
-    assert!(
-        is_dim(&grid, y, "untracked, wholly added"),
-        "{}",
-        grid.contents
-    );
+    let y = list_row_with(&grid, "new.txt");
+    // settled: the wait above matched the whole file row.
+    assert!(is_bold(&grid, y, "new.txt"), "{}", contents(&grid));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }
@@ -664,14 +734,238 @@ fn the_repeatedly_edited_tracked_file_row_matches_numstat() {
     let wanted = format!("+{added} \u{2212}{removed}");
     let grid = run.wait_screen("the tracked file row with git figures", |grid| {
         grid.rows[0].contains("Changed files")
-            && find_row(grid, "f.txt").is_some_and(|y| grid.rows[usize::from(y)].contains(&wanted))
+            && list_row(grid, "f.txt").is_some_and(|y| grid.rows[usize::from(y)].contains(&wanted))
     });
-    let y = row_with(&grid, "f.txt");
-    assert!(
-        grid.rows[usize::from(y)].contains(&wanted),
-        "{}",
-        grid.contents
+    let y = list_row_with(&grid, "f.txt");
+    // settled: the wait above matched the tracked file row with git figures.
+    assert!(list_text(&grid, y).contains(&wanted), "{}", contents(&grid));
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn the_changed_files_list_groups_folders_with_letters_figures_totals_and_focus() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [
+                {"name": "write", "arguments": {"path": "src/one.rs", "content": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n"}},
+                {"name": "write", "arguments": {"path": "top.txt", "content": "a\nb\nc\n"}},
+            ]},
+            {"text": ["Done."]},
+        ]}),
     );
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    config(&setup, json!({"reviewer": {"model": "scripted/r.json"}}));
+    let mut run = turned(&setup);
+    let grid = run.wait_screen("the changed files card", |grid| {
+        panel_item_at(grid, "one.rs").is_some()
+    });
+    // The card sums Fiber's own writes: twelve lines plus three; the
+    // totals row opens the Changed files list.
+    let (x, total_y) = panel_item_at(&grid, "+15").expect("the card totals row");
+    click(&mut run, x, total_y);
+    let grid = run.wait_screen("the grouped list", |grid| {
+        grid.rows[0].contains("Changed files")
+            && list_row(grid, "./").is_some()
+            && list_row(grid, "src/").is_some()
+            && list_row(grid, "top.txt").is_some_and(|y| grid.rows[usize::from(y)].contains(" +3"))
+            && list_row(grid, "one.rs").is_some_and(|y| grid.rows[usize::from(y)].contains("+12"))
+            && list_row(grid, "2 files").is_some()
+    });
+    // Folders lead their files in path order: "./" holds the top-level
+    // file, "src/" the nested one.
+    let dot = list_row_with(&grid, "./");
+    let top = list_row_with(&grid, "top.txt");
+    let src = list_row_with(&grid, "src/");
+    let one = list_row_with(&grid, "one.rs");
+    assert!(dot < top && top < src && src < one, "{}", contents(&grid));
+    // The figures align in one column: the shorter count pads left.
+    // The rows span the full grid with the panel on the right, so the
+    // asserts trim the inset gutter and match the list text's prefix.
+    // settled: the wait above matched the focused file row's figures.
+    assert!(
+        list_text(&grid, top).starts_with("›     M  top.txt   +3 −0"),
+        "{}",
+        contents(&grid)
+    );
+    // settled: the wait above matched the nested file row's figures.
+    assert!(
+        list_text(&grid, one).starts_with("M  one.rs  +12 −0"),
+        "{}",
+        contents(&grid)
+    );
+    // The first file row has the focus.
+    // settled: the wait above matched the focused file row's figures.
+    assert!(is_focused_row(&grid, top, "top.txt"), "{}", contents(&grid));
+    // The totals line the file count with the summed figures.
+    let totals = list_row_with(&grid, "2 files");
+    // settled: the wait above matched the totals row.
+    assert!(
+        list_text(&grid, totals).starts_with("2 files  +15 −0"),
+        "{}",
+        contents(&grid)
+    );
+    // settled: the wait above matched the totals row.
+    assert!(is_dim(&grid, totals, "2 files"), "{}", contents(&grid));
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn the_changed_files_committed_file_stays_dim_with_no_exit_code() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    git(&workspace, &["init"]);
+    git(&workspace, &["config", "user.email", "test@fiber.dev"]);
+    git(&workspace, &["config", "user.name", "fiber test"]);
+    fs::write(workspace.join("f.txt"), "call foo(a);\n").unwrap();
+    git(&workspace, &["add", "f.txt"]);
+    git(&workspace, &["commit", "-m", "add f"]);
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "f.txt", "edits": [
+                {"old_text": "call foo(a);\n", "new_text": "call bar(a);\n"},
+            ]}}]},
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "f.txt", "edits": [
+                {"old_text": "call bar(a);\n", "new_text": "call foo(a);\n"},
+            ]}}]},
+            {"text": ["Done."]},
+        ]}),
+    );
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    config(&setup, json!({"reviewer": {"model": "scripted/r.json"}}));
+    let mut run = turned(&setup);
+    let grid = run.wait_screen("the changed files card", |grid| {
+        panel_item_at(grid, "f.txt").is_some()
+    });
+    let (_, y) = panel_item_at(&grid, "f.txt").unwrap();
+    let x = col_at(&grid, y + 1, "+2");
+    // The totals row opens the Changed files list.
+    click(&mut run, x, y + 1);
+    run.wait_screen("the undone file row", |grid| {
+        grid.rows[0].contains("Changed files")
+            && list_row(grid, "f.txt")
+                .is_some_and(|y| grid.rows[usize::from(y)].contains("A  f.txt"))
+    });
+    // Choosing the file reads its empty diff against HEAD.
+    run.write(b"\r");
+    run.wait_screen("the no-diff sentence", |grid| {
+        grid.rows[0].contains("Changed files")
+            && find_row(grid, "No changes against HEAD: committed or undone").is_some()
+            // The sentence proves the whole diff answer arrived, so no
+            // "Exit code" closing line reaches the screen with it.
+            && !grid.contents.contains("Exit code")
+    });
+    // Back in the list, the undone file stays listed and dim.
+    run.write(b"\x1b[D");
+    let grid = run.wait_screen("the dim no-diff row", |grid| {
+        grid.rows[0].contains("Changed files")
+            && list_row(grid, "f.txt")
+                .is_some_and(|y| grid.rows[usize::from(y)].contains("no changes"))
+    });
+    let y = list_row_with(&grid, "f.txt");
+    // settled: the wait above matched the whole no-diff row.
+    assert!(is_dim(&grid, y, "no changes"), "{}", contents(&grid));
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn the_changed_files_open_in_editor_click_runs_the_same_path_as_ctrl_g() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    git(&workspace, &["init"]);
+    git(&workspace, &["config", "user.email", "test@fiber.dev"]);
+    git(&workspace, &["config", "user.name", "fiber test"]);
+    fs::write(workspace.join("f.txt"), "call foo(a);\n").unwrap();
+    git(&workspace, &["add", "f.txt"]);
+    git(&workspace, &["commit", "-m", "add f"]);
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "f.txt", "edits": [
+                {"old_text": "call foo(a);\n", "new_text": "call bar(a);\n"},
+            ]}}]},
+            {"text": ["Done."]},
+        ]}),
+    );
+    config(&setup, json!({}));
+    // The editor records its arguments (`+N`, the path) and exits at
+    // once, so the binary's reread answers from the unchanged file.
+    let editor = workspace.join("editor.sh");
+    let argv = workspace.join("argv");
+    fs::write(
+        &editor,
+        format!("printf '%s\\n' \"$@\" >> \"{}\"\n", argv.display()),
+    )
+    .unwrap();
+    let editor_cmd = format!("/bin/sh {}", editor.display());
+    let env = [
+        ("EDITOR", editor_cmd.as_str()),
+        TRUECOLOUR[0],
+        TRUECOLOUR[1],
+        TRUECOLOUR[2],
+    ];
+    let mut run = Run::spawn(&setup, 160, 48, &[], &env);
+    run.ready();
+    let from = run.output().len();
+    run.write(b"go\r");
+    run.turn_finished(from);
+    let grid = run.wait_screen("the changed files card", |grid| {
+        panel_item_at(grid, "f.txt").is_some()
+    });
+    let (_, y) = panel_item_at(&grid, "f.txt").unwrap();
+    let x = col_at(&grid, y + 1, "+1");
+    // The totals row opens the Changed files list.
+    click(&mut run, x, y + 1);
+    run.wait_screen("the file row", |grid| {
+        grid.rows[0].contains("Changed files") && list_row(grid, "f.txt").is_some()
+    });
+    // Choosing the file shows its hunks under the editor target.
+    run.write(b"\r");
+    run.wait_screen("the file diff with the editor target", |grid| {
+        grid.rows[0].contains("Changed files")
+            && find_row(grid, "Open in editor ›").is_some()
+            && find_row(grid, "+call bar(a);").is_some()
+    });
+    // The click needs no row-position signal beyond the frame-locked
+    // helper: it finds the target in the frame it acts on.
+    run.click_where("the Open in editor target", |grid| {
+        grid.text_at("Open in editor ›")
+    });
+    let wanted = vec![
+        "+1".to_owned(),
+        workspace.join("f.txt").display().to_string(),
+    ];
+    let recorded = argv.clone();
+    fakes::wait_until("the click's editor arguments", setup.deadline, move || {
+        argv_lines(&recorded) == wanted
+    });
+    fs::write(&argv, "").unwrap();
+    let wanted = vec![
+        "+1".to_owned(),
+        workspace.join("f.txt").display().to_string(),
+    ];
+    run.write(b"\x07");
+    fakes::wait_until("the Ctrl+G editor arguments", setup.deadline, move || {
+        argv_lines(&argv) == wanted
+    });
+    // Back in the list, as the editor-return reread proves, before
+    // quitting from the conversation.
+    run.write(b"\x1b[D");
+    run.wait_screen("the returned list", |grid| {
+        grid.rows[0].contains("Changed files") && list_row(grid, "f.txt").is_some()
+    });
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }
