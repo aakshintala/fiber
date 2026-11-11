@@ -4699,26 +4699,32 @@ fn shift_arrows_jump_between_projects_first_rows() {
     for key in [Key::Up, Key::Up, Key::Up] {
         assert_eq!(app.on_key(key, now), Effect::None);
     }
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(focused_name(&app), "second work");
     // Shift+↓ lands on the second project's first row.
     assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
     draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(focused_name(&app), "other work");
     // Shift+↑ returns to the first project's first row.
     assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
     draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(focused_name(&app), "first work");
     // No wrap past the first project.
     assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
     draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(focused_name(&app), "first work");
     // Down to the last row, then no wrap past the last project.
     for key in [Key::Down, Key::Down, Key::Down] {
         assert_eq!(app.on_key(key, now), Effect::None);
     }
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(focused_name(&app), "third work");
     assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
     draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(focused_name(&app), "third work");
 }
 

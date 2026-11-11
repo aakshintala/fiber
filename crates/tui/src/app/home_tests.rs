@@ -2227,6 +2227,7 @@ fn shift_down_from_a_projects_middle_row_lands_on_the_next_projects_first_row() 
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
@@ -2236,6 +2237,7 @@ fn shift_down_from_a_projects_middle_row_lands_on_the_next_projects_first_row() 
     );
     assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
@@ -2254,6 +2256,7 @@ fn shift_keys_hold_at_the_first_and_last_project() {
     focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
@@ -2264,6 +2267,7 @@ fn shift_keys_hold_at_the_first_and_last_project() {
     focus_session(&mut app, "s_cccccccccccccccc");
     assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
@@ -2334,6 +2338,7 @@ fn shift_down_lands_on_the_first_exited_row_with_no_live_rows() {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
@@ -2394,6 +2399,7 @@ fn shift_down_expands_a_more_collapsed_project() {
             .contains(&Spot::Entry(row_key(&app, "s_cccccccccccccccc"))),
     );
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
@@ -2452,6 +2458,7 @@ fn shift_down_opens_an_archived_only_project() {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
     drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
