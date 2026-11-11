@@ -50,14 +50,6 @@ docs/tui.md	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aaksh
 crates/contract/src/events_tests.rs	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/tui/src/shell_tests.rs	fiber-3897	plan	2026-11-09T18:44:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/tui/src/app.rs	fiber-3897	plan	2026-11-10T00:28:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4486
-xtask/src/models_dev_table.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-providers/codex/providers/codex.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/config/tests/providers_data.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/tests/models-dev.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-providers/openai/providers/openai.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/tests/models_dev.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/model-routing.md	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/providers/models.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-flake-report	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
