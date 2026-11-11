@@ -48,9 +48,13 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the milliseconds from the reply's `Date` header until then
-become the error's `retry_after_ms`, and
-the message names the reset time. Without a usable `Date`, no wait is set. `rate_limit_exceeded` stays `rate_limited`.
+(Unix seconds), Fiber uses `retry-after` first. Only when the reply has no
+`retry-after` header at all does it use the milliseconds from the reply's
+`Date` header until `resets_at` as `retry_after_ms`; a present but
+unparseable `retry-after` vetoes that fallback. Without a usable `Date`, no
+fallback wait is set. The message names the reset time. The vendor's explicit
+wait takes priority, and the reset time fills in only when the vendor sends
+no wait. `rate_limit_exceeded` stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
 "The usage-limit error body").
