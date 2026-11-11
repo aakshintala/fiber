@@ -980,6 +980,9 @@ const SURFACE_RGB: Colour = Colour::Rgb(26, 26, 34);
 const ACCENT_RGB: Colour = Colour::Rgb(110, 170, 254);
 const SURFACE_256: Colour = Colour::Indexed(234);
 const ACCENT_256: Colour = Colour::Indexed(75);
+/// The dark page's 256-colour entry: the panel tint's, since the page
+/// paints on the panel tint (`docs/tui.md:2985`).
+const PANEL_256: Colour = Colour::Indexed(233);
 
 #[test]
 fn truecolour_draws_the_input_box_as_a_striped_surface() {
@@ -1000,16 +1003,18 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
     let stripe = screen.cell(BOX_LEFT, INPUT_ROW);
     assert_eq!(stripe.symbol.as_str(), "▌");
     assert_eq!(stripe.fg, ACCENT_RGB);
-    // Its edges: surface half blocks over the default background.
+    // Its edges: surface half blocks over the page's panel tint
+    // (`docs/tui.md:2985`).
     for (y, edge) in [(EDGE_TOP, "▄"), (EDGE_BOTTOM, "▀")] {
         for x in BOX_LEFT..BOX_RIGHT {
             let cell = screen.cell(x, y);
             assert_eq!(cell.symbol.as_str(), edge, "edge cell ({x}, {y})");
             assert_eq!(cell.fg, SURFACE_RGB, "edge cell ({x}, {y})");
-            assert_eq!(cell.bg, Colour::Default, "edge cell ({x}, {y})");
+            assert_eq!(cell.bg, PANEL_RGB, "edge cell ({x}, {y})");
         }
     }
-    // The conversation above is blank cells on the default background.
+    // The conversation above is blank cells on the page's panel tint
+    // (`docs/tui.md:2985`).
     let content = (1..EDGE_TOP)
         .find(|y| (BOX_LEFT..BOX_RIGHT).any(|x| screen.cell(x, *y).symbol.as_str() != " "));
     let first = content.expect("a content row above the input box");
@@ -1017,7 +1022,7 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
     for y in 1..first {
         for x in BOX_LEFT..BOX_RIGHT {
             assert_eq!(screen.cell(x, y).symbol.as_str(), " ");
-            assert_eq!(screen.cell(x, y).bg, Colour::Default);
+            assert_eq!(screen.cell(x, y).bg, PANEL_RGB);
         }
     }
     // The reply draws in the default colour, not dim, on a turn card.
@@ -1071,7 +1076,28 @@ fn at_256_colours_every_colour_is_a_palette_entry() {
         let edge = screen.cell(x, EDGE_TOP);
         assert_eq!(edge.symbol.as_str(), "▄");
         assert_eq!(edge.fg, SURFACE_256);
-        assert_eq!(edge.bg, Colour::Default);
+        // The dark page paints on the panel tint: at 256 colours the
+        // page takes the panel's entry, 233 (`docs/tui.md:2985`).
+        assert_eq!(edge.bg, PANEL_256, "background and panel share one entry");
+    }
+}
+
+#[test]
+fn dark_conversation_page_is_the_panel_tint() {
+    // Every cell of the conversation is the page: the dark page paints
+    // on the panel tint, so the terminal's own background shows nowhere
+    // (`docs/tui.md:2985`).
+    let (screen, _) = one_turn(&TRUECOLOUR);
+    // settled: "the drawn turn" drew the reply with no input since.
+    let content = (1..EDGE_TOP)
+        .find(|y| (BOX_LEFT..BOX_RIGHT).any(|x| screen.cell(x, *y).symbol.as_str() != " "));
+    let first = content.expect("a content row above the input box");
+    assert!(first > 1, "a blank conversation row above the input box");
+    for y in 1..first {
+        for x in BOX_LEFT..BOX_RIGHT {
+            assert_eq!(screen.cell(x, y).symbol.as_str(), " ");
+            assert_eq!(screen.cell(x, y).bg, PANEL_RGB, "page cell ({x}, {y})");
+        }
     }
 }
 
@@ -1151,7 +1177,9 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
             && (left..=right).all(|x| screen.cell(x, y).bg == tint)
             && [left_gutter, right_gutter].into_iter().all(|x| {
                 let gutter = screen.cell(x, y);
-                gutter.symbol == " " && gutter.bg == Colour::Default
+                // The gutters are page cells: the panel tint
+                // (`docs/tui.md:2985`).
+                gutter.symbol == " " && gutter.bg == PANEL_RGB
             })
             && (0..3).all(|dx| {
                 let cell = screen.cell(reply_x + dx, y);
@@ -1188,7 +1216,9 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
                     grip.symbol == "⋮" && grip.dim && !grip.bold
                 })
         }
-        SettledScreen::Home => screen.cell(150, 20).bg == Colour::Default,
+        // The home screen's blank cells are page cells: the panel tint
+        // (`docs/tui.md:2985`).
+        SettledScreen::Home => screen.cell(150, 20).bg == PANEL_RGB,
         SettledScreen::Rail => {
             (0..48).all(|y| (0..24).all(|x| screen.cell(x, y).bg != Colour::Default))
                 && screen.cell(23, 0).bg == PANEL_RGB
@@ -1421,7 +1451,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     let second = bubble[1];
     if !bubble
         .iter()
-        .all(|y| grid.cell(57, *y).bg == Colour::Default && grid.cell(124, *y).fg == ACCENT_RGB)
+        .all(|y| grid.cell(57, *y).bg == PANEL_RGB && grid.cell(124, *y).fg == ACCENT_RGB)
     {
         return false;
     }
@@ -1434,14 +1464,14 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     for (y, edge) in [(first - 1, "▄"), (second + 1, "▀")] {
         if !(58..=124).all(|x| {
             let cell = grid.cell(x, y);
-            cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == Colour::Default
+            cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == PANEL_RGB
         }) {
             return false;
         }
     }
     if !(1..=124).all(|x| {
         let cell = grid.cell(x, first - 2);
-        cell.symbol == " " && cell.bg == Colour::Default
+        cell.symbol == " " && cell.bg == PANEL_RGB
     }) {
         return false;
     }
@@ -1463,7 +1493,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     let card_top = second + 4;
     if !(2..=124).all(|x| {
         let cell = grid.cell(x, card_top);
-        cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == Colour::Default
+        cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == PANEL_RGB
     }) {
         return false;
     }
@@ -1684,27 +1714,29 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
         for x in 58..=124 {
             assert_eq!(end.cell(x, *y).bg, PROMPT_RGB, "bubble cell ({x}, {y})");
         }
-        assert_eq!(end.cell(57, *y).bg, Colour::Default);
+        assert_eq!(end.cell(57, *y).bg, PANEL_RGB);
         assert_eq!(end.cell(124, *y).fg, ACCENT_RGB);
     }
     let first = bubble[0];
     assert_eq!(end.cell(58, first).symbol.as_str(), " ");
     assert_eq!(end.cell(59, first).symbol.as_str(), "a");
     assert_eq!(end.cell(123, first).symbol.as_str(), " ");
-    // Half-block edges above and below, on the terminal background.
+    // Half-block edges above and below, on the page's panel tint
+    // (`docs/tui.md:2985`).
     for (y, edge) in [(first - 1, "▄"), (bubble[1] + 1, "▀")] {
         for x in 58..=124 {
             let cell = end.cell(x, y);
             assert_eq!(cell.symbol.as_str(), edge, "edge cell ({x}, {y})");
             assert_eq!(cell.fg, PROMPT_RGB, "edge cell ({x}, {y})");
-            assert_eq!(cell.bg, Colour::Default, "edge cell ({x}, {y})");
+            assert_eq!(cell.bg, PANEL_RGB, "edge cell ({x}, {y})");
         }
     }
-    // A blank row above the top edge.
+    // A blank row above the top edge, on the page's panel tint
+    // (`docs/tui.md:2985`).
     for x in 1..=124 {
         let cell = end.cell(x, first - 2);
         assert_eq!(cell.symbol.as_str(), " ", "blank cell ({x}, {})", first - 2);
-        assert_eq!(cell.bg, Colour::Default, "blank cell ({x}, {})", first - 2);
+        assert_eq!(cell.bg, PANEL_RGB, "blank cell ({x}, {})", first - 2);
     }
     // The time row ends one column before the stripe, dim.
     let time: String = (0..160)
@@ -1740,12 +1772,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
             bubble[1] + 4
         );
         assert_eq!(cell.fg, TURN_RGB, "card edge ({x}, {})", bubble[1] + 4);
-        assert_eq!(
-            cell.bg,
-            Colour::Default,
-            "card edge ({x}, {})",
-            bubble[1] + 4
-        );
+        assert_eq!(cell.bg, PANEL_RGB, "card edge ({x}, {})", bubble[1] + 4);
     }
     // Every card row up to the card's bottom edge sits on the turn tint
     // with a blank column on each side.
