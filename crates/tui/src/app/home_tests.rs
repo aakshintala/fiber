@@ -7681,8 +7681,9 @@ fn forgot_drops_the_loaded_exited_row(kind: &str) {
     load_exited(&mut app, "s_aaaaaaaaaaaaaaaa", "fix the parser");
     assert_eq!(rows(&app), ["○  fix the parser"]);
     let sent = commands(app.on_line(forgot(kind, "s_aaaaaaaaaaaaaaaa", "-w")));
-    // A delete or an archive can move either count, so the forgot line
-    // re-asks both, with one ask of each in flight.
+    // (`docs/tui.md`, "The session list"): a delete or an archive can
+    // move either count, so the forgot line re-asks both, with one ask
+    // of each in flight.
     assert_eq!(sent.len(), 2, "{sent:?}");
     let exited = sent
         .iter()
