@@ -457,6 +457,10 @@ impl Parser<'_> {
             match self.peek() {
                 Some(b' ') | Some(b'\t') => self.bump(),
                 Some(b'#') => {
+                    // Eats the `#` first, so the loop below always moves:
+                    // without it a mutant breaking the condition would
+                    // re-enter this arm forever instead of failing fast.
+                    self.bump();
                     while !matches!(self.peek(), None | Some(b'\n') | Some(b'\r')) {
                         self.bump();
                     }

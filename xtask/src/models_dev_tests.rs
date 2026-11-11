@@ -1960,6 +1960,15 @@ fn trailing_blanks_and_comments_are_skipped() {
          name = \"Fixed\"\n";
     let parsed = corrections(trailing_comment);
     assert_eq!(parsed[0].model, "m");
+    // A trailing comment ending at EOF without a newline parses too.
+    let eof_comment = "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         name = \"Fixed\" # note";
+    assert!(parse_corrections("corrections", eof_comment).is_ok());
 }
 
 #[test]
@@ -2134,6 +2143,36 @@ fn bool_words_need_non_key_tails() {
         parse_corrections("corrections", "[[correction]]\n= \"x\"\n").unwrap_err(),
         "corrections: reads no key"
     );
+}
+
+#[test]
+fn truncated_bool_words_are_rejected() {
+    // `tru` and `fals` hold a `Some` slice that is unequal, so the
+    // `holds` guard fails and `value()` reports the unexpected byte. A
+    // `holds` taking any `Some` slice would read `Ok(Bool)` instead:
+    // inline it misreads the closing delimiter, and at a line end it
+    // swallows the newline and parses the entry.
+    for literal in ["tru", "fals"] {
+        let error = parse_field_err(literal);
+        assert!(
+            error.contains("reads an unexpected byte"),
+            "{literal}: {error}"
+        );
+        let text = format!(
+            "[[correction]]\n\
+             package = \"t\"\n\
+             model = \"m\"\n\
+             source = \"https://vendor.example/m\"\n\
+             upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+             [correction.fields]\n\
+             v = {literal}\n"
+        );
+        let error = parse_corrections("corrections", &text).unwrap_err();
+        assert!(
+            error.contains("reads an unexpected byte"),
+            "{literal}: {error}"
+        );
+    }
 }
 
 #[test]
