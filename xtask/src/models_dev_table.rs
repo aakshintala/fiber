@@ -306,7 +306,7 @@ const OPENAI: Package = Package {
     ],
 };
 
-/// Codex's models: the four subscription models models.dev lists under
+/// Codex's models: the five subscription models models.dev lists under
 /// `openai`, all on `openai-responses` with the session cache-key header.
 /// The ChatGPT backend serves a 272000-token window, not the 1050000 the
 /// OpenAI API lists, so the table pins `context_window`.
@@ -318,7 +318,14 @@ const CODEX: Package = Package {
     base_url: "https://chatgpt.com/backend-api/codex",
     drop_deprecated: true,
     skip: &[],
-    only: &["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+    only: &[
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+    ],
+
     protocol_overrides: &[],
     every_model: r#"{"compat":{"cache_key_header":"session_id","store":false},"context_window":272000,"subscription":true}"#,
     by_protocol: &[],
@@ -328,6 +335,7 @@ const CODEX: Package = Package {
         ("gpt-6-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
         ("gpt-6-astra", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
         ("gpt-6-luna", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
+        ("gpt-6.1-terra", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
     ],
 };
 
