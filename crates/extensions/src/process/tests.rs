@@ -258,6 +258,122 @@ fn null_args_are_malformed() {
     );
 }
 
+#[test]
+fn unknown_import_source_is_refused_with_the_hub_message() {
+    // The process boundary refuses an unknown source where the line is
+    // parsed, with the hub's sentence verbatim — not UNFIT.
+    let parsed = transport::parse_line(br#"{"id":"c","command":"import","args":{"source":"vim"}}"#);
+    assert_eq!(
+        parsed,
+        ParsedLine::Refused {
+            id: contract::CommandId("c".into()),
+            message: "`source` must be `claude-code` or `codex`.".into(),
+        }
+    );
+}
+
+#[test]
+fn import_source_with_an_extra_key_is_unfit() {
+    // Structural checks run before the source-name lookup: an extra key
+    // keeps UNFIT even when the source names no harness.
+    let parsed = transport::parse_line(
+        br#"{"id":"c","command":"import","args":{"source":"vim","extra":true}}"#,
+    );
+    assert_eq!(
+        parsed,
+        ParsedLine::Unfit {
+            id: contract::CommandId("c".into())
+        }
+    );
+}
+
+#[test]
+fn import_source_null_is_unfit() {
+    // An optional key is absent, never null: a null source keeps UNFIT
+    // instead of reading as both.
+    let parsed = transport::parse_line(br#"{"id":"c","command":"import","args":{"source":null}}"#);
+    assert_eq!(
+        parsed,
+        ParsedLine::Unfit {
+            id: contract::CommandId("c".into())
+        }
+    );
+}
+
+#[test]
+fn import_source_number_is_unfit() {
+    // A non-string source keeps UNFIT instead of naming the two sources.
+    let parsed = transport::parse_line(br#"{"id":"c","command":"import","args":{"source":42}}"#);
+    assert_eq!(
+        parsed,
+        ParsedLine::Unfit {
+            id: contract::CommandId("c".into())
+        }
+    );
+}
+
+#[test]
+fn unbuilt_command_is_unknown() {
+    // A name the wire does not build answers `unknown_command` with the
+    // line's own command name.
+    let parsed = transport::parse_line(br#"{"id":"c","command":"frobnicate","args":{}}"#);
+    assert_eq!(
+        parsed,
+        ParsedLine::Unknown {
+            id: contract::CommandId("c".into()),
+            command: "frobnicate".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn known_import_sources_forward() {
+    // Both wire names forward through the `Drive` seam; missing and empty
+    // `args` forward as both sources.
+    for args in [
+        r#"{"source":"codex"}"#,
+        r#"{"source":"claude-code"}"#,
+        r#"{}"#,
+    ] {
+        let line = format!(r#"{{"id":"c","command":"import","args":{args}}}"#);
+        let mut expected = Map::new();
+        if args != r#"{}"# {
+            let value: serde_json::Value = serde_json::from_str(args).unwrap();
+            expected = value.as_object().unwrap().clone();
+        }
+        assert_eq!(
+            transport::parse_line(line.as_bytes()),
+            ParsedLine::Forward {
+                id: contract::CommandId("c".into()),
+                command: "import".to_owned(),
+                args: expected,
+            },
+            "{args}"
+        );
+    }
+    assert_eq!(
+        transport::parse_line(br#"{"id":"c","command":"import"}"#),
+        ParsedLine::Forward {
+            id: contract::CommandId("c".into()),
+            command: "import".to_owned(),
+            args: Map::new(),
+        }
+    );
+}
+
+#[test]
+fn source_shaped_args_on_another_command_are_unfit() {
+    // The refusal names the import boundary only: the same args shape on
+    // any other built command keeps UNFIT.
+    let parsed = transport::parse_line(br#"{"id":"c","command":"tools","args":{"source":"vim"}}"#);
+    assert_eq!(
+        parsed,
+        ParsedLine::Unfit {
+            id: contract::CommandId("c".into())
+        }
+    );
+}
+
 // The shared admission context and helpers.
 
 #[test]

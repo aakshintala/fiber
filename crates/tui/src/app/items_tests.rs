@@ -1900,8 +1900,8 @@ fn take_wake_prefers_the_earlier_retry_over_the_status_tick() {
 #[test]
 fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
     use super::super::Kind;
-    use crate::import_report::ImportSource;
     use crate::input::Draft;
+    use contract::commands::ImportSource;
 
     let mut app = home();
     opened(&mut app);
@@ -1909,7 +1909,7 @@ fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
     opened_item(&mut app, "j_1");
     app.outbox.insert(
         "c_1".to_owned(),
-        Kind::Import(ImportSource::Codex),
+        Kind::Import(Some(ImportSource::Codex)),
         Draft::default(),
     );
     let accepted = other_line(
@@ -1938,7 +1938,7 @@ fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
     // notice and opens no second report.
     app.outbox.insert(
         "c_2".to_owned(),
-        Kind::Import(ImportSource::Codex),
+        Kind::Import(Some(ImportSource::Codex)),
         Draft::default(),
     );
     let malformed = other_line(DELEGATE_A, "command_accepted", json!({"command_id": "c_2"}));

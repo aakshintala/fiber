@@ -110,12 +110,28 @@ fn the_cursor_reverses_the_covered_character() {
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // The caret on `i`: the covered character stays, in the slab's
-    // colour on the text colour, with no dim (`docs/tui.md`, "The input
-    // box"). The taller box lifts the draft two rows above main's.
+    // The caret on `i`: the covered character stays, keeping the draft
+    // cell's own colours and inverting them, with no dim (`docs/tui.md`,
+    // "The input box"). The taller box lifts the draft two rows above
+    // main's.
     assert_eq!(buf[(6, 8)].symbol(), "i");
-    assert_eq!(buf[(6, 8)].style().fg, Some(Role::Surface.color()));
-    assert_eq!(buf[(6, 8)].bg, Role::Text.color());
+    assert_eq!(
+        buf[(6, 8)].style().fg,
+        buf[(5, 8)].style().fg,
+        "the covered cell keeps its neighbours' colours"
+    );
+    assert_eq!(
+        buf[(6, 8)].bg,
+        buf[(5, 8)].bg,
+        "the covered cell keeps its neighbours' colours"
+    );
+    assert!(
+        buf[(6, 8)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "the covered cell inverts"
+    );
     assert!(
         !buf[(6, 8)]
             .style()
@@ -155,11 +171,16 @@ fn the_cursor_draws_over_a_backward_selection() {
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     // The caret's cell draws last, over the selection: the covered `h`
-    // in the slab's colour on the text colour (`docs/tui.md`, "The input
-    // box").
+    // stays, reversing whatever the selection painted under it
+    // (`docs/tui.md`, "The input box").
     assert_eq!(buf[(5, 8)].symbol(), "h");
-    assert_eq!(buf[(5, 8)].style().fg, Some(Role::Surface.color()));
-    assert_eq!(buf[(5, 8)].bg, Role::Text.color());
+    assert!(
+        buf[(5, 8)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "the covered cell inverts over the selection"
+    );
 }
 
 #[test]

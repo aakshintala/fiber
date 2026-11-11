@@ -42,8 +42,21 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
         .and_then(serde_json::Value::as_object)
         .cloned()
         .unwrap_or_default();
+    // A failed `import` whose `args` are sound but whose `source` names
+    // no harness is refused naming the two sources. The check reads the
+    // raw line before the value moves into the command-line read.
+    let unknown_source =
+        contract::commands::is_unknown_import_source(&classified.command, map.get("args"));
     let parsed: Result<CommandLine, _> = serde_json::from_value(value);
     let Ok(parsed) = parsed else {
+        // An `import` whose `args` are sound but whose `source` names no
+        // harness is refused naming the two sources.
+        if unknown_source {
+            return ParsedLine::Refused {
+                id: classified.id,
+                message: "`source` must be `claude-code` or `codex`.".to_owned(),
+            };
+        }
         return unbuilt_or_unfit(classified);
     };
     match parsed.command {

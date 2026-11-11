@@ -472,13 +472,69 @@ pub struct CredentialArgs {
     pub label: String,
 }
 
+/// Which harness an import copies: the wire names the harness in
+/// lowercase, and any other name is refused where the line is parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ImportSource {
+    /// Claude Code, read from `~/.claude`.
+    #[serde(rename = "claude-code")]
+    ClaudeCode,
+    /// Codex, read from `~/.codex`.
+    #[serde(rename = "codex")]
+    Codex,
+}
+
+impl ImportSource {
+    /// The wire name the receipt and the report use: `claude-code` or
+    /// `codex`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ImportSource {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "claude-code" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
+            _ => Err(D::Error::custom(
+                "`source` must be `claude-code` or `codex`.",
+            )),
+        }
+    }
+}
+
+/// Whether an `import` line's `args` value names no harness while staying
+/// structurally sound: the command is `import`, `args` is an object with
+/// only `source`, and `source` is a string the `ImportSource` enum refuses.
+/// Only then does the refusal name the two sources; any other shape keeps
+/// the generic mapping.
+pub fn is_unknown_import_source(command: &str, args: Option<&Value>) -> bool {
+    if command != "import" {
+        return false;
+    }
+    let Some(Value::Object(map)) = args else {
+        return false;
+    };
+    if map.len() != 1 || !map.contains_key("source") {
+        return false;
+    }
+    let Some(Value::String(name)) = map.get("source") else {
+        return false;
+    };
+    serde_json::from_value::<ImportSource>(Value::String(name.clone())).is_err()
+}
+
 /// The `args` of `import`: `claude-code` or `codex`; absent means both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImportArgs {
     /// The source to import; absent means both sources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub source: Option<ImportSource>,
 }
 
 /// The `args` of `quota`.

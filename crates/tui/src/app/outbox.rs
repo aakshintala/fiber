@@ -9,12 +9,11 @@
 use std::collections::HashMap;
 
 use contract::commands::hub::{HubCommand, HubCommandLine};
-use contract::commands::{Command, CommandLine, HistoryArgs, SubscribeLevel};
+use contract::commands::{Command, CommandLine, HistoryArgs, ImportSource, SubscribeLevel};
 use contract::{CommandId, Seq, SessionId};
 use serde_json::Value;
 
 use super::Sent;
-use crate::import_report::ImportSource;
 use crate::input::Draft;
 
 /// What the terminal is attached to.
@@ -48,9 +47,9 @@ pub(crate) enum Kind {
     Shell,
     /// A built-in command such as `compact`, `reload` or `close`.
     Command,
-    /// An `import` for a named source or both; its answer's report is
-    /// titled from it.
-    Import(ImportSource),
+    /// An `import` for a named source or both (`None` for a bare
+    /// `/import`); its answer's report is titled from it.
+    Import(Option<ImportSource>),
 }
 
 /// The feature waiting for a command's answer.

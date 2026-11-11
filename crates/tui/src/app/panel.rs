@@ -136,8 +136,8 @@ struct SessionFigures {
 }
 
 /// Folds one session-figure envelope into `figures`: `session_status`,
-/// `preamble_built`, `model_changed`, `turn_completed`,
-/// `assistant_message_started`, the thinking latches,
+/// `preamble_built`, `model_changed`, `turn_started`,
+/// `turn_completed`, `assistant_message_started`, the thinking latches,
 /// `usage_recorded`, and the MCP down/ready lines. Any other envelope
 /// leaves `figures` alone, so each caller routes only its own
 /// session's lines here (`docs/tui.md`, "Swapped views").
@@ -167,8 +167,16 @@ fn fold_session_figures(figures: &mut SessionFigures, envelope: &Envelope) {
                 figures.credential = Some(changed.after.credential);
             }
         }
+        EventKind::TurnStarted => {
+            // Turns count every started turn carrying a turn id, the
+            // running one included, as `session_status` counts them
+            // (`docs/tui.md`, "The panel"; `docs/events.md`,
+            // `session_status`).
+            if envelope.turn_id.is_some() {
+                figures.turns = figures.turns.saturating_add(1);
+            }
+        }
         EventKind::TurnCompleted => {
-            figures.turns = figures.turns.saturating_add(1);
             figures.started_at = None;
             // A settled turn ends any thinking it streamed: a
             // thinking-only turn never draws a stale `∴`.
@@ -235,7 +243,6 @@ fn fold_session_figures(figures: &mut SessionFigures, envelope: &Envelope) {
         | EventKind::FiberExited
         | EventKind::Rewound
         | EventKind::Moved
-        | EventKind::TurnStarted
         | EventKind::StepStarted
         | EventKind::SteeringApplied
         | EventKind::SteeringQueue
@@ -375,6 +382,7 @@ impl PanelState {
             }
             EventKind::PreambleBuilt
             | EventKind::ModelChanged
+            | EventKind::TurnStarted
             | EventKind::TurnCompleted
             | EventKind::AssistantMessageStarted
             | EventKind::ReasoningDelta
@@ -444,7 +452,6 @@ impl PanelState {
             | EventKind::FiberExited
             | EventKind::Rewound
             | EventKind::Moved
-            | EventKind::TurnStarted
             | EventKind::StepStarted
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
@@ -544,6 +551,7 @@ impl PanelState {
             EventKind::SessionStatus
             | EventKind::PreambleBuilt
             | EventKind::ModelChanged
+            | EventKind::TurnStarted
             | EventKind::TurnCompleted
             | EventKind::AssistantMessageStarted
             | EventKind::ReasoningDelta
@@ -568,7 +576,6 @@ impl PanelState {
             | EventKind::FiberExited
             | EventKind::Rewound
             | EventKind::Moved
-            | EventKind::TurnStarted
             | EventKind::StepStarted
             | EventKind::SteeringApplied
             | EventKind::SteeringQueue
@@ -701,7 +708,7 @@ impl PanelState {
             .and_then(|delegate| delegate.figures.budget)
     }
 
-    /// How many of the delegate's turns have completed.
+    /// How many of the delegate's turns have started.
     pub(crate) fn delegate_turns_for(&self, session: &SessionId) -> u64 {
         self.delegate_for(session)
             .map(|delegate| delegate.figures.turns)
@@ -863,7 +870,7 @@ impl PanelState {
         self.figures.budget
     }
 
-    /// How many turns have completed.
+    /// How many turns have started.
     pub(crate) fn turns(&self) -> u64 {
         self.figures.turns
     }

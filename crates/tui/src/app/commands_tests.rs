@@ -37,6 +37,7 @@ fn first_run_enter_login(model: Option<String>) {
     *seam.targets.lock().unwrap() = Ok(vec![crate::configure::LoginTarget {
         name: "acme".to_owned(),
         kind: crate::configure::LoginKind::Key,
+        label: None,
     }]);
     let mut app = connected();
     app.set_configure(seam.clone());
@@ -848,16 +849,25 @@ fn report_keys_keep_the_held_conversation_position() {
 
 #[test]
 fn a_rejected_import_keeps_the_existing_notice_path() {
+    // An unknown source is refused locally with the hub's message:
+    // nothing goes out, the draft stays, and one notice shows.
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));
-    let id = lines[0]["id"].clone();
-    let rejected = session_line(
-        "command_rejected",
-        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
-    );
-    assert!(app.on_line(rejected).is_empty());
+    assert!(lines.is_empty());
+    assert!(app.outbox.pending.is_empty());
     assert_eq!(app.draft(), "/import vim");
-    assert_eq!(app.notice(), Some("No."));
+    assert_eq!(
+        app.notice(),
+        Some("`source` must be `claude-code` or `codex`.")
+    );
+    assert!(
+        notice_with(
+            &app,
+            ErrorCode::InvalidArguments,
+            "`source` must be `claude-code` or `codex`."
+        ),
+        "the refusal carries the hub's code and message"
+    );
 }
 
 #[test]
@@ -2298,21 +2308,17 @@ fn a_rejected_named_import_returns_its_draft_with_the_notice() {
 }
 
 #[test]
-fn an_accepted_unknown_source_import_settles_without_a_report() {
+fn an_unknown_import_source_sends_no_line_and_holds_no_entry() {
+    // No string source can be dispatched after the retype, so unknown
+    // input is refused before anything is sent: no line, no outbox
+    // entry, no report, and the draft stays for a retry.
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));
-    let id = lines[0]["id"].clone();
-    assert_eq!(lines[0]["args"], json!({"source": "vim"}));
-    // An unknown source stays a plain command: its accept closes the
-    // entry with no report and no notice.
-    let accepted = session_line(
-        "command_accepted",
-        json!({"command_id": id, "result": import_result()}),
-    );
-    assert!(app.on_line(accepted).is_empty());
-    assert!(app.import_report().is_none());
-    assert!(app.notices().is_empty());
+    assert!(lines.is_empty());
     assert!(app.outbox.pending.is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(app.draft(), "/import vim");
+    assert_eq!(app.notices().len(), 1);
 }
 
 /// A refused prompt keeps the draft and the working loop: the refusal

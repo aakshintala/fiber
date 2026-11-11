@@ -176,6 +176,15 @@ pub(crate) enum ParsedLine {
         /// The line's id, answering it.
         id: CommandId,
     },
+    /// A structurally sound `import` line whose string `source` names no
+    /// harness: answered `invalid_arguments` with the carried message,
+    /// the hub's sentence verbatim.
+    Refused {
+        /// The line's id, answering it.
+        id: CommandId,
+        /// The refusal's sentence.
+        message: String,
+    },
     /// No JSON object with an id: ignored, and the pipe stays open.
     Ignored,
 }
