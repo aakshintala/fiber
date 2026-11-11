@@ -11,15 +11,15 @@ expression: "snapshot_text(&setup, &grid, &[])"
  467                                                                                                                             scripted/s.json
  468                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
  469                                                                                                                             compacts at 400.0k           —
- 470                                                                                                                             then a summary, fresh context
- 471                                                                                                                             tokens in / out          0 / 0
- 472                                                                                                                             cache hits                   —
- 473                                                                                                                             cache resets in     [duration]
- 474                                                                                                                             cost                   unknown
- 475                                                                                                                             cost on subscription     $0.00
- 476                                                                                                                             speed, last reply            —
- 477                                                                                                                             turns                        1
- 478                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ 470                                                                                                                             tokens in / out          0 / 0
+ 471                                                                                                                             cache hits                   —
+ 472                                                                                                                             cache resets in     [duration]
+ 473                                                                                                                             cost                   unknown
+ 474                                                                                                                             cost on subscription     $0.00
+ 475                                                                                                                             speed, last reply            —
+ 476                                                                                                                             turns                        1
+ 477                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ 478
  479
  480
  481
