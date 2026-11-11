@@ -379,3 +379,4 @@ crates/tui/src/window.rs	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro
 crates/tui/src/window/images.rs	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/events.md	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/bug-red	fiber-4628	plan	2026-11-11T15:25:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
