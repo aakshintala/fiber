@@ -119,6 +119,7 @@ struct Hooks {
     held: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs after a takeover opens the log and before it appends its start
     /// record, so a test fails that append.
+    #[allow(clippy::type_complexity, reason = "the hook takes the just-opened log")]
     before_start_append: Option<Box<dyn Fn(&Log) + Send + Sync>>,
     /// Runs after a takeover appends its start record and before it binds,
     /// so a test lands keeper death in that window.
@@ -284,8 +285,8 @@ impl Runtime {
                             });
                             self.listen(socket, listener);
                             // The log is already stopped, and the next durable append reports it.
-                            if let Some(log) = log.as_ref() {
-                                if let Err(error) = log
+                            if let Some(log) = log.as_ref()
+                                && let Err(error) = log
                                     .log
                                     .append(
                                         &contract::events::Event::KeeperBound(
@@ -295,9 +296,8 @@ impl Runtime {
                                         None,
                                     )
                                     .map_err(|error| io::Error::other(error.to_string()))
-                                {
-                                    drop(error);
-                                }
+                            {
+                                drop(error);
                             }
                             self.files()?;
                             #[cfg(test)]

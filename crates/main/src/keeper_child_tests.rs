@@ -640,10 +640,10 @@ fn takeover_appends_started_then_bound() {
     let mut seen_started = false;
     let mut bound_after_started = false;
     for line in &lines {
-        match line.kind() {
-            EventKind::KeeperStarted => seen_started = true,
-            EventKind::KeeperBound if seen_started => bound_after_started = true,
-            _ => {}
+        if line.kind() == EventKind::KeeperStarted {
+            seen_started = true;
+        } else if seen_started && line.kind() == EventKind::KeeperBound {
+            bound_after_started = true;
         }
     }
     assert!(

@@ -266,7 +266,7 @@ fn keeper_state_at_expiry(
     let mut bounds: Vec<u64> = Vec::new();
     if !malformed {
         for (kind, seq, ts) in &records {
-            if !cutoff.map_or(true, |cut| *seq > cut) {
+            if !cutoff.is_none_or(|cut| *seq > cut) {
                 continue;
             }
             if kind == "keeper_started" {
@@ -2778,7 +2778,7 @@ fn record_scan_trailing_fragment_drops() {
 fn keeper_dead_at_expiry_with_no_takeover_names_never_spawned_died_before_opening_or_failed_to_record()
  {
     // A text-only scripted session runs to clean exit: no command ever runs,
-    // so per `docs/tools.md`, "One keeper per session" no keeper ever
+    // so per `docs/tools.md`, "The keeper" no keeper ever
     // spawns. The re-created leftover socket (bound path, no listener) is the
     // exact filesystem state a SIGKILLed keeperless session leaves, so expiry
     // is certain, not raced.
@@ -2825,7 +2825,8 @@ fn keeper_dead_at_expiry_with_no_takeover_names_never_spawned_died_before_openin
     keeper_watchdog.stand_down(setup.deadline.cleanup_phase());
     // The leftover refusing socket: bound path, no listener.
     let socket = setup.session_socket(id);
-    let _ = fs::remove_file(&socket);
+    // The session may have unlinked its socket on exit; a stale one goes too.
+    drop(fs::remove_file(&socket));
     let listener = UnixListener::bind(&socket).unwrap();
     drop(listener);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

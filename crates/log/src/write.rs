@@ -1036,6 +1036,10 @@ impl Log {
     /// Replaces the event file with a read-only handle on it, so the next
     /// write fails for real. Test-only.
     #[cfg(any(test, feature = "fault-hooks"))]
+    #[allow(
+        clippy::expect_used,
+        reason = "test-only fault hook; a failure is the test's"
+    )]
     pub fn break_writes(&self) {
         let mut inner = self.lock();
         let path = inner.dir.join(EVENTS);
