@@ -192,12 +192,6 @@ crates/tui/src/event_loop_settings_tests.rs	fiber-4618	plan	2026-11-11T04:01:36Z
 crates/tui/src/app/snapshots/tui__app__config_views__tests__settings_has_no_screen_reader_row.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/snapshots/tui__app__config_views__tests__settings_has_no_screen_reader_row_attached.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-providers/databricks/thinking-overlay.json	fiber-4610	plan	2026-11-11T04:52:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/model-routing.md	fiber-4610	plan	2026-11-11T04:52:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/models_dev.rs	fiber-4610	plan	2026-11-11T05:00:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/models_dev_tests.rs	fiber-4610	plan	2026-11-11T05:00:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-providers/databricks/thinking.lua	fiber-4610	plan	2026-11-11T05:08:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/providers/databricks.rs	fiber-4610	plan	2026-11-11T05:08:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/paste_tests.rs	fiber-4491	plan	2026-11-11T05:29:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/top_tests.rs	fiber-4491	plan	2026-11-11T05:29:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/reconnect_tests.rs	fiber-4491	plan	2026-11-11T05:29:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -278,7 +272,6 @@ crates/tui/src/view.rs	fiber-4596	plan	2026-11-11T08:56:56Z	roundhouse-7010-plus
 .github/workflows/ci.yml	fiber-4630	plan	2026-11-11T09:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4630	plan	2026-11-11T09:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/doc-citations.allow	fiber-4618	plan	2026-11-11T09:42:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-research/databricks-gateway-probe/README.md	fiber-4610	plan	2026-11-11T09:54:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/models_dev.rs	fiber-4633	plan	2026-11-11T10:19:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/models_dev_tests.rs	fiber-4633	plan	2026-11-11T10:19:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/models_dev_table.rs	fiber-4633	plan	2026-11-11T10:32:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
