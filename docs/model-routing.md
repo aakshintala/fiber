@@ -628,8 +628,10 @@ For each model:
 - its protocol and base URL, which can differ between models of one provider,
   and may name a per-account host ("A per-account host")
 - compatibility flags the native protocol reads, such as whether the vendor
-  accepts `store`, which field carries the token limit, and which thinking
-  dialect it speaks
+  accepts `store`, which field carries the token limit, which thinking
+  dialect it speaks, and whether the request leaves the `strict` key off
+  every tool (`compat.no_strict`, which `claude-opus-4-1` needs on the
+  Databricks gateway: it rejects `strict` even as `false`)
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees"), except the Databricks
@@ -830,7 +832,12 @@ models work only through its Anthropic route, because its default route rejects
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. A
 `gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
-carries `compat.gemini` on the protocol already chosen. All of that is data.
+carries `compat.gemini` on the protocol already chosen. Two Claude rows
+differ per model, as probed through the gateway: the `claude-sonnet-4-5`
+rows carry no `deferred_tools`, because the gateway rejects their deferred
+load; and `claude-opus-4-1` carries `compat.no_strict`, because the gateway
+rejects the `strict` key on it, even as `false`, so its tools are sent with
+no `strict` key at all. All of that is data.
 
 ### Model discovery
 
