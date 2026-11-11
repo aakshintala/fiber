@@ -966,7 +966,7 @@ fn two_services_without_endpoints_group_into_one_notice() {
     let models = run(&setup, &["models", "--json"], &credentials(&host));
     assert_eq!(models.code, Some(0), "stderr: {}", models.stderr);
     // A pass that finds several problems of one code raises one notice whose
-    // message gives the count (`docs/errors.md`, "Notices"): two omissions.
+    // message gives the count (`docs/errors.md`, "Registry"): two omissions.
     assert!(
         models.stderr.contains("2 `model_omitted` notices:"),
         "stderr: {}",
@@ -986,7 +986,7 @@ fn two_services_without_endpoints_group_into_one_notice() {
             models.stderr
         );
     }
-    // The grouped notice lists each item (`docs/errors.md`, "Notices"): two items.
+    // The grouped notice lists each item (`docs/errors.md`, "Registry"): two items.
     assert_eq!(
         models
             .stderr
@@ -1048,6 +1048,7 @@ fn a_warm_cache_names_the_omission_once_on_a_later_ask() {
         .iter()
         .filter(|line| line["kind"] == "notice")
         .collect();
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(first_notices.len(), 1, "{first_notices:?}");
     assert_eq!(first_notices[0]["payload"]["code"], "model_omitted");
 
@@ -1070,6 +1071,7 @@ fn a_warm_cache_names_the_omission_once_on_a_later_ask() {
         .iter()
         .filter(|line| line["kind"] == "notice")
         .collect();
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0]["payload"]["code"], "model_omitted");
     assert_eq!(
