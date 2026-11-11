@@ -313,3 +313,5 @@ providers/vertex/providers/vertex.json	fiber-4633	plan	2026-11-11T10:32:49Z	roun
 providers/databricks/thinking.lua	fiber-4633	plan	2026-11-11T10:32:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/tests/models-dev.json	fiber-4633	plan	2026-11-11T10:32:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/keeper_child.rs	fiber-4628	plan	2026-11-11T11:10:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/compiled_in.rs	fiber-4633	plan	2026-11-11T11:11:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_table/bedrock.rs	fiber-4633	plan	2026-11-11T11:11:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
