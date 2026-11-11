@@ -2421,7 +2421,7 @@ const RESTORE: &[u8] =
 
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
-/// watched pty chunks. The pty is 160 columns wide so the whole foot
+/// watched pty chunks. The pty is 200 columns wide so the whole foot
 /// hint shows, naming the rebound key.
 #[track_caller]
 fn spawn_run_with_launch(
@@ -2477,7 +2477,8 @@ fn run_home_names_the_key_maps_bound_key() {
     let mut started = launch();
     started.keys = crate::KeysSetup { user: keys };
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (mut pair, finished, frames) = spawn_run_with_launch(hub, vec![b"quit" as &[u8]], started);
+    let (mut pair, finished, frames) =
+        spawn_run_with_launch_at_height(hub, vec![b"quit" as &[u8]], started, 200, 12);
     let first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     assert!(
         first.starts_with(START),
