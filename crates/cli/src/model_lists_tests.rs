@@ -602,15 +602,10 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
         .unwrap(),
     );
     assert!(catalogue.models.is_empty());
-    assert!(
-        catalogue
-            .notices
-            .iter()
-            .any(|notice| notice.message.contains("acme/m1")
-                && notice.message.contains("context_window")),
-        "{:?}",
-        catalogue.notices
-    );
+    // A cache-substituted invalid list drains silently at load: its one
+    // `model_invalid` notice per reason is drawn in `add_lua`, never here.
+    // A `Cached` read never runs `add_lua`, so no notice names `acme/m1`.
+    assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
 }
 
 #[test]
@@ -1065,8 +1060,8 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     );
     let setup = Setup::new("fiber-model-list-apart");
     install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
-    // A cached model with no context window: a `model_invalid` notice
-    // from the cached admission, before the placeholder fill.
+    // A cached model with no context window drains silently at load,
+    // before the placeholder fill.
     setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
     config::write_model_cache(
         &setup.home(),
@@ -1092,11 +1087,11 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
         .unwrap()
     };
     let (_providers, _config, others, unconfigured) = read();
-    assert_eq!(others.len(), 1, "{others:?}");
-    assert!(others[0].message.contains("bad/m1"), "{others:?}");
-    assert!(others[0].message.contains("context_window"), "{others:?}");
-    assert_eq!(others[0].code, ErrorCode::ModelInvalid);
-    assert_eq!(others[0].extension.as_deref(), Some("bad-ext"));
+    // A cache-substituted invalid list drains silently at load: its one
+    // `model_invalid` notice per reason is drawn in `add_lua`, never here.
+    // A `Cached` read never runs `add_lua`, so no invalid notice stays
+    // beside the placeholder ones.
+    assert!(others.is_empty(), "{others:?}");
     assert_eq!(unconfigured.len(), 1, "{unconfigured:?}");
     assert!(
         unconfigured[0].message.contains("acme/m"),
@@ -1433,7 +1428,7 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
     setup.install_data("bare-ext", "bare", &["b1"], &json!({}));
     config::delete_credential(&setup.home(), "bare", "default").unwrap();
-    // An invalid cached model stays a notice beside the listed rows.
+    // An invalid cached model drains silently beside the listed rows.
     setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
     config::write_model_cache(
         &setup.home(),
@@ -1448,8 +1443,10 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     .unwrap();
     let catalogue = cached_list(&setup);
     assert_eq!(references(&catalogue), ["acme/m1"]);
-    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
-    assert!(catalogue.notices[0].message.contains("bad/m1"));
+    // A cache-substituted invalid list drains silently at load: its one
+    // `model_invalid` notice per reason is drawn in `add_lua`, never here.
+    // A `Cached` read never runs `add_lua`, so no notice names `bad/m1`.
+    assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
 }
 
 #[test]

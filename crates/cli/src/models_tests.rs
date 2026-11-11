@@ -2186,8 +2186,8 @@ fn a_model_less_search_keeps_cache_error_notices_and_installed_rows() {
         }]),
     )
     .unwrap();
-    // The search names no model: the installed rows list, and the cached
-    // admission's error notice stays beside them.
+    // The search names no model: the installed rows list, with no cached
+    // invalid notice beside them.
     let (result, out, err) = setup.run(
         Some("acme"),
         false,
@@ -2196,6 +2196,8 @@ fn a_model_less_search_keeps_cache_error_notices_and_installed_rows() {
     );
     result.unwrap();
     assert!(out.contains("acme/m1"), "{out:?}");
-    assert!(err.contains("bad/m1"), "{err:?}");
-    assert!(err.contains("context_window"), "{err:?}");
+    // A cache-substituted invalid list drains silently at load: its one
+    // `model_invalid` notice per reason is drawn in `add_lua`, never here.
+    // A `Cached` read never runs `add_lua`, so no notice names `bad/m1`.
+    assert!(!err.contains("bad/m1"), "{err:?}");
 }
