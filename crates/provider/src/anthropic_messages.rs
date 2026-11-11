@@ -169,7 +169,7 @@ impl Provider for Messages {
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        wire_tools(tools, self.deferred_tools)
+        wire_tools(tools, self.deferred_tools, self.endpoint.compat.no_strict)
     }
 
     fn defers(&self) -> bool {
@@ -206,8 +206,14 @@ impl Provider for Messages {
 /// tool search tool itself"), which an extension may mark deferred, and a
 /// hosted tool, which has no definition to load (`research/tool-search`).
 /// A deferred tool still spends a strict slot: the budget counts every
-/// tool that fits.
-fn wire_tools(tools: &[ToolDefinition], deferring: bool) -> Vec<Map<String, Value>> {
+/// tool that fits. With `no_strict`, no tool carries a `"strict"` key at
+/// all, so no tool spends a strict slot: the gateway rejects `strict`
+/// even as `false`.
+fn wire_tools(
+    tools: &[ToolDefinition],
+    deferring: bool,
+    no_strict: bool,
+) -> Vec<Map<String, Value>> {
     let sorted = crate::wire::sorted_by_name(tools);
     let mut strict_left = MAX_STRICT_TOOLS;
     sorted
@@ -217,6 +223,17 @@ fn wire_tools(tools: &[ToolDefinition], deferring: bool) -> Vec<Map<String, Valu
             // schema, and no strict slot.
             if let Some(kind) = &tool.hosted {
                 return crate::wire::object(json!({"name": tool.name, "type": kind}));
+            }
+            if no_strict {
+                let mut wired = crate::wire::object(json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }));
+                if deferring && tool.deferred && tool.name != TOOL_SEARCH {
+                    wired.insert("defer_loading".into(), json!(true));
+                }
+                return wired;
             }
             let strict = strict_left > 0
                 && strict::fits(&tool.input_schema)
@@ -241,11 +258,11 @@ fn wire_tools(tools: &[ToolDefinition], deferring: bool) -> Vec<Map<String, Valu
 /// The tools as sent: the rewound build verbatim, else the tools Fiber
 /// builds. Shared by the body and the digests, so both hash the same
 /// bytes.
-fn wired_tools(request: &ModelRequest, deferring: bool) -> Vec<Value> {
+fn wired_tools(request: &ModelRequest, deferring: bool, no_strict: bool) -> Vec<Value> {
     request
         .sent_tools
         .clone()
-        .unwrap_or_else(|| wire_tools(&request.tools, deferring))
+        .unwrap_or_else(|| wire_tools(&request.tools, deferring, no_strict))
         .into_iter()
         .map(Value::Object)
         .collect()
@@ -268,7 +285,7 @@ fn system(request: &ModelRequest) -> Option<Value> {
 /// from the body when the request sends none, so their digest is absent
 /// too.
 fn hashes(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> PrefixHashes {
-    let tools = wired_tools(request, deferring);
+    let tools = wired_tools(request, deferring, endpoint.compat.no_strict);
     PrefixHashes {
         system: system(request).map(|system| crate::cache_diagnostics::segment(&system)),
         tools: (!tools.is_empty()).then(|| crate::cache_diagnostics::segment(&Value::Array(tools))),
@@ -283,7 +300,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> Vec<u8>
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
-    let tools = wired_tools(request, deferring);
+    let tools = wired_tools(request, deferring, endpoint.compat.no_strict);
     let bedrock = endpoint.compat.bedrock_invoke;
     let mut body = Map::new();
     // Bedrock's Invoke API names the model in the path and streams by the
