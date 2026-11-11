@@ -1163,17 +1163,21 @@ fn session_card_with_budget() {
     insta::assert_snapshot!("session_card_with_budget", screen(&app, 160, 40));
 }
 
-/// The Session card's model row for one scripted model call: the call
-/// and reasoning start markers precede streamed thinking, and the whole
-/// screen shows `high ∴` with the glyph dim; once the model's text
-/// starts the `∴` is gone, and the settled call draws the plain level
-/// again (`docs/tui.md`, "The panel").
+/// The Session card's model row for one scripted model call inside its
+/// turn: the turn starts first (`docs/loop.md`, "Starting a turn"), then
+/// the call and reasoning start markers precede streamed thinking, and
+/// the whole screen shows `high ∴` with the glyph dim; once the model's
+/// text starts the `∴` is gone, and the settled call draws the plain
+/// level again (`docs/tui.md`, "The panel").
 #[test]
 fn session_card_shows_the_thinking_glyph_while_the_model_thinks() {
     use crate::app::panel::Spot;
     use crate::theme::{Role, style};
     let mut app = attached(160, 40);
     app.on_line(preamble_line(Some(800)));
+    // The turn starts before the first model request (`docs/loop.md`,
+    // "Starting a turn"), so the scripted call folds into it.
+    app.on_line(started_line("t_1"));
     app.on_line(session_line(
         "assistant_message_started",
         serde_json::json!({}),
@@ -1215,9 +1219,9 @@ fn session_card_shows_the_thinking_glyph_while_the_model_thinks() {
         "assistant_message_completed",
         serde_json::json!({"outcome": "completed"}),
     ));
-    // The settled turn counts: its start carries the turn id, so the
-    // cleared snapshot keeps turns at 1 with no running-turn card.
-    app.on_line(started_line("t_1"));
+    // Closing the turn the call ran in keeps turns at 1; the cleared
+    // snapshot pins that turn's card with its streamed thinking and
+    // reply.
     app.on_line(session_line(
         "turn_completed",
         serde_json::json!({"outcome": "completed"}),
