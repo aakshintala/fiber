@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use config::{Config, ModelData, ProviderData, Source};
 use contract::ErrorCode;
-use contract::events::Notice;
+use contract::events::{ExtensionFailure, Notice};
+use contract::shapes::Failure;
 
 use crate::git::short_name;
 use crate::{API, Error, LuaProvider, ModelsArg, SessionExtensions};
@@ -52,6 +53,11 @@ pub struct Providers {
     /// The extension whose data or `models()` supplied each provider's
     /// current models, by provider name.
     extension_of: BTreeMap<String, String>,
+    /// Each `models()` discovery failure since the last
+    /// [`Providers::take_discovery_failures`] drain, in registration
+    /// order: one entry per failing registration, each mirroring its
+    /// per-entry notice.
+    discovery_failures: Vec<ExtensionFailure>,
     /// Each provider's models' addendum texts, by provider name then
     /// model id: read with the data that declared them and replaced
     /// together with it.
@@ -107,6 +113,44 @@ impl Model<'_> {
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider.name, self.model.id)
     }
+}
+
+/// Drains every entry a provider marked for deliberate omission into one
+/// `model_omitted` notice per entry, in model order, leaving kept models
+/// unchanged. Runs before [`leave_out_invalid`] at every call site, so a
+/// marked entry is never validated: an omission draws no `model_invalid`
+/// for whatever its declaration holds. The reason comes verbatim from the
+/// mark, without duplicating its terminal punctuation; parsing already
+/// rejects an empty one.
+pub fn leave_out_omitted(
+    provider: &str,
+    extension: &str,
+    models: &mut Vec<ModelData>,
+) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    let mut kept = Vec::new();
+    for model in models.drain(..) {
+        match model.omit_reason.as_deref() {
+            Some(reason) => {
+                let end = if reason.trim_end().ends_with(['.', '!', '?']) {
+                    ""
+                } else {
+                    "."
+                };
+                notices.push(Notice {
+                    code: ErrorCode::ModelOmitted,
+                    message: format!(
+                        "The model `{provider}/{}` was left out of the model list: {reason}{end}",
+                        model.id
+                    ),
+                    extension: Some(extension.to_owned()),
+                });
+            }
+            None => kept.push(model),
+        }
+    }
+    *models = kept;
+    notices
 }
 
 /// Removes every model that declares no `context_window`, whose `web_search`
@@ -510,8 +554,13 @@ impl Providers {
             for mut data in datas {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
+                // A warm cache feeds this admission and `add_lua` with the
+                // same marked list, so the marks drain here without emitting:
+                // each omission draws its one `model_omitted` notice there,
+                // not twice. A static list still emits through `admit`.
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
+                    let _ = leave_out_omitted(&data.name, &manifest.name, &mut data.models);
                 }
                 notices.extend(providers.admit(&data.name, &manifest.name, &mut data.models));
                 // One extension's addenda are read into a local buffer
@@ -572,13 +621,15 @@ impl Providers {
         }
     }
 
-    /// Leaves out the models `extension` may not serve: first the invalid
-    /// ones, then the ones whose `base_url` the manifest's entry for
-    /// `provider` does not list. A missing entry admits no model. Every
-    /// extension-supplied model list passes through here before entering
-    /// the registry; only the built-in scripted provider's model does not.
+    /// Leaves out the models `extension` may not serve: first the
+    /// deliberately omitted ones, then the invalid ones, then the ones
+    /// whose `base_url` the manifest's entry for `provider` does not list.
+    /// A missing entry admits no model. Every extension-supplied model
+    /// list passes through here before entering the registry; only the
+    /// built-in scripted provider's model does not.
     fn admit(&self, provider: &str, extension: &str, models: &mut Vec<ModelData>) -> Vec<Notice> {
-        let mut notices = leave_out_invalid(provider, extension, models);
+        let mut notices = leave_out_omitted(provider, extension, models);
+        notices.extend(leave_out_invalid(provider, extension, models));
         let empty = Vec::new();
         let listed = self
             .declared
@@ -623,6 +674,14 @@ impl Providers {
             notices.extend(self.add_lua(extension, provider, config, run, env));
         }
         notices
+    }
+
+    /// Each `models()` discovery failure `add_lua` recorded since the
+    /// last drain, one entry per failing registration with no dedupe,
+    /// each mirroring its per-entry notice. The drain runs once per
+    /// rebuild, so a second call cannot double-report.
+    pub fn take_discovery_failures(&mut self) -> Vec<ExtensionFailure> {
+        std::mem::take(&mut self.discovery_failures)
     }
 
     /// The installed providers' names, sorted.
@@ -772,6 +831,18 @@ impl Providers {
         let mut models = match provider.models(&arg) {
             Ok(models) => models,
             Err(e) => {
+                // The programmatic record mirrors the notice below: the
+                // notice path keeps working as it does now.
+                self.discovery_failures.push(ExtensionFailure {
+                    provider: name.clone(),
+                    extension: Some(extension.to_owned()),
+                    error: Failure {
+                        code: e.code(),
+                        message: e.to_string(),
+                        retry_after_ms: None,
+                        provider: None,
+                    },
+                });
                 return vec![Notice {
                     code: e.code(),
                     message: e.to_string(),
@@ -1112,7 +1183,8 @@ impl Providers {
             .map(|(extension, _)| extension.clone());
         let mut models = models;
         let Some(owner) = owner else {
-            let mut notices = leave_out_invalid(name, name, &mut models);
+            let mut notices = leave_out_omitted(name, name, &mut models);
+            notices.extend(leave_out_invalid(name, name, &mut models));
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
             return notices;
         };

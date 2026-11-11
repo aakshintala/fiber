@@ -90,6 +90,7 @@ impl Providers {
             thinking_levels: Vec::new(),
             thinking_default: None,
             prompt_addendum: None,
+            omit_reason: None,
         });
     }
 }

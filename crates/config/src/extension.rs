@@ -115,6 +115,22 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+/// Reads a key that, when present, must name a reason: `null`, a
+/// non-string, an empty string or a whitespace-only string is an error,
+/// not the same as an absent key.
+fn present_non_empty<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reason = String::deserialize(deserializer)?;
+    if reason.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "`omit_reason` names the provider's reason when present",
+        ));
+    }
+    Ok(Some(reason))
+}
+
 /// Whether `name` is one `fiber.command` accepts: non-empty with no
 /// whitespace, `/` or `:`.
 fn is_command_name(name: &str) -> bool {
@@ -419,6 +435,11 @@ pub struct ModelData {
     /// (`docs/system-prompt.md`, "The model's addendum").
     #[serde(default)]
     pub prompt_addendum: Option<String>,
+    /// The omission mark on an entry left out on purpose — set by a
+    /// provider's `models()` return or carried by static provider data:
+    /// the provider's reason. Absent means kept.
+    #[serde(default, deserialize_with = "present_non_empty")]
+    pub omit_reason: Option<String>,
 }
 
 /// A wire protocol (`docs/model-routing.md`, "Protocols and providers").
@@ -781,3 +802,54 @@ pub fn host_shape(value: &str) -> Option<&str> {
 #[cfg(test)]
 #[path = "extension_set_tests.rs"]
 mod extension_set_tests;
+
+#[cfg(test)]
+mod omit_reason_tests {
+    #![allow(clippy::unwrap_used, reason = "a failure is the test's")]
+
+    use serde_json::json;
+
+    use super::ModelData;
+
+    /// A present mark is kept verbatim: the drain in `extensions` reports
+    /// the provider's own words (`docs/model-routing.md`, "Model discovery").
+    #[test]
+    fn present_is_kept_verbatim() {
+        let data: ModelData = serde_json::from_value(json!({
+            "id": "gone", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "omit_reason": "no serving endpoint with a matching name",
+        }))
+        .unwrap();
+        assert_eq!(
+            data.omit_reason.as_deref(),
+            Some("no serving endpoint with a matching name")
+        );
+    }
+
+    #[test]
+    fn absent_means_kept() {
+        let data: ModelData = serde_json::from_value(json!({
+            "id": "ok", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+        }))
+        .unwrap();
+        assert_eq!(data.omit_reason, None);
+    }
+
+    /// An empty or blank mark names no reason, and neither do `null` or a
+    /// non-string: `present_non_empty` refuses each, so a malformed
+    /// `models()` list fails as `BadReturn` on the existing path
+    /// (`docs/model-routing.md`, "Model discovery").
+    #[test]
+    fn empty_blank_null_or_non_string_is_invalid() {
+        for reason in [json!(""), json!("   "), json!(null), json!(7)] {
+            let result = serde_json::from_value::<ModelData>(json!({
+                "id": "gone", "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1",
+                "omit_reason": reason,
+            }));
+            assert!(result.is_err(), "{reason}");
+        }
+    }
+}

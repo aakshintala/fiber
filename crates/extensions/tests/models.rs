@@ -14,7 +14,7 @@ use common::{Setup, config, install, lua_named, manifest, provider, write};
 use config::{ModelData, Secret, write_model_cache};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use extensions::{Error, ModelsArg, Providers, leave_out_invalid};
+use extensions::{Error, ModelsArg, Providers, leave_out_invalid, leave_out_omitted};
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, NoLock};
 use serde_json::json;
@@ -795,6 +795,148 @@ fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     );
 }
 
+#[test]
+fn leave_out_omitted_drains_a_marked_entry_with_its_reason() {
+    let list = json!([
+        {"id": "gone", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+         "omit_reason": "no serving endpoint with a matching name"},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_omitted("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/gone` was left out of the model list: \
+         no serving endpoint with a matching name."
+    );
+}
+
+#[test]
+fn leave_out_omitted_keeps_a_reason_terminal_period() {
+    // A provider reason that already ends with terminal punctuation draws no
+    // second period (`docs/code-quality.md`, "What a reviewer checks").
+    let list = json!([
+        {"id": "gone", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+         "omit_reason": "No endpoint."},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_omitted("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1);
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/gone` was left out of the model list: No endpoint."
+    );
+}
+
+#[test]
+fn leave_out_omitted_drains_every_entry_when_all_are_marked() {
+    let list = json!([
+        {"id": "b", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+         "omit_reason": "first reason"},
+        {"id": "a", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+         "omit_reason": "second reason"}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_omitted("acme", "acme", &mut models);
+    assert!(models.is_empty(), "{models:?}");
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.code == ErrorCode::ModelOmitted),
+        "{notices:?}"
+    );
+    // No order is promised across entries, so the messages are asserted
+    // as a set.
+    let mut messages = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect::<Vec<_>>();
+    messages.sort_unstable();
+    assert_eq!(
+        messages,
+        [
+            "The model `acme/a` was left out of the model list: second reason.",
+            "The model `acme/b` was left out of the model list: first reason.",
+        ]
+    );
+}
+
+#[test]
+fn set_models_marks_an_omission_without_validating_it() {
+    let mut providers = Providers::default();
+    // No installed extension declares `ghost`, so the orphan branch runs
+    // with `ghost` standing in as the extension. The entry is both marked
+    // and missing `context_window`: the drain runs before validation, so
+    // only the omission notice is drawn, never `model_invalid`.
+    let marked: ModelData = serde_json::from_value(json!({
+        "id": "gone", "protocol": "anthropic-messages",
+        "base_url": "http://127.0.0.1:1/v1",
+        "omit_reason": "no serving endpoint with a matching name",
+    }))
+    .unwrap();
+    let notices = providers.set_models("ghost", vec![marked]);
+    assert!(providers.resolve("ghost/gone").is_err());
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
+    assert_eq!(notices[0].extension.as_deref(), Some("ghost"));
+    assert_eq!(
+        notices[0].message,
+        "The model `ghost/gone` was left out of the model list: \
+         no serving endpoint with a matching name."
+    );
+}
+
+#[test]
+fn a_static_marked_model_is_left_out_with_an_omitted_notice() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["kept"]);
+    data["models"].as_array_mut().unwrap().push(json!({
+        "id": "gone", "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+        "omit_reason": "no serving endpoint with a matching name",
+    }));
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/kept").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/gone").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/gone` was left out of the model list: \
+         no serving endpoint with a matching name."
+    );
+}
+
 /// A bare `acme` Lua provider whose login is stored, so the credential
 /// gate lets `models()` run: what most `add_lua` tests use.
 fn lua_acme(setup: &Setup, dir: &str, models_run: &str) -> std::sync::Arc<extensions::LuaProvider> {
@@ -1035,6 +1177,78 @@ fn a_failing_models_leaves_no_models_with_the_errors_code() {
         "{}",
         notices[0].message
     );
+}
+
+#[test]
+fn a_failing_models_records_one_discovery_failure_beside_its_notice() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(&setup, "ext", "error(\"boom\")");
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    // The notice path keeps working as it does now.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+    // The failure is recorded beside it, with the same code and message.
+    let failures = providers.take_discovery_failures();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[0].error.code, ErrorCode::ExtensionFailed);
+    assert_eq!(failures[0].error.message, notices[0].message);
+    // The drain reports once: a second call finds nothing left.
+    assert!(providers.take_discovery_failures().is_empty());
+}
+
+#[test]
+fn two_failing_registrations_of_one_provider_record_two_failures() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(&setup, "ext", "error(\"boom\")");
+    let first = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(first.len(), 1, "{first:?}");
+    // A second extension registering the same provider name whose
+    // `models()` also fails records again: no dedupe, one entry per
+    // failing registration, each carrying its own extension.
+    let again = lua_acme(&setup, "ext2", "error(\"boom\")");
+    let second = providers.add_lua(
+        "other-ext",
+        &again,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(second.len(), 1, "{second:?}");
+    let failures = providers.take_discovery_failures();
+    assert_eq!(failures.len(), 2);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[1].provider, "acme");
+    assert_eq!(failures[1].extension.as_deref(), Some("other-ext"));
 }
 
 #[test]

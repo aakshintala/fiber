@@ -77,6 +77,18 @@
         "text"
       ],
       "cost": null
+    },
+    {
+      "id": "databricks-gamma",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 16000,
+      "max_output_tokens": 2000,
+      "input": [
+        "text"
+      ],
+      "cost": null,
+      "omit_reason": "no serving endpoint with a matching name"
     }
   ]
 }
