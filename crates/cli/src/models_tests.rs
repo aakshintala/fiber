@@ -2188,6 +2188,8 @@ fn a_model_less_search_keeps_cache_error_notices_and_installed_rows() {
     .unwrap();
     // The search names no model: the installed rows list, and the cached
     // admission's error notice stays beside them.
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     let (result, out, err) = setup.run(
         Some("acme"),
         false,

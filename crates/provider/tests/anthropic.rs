@@ -366,6 +366,119 @@ fn deferred_tools_spend_the_strict_budget_and_tool_search_takes_none() {
     assert!(sent[21].get("defer_loading").is_none());
 }
 
+fn no_strict_endpoint(server: &ProviderServer) -> Endpoint {
+    Endpoint {
+        compat: provider::Compat {
+            no_strict: true,
+            ..provider::Compat::default()
+        },
+        ..endpoint(server)
+    }
+}
+
+#[test]
+fn a_no_strict_model_sends_tools_with_no_strict_key() {
+    // `docs/tools.md`, "Which tools the model sees": every tool is declared
+    // on every request, in full or deferred. The Databricks gateway rejects
+    // `strict` even as `false` on `claude-opus-4-1`, so its tools carry no
+    // `strict` key at all: not a fitting tool, not a deferred one, not the
+    // loose `tool_search`, not a hosted one, and not the tools past the
+    // 20-tool budget.
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let protocol = Messages::new(no_strict_endpoint(&server)).deferred_tools(true);
+    let mut tools: Vec<ToolDefinition> = (0..21)
+        .map(|i| strict_tool(&format!("tool_{i:02}"), i == 0))
+        .collect();
+    tools.push(search_tool(false));
+    tools.push(ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({"type": "object"}),
+        deferred: true,
+        hosted: Some("web_search_20250305".into()),
+    });
+    let wired = wired(&protocol, &tools);
+    assert_eq!(wired.len(), tools.len());
+    for tool in &wired {
+        assert!(tool.get("strict").is_none(), "{tool}");
+    }
+    let mut req = request();
+    req.tools = tools;
+    run(protocol.call(&req)).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(sent, Value::Array(wired));
+    let sent = sent.as_array().unwrap();
+    let by_name = |name: &str| {
+        sent.iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+    };
+    assert_eq!(by_name("tool_00")["defer_loading"], true);
+    for i in 1..21 {
+        let name = format!("tool_{i:02}");
+        assert!(
+            by_name(&name).get("defer_loading").is_none(),
+            "{name} is not deferred"
+        );
+        assert!(by_name(&name).get("strict").is_none(), "{name}");
+    }
+    assert!(by_name("tool_search").get("defer_loading").is_none());
+    assert!(by_name("tool_search").get("strict").is_none());
+    assert_eq!(
+        by_name("web_search"),
+        &json!({"name": "web_search", "type": "web_search_20250305"})
+    );
+}
+
+#[test]
+fn a_no_strict_model_strips_strict_from_rewound_tools() {
+    // `docs/events.md`, "Rewind": a rewound session's first request sends its
+    // parent's logged build verbatim. With `compat.no_strict` that build's
+    // `strict` keys still go out, so they are stripped here; every other key
+    // stays as logged.
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let protocol = Messages::new(no_strict_endpoint(&server)).deferred_tools(true);
+    let schema = weather_tool().input_schema;
+    let rewound = vec![
+        json!({
+            "name": "a_full",
+            "description": "Weather for a city.",
+            "input_schema": schema.clone(),
+            "strict": true,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        json!({
+            "name": "b_deferred",
+            "description": "Weather for a city.",
+            "input_schema": schema,
+            "strict": false,
+            "defer_loading": true,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ];
+    let mut req = request();
+    req.tools = vec![];
+    req.sent_tools = Some(rewound);
+    run(protocol.call(&req)).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    let sent = sent.as_array().unwrap();
+    assert_eq!(sent.len(), 2);
+    for tool in sent {
+        assert!(tool.get("strict").is_none(), "{tool}");
+    }
+    let by_name = |name: &str| {
+        sent.iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+    };
+    assert_eq!(by_name("b_deferred")["defer_loading"], true);
+    assert!(by_name("a_full").get("defer_loading").is_none());
+}
+
 /// Every probe recording compiled into this test, in the order the old
 /// directory walk read them: the raw directory sorted by file name.
 /// Names are repo-relative paths, used as parse labels.

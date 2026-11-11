@@ -2215,7 +2215,8 @@ fn a_subscribe_result_names_the_last_fold_line() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
         CommandResult::Subscribe {
-            last_seq: crate::Seq(41)
+            last_seq: crate::Seq(41),
+            workspace_gone: None,
         }
     );
     let Some(Event::CommandAccepted(accepted)) =
@@ -2224,6 +2225,31 @@ fn a_subscribe_result_names_the_last_fold_line() {
         panic!("not an acceptance");
     };
     assert_eq!(accepted.result, None);
+    // A result omitting the missing path reads as a live open, and a
+    // live open stays byte-identical on the wire: the path is absent,
+    // never null (`docs/invocation.md`, "Lifecycle").
+    let written = serde_json::to_value(result_of(
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    ))
+    .unwrap();
+    assert!(
+        written["result"].get("workspace_gone").is_none(),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_subscribe_result_carries_the_missing_workspace_path() {
+    // The hub names the missing workspace when it replays the log of a
+    // session whose workspace is gone (`docs/invocation.md`,
+    // "Lifecycle"); the terminal opens that accept read only.
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"last_seq": 41, "workspace_gone": "/w"}})),
+        CommandResult::Subscribe {
+            last_seq: crate::Seq(41),
+            workspace_gone: Some("/w".into()),
+        }
+    );
 }
 
 #[test]

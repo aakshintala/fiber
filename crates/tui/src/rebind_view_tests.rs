@@ -121,6 +121,24 @@ fn keys_attached_40x12() {
 }
 
 #[test]
+fn keys_focus_project_scrolled_80x24() {
+    let mut app = home(80, 24);
+    slash_keys(&mut app);
+    // Scroll until the added row shows: one Down per action from the
+    // top, bounded by the table. The row's id is one token, so no
+    // column wrap can split it.
+    for _ in 0..crate::bindings::BINDINGS.len() {
+        if screen(&app, 80, 24).contains("focus_project") {
+            break;
+        }
+        tap(&mut app, "down");
+    }
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("focus_project"), "{frame}");
+    insta::assert_snapshot!("keys_focus_project_scrolled_80x24", frame);
+}
+
+#[test]
 fn keys_capture_80x24() {
     let mut app = attached(80, 24);
     slash_keys(&mut app);

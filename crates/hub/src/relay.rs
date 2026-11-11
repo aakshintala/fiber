@@ -482,13 +482,13 @@ pub(crate) fn route(
     // `serve_existing`, so the live relay never sees the command. The
     // credential check runs first, so a malformed subscribe gains no
     // accepted answer.
-    if stripped.get("command").and_then(Value::as_str) == Some("subscribe")
+    let full_subscribe = stripped.get("command").and_then(Value::as_str) == Some("subscribe")
         && stripped
             .get("args")
             .and_then(|args| args.get("level"))
             .and_then(Value::as_str)
-            == Some("full")
-    {
+            == Some("full");
+    if full_subscribe {
         if let Err(refused) = startup_credential(&stripped) {
             crate::retire::refuse(
                 writer,
@@ -505,6 +505,35 @@ pub(crate) fn route(
             replay_exited_delegate(id, session, &stripped, hub, writer, relays);
             return;
         }
+    }
+    // A `full` subscribe or `history` for a session whose workspace is
+    // gone and cannot be made again reads from the log instead of
+    // reaching a relay, an opener or a resume (`docs/invocation.md`,
+    // "Lifecycle"). A finished delegate keeps its replay above, a
+    // served session keeps its relay, and every other command falls
+    // through to the resume path. The log reads run before the relays
+    // snapshot is taken, holding no lock across them.
+    let history = stripped.get("command").and_then(Value::as_str) == Some("history");
+    if (full_subscribe || history)
+        && let Some((dir, workspace_gone)) =
+            crate::resume::gone_readable(&hub.home, &SessionId(session.to_owned()))
+        && !relay_serves(relays, session, from)
+    {
+        if full_subscribe {
+            replay_gone_workspace(
+                id,
+                session,
+                &stripped,
+                hub,
+                writer,
+                relays,
+                &dir,
+                &workspace_gone,
+            );
+        } else {
+            replay_history(id, session, &stripped, hub, writer, relays, &dir);
+        }
+        return;
     }
     // Serves the command on the session's published relay, when one
     // outlives this call's check: every path below serves it and reports
@@ -953,6 +982,16 @@ fn could_not_replay(
     );
 }
 
+/// Whether a relay already serves `session` past `from`: a gone
+/// workspace reads from the log only when no relay owns the session,
+/// so a draining relay keeps the command it is passing on.
+fn relay_serves(relays: &Arc<Mutex<Relays>>, session: &str, from: Option<u64>) -> bool {
+    lock(relays)
+        .entries
+        .iter()
+        .any(|entry| entry.session == session && from.is_none_or(|from| entry.epoch > from))
+}
+
 /// Serves a `full` subscribe for a finished delegate from its log: the
 /// replay branch of [`route`] calls this when
 /// [`crate::resume::exited_delegate`] holds, before any opener, relay or
@@ -978,7 +1017,62 @@ fn replay_exited_delegate(
         crate::retire::refuse_not_found(writer, hub, relays, session, id);
         return;
     };
-    let fold = match exited_fold(&dir) {
+    replay_fold(id, session, stripped, hub, writer, relays, &dir, None);
+}
+
+/// Serves a `full` subscribe for a session whose workspace is gone and
+/// cannot be made again from its log, as [`replay_exited_delegate`]
+/// serves a finished delegate: the accept carries the missing path
+/// beside the fold's boundary (`docs/invocation.md`, "Lifecycle"), and
+/// nothing resumes the session. The route calls this only when no relay
+/// serves the session and the delegate branch did not fire.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the command, its session, the hub, the client and the log to replay are one hand-off"
+)]
+fn replay_gone_workspace(
+    id: &CommandId,
+    session: &str,
+    stripped: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    dir: &std::path::Path,
+    workspace_gone: &std::path::Path,
+) {
+    replay_fold(
+        id,
+        session,
+        stripped,
+        hub,
+        writer,
+        relays,
+        dir,
+        Some(&workspace_gone.display().to_string()),
+    );
+}
+
+/// Replays the fold in `dir` through the synthetic-relay machinery
+/// [`replay_exited_delegate`] describes: one relay thread owns a socket
+/// pair preloaded with the accept and the fold, the accept carrying the
+/// fold's boundary and, when given, the missing workspace path. A log
+/// that vanished answers `session_not_found`, one that cannot be read
+/// or serialised `log_corrupt`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the command, its session, the hub, the client and the log to replay are one hand-off"
+)]
+fn replay_fold(
+    id: &CommandId,
+    session: &str,
+    stripped: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    dir: &std::path::Path,
+    workspace_gone: Option<&str>,
+) {
+    let fold = match exited_fold(dir) {
         Ok(fold) => fold,
         Err(code) => {
             crate::retire::refuse(
@@ -997,6 +1091,9 @@ fn replay_exited_delegate(
     let mut result = Map::new();
     if let Some(last) = last {
         result.insert("last_seq".into(), Value::from(last));
+    }
+    if let Some(gone) = workspace_gone {
+        result.insert("workspace_gone".into(), Value::from(gone));
     }
     let mut payload = Map::new();
     payload.insert("command_id".into(), Value::String(id.0.clone()));
@@ -1116,6 +1213,197 @@ fn exited_fold(dir: &std::path::Path) -> Result<Vec<contract::Envelope>, ErrorCo
         return Err(ErrorCode::LogCorrupt);
     }
     Ok(fold)
+}
+
+/// A hub-answered `history` page holds at most as many lines as the
+/// session's own (`crates/doors/src/client.rs`, [`HISTORY` there]).
+const HISTORY_PAGE: usize = 256;
+
+/// The hub-answered `history` refusals, byte-identical to the session's
+/// own (`crates/doors/src/client.rs`, "history").
+const HISTORY_PAST: &str = "`from_seq` is past the latest line.";
+const HISTORY_REVERSED: &str = "`to_seq` is before `from_seq`.";
+const HISTORY_UNFIT: &str = "The arguments do not fit this command.";
+
+/// The wording every hub-answered gone-workspace failure carries when
+/// the log itself is at fault, as [`replay_fold`] answers them: the log
+/// cannot be replayed.
+fn cannot_replay(session: &str) -> String {
+    format!("The log of session `{session}` cannot be replayed.")
+}
+
+/// Answers `history` for a session whose workspace is gone from its
+/// log, page-for-page as the session would
+/// (`crates/doors/src/client.rs`, "history"): at most [`HISTORY_PAGE`]
+/// lines, `from_seq` past the latest line and a reversed window refused
+/// `invalid_arguments`, an ancestor outside the `forked_from` chain
+/// refused the same way. A log that vanished mid-route answers
+/// `session_not_found`, one that cannot be read or serialised
+/// `log_corrupt`. Answered directly: no relay thread exists to keep
+/// order against, so nothing is queued.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the command, its session, the hub, the client and the log to read are one hand-off"
+)]
+fn replay_history(
+    id: &CommandId,
+    session: &str,
+    stripped: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    dir: &std::path::Path,
+) {
+    let refuse = |code: &ErrorCode, message: &str| {
+        crate::retire::refuse(writer, hub, relays, session, id, code, message);
+    };
+    let args: contract::commands::HistoryArgs = match stripped.get("args") {
+        None => contract::commands::HistoryArgs {
+            session_id: None,
+            from_seq: None,
+            to_seq: None,
+        },
+        Some(args) => match serde_json::from_value(args.clone()) {
+            Ok(args) => args,
+            Err(_) => {
+                refuse(&ErrorCode::InvalidArguments, HISTORY_UNFIT);
+                return;
+            }
+        },
+    };
+    let own = SessionId(session.to_owned());
+    // The ancestor the window counts in, resolved exactly as the session
+    // resolves it: an invalid id and an id outside the `forked_from`
+    // chain are refused with the session's sentences. The walk runs only
+    // for an ancestor query, as the session's does, so a failure past
+    // the own log the helper just read is the unresolvable parent.
+    let ancestor: Option<log::Segment> = match args.session_id.as_ref().filter(|id| *id != &own) {
+        None => None,
+        Some(wanted) => {
+            if !valid_session_id(&wanted.0) {
+                refuse(
+                    &ErrorCode::InvalidArguments,
+                    &format!(
+                        "{} is not a session id: one is `s_` followed by 16 lowercase hex digits.",
+                        wanted.0
+                    ),
+                );
+                return;
+            }
+            let chain = match log::history(dir) {
+                Ok(chain) => chain,
+                Err(log::Error::NotFound(path)) if path.as_path() != dir => {
+                    refuse(&ErrorCode::InvalidArguments, HISTORY_UNFIT);
+                    return;
+                }
+                Err(log::Error::NotFound(_)) => {
+                    refuse(&ErrorCode::SessionNotFound, &cannot_replay(session));
+                    return;
+                }
+                Err(_) => {
+                    refuse(&ErrorCode::InvalidArguments, HISTORY_UNFIT);
+                    return;
+                }
+            };
+            match chain
+                .into_iter()
+                .rev()
+                .skip(1)
+                .find(|segment| segment.session_id == *wanted)
+            {
+                Some(segment) => Some(segment),
+                None => {
+                    refuse(
+                        &ErrorCode::InvalidArguments,
+                        &format!(
+                            "Session {} is neither this session nor one it continues.",
+                            wanted.0
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+    };
+    // How many durable lines the window counts in: one past the
+    // ancestor's held line, else the own log's lines. The helper just
+    // proved the log ends in `fiber_exited`, so an open failure is the
+    // mid-route vanish and a shape failure is corruption.
+    let count = match ancestor.as_ref().and_then(|segment| segment.to) {
+        Some(to) => to.0.saturating_add(1),
+        None => match log::last_seq(dir) {
+            Ok(last) => last.map_or(0, |last| last.0.saturating_add(1)),
+            Err(log::Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+                refuse(&ErrorCode::SessionNotFound, &cannot_replay(session));
+                return;
+            }
+            Err(_) => {
+                refuse(&ErrorCode::LogCorrupt, &cannot_replay(session));
+                return;
+            }
+        },
+    };
+    // The window, computed exactly as the session computes it.
+    let (start, max, to) = match args.from_seq {
+        Some(from_seq) => {
+            let from = from_seq.0;
+            if from >= count {
+                refuse(&ErrorCode::InvalidArguments, HISTORY_PAST);
+                return;
+            }
+            let max = match args.to_seq {
+                Some(to) if to < from_seq => {
+                    refuse(&ErrorCode::InvalidArguments, HISTORY_REVERSED);
+                    return;
+                }
+                Some(to) => usize::try_from(to.0 - from).map_or(HISTORY_PAGE, |span| {
+                    span.saturating_add(1).min(HISTORY_PAGE)
+                }),
+                None => HISTORY_PAGE,
+            };
+            (from, max, args.to_seq.map_or(u64::MAX, |to| to.0))
+        }
+        None => {
+            if count == 0 {
+                let result = serde_json::to_value(&contract::events::CommandResult::History {
+                    lines: vec![],
+                });
+                match result {
+                    Ok(result) => crate::connection::accept_result(writer, hub, id, result),
+                    Err(_) => refuse(&ErrorCode::LogCorrupt, &cannot_replay(session)),
+                }
+                return;
+            }
+            let end = args.to_seq.map_or(count - 1, |to| to.0.min(count - 1));
+            let back = u64::try_from(HISTORY_PAGE - 1).map_or(end, |back| back.min(end));
+            let start = end - back;
+            let max = usize::try_from(back).map_or(HISTORY_PAGE, |back| back + 1);
+            (start, max, end)
+        }
+    };
+    // The window's lines, read from the ancestor's segment or the whole
+    // own log, then bounded by `to_seq`: a page read fails as the
+    // session's fails.
+    let segment = ancestor.unwrap_or(log::Segment {
+        session_id: own,
+        dir: dir.to_path_buf(),
+        to: None,
+    });
+    let lines = match segment.range(start, max) {
+        Ok(lines) => lines,
+        Err(_) => {
+            refuse(&ErrorCode::InvalidArguments, HISTORY_UNFIT);
+            return;
+        }
+    };
+    let lines: Vec<contract::Envelope> = lines
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq.0 <= to))
+        .collect();
+    match serde_json::to_value(&contract::events::CommandResult::History { lines }) {
+        Ok(result) => crate::connection::accept_result(writer, hub, id, result),
+        Err(_) => refuse(&ErrorCode::LogCorrupt, &cannot_replay(session)),
+    }
 }
 
 /// Everything `establish` needs beyond the connection: the mark to admit
