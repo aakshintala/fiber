@@ -410,8 +410,25 @@ impl Fixture {
     /// answering it. The record and the logs are read in the failure
     /// path; when the wait expired instead, `fakes::within` never joins
     /// its work thread, so both may include later entries.
+    /// Runs the explicit reload preparation, as `prepare_as` does.
     #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
+        self.prepare_as(super::Preparation::Explicit)
+    }
+
+    /// Runs the reload preparation for `preparation`, dumping the last
+    /// reached prepare checkpoint and every fake MCP server's
+    /// `stderr.log` and `requests.log` into the failure when the prepare
+    /// wait fails: the wait expired, the worker panicked, or the worker
+    /// thread failed to start. The checkpoint record is test-only:
+    /// `prepare_inner` appends each stage boundary it passes, with no
+    /// pause and no branch, because no outside seam reaches those steps:
+    /// the fake servers log a request on arrival, before handling or
+    /// answering it. The record and the logs are read in the failure
+    /// path; when the wait expired instead, `fakes::within` never joins
+    /// its work thread, so both may include later entries.
+    #[track_caller]
+    fn prepare_as(&self, preparation: super::Preparation) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
         state.clear_prepare_progress();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -425,7 +442,7 @@ impl Fixture {
                                 model: "scripted/s.json".into(),
                                 credential: None,
                             },
-                            super::Preparation::Explicit,
+                            preparation,
                         )
                         .unwrap()
                 },
@@ -975,6 +992,201 @@ fn provider_reload_models_error_keeps_the_old_catalogue() {
             .any(|notice| notice.extension.as_deref() == Some("fake")),
         "no models() error notice for fake in {:?}",
         notices
+            .iter()
+            .map(|notice| (&notice.code, &notice.extension, &notice.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn provider_reload_models_error_records_the_discovery_failure() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // A Lua provider file whose `models()` errors, with no cached copy:
+    // the failure is recorded beside its notice, and the provider keeps
+    // its data file's list.
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    let prepared = fixture.prepare();
+    let notices = prepared.notices.clone();
+    assert_eq!(prepared.extension_failures.len(), 1);
+    assert_eq!(prepared.extension_failures[0].provider, "fake");
+    assert_eq!(
+        prepared.extension_failures[0].extension.as_deref(),
+        Some("fake")
+    );
+    assert_eq!(
+        prepared.extension_failures[0].error.code,
+        contract::ErrorCode::ExtensionFailed
+    );
+    assert!(
+        prepared.extension_failures[0]
+            .error
+            .message
+            .contains("models boom"),
+        "{:?}",
+        prepared.extension_failures[0].error
+    );
+    assert!(prepared.server_sync.server_failures.is_empty());
+    // The failure reaches the session as a notice naming the extension.
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.extension.as_deref() == Some("fake")),
+        "no models() error notice for fake in {:?}",
+        notices
+            .iter()
+            .map(|notice| (&notice.code, &notice.extension, &notice.message))
+            .collect::<Vec<_>>()
+    );
+    (prepared.installed)();
+    // The provider keeps its old list: the old reference resolves.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
+}
+
+#[test]
+fn provider_reload_models_error_survives_a_failing_placeholder_fill() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // The judge data file's model names a placeholder host its manifest
+    // lists, and the judge settings file holding its value cannot be
+    // read: the placeholder fill fails, while fake's `models()` fails
+    // first in the same rebuild. The fill failure lives on a provider
+    // with no Lua, so no models-arg gate stands between the fill and the
+    // failure it reports.
+    let judge_data = fixture
+        .rig
+        .home
+        .join("extensions/judge/providers/judge.json");
+    let mut data: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&judge_data).unwrap()).unwrap();
+    data["models"] = json!([
+        {"id": "m", "protocol": "openai-responses", "base_url": "https://{host}/v1", "context_window": 10000},
+    ]);
+    std::fs::write(&judge_data, data.to_string()).unwrap();
+    let judge_manifest = fixture.rig.home.join("extensions/judge/extension.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&judge_manifest).unwrap()).unwrap();
+    manifest["providers"]["judge"] = json!(["https://{host}/v1"]);
+    std::fs::write(&judge_manifest, manifest.to_string()).unwrap();
+    std::fs::create_dir_all(fixture.rig.home.join("config")).unwrap();
+    std::fs::write(fixture.rig.home.join("config/judge.json"), "{").unwrap();
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    let prepared = fixture.prepare();
+    // The rebuild cannot be read, so the old catalogue stands, and the
+    // drained failure still names the provider.
+    assert_eq!(prepared.extension_failures.len(), 1);
+    assert_eq!(prepared.extension_failures[0].provider, "fake");
+    assert_eq!(
+        prepared.extension_failures[0].extension.as_deref(),
+        Some("fake")
+    );
+    (prepared.installed)();
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
+}
+
+#[test]
+fn provider_reload_refresh_error_without_a_registered_extension_omits_it() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // No data file at reload: the provider is unregistered, with only
+    // its Lua, its cache file and its source. The cache file holds no
+    // list, so the session's `models()` runs and fails first; its mtime
+    // still makes the source stale, so the refresh join fails after it
+    // with no registered extension to name.
+    std::fs::remove_file(fixture.fake_data()).unwrap();
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    let cache = fixture.rig.home.join("cache/models/fake.json");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    std::fs::write(&cache, "{").unwrap();
+    // Dated two days before the fake clock's wall
+    // (`support::clock::WALL_EPOCH`), so the source reads newer than the
+    // cache on the reload's clock.
+    std::fs::File::options()
+        .write(true)
+        .open(&cache)
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
+    fixture.touch_fake_source();
+    let prepared = fixture.prepare();
+    // One entry per failure: the session failure names its extension,
+    // and the refresh failure with no registered extension omits it,
+    // never null.
+    assert_eq!(prepared.extension_failures.len(), 2);
+    assert_eq!(prepared.extension_failures[0].provider, "fake");
+    assert_eq!(
+        prepared.extension_failures[0].extension.as_deref(),
+        Some("fake")
+    );
+    assert_eq!(prepared.extension_failures[1].provider, "fake");
+    assert_eq!(prepared.extension_failures[1].extension, None);
+    assert_eq!(
+        prepared.extension_failures[1].error.code,
+        contract::ErrorCode::ExtensionFailed
+    );
+    assert!(
+        prepared.extension_failures[1]
+            .error
+            .message
+            .contains("models boom"),
+        "{:?}",
+        prepared.extension_failures[1].error
+    );
+    assert!(prepared.server_sync.server_failures.is_empty());
+    // Each entry mirrors its own notice.
+    let extensions: Vec<_> = prepared
+        .notices
+        .iter()
+        .filter(|notice| notice.message.contains("models boom"))
+        .map(|notice| notice.extension.clone())
+        .collect();
+    assert!(
+        extensions.contains(&Some("fake".to_owned())),
+        "{extensions:?}"
+    );
+    assert!(extensions.contains(&None), "{extensions:?}");
+}
+
+#[test]
+fn a_late_preparation_with_a_models_error_carries_no_failures() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // A Lua provider file whose `models()` errors, as the explicit
+    // preparation records: the late preparation publishes no `reloaded`,
+    // so it carries no failures, while the notice still reaches the
+    // session.
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    let prepared = fixture.prepare_as(super::Preparation::Late);
+    assert!(prepared.extension_failures.is_empty());
+    assert!(prepared.server_sync.server_failures.is_empty());
+    assert!(
+        prepared
+            .notices
+            .iter()
+            .any(|notice| notice.extension.as_deref() == Some("fake")),
+        "no models() error notice for fake in {:?}",
+        prepared
+            .notices
             .iter()
             .map(|notice| (&notice.code, &notice.extension, &notice.message))
             .collect::<Vec<_>>()

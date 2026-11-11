@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use config::{Config, ModelData, ProviderData, Source};
 use contract::ErrorCode;
-use contract::events::Notice;
+use contract::events::{ExtensionFailure, Notice};
+use contract::shapes::Failure;
 
 use crate::git::short_name;
 use crate::{API, Error, LuaProvider, ModelsArg, SessionExtensions};
@@ -52,6 +53,11 @@ pub struct Providers {
     /// The extension whose data or `models()` supplied each provider's
     /// current models, by provider name.
     extension_of: BTreeMap<String, String>,
+    /// Each `models()` discovery failure since the last
+    /// [`Providers::take_discovery_failures`] drain, in registration
+    /// order: one entry per failing registration, each mirroring its
+    /// per-entry notice.
+    discovery_failures: Vec<ExtensionFailure>,
     /// Each provider's models' addendum texts, by provider name then
     /// model id: read with the data that declared them and replaced
     /// together with it.
@@ -670,6 +676,14 @@ impl Providers {
         notices
     }
 
+    /// Each `models()` discovery failure `add_lua` recorded since the
+    /// last drain, one entry per failing registration with no dedupe,
+    /// each mirroring its per-entry notice. The drain runs once per
+    /// rebuild, so a second call cannot double-report.
+    pub fn take_discovery_failures(&mut self) -> Vec<ExtensionFailure> {
+        std::mem::take(&mut self.discovery_failures)
+    }
+
     /// The installed providers' names, sorted.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)
@@ -817,6 +831,18 @@ impl Providers {
         let mut models = match provider.models(&arg) {
             Ok(models) => models,
             Err(e) => {
+                // The programmatic record mirrors the notice below: the
+                // notice path keeps working as it does now.
+                self.discovery_failures.push(ExtensionFailure {
+                    provider: name.clone(),
+                    extension: Some(extension.to_owned()),
+                    error: Failure {
+                        code: e.code(),
+                        message: e.to_string(),
+                        retry_after_ms: None,
+                        provider: None,
+                    },
+                });
                 return vec![Notice {
                     code: e.code(),
                     message: e.to_string(),
