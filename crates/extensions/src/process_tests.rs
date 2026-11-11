@@ -4322,6 +4322,102 @@ fn production_services(
     })
 }
 
+/// Process host-call admission matches the shared Lua callback policy.
+#[test]
+fn process_admission_parity() {
+    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use crate::host::admission::CallbackContext;
+
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let services = NativeHostServices {
+        runtime: Runtime::new(Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: Mutex::new(None),
+        delegate: Mutex::new(None),
+        tool_runner: Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: Mutex::new(None),
+        diagnostics: None,
+    };
+    let context = ProcessContext {
+        run: ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let request = || contract::model::HostModelRequest {
+        model: "test/model".to_owned(),
+        system: None,
+        messages: Vec::new(),
+        max_tokens: 1,
+    };
+    let cases = [
+        ("tool task", true, true),
+        ("command run", true, true),
+        ("hook turn_end", true, true),
+        ("watcher 3", true, false),
+        ("delegate child", true, true),
+        ("provider p.sign", false, false),
+        ("search web", false, false),
+        ("tool task effects", false, false),
+    ];
+
+    for (index, (ran_by, model_allowed, delegate_allowed)) in cases.into_iter().enumerate() {
+        let callback = CallbackContext::request(
+            "fiber.test/proc",
+            contract::RequestId(format!("admission-{index}")),
+            ran_by.to_owned(),
+            None,
+            support::cancel::Token::new(),
+            None,
+            None,
+        );
+        for (operation, allowed, name, expected) in [
+            (
+                HostOperation::Model { request: request() },
+                model_allowed,
+                "host.model",
+                "host.model: not available here",
+            ),
+            (
+                HostOperation::Delegate {
+                    arguments: serde_json::Map::new(),
+                    timeout: Duration::from_secs(1),
+                    run: false,
+                },
+                delegate_allowed,
+                "host.delegate",
+                "host.delegate: not available here",
+            ),
+        ] {
+            let result = super::process::context::ProcessHostServices::perform(
+                &services,
+                &context,
+                &callback,
+                operation,
+                &support::cancel::Token::new(),
+            );
+            let Err((code, message)) = result else {
+                panic!("{name} without a service must not succeed");
+            };
+            if allowed {
+                assert_eq!(code, ErrorCode::Closing, "{ran_by}: {name}");
+            } else {
+                assert_eq!(code, ErrorCode::InvalidArguments, "{ran_by}: {name}");
+                assert_eq!(message, expected, "{ran_by}: {name}");
+            }
+        }
+    }
+}
+
 /// A hook delivery commits its state writes on success: the set joins
 /// the hook's transaction, and the reply commits it.
 #[test]
