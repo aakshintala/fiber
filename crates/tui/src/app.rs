@@ -2396,6 +2396,8 @@ impl App {
                 | EventKind::DelegateFinished
                 | EventKind::JobCompleted
                 | EventKind::JobsPendingNotified
+                | EventKind::KeeperStarted
+                | EventKind::KeeperBound
                 | EventKind::Unknown(_) => {}
             }
             return send;
@@ -2507,6 +2509,8 @@ impl App {
                 | EventKind::DelegateFinished
                 | EventKind::JobCompleted
                 | EventKind::JobsPendingNotified
+                | EventKind::KeeperStarted
+                | EventKind::KeeperBound
                 | EventKind::Unknown(_) => {}
             }
             return send;
@@ -2742,6 +2746,8 @@ impl App {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::Unknown(_) => {}
         }
         if let Some(busy) = applied.busy {
@@ -2909,6 +2915,8 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => false,

@@ -277,8 +277,9 @@ Exactly one of `outer_action_id` and `command_id` is present.
 
 ## Kinds
 
-Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
-of their own. MCP elicitation, and `ask_user` in a session a person drives,
+Fiber's loop emits the kinds below. On a crash takeover the keeper writes
+`keeper_started` and `keeper_bound` (`docs/tools.md`, "The keeper"). MCP
+elicitation and `ask_user` add no kind of their own. MCP elicitation, and `ask_user` in a session a person drives,
 raise interactions ("Interactions") that every driver answers with `reply`. In
 a session a program drives, `ask_user` ends the turn with `questions` on
 `turn_completed`.
@@ -1502,7 +1503,22 @@ boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and
 Their position in the log is the delivery point. The exception is a
 `job_completed` the keeper writes while its session is gone, which carries no
 `output_tail`, `notice` or `changed_by`: its delivery point is the next
-turn's `turn_started` (`docs/tools.md`, "The keeper").
+turn's `turn_started` (`docs/tools.md`, "The keeper"). The keeper also
+appends `keeper_started` when its takeover opens the log and `keeper_bound`
+once `bind` and `listen` succeed, only on a crash takeover, never on the
+normal path.
+
+#### `keeper_started`
+
+Durable. The payload is `{}`. The keeper appends it when its takeover opens
+the session's log, before it binds; only on a crash takeover, never on the
+normal path (`docs/tools.md`, "The keeper").
+
+#### `keeper_bound`
+
+Durable. The payload is `{}`. The keeper appends it once `bind` and `listen`
+succeed on its socket; only on a crash takeover, never on the normal path
+(`docs/tools.md`, "The keeper").
 
 ### Command acknowledgements
 

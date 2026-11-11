@@ -935,7 +935,9 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::JobLine(_)
         | Event::DelegateFinished(_)
         | Event::JobCompleted(_)
-        | Event::JobsPendingNotified(_) => false,
+        | Event::JobsPendingNotified(_)
+        | Event::KeeperStarted(_)
+        | Event::KeeperBound(_) => false,
         // Ephemeral: never written.
         Event::SteeringQueue(_)
         | Event::Clients(_)
