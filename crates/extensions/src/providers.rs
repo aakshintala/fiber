@@ -62,6 +62,12 @@ pub struct Providers {
     /// model id: read with the data that declared them and replaced
     /// together with it.
     addenda: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each `model_invalid` the load emitted, by provider name: its code
+    /// with its message, per reason, in emission order. A later admission
+    /// reports only invalid the load did not report, so the same marked
+    /// list feeding the load and `add_lua` draws one notice per reason,
+    /// never two (`docs/model-routing.md`, "Model discovery").
+    reported_invalid: BTreeMap<String, Vec<(ErrorCode, String)>>,
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
     lua: BTreeMap<String, Arc<LuaProvider>>,
@@ -555,17 +561,27 @@ impl Providers {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
                 // A warm cache feeds this admission and `add_lua` with the
-                // same marked list, so the marks drain here without emitting:
+                // same marked list, so omissions drain here without emitting:
                 // each omission draws its one `model_omitted` notice there,
-                // and each invalid entry its one `model_invalid` notice per
-                // reason there, not twice. A static list still emits through
-                // `admit`.
+                // not twice. Each invalid entry emits here through `admit`,
+                // and `add_lua` suppresses only those repeats. A static
+                // list still emits through `admit`.
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
                     let _ = leave_out_omitted(&data.name, &manifest.name, &mut data.models);
-                    let _ = leave_out_invalid(&data.name, &manifest.name, &mut data.models);
                 }
-                notices.extend(providers.admit(&data.name, &manifest.name, &mut data.models));
+                let admitted = providers.admit(&data.name, &manifest.name, &mut data.models);
+                for notice in admitted
+                    .iter()
+                    .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+                {
+                    providers
+                        .reported_invalid
+                        .entry(data.name.clone())
+                        .or_default()
+                        .push((notice.code.clone(), notice.message.clone()));
+                }
+                notices.extend(admitted);
                 // One extension's addenda are read into a local buffer
                 // against its own directory, and inserted only when every
                 // one of its files succeeds: a bad addendum leaves out all
@@ -853,7 +869,25 @@ impl Providers {
                 }];
             }
         };
-        let notices = self.admit(&name, extension, &mut models);
+        let admitted = self.admit(&name, extension, &mut models);
+        // A later admission reports only invalid the load did not report:
+        // each load-emitted identity stays suppressed here, and every
+        // other notice is kept, so repeated admissions stay idempotent
+        // (`docs/model-routing.md`, "Model discovery").
+        let reported = self.reported_invalid.get(&name);
+        let notices: Vec<Notice> = admitted
+            .into_iter()
+            .filter(|notice| {
+                if notice.code != ErrorCode::ModelInvalid {
+                    return true;
+                }
+                reported.is_none_or(|reported| {
+                    !reported
+                        .iter()
+                        .any(|(code, message)| code == &notice.code && message == &notice.message)
+                })
+            })
+            .collect();
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
         let addenda = match read_addenda(provider.dir(), &models) {
