@@ -4001,13 +4001,33 @@ fn a_refusal_for_another_command_keeps_the_tracking_query_pending() {
     use crate::app::Waiting;
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let (_, tracking_id) = open_figures(&mut app, 120, 35);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
     app.on_line(rejected_diff(SESSION, "c_other", "wrong command"));
     assert_eq!(
         app.outbox.waiting(&tracking_id),
         Some(Waiting::Figures),
         "the tracking query stays pending after another command's refusal"
     );
+    // The stale rejection leaves the live tracking request intact: the
+    // later tracking answer still folds. With `!=` the stale rejection
+    // would clear the live request and the tracking answer would fold
+    // nowhere, leaving the card figures with `D`.
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t1\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    A  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
