@@ -108,6 +108,8 @@ fn the_list_draws_every_drawn_command_once_in_drawn_order() {
 
 #[test]
 fn archive_draws_after_close_before_delete_naming_the_stop_first() {
+    // `/archive` draws between `/close` and `/delete`, with the
+    // stop-first wording (`docs/tui.md`, "Slash commands").
     let all = rows(&[]);
     let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
     let close = names.iter().position(|name| *name == "close").unwrap();

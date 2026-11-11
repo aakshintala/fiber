@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use super::super::super::{App, Effect, Waiting};
+use super::delete::validated_sets;
 use super::{refusal, refusal_code};
 use crate::home::title;
 use contract::ErrorCode;
@@ -33,17 +34,16 @@ enum State {
     #[default]
     Idle,
     /// The cascading dry run is out; its answer stops the held set.
-    Discovering { target: SessionId, name: String },
+    Discovering { target: SessionId },
     /// Stops are out for each feed-backed held row that was live;
     /// `session_left` with `how: exited` or `crashed` retires one. The
     /// one archive goes out once none wait.
     Stopping {
         target: SessionId,
-        name: String,
         waiting: Vec<SessionId>,
     },
     /// The one archive waits for its answer; it names only the target.
-    Archiving { target: SessionId, name: String },
+    Archiving { target: SessionId },
 }
 
 impl App {
@@ -68,17 +68,6 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let name = self
-            .home
-            .sessions
-            .row(&session)
-            .map(title)
-            .or_else(|| {
-                self.name()
-                    .filter(|name| !name.is_empty())
-                    .map(crate::text::controls_to_space)
-            })
-            .unwrap_or_else(|| session.0.clone());
         let home = &mut self.home;
         let command = support::mint("c_");
         let line = json!({
@@ -90,10 +79,7 @@ impl App {
         let generation = home.questions.archive_command.generation.wrapping_add(1);
         home.questions.archive_command = ArchiveCommand {
             generation,
-            state: State::Discovering {
-                target: session,
-                name,
-            },
+            state: State::Discovering { target: session },
         };
         self.outbox
             .wait(&command, Waiting::ArchiveDiscovery(generation));
@@ -137,7 +123,7 @@ impl App {
         let Waiting::ArchiveDiscovery(generation) = tag else {
             return None;
         };
-        let (target, name) = self.archive_discovery_parts(generation)?;
+        let target = self.archive_discovery_parts(generation)?;
         self.outbox.settled(id);
         if !accepted {
             self.archive_command_finish(false);
@@ -170,7 +156,7 @@ impl App {
         let waiting = feed_held.clone();
         if feed_held.is_empty() {
             self.go_home();
-            return Some(self.archive_command_send(target, name));
+            return Some(self.archive_command_send(target));
         }
         let (lines, pairs) = self.close_lines(&feed_held);
         for (session, close) in &pairs {
@@ -186,11 +172,7 @@ impl App {
                 },
             );
         }
-        self.home.questions.archive_command.state = State::Stopping {
-            target,
-            name,
-            waiting,
-        };
+        self.home.questions.archive_command.state = State::Stopping { target, waiting };
         self.go_home();
         // The stops cruise the fold: each id rides paired, so a failed
         // write settles by the carried id.
@@ -202,16 +184,15 @@ impl App {
         )
     }
 
-    /// The discovery's target and captured name, while its answer is
-    /// still the one the command waits on: the running command's, in
-    /// the discovery phase.
-    fn archive_discovery_parts(&self, generation: u64) -> Option<(SessionId, String)> {
+    /// The discovery's target, while its answer is still the one the
+    /// command waits on: the running command's, in the discovery phase.
+    fn archive_discovery_parts(&self, generation: u64) -> Option<SessionId> {
         let home = &self.home;
         if home.questions.archive_command.generation != generation {
             return None;
         }
         match &home.questions.archive_command.state {
-            State::Discovering { target, name } => Some((target.clone(), name.clone())),
+            State::Discovering { target } => Some(target.clone()),
             State::Idle | State::Stopping { .. } | State::Archiving { .. } => None,
         }
     }
@@ -281,18 +262,17 @@ impl App {
         if !complete {
             return Vec::new();
         }
-        let (target, name) = match self.archive_stopping_target() {
-            Some(target) => target,
-            None => return Vec::new(),
+        let Some(target) = self.archive_stopping_target() else {
+            return Vec::new();
         };
-        self.archive_command_send(target, name)
+        self.archive_command_send(target)
     }
 
     /// The stopping command's target, while every held id has stopped.
-    fn archive_stopping_target(&self) -> Option<(SessionId, String)> {
+    fn archive_stopping_target(&self) -> Option<SessionId> {
         let home = &self.home;
         match &home.questions.archive_command.state {
-            State::Stopping { target, name, .. } => Some((target.clone(), name.clone())),
+            State::Stopping { target, .. } => Some(target.clone()),
             State::Idle | State::Discovering { .. } | State::Archiving { .. } => None,
         }
     }
@@ -311,7 +291,7 @@ impl App {
     /// current connection: exactly the target session, never the held
     /// cascade. A line that cannot go out ends in the archive
     /// uncertainty instead.
-    fn archive_command_send(&mut self, target: SessionId, name: String) -> Vec<String> {
+    fn archive_command_send(&mut self, target: SessionId) -> Vec<String> {
         if !self.outbox.is_up() {
             self.archive_command_archive_unknown();
             return Vec::new();
@@ -325,7 +305,7 @@ impl App {
             &command,
             Waiting::ArchiveFinal(self.home.questions.archive_command.generation),
         );
-        self.home.questions.archive_command.state = State::Archiving { target, name };
+        self.home.questions.archive_command.state = State::Archiving { target };
         vec![line]
     }
 
@@ -338,7 +318,7 @@ impl App {
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        let (target, _name) = self.archive_archiving_target()?;
+        let target = self.archive_archiving_target()?;
         if accepted {
             let archived = payload
                 .get("result")
@@ -383,10 +363,10 @@ impl App {
     }
 
     /// The archiving command's target, while its archive waits.
-    fn archive_archiving_target(&self) -> Option<(SessionId, String)> {
+    fn archive_archiving_target(&self) -> Option<SessionId> {
         let home = &self.home;
         match &home.questions.archive_command.state {
-            State::Archiving { target, name } => Some((target.clone(), name.clone())),
+            State::Archiving { target } => Some(target.clone()),
             State::Idle | State::Discovering { .. } | State::Stopping { .. } => None,
         }
     }
@@ -577,64 +557,6 @@ fn archive_stop_generation(tag: &Waiting) -> Option<u64> {
     } else {
         None
     }
-}
-
-/// Checks the discovery answer before it stops the held set: `sessions`
-/// is a nonempty unique set containing the attached session, and `held`
-/// is a unique subset of it in the preview's relative order. Anything
-/// else is malformed: the caller shows the invalid-preview notice and
-/// the invalid detail never reaches a person.
-fn validated_sets(result: &Value, target: &SessionId) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
-    let sessions = result.get("sessions").and_then(Value::as_array)?;
-    if sessions.is_empty() {
-        return None;
-    }
-    let mut seen = BTreeSet::new();
-    let mut set = Vec::with_capacity(sessions.len());
-    for id in sessions {
-        let id = id.as_str().unwrap_or("");
-        if !contract::is_minted_session_id(id) {
-            return None;
-        }
-        if !seen.insert(id) {
-            return None;
-        }
-        set.push(SessionId(id.to_owned()));
-    }
-    if !seen.contains(target.0.as_str()) {
-        return None;
-    }
-    let held = result.get("held").and_then(Value::as_array)?;
-    let mut held_seen = BTreeSet::new();
-    let mut held_order = Vec::with_capacity(held.len());
-    for id in held {
-        let id = id.as_str().unwrap_or("");
-        if !contract::is_minted_session_id(id) {
-            return None;
-        }
-        if !held_seen.insert(id) {
-            return None;
-        }
-        if !seen.contains(id) {
-            return None;
-        }
-        held_order.push(id);
-    }
-    let held_set: Vec<SessionId> = set
-        .iter()
-        .filter(|id| held_seen.contains(id.0.as_str()))
-        .cloned()
-        .collect();
-    // The hub names `held` in the preview's order; a `held` array that
-    // disagrees with it relatively is not the preview the hub checked.
-    if held_set
-        .iter()
-        .map(|id| id.0.as_str())
-        .ne(held_order.iter().copied())
-    {
-        return None;
-    }
-    Some((set, held_set))
 }
 
 #[cfg(test)]

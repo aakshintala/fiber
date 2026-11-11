@@ -2411,6 +2411,8 @@ fn archive_command_stops_archives_and_lands_home() {
         serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "fix the parser", "exited")], "total": 1}),
     ));
     let frame = screen(&app, 80, 24);
+    // The fold head counts the archived `recent` total (`docs/tui.md`,
+    // "The session list").
     assert!(frame.contains("archived · 1"), "{frame}");
     insta::assert_snapshot!("archive_command_home", frame);
 }

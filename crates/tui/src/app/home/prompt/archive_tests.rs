@@ -231,15 +231,26 @@ fn accepted_discovery_stops_the_held_cascade_without_asking() {
     let mut app = attached();
     app.on_line(live(B, "forked"));
     let lines = start(&mut app, &[A, B], &[A, B]);
-    // One `close` with `now` per held id, and a summary subscribe where
-    // this connection held nothing.
+    // One `close` with `now` per held id (`docs/tui.md`, "The session
+    // list": `/archive` stops the session the way `/delete` does, and
+    // `/delete` stops every running one first). The doc leaves the
+    // wire order open, so the stopped ids read as a set.
     let died = closes(&lines);
     assert_eq!(died.len(), 2);
-    for (line, id) in died.iter().zip([A, B]) {
+    for line in &died {
         assert_eq!(line["command"], "close");
         assert_eq!(line["args"], json!({"now": true}));
-        assert_eq!(line["session_id"], id);
     }
+    let mut stopped: Vec<&str> = died
+        .iter()
+        .map(|line| {
+            line["session_id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("stop session"))
+        })
+        .collect();
+    stopped.sort();
+    assert_eq!(stopped, [A, B]);
     // No archive goes out before every held id reports its exit, and no
     // question opens at any phase.
     assert!(archives(&lines).is_empty());

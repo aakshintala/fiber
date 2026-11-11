@@ -655,7 +655,10 @@ fn stop_generation(tag: &Waiting) -> Option<u64> {
 /// is a unique subset of it in the preview's relative order. Anything
 /// else is malformed: the caller shows the invalid-preview notice, and
 /// the invalid detail never reaches a person.
-fn validated_sets(result: &Value, target: &SessionId) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
+pub(super) fn validated_sets(
+    result: &Value,
+    target: &SessionId,
+) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
     let sessions = result.get("sessions").and_then(Value::as_array)?;
     if sessions.is_empty() {
         return None;
