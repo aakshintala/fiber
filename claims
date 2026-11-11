@@ -290,3 +290,10 @@ crates/extensions/tests/first_party_providers.rs	fiber-4614	plan	2026-11-11T03:0
 research/muse-thinking/README.md	fiber-4614	plan	2026-11-11T03:10:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 research/muse-thinking/raw/muse-ember-1.0.json	fiber-4614	plan	2026-11-11T03:10:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 research/muse-thinking/raw/muse-wonder-1.0.json	fiber-4614	plan	2026-11-11T03:10:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/call_view_tests.rs	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/config_views/credential_tests.rs	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/rewind_tests.rs	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop_settings_tests.rs	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/snapshots/tui__app__config_views__tests__settings_has_no_screen_reader_row.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/snapshots/tui__app__config_views__tests__settings_has_no_screen_reader_row_attached.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
