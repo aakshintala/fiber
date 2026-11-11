@@ -144,6 +144,25 @@ impl State {
     }
 }
 
+/// Why the feed forgot a session: what the broadcast line names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Forgotten {
+    /// Its directory was deleted.
+    Deleted,
+    /// It was archived.
+    Archived,
+}
+
+impl Forgotten {
+    /// The hub line kind for this removal.
+    fn kind(self) -> HubEventKind {
+        match self {
+            Forgotten::Deleted => HubEventKind::SessionDeleted,
+            Forgotten::Archived => HubEventKind::SessionArchived,
+        }
+    }
+}
+
 /// A followed session's summary connection: the stream to shut, and the
 /// stop that ends its reader. The reader holds the stream's other clone
 /// through its own stoppable wrapper, and is its only reader.
@@ -360,9 +379,25 @@ impl Feed {
         }
     }
 
-    /// Drops any entry for `session`: its directory was deleted.
-    pub(crate) fn forget(&self, session: &str) {
-        lock(&self.state).entries.remove(session);
+    /// Drops a deleted or archived session's entry and tells every
+    /// subscriber: the row is already gone, so the terminal drops its
+    /// row and re-asks that project's counts. One line per call names
+    /// the session and its project, under the same state guard as the
+    /// removal, so a subscriber never sees the line for an entry that
+    /// comes back. After `stop` the fanout is emptied and a late call
+    /// removes only.
+    pub(crate) fn forget(&self, session: &str, project: &str, kind: Forgotten) {
+        let mut state = lock(&self.state);
+        if state.stopped {
+            return;
+        }
+        state.entries.remove(session);
+        let line = self.forgot_line(session, project, kind);
+        let closers = state.fanout.broadcast(&line);
+        drop(state);
+        // Shut outside the state lock, as the status and left paths do:
+        // a shutdown unblocks a writer holding its mutex.
+        close_connections(closers, UnixStream::shutdown);
         self.attention.forget(session);
     }
 
@@ -787,6 +822,22 @@ impl Feed {
         );
         let line = HubLine {
             kind: HubEventKind::Keepers,
+            ts: wall_ms(self.clock.wall()),
+            schema_version: SCHEMA_VERSION,
+            payload,
+        };
+        to_line(&line)
+    }
+
+    /// A `session_deleted` or `session_archived` hub line for `id` in
+    /// `project`: ephemeral, carrying no `seq`, so a new subscriber
+    /// learns nothing about a session that is already gone.
+    fn forgot_line(&self, id: &str, project: &str, kind: Forgotten) -> Line {
+        let mut payload = Map::new();
+        payload.insert("session_id".to_owned(), Value::String(id.to_owned()));
+        payload.insert("project".to_owned(), Value::String(project.to_owned()));
+        let line = HubLine {
+            kind: kind.kind(),
             ts: wall_ms(self.clock.wall()),
             schema_version: SCHEMA_VERSION,
             payload,

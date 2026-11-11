@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::commands::ImportSource;
 use contract::commands::hub::PruneExpect;
 use contract::shapes::Failure;
 use serde::{Deserialize, Serialize};
@@ -40,7 +41,7 @@ pub trait Machine: Send + Sync {
     fn import(
         &self,
         home: &Path,
-        source: Option<&str>,
+        source: Option<ImportSource>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure>;
     /// Reads a configuration view's file and its version.
@@ -180,11 +181,19 @@ pub(crate) fn on_import(hub: &Hub, args: &Map<String, Value>) -> Result<Option<V
     if args.keys().any(|key| key != "source") {
         return Err(invalid());
     }
+    // The hub never builds `ImportArgs`: the raw map parses through the
+    // contract enum, so a null, a non-string or an unknown name is refused
+    // `invalid_arguments` naming the two sources.
     let source = match args.get("source") {
         None => None,
-        Some(Value::String(source)) if source == "claude-code" || source == "codex" => {
-            Some(source.as_str())
-        }
+        Some(Value::String(name)) => Some(
+            serde_json::from_value::<ImportSource>(Value::String(name.clone())).map_err(|_| {
+                Refused {
+                    code: contract::ErrorCode::InvalidArguments,
+                    message: "`source` must be `claude-code` or `codex`.".to_owned(),
+                }
+            })?,
+        ),
         Some(_) => {
             return Err(Refused {
                 code: contract::ErrorCode::InvalidArguments,

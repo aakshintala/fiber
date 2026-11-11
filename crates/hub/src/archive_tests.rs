@@ -535,6 +535,21 @@ impl Sub {
         }
     }
 
+    /// The next line, which must be the hub's `kind` line for `id` in
+    /// `project` (`docs/invocation.md`, "What the hub speaks"): every
+    /// archived session is told to every feed subscriber. No code path
+    /// enqueues one before the fix, so the read times out there.
+    fn forgot(&mut self, kind: &str, id: &str, project: &str) {
+        let mut text = String::new();
+        self.read
+            .read_line(&mut text)
+            .unwrap_or_else(|_| panic!("never received {kind} for {id}"));
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(line["kind"], kind, "{line}");
+        assert_eq!(line["payload"]["session_id"], id, "{line}");
+        assert_eq!(line["payload"]["project"], project, "{line}");
+    }
+
     /// The next line, which must be `session_left` for `id` with `how`.
     fn left(&mut self, id: &str, how: &str) {
         let mut text = String::new();
@@ -725,4 +740,43 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
     assert_eq!(rows.len(), 2, "{}", temp.recent_text());
     assert_eq!(rows[1]["archived"], true);
     assert_eq!(rows[1]["how"], "crashed");
+}
+
+#[test]
+fn two_clients_see_fresh_and_retry_archive_lines() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(9, &["fiber_exited"]);
+    temp.exited_row(9);
+    let mut first = Sub::new(&hub.feed);
+    let mut second = Sub::new(&hub.feed);
+    // The subscribe-time snapshot is the always-on keepers line,
+    // empty here (`docs/events.md`, "Hub feed", "keepers"): read it
+    // before the broadcast lines it precedes.
+    for sub in [&mut first, &mut second] {
+        let mut text = String::new();
+        sub.read
+            .read_line(&mut text)
+            .expect("the snapshot keepers line arrives");
+        let snapshotted: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(snapshotted["kind"], "keepers");
+        assert_eq!(snapshotted["payload"], serde_json::json!({"keepers": []}));
+    }
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(9)})),
+        Ok(None)
+    );
+    for sub in [&mut first, &mut second] {
+        sub.forgot("session_archived", &testkit::id(9), "-w");
+    }
+    // (`docs/invocation.md`, "What the hub speaks"): a retry that writes
+    // nothing still tells every feed subscriber, so the second call site
+    // sends its own line.
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(9)})),
+        Ok(None)
+    );
+    for sub in [&mut first, &mut second] {
+        sub.forgot("session_archived", &testkit::id(9), "-w");
+    }
 }

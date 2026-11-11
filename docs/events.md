@@ -70,7 +70,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends seven lines of its own, only on a connection to the hub and
+The hub sends nine lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -93,6 +93,14 @@ is about the hub or names its session in the payload:
   new feed subscriber: `payload` holds `keepers` (array of session ids, in id
   order), every keeper-held `run/` entry the hub's probe confirms, empty when
   none.
+- `session_deleted`, on the feed when a session is deleted: `payload` holds
+  `session_id` (string) and `project` (string), the project's key, the name
+  of its `projects/<key>/` directory. It carries no `seq`, and a new
+  subscriber learns nothing about the deleted session.
+- `session_archived`, on the feed when a session is archived: `payload`
+  holds `session_id` (string) and `project` (string), as for
+  `session_deleted`. It carries no `seq`, and a new subscriber learns
+  nothing about the archived session.
 - `stream_closed`, when a running session closes the connection the hub relays
   for a client, as it does when it cannot read its log to serve it: `payload`
   holds `session_id` (string). It carries no `seq`, and comes after every line

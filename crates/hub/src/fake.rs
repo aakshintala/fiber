@@ -1194,10 +1194,11 @@ impl crate::Machine for FakeMachine {
     fn import(
         &self,
         home: &Path,
-        source: Option<&str>,
+        source: Option<contract::commands::ImportSource>,
         _clock: Arc<dyn contract::clock::Clock>,
     ) -> Result<Option<Value>, Failure> {
-        lock(&self.calls).push(serde_json::json!({"import":{"home":home,"source":source}}));
+        lock(&self.calls)
+            .push(serde_json::json!({"import":{"home":home,"source":source.map(|s| s.name())}}));
         lock(&self.imports).pop_front().unwrap_or(Ok(None))
     }
     fn read_config(&self, workspace: &Path, path: &Path) -> Result<(String, String), Failure> {

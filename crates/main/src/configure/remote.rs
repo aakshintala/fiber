@@ -371,24 +371,19 @@ impl hub::Machine for Seam {
     fn import(
         &self,
         home: &Path,
-        source: Option<&str>,
+        source: Option<config::ImportSource>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure> {
-        // The hub already refused anything but the two; this names
-        // them again so the seam never misroutes a source.
+        // The hub already refused anything but the two, and the type
+        // carries only the two: every source routes, so no refusal arm
+        // remains.
         let sources: &[config::ImportSource] = match source {
             None => &[
                 config::ImportSource::ClaudeCode,
                 config::ImportSource::Codex,
             ],
-            Some("claude-code") => &[config::ImportSource::ClaudeCode],
-            Some("codex") => &[config::ImportSource::Codex],
-            Some(_) => {
-                return Err(failure(
-                    ErrorCode::InvalidArguments,
-                    "`source` must be `claude-code` or `codex`.",
-                ));
-            }
+            Some(config::ImportSource::ClaudeCode) => &[config::ImportSource::ClaudeCode],
+            Some(config::ImportSource::Codex) => &[config::ImportSource::Codex],
         };
         // The ports the driver would print, minus the printing: each
         // source's report extended into one answer, a failed source

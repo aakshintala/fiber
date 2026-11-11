@@ -788,7 +788,9 @@ off, a provider with no scoped installed model shows no section and no
 count row. Each model takes two rows. The first
 is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
 "● current" bold in `accent` on the session's model, "· scoped" dim on a
-scoped model while every model shows, then its input and output prices per
+scoped model while every model shows, "· new" dim on a model its vendor lists
+that Fiber has no details for (`docs/model-routing.md`, "Which models exist,
+and what Fiber knows about them"), then its input and output prices per
 million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
 and nothing for a model whose provider data names no cost. A model priced
 by request size shows the prices of the tier the session's last call falls

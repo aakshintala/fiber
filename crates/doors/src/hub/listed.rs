@@ -278,6 +278,8 @@ pub(crate) fn authenticate(
             | HubEventKind::Attention
             | HubEventKind::DeviceChanged
             | HubEventKind::SessionLeft
+            | HubEventKind::SessionDeleted
+            | HubEventKind::SessionArchived
             | HubEventKind::StreamClosed
             | HubEventKind::StreamReopened
             | HubEventKind::Keepers

@@ -1938,9 +1938,11 @@ impl App {
                 Vec::new()
             }
             HubEventKind::Keepers => Vec::new(),
-            HubEventKind::DeviceChanged | HubEventKind::SessionLeft | HubEventKind::Unknown(_) => {
-                Vec::new()
-            }
+            HubEventKind::DeviceChanged
+            | HubEventKind::SessionLeft
+            | HubEventKind::SessionDeleted
+            | HubEventKind::SessionArchived
+            | HubEventKind::Unknown(_) => Vec::new(),
         }
     }
 
@@ -2128,7 +2130,7 @@ impl App {
         };
         if let Some((Kind::Import(source), _)) = entry.as_ref() {
             let opened = accepted.is_some_and(|answer| {
-                self.import_answered(source.arg().map(str::to_owned), answer)
+                self.import_answered(source.map(|s| s.name()).map(str::to_owned), answer)
             });
             if !opened {
                 self.notices
