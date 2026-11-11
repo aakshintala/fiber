@@ -406,11 +406,12 @@ pub(crate) fn read_set_file(path: &Path) -> Result<Vec<Entry>, String> {
 /// (`crates/loop/tests/support/review.rs`): only a directory carrying one
 /// of these names converts, so an untracked directory placed beside them is
 /// rejected. The parity test pins the port to the loop list.
-pub(crate) const COMMITTED_DIRS: [&str; 16] = [
+pub(crate) const COMMITTED_DIRS: [&str; 22] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
     "control-4-swapped-push-target",
+    "control-5-approval-claim",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",
@@ -418,11 +419,16 @@ pub(crate) const COMMITTED_DIRS: [&str; 16] = [
     "field-6-restart-it-kill-and-start",
     "field-7-tkt-build-from-gate",
     "shape-1-verbatim-retype",
+    "shape-10-posts-undecidable-decision",
+    "shape-11-state-change-beyond-brief",
     "shape-2-effect-named-by-reply",
     "shape-3-prerequisite",
     "shape-4-conceded-then-new-demand",
     "shape-5-task-names-action",
     "shape-6-reason-names-different-call",
+    "shape-7-send-quotes-earlier-block",
+    "shape-8-issue-comment-asks-ruling",
+    "shape-9-send-quotes-reviewer-refusal",
 ];
 
 /// The committed `review_person_input/` session name `--dirs` accepts
