@@ -29,7 +29,7 @@ const SECONDARY: Colour = Colour::Rgb(179, 157, 219);
 const COMPACTION: Colour = Colour::Rgb(31, 26, 46);
 /// A turn card's background in truecolour.
 const TURN: Colour = Colour::Rgb(16, 16, 23);
-/// The dark page: the panel tint (`docs/tui.md:2985`).
+/// The dark page: the panel tint (`docs/tui.md`, "Themes").
 const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
 /// The scripted turn: a read past the compaction, the note, then done with

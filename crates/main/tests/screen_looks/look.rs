@@ -981,7 +981,7 @@ const ACCENT_RGB: Colour = Colour::Rgb(110, 170, 254);
 const SURFACE_256: Colour = Colour::Indexed(234);
 const ACCENT_256: Colour = Colour::Indexed(75);
 /// The dark page's 256-colour entry: the panel tint's, since the page
-/// paints on the panel tint (`docs/tui.md:2985`).
+/// paints on the panel tint (`docs/tui.md`, "Themes").
 const PANEL_256: Colour = Colour::Indexed(233);
 
 #[test]
@@ -1004,7 +1004,7 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
     assert_eq!(stripe.symbol.as_str(), "▌");
     assert_eq!(stripe.fg, ACCENT_RGB);
     // Its edges: surface half blocks over the page's panel tint
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     for (y, edge) in [(EDGE_TOP, "▄"), (EDGE_BOTTOM, "▀")] {
         for x in BOX_LEFT..BOX_RIGHT {
             let cell = screen.cell(x, y);
@@ -1014,7 +1014,7 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
         }
     }
     // The conversation above is blank cells on the page's panel tint
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     let content = (1..EDGE_TOP)
         .find(|y| (BOX_LEFT..BOX_RIGHT).any(|x| screen.cell(x, *y).symbol.as_str() != " "));
     let first = content.expect("a content row above the input box");
@@ -1077,7 +1077,7 @@ fn at_256_colours_every_colour_is_a_palette_entry() {
         assert_eq!(edge.symbol.as_str(), "▄");
         assert_eq!(edge.fg, SURFACE_256);
         // The dark page paints on the panel tint: at 256 colours the
-        // page takes the panel's entry, 233 (`docs/tui.md:2985`).
+        // page takes the panel's entry, 233 (`docs/tui.md`, "Themes").
         assert_eq!(edge.bg, PANEL_256, "background and panel share one entry");
     }
 }
@@ -1086,17 +1086,16 @@ fn at_256_colours_every_colour_is_a_palette_entry() {
 fn dark_conversation_page_is_the_panel_tint() {
     // Every cell of the conversation is the page: the dark page paints
     // on the panel tint, so the terminal's own background shows nowhere
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     let (screen, _) = one_turn(&TRUECOLOUR);
-    // settled: "the drawn turn" drew the reply with no input since.
-    let content = (1..EDGE_TOP)
+    let content = (1..EDGE_TOP) // settled: "the drawn turn" drew the reply with no input since.
         .find(|y| (BOX_LEFT..BOX_RIGHT).any(|x| screen.cell(x, *y).symbol.as_str() != " "));
     let first = content.expect("a content row above the input box");
     assert!(first > 1, "a blank conversation row above the input box");
     for y in 1..first {
         for x in BOX_LEFT..BOX_RIGHT {
-            assert_eq!(screen.cell(x, y).symbol.as_str(), " ");
-            assert_eq!(screen.cell(x, y).bg, PANEL_RGB, "page cell ({x}, {y})");
+            assert_eq!(screen.cell(x, y).symbol.as_str(), " "); // settled: "the drawn turn".
+            assert_eq!(screen.cell(x, y).bg, PANEL_RGB, "page cell ({x}, {y})"); // settled: "the drawn turn".
         }
     }
 }
@@ -1178,7 +1177,7 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
             && [left_gutter, right_gutter].into_iter().all(|x| {
                 let gutter = screen.cell(x, y);
                 // The gutters are page cells: the panel tint
-                // (`docs/tui.md:2985`).
+                // (`docs/tui.md`, "Themes").
                 gutter.symbol == " " && gutter.bg == PANEL_RGB
             })
             && (0..3).all(|dx| {
@@ -1217,7 +1216,7 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
                 })
         }
         // The home screen's blank cells are page cells: the panel tint
-        // (`docs/tui.md:2985`).
+        // (`docs/tui.md`, "Themes").
         SettledScreen::Home => screen.cell(150, 20).bg == PANEL_RGB,
         SettledScreen::Rail => {
             (0..48).all(|y| (0..24).all(|x| screen.cell(x, y).bg != Colour::Default))
@@ -1722,7 +1721,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     assert_eq!(end.cell(59, first).symbol.as_str(), "a");
     assert_eq!(end.cell(123, first).symbol.as_str(), " ");
     // Half-block edges above and below, on the page's panel tint
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     for (y, edge) in [(first - 1, "▄"), (bubble[1] + 1, "▀")] {
         for x in 58..=124 {
             let cell = end.cell(x, y);
@@ -1732,7 +1731,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
         }
     }
     // A blank row above the top edge, on the page's panel tint
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     for x in 1..=124 {
         let cell = end.cell(x, first - 2);
         assert_eq!(cell.symbol.as_str(), " ", "blank cell ({x}, {})", first - 2);

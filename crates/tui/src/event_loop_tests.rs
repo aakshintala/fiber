@@ -882,13 +882,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The watcher starts before `run`, and is the only reader from the
     // first frame to end of file.
-    let frames = watch(
-        &pair.main,
-        vec![
-            b"refused" as &[u8],
-            b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter" as &[u8],
-        ],
-    );
+    // The resized foot hint's pen, selected by the same depth production
+    // paints with: the dark page is the panel tint, the terminal default
+    // without colour (`docs/tui.md`, "Themes").
+    let foot_marker: &'static [u8] = match crate::look::depth(&|name| std::env::var(name).ok()) {
+        crate::look::Depth::NoColour => b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter",
+        crate::look::Depth::Ansi256 => b"\x1b[10;1H\x1b[1m\x1b[39;48;5;233mEnter",
+        crate::look::Depth::True => b"\x1b[10;1H\x1b[1m\x1b[39;48;2;12;12;17mEnter",
+    };
+    let frames = watch(&pair.main, vec![b"refused" as &[u8], foot_marker]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -932,7 +934,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     let wait = Deadline::after(DEADLINE);
     let foot = watched(&frames, "the foot hint on row 10", &wait);
     assert!(
-        foot.ends_with(b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter"),
+        foot.ends_with(foot_marker),
         "the foot starts with its cursor move, bold and first word: {foot:?}"
     );
     pair.main

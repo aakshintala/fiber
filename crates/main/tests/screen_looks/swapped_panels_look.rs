@@ -28,7 +28,7 @@ use support::{Setup, TRUECOLOUR, write_json};
 
 /// `error` in the dark theme.
 const ERROR: Colour = Colour::Rgb(255, 93, 115);
-/// The dark page: the panel tint (`docs/tui.md:2985`).
+/// The dark page: the panel tint (`docs/tui.md`, "Themes").
 const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
 /// The prompt tokens the scripted turns report: what a reload rebuilds.
@@ -507,7 +507,7 @@ fn the_settings_view_matches_the_doc() {
 fn dark_settings_body_sits_on_the_panel_tint() {
     // Every swapped view draws on the page: the dark page paints on the
     // panel tint, so the terminal's own background shows nowhere
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     let setup = tools_setup(json!({}));
     let mut run = turned(&setup);
     run.write(b"/settings\r");

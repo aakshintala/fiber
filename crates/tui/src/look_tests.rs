@@ -188,7 +188,7 @@ fn the_defaults_stay_the_default_at_every_depth() {
     // terminal's own colours and `muted` is dim over the default
     // foreground, so they stay the default at every depth (`docs/tui.md`,
     // "Themes"). The page paints on the panel tint instead
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     let depths: [&[(&str, &str)]; 3] = [
         &[("COLORTERM", "truecolor")],
         &[("TERM", "xterm-256color")],
@@ -338,7 +338,7 @@ fn paint_resolves_markers_to_the_theme() {
     ]);
     look.paint(&mut buf);
     assert_eq!(buf[(0, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
-    // The dark page paints on the panel tint (`docs/tui.md:2985`).
+    // The dark page paints on the panel tint (`docs/tui.md`, "Themes").
     assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x0c, 0x0c, 0x11));
     // With colour, an edge keeps its half block.
     assert_eq!(buf[(1, 0)].symbol(), "▄");
@@ -717,7 +717,7 @@ fn the_light_page_is_231_and_every_tint_stays_visible() {
         assert_ne!(light.colour(role), Color::Indexed(231), "{}", role.name());
     }
     // The dark page paints on the panel tint: at 256 colours both take
-    // the same entry (`docs/tui.md:2985`).
+    // the same entry (`docs/tui.md`, "Themes").
     let dark = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
     assert_eq!(dark.colour(Role::Background), Color::Indexed(233));
     assert_eq!(
@@ -766,7 +766,7 @@ fn a_nonwhite_page_keeps_the_old_mapping() {
         coloured.colour(Role::Background),
         Color::Indexed(ansi256((0x10, 0x10, 0x17), GREY))
     );
-    // The dark page paints on the panel tint (`docs/tui.md:2985`), and a
+    // The dark page paints on the panel tint (`docs/tui.md`, "Themes"), and a
     // file theme that leaves it out keeps its base's page.
     let dark = look(ThemeSetting::Dark, &ansi);
     assert_eq!(dark.colour(Role::Background), Color::Indexed(233));
@@ -921,7 +921,7 @@ fn logo_tint_reads_the_roles_over_the_page_background() {
         ]
     );
     // The dark background is the panel tint: it backs the image with
-    // the page (`docs/tui.md:2985`).
+    // the page (`docs/tui.md`, "Themes").
     assert_eq!(background, (0x0c, 0x0c, 0x11));
     let (tint, background) = look(ThemeSetting::Light, &[("COLORTERM", "truecolor")])
         .logo_tint()

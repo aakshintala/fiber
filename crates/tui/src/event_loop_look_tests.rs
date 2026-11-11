@@ -187,7 +187,7 @@ fn a_fixed_dark_theme_stays_dark_after_a_light_report() {
     let mut app = App::new(std::path::PathBuf::from("/w"));
     screen.draw_with(&mut app, None, hi).expect("a draw");
     // The fixed dark theme keeps its own page under a light report
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     assert_eq!(
         screen.backend().buffer()[(3, 1)].bg,
         Color::Rgb(0x0c, 0x0c, 0x11)
@@ -202,7 +202,7 @@ fn a_light_report_through_the_loop_repaints_light() {
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(Vec::new()), &step_rx), None);
     // The loop starts dark: the page paints on the panel tint
-    // (`docs/tui.md:2985`).
+    // (`docs/tui.md`, "Themes").
     assert_eq!(
         lp.screen.backend().buffer()[(0, 0)].bg,
         Color::Rgb(0x0c, 0x0c, 0x11)

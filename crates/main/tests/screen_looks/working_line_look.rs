@@ -24,7 +24,7 @@ use support::{Setup, TRUECOLOUR};
 const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
 const INFO: Colour = Colour::Rgb(125, 211, 252);
 const SURFACE: Colour = Colour::Rgb(26, 26, 34);
-/// The dark page: the panel tint (`docs/tui.md:2985`).
+/// The dark page: the panel tint (`docs/tui.md`, "Themes").
 const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
 /// The working line's spinner frames (`docs/tui.md`, "The working line").
