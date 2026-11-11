@@ -915,7 +915,18 @@ impl TuiVm {
                 let returned = values.into_iter().next().unwrap_or(mlua::Value::Nil);
                 return match returned {
                     mlua::Value::Boolean(_) | mlua::Value::Nil => Ok(()),
-                    _ => Err(shape("a focus handler returns only true, false or nil")),
+                    mlua::Value::LightUserData(_)
+                    | mlua::Value::Integer(_)
+                    | mlua::Value::Number(_)
+                    | mlua::Value::String(_)
+                    | mlua::Value::Table(_)
+                    | mlua::Value::Function(_)
+                    | mlua::Value::Thread(_)
+                    | mlua::Value::UserData(_)
+                    | mlua::Value::Error(_)
+                    | mlua::Value::Other(_) => {
+                        Err(shape("a focus handler returns only true, false or nil"))
+                    }
                 };
             }
             let mut yielded = values.iter();
