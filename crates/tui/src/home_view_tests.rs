@@ -4645,3 +4645,102 @@ fn home_logo_rect_values() {
     keys.open_keys();
     assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
 }
+
+#[test]
+fn home_after_forgot_drops_the_row() {
+    // Client B's home after another client's delete: one live row and
+    // one exited row, then a `session_deleted` wire line for the
+    // exited row drops it and re-asks that project's counts.
+    let mut app = home(80, 24);
+    let lines: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let feed = lines
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {lines:?}"));
+    let recent = lines
+        .iter()
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {lines:?}"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    // The live status queues one scoped ask of each kind for the new
+    // project; settle both empty so the forgot re-ask below is exactly
+    // one of each.
+    let asked: Vec<serde_json::Value> = app
+        .on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let scoped = asked
+        .iter()
+        .find(|line| line["command"] == "recent" && line["args"].get("archived").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a scoped ask: {asked:?}"));
+    let archived = asked
+        .iter()
+        .find(|line| line["command"] == "recent" && line["args"].get("archived").is_some())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an archived ask: {asked:?}"));
+    assert!(
+        app.on_line(accepted(
+            scoped,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            archived,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            recent,
+            serde_json::json!({"sessions": [recent_row("s_cccccccccccccccc", "old work", "exited")]}),
+        ))
+        .is_empty()
+    );
+    let before = screen(&app, 80, 24);
+    assert!(before.contains("old work"), "{before}");
+    let forgot = crate::link::parse_line(
+        r#"{"kind":"session_deleted","ts":0,"schema_version":1,"payload":{"session_id":"s_cccccccccccccccc","project":"-w"}}"#,
+    )
+    .unwrap_or_else(|| panic!("the forgot line parses"));
+    let sent: Vec<serde_json::Value> = app
+        .on_line(forgot)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    // (`docs/tui.md`, "The session list"): the deleted session re-asks
+    // its project's counts, with one ask of each in flight: the exited
+    // scoped page and the archived scoped page.
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    for line in &sent {
+        assert_eq!(line["command"], "recent");
+        assert_eq!(line["args"]["project"], "-w");
+        assert!(line["args"].get("before").is_none());
+    }
+    assert_eq!(
+        sent.iter()
+            .filter(|line| line["args"].get("archived").is_some())
+            .count(),
+        1,
+        "{sent:?}"
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("fix the parser"), "{frame}");
+    assert!(!frame.contains("old work"), "{frame}");
+    insta::assert_snapshot!("home_after_forgot_drops_the_row", frame);
+}
