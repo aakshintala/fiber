@@ -99,16 +99,14 @@ fn process_with(setup: &Setup, short: &str, extra: &Value, plan: &Value) {
             "process": process,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A valid `fiber.tool` spec with `run`, as JSON.

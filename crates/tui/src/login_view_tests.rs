@@ -27,14 +27,17 @@ fn targets() -> Vec<LoginTarget> {
         LoginTarget {
             name: "acme".to_owned(),
             kind: LoginKind::Key,
+            label: None,
         },
         LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         },
         LoginTarget {
             name: "acme.api_key".to_owned(),
             kind: LoginKind::Secret,
+            label: None,
         },
     ]
 }
@@ -396,6 +399,7 @@ fn one_browser_provider_pads_the_body_to_three_rows() {
     let fake = fake_with(vec![LoginTarget {
         name: "codex".to_owned(),
         kind: LoginKind::Browser,
+        label: None,
     }]);
     let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
     assert_eq!(slab_height(&buf, 80, 24), probe_height(3));
@@ -464,6 +468,7 @@ fn a_failed_body_drops_rows_in_order_at_the_cap() {
         vec![LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         }],
     ] {
         let cap: usize = if targets.len() == 1 { 3 } else { 6 };
@@ -495,6 +500,7 @@ fn a_very_long_browser_name_draws_one_barred_row() {
     let fake = fake_with(vec![LoginTarget {
         name: "b".repeat(65_530),
         kind: LoginKind::Browser,
+        label: None,
     }]);
     let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
     assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
@@ -510,6 +516,7 @@ fn names_cut_at_the_budget_keep_the_tag_on_screen() {
         let fake = fake_with(vec![LoginTarget {
             name: name.clone(),
             kind: LoginKind::Browser,
+            label: None,
         }]);
         let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
         let row = screen
@@ -565,6 +572,7 @@ fn at_saturation_the_last_provider_stays_visible_with_one_bar() {
         made.push(LoginTarget {
             name: format!("p{n}"),
             kind: LoginKind::Key,
+            label: None,
         });
     }
     let last = format!("p{}", PROVIDERS - 1);
@@ -634,6 +642,7 @@ fn the_footer_padding_holds_the_width_while_scrolled() {
     made.push(LoginTarget {
         name: "s".repeat(60),
         kind: LoginKind::Secret,
+        label: None,
     });
     let fake = fake_with(made);
     let login = Login::open(&ctx(&fake));
@@ -1266,6 +1275,189 @@ fn esc_on_the_list_closes() {
 }
 
 #[test]
+fn login_signed_in_first_80x24() {
+    // `docs/tui.md`, "Logging in": providers with a usable credential
+    // come first, each marked "✓ <label>" with its default label, or
+    // the variable's name for a key read from the environment.
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+            label: None,
+        },
+        LoginTarget {
+            name: "acme".to_owned(),
+            kind: LoginKind::Key,
+            label: Some("default".to_owned()),
+        },
+        LoginTarget {
+            name: "acme.api_key".to_owned(),
+            kind: LoginKind::Secret,
+            label: None,
+        },
+        LoginTarget {
+            name: "zeta".to_owned(),
+            kind: LoginKind::Key,
+            label: Some("ZETA_KEY".to_owned()),
+        },
+    ]);
+    let login = Login::open(&ctx(&fake));
+    // `docs/tui.md`, "Logging in": the two signed-in providers list
+    // first, then the two unsigned rows. The doc promises only this
+    // grouping, so the test checks grouping and marks, never the order
+    // within a group. The snapshot below shows one example order.
+    assert_eq!(login.targets.len(), 4);
+    assert!(login.targets[0].label.is_some());
+    assert!(login.targets[1].label.is_some());
+    assert!(login.targets[2].label.is_none());
+    assert!(login.targets[3].label.is_none());
+    let mut signed: Vec<&str> = login.targets[..2]
+        .iter()
+        .map(|target| target.name.as_str())
+        .collect();
+    signed.sort_unstable();
+    assert_eq!(signed, ["acme", "zeta"]);
+    // Providers group before secrets: the unsigned provider precedes
+    // the secret.
+    assert_eq!(login.targets[2].name.as_str(), "codex");
+    assert_eq!(login.targets[2].kind, LoginKind::Browser);
+    assert_eq!(login.targets[3].name.as_str(), "acme.api_key");
+    assert_eq!(login.targets[3].kind, LoginKind::Secret);
+    assert_eq!(
+        login
+            .targets
+            .iter()
+            .filter(|target| target.label.is_some())
+            .count(),
+        2
+    );
+    let screen = drawn(&login, 80, 24);
+    // `docs/tui.md`, "Logging in": each signed-in row shows its mark.
+    for mark in ["✓ default", "✓ ZETA_KEY"] {
+        assert!(screen.lines().any(|row| row.contains(mark)), "{screen}");
+    }
+    // Each signed-in mark draws in the doc's `success`
+    // (`docs/tui.md`, "Logging in"), one per signed-in row. The
+    // focused row rides the bar, which covers the whole row in black
+    // whatever the row names.
+    let (buf, _) = overlaid(&login, 80, 24);
+    let success = Role::Success.color();
+    let accent = Role::Accent.color();
+    let mut marks = Vec::new();
+    let mut barred_marks = 0;
+    for y in 0..24u16 {
+        for x in 0..80u16 {
+            if buf[(x, y)].symbol() == "✓" {
+                if buf[(x, y)].bg == accent {
+                    barred_marks += 1;
+                    assert_eq!(
+                        buf[(x, y)].fg,
+                        crate::look::BAR_TEXT,
+                        "the bar covers the focused mark in black"
+                    );
+                } else {
+                    assert_eq!(buf[(x, y)].fg, success, "the mark draws in success");
+                }
+                marks.push((x, y));
+            }
+        }
+    }
+    assert_eq!(marks.len(), 2, "one mark per signed-in row");
+    assert_eq!(barred_marks, 1, "the focused row rides the bar");
+    // The focused signed-in row keeps `bold` with the bar; the other
+    // mark draws unbolded.
+    let rows = text_of(&buf, 80, 24);
+    let row_y = |needle: &str| {
+        u16::try_from(rows.iter().position(|row| row.contains(needle)).unwrap()).unwrap()
+    };
+    let col_x =
+        |y: u16, needle: &str| u16::try_from(rows[usize::from(y)].find(needle).unwrap()).unwrap();
+    let tag_cells = |y: u16, tag: &str| {
+        let x = col_x(y, tag);
+        let len = u16::try_from(tag.len()).unwrap();
+        (0..len).map(move |dx| (x + dx, y))
+    };
+    // Focus is the first sorted target, whichever signed-in provider it
+    // is: the test never pins which.
+    let focused_mark = format!("✓ {}", login.targets[0].label.as_deref().unwrap());
+    let focused_y = row_y(&focused_mark);
+    let (mark_x, _) = marks
+        .iter()
+        .find(|(_, my)| *my == focused_y)
+        .copied()
+        .unwrap();
+    assert!(buf[(mark_x, focused_y)].modifier.contains(Modifier::BOLD));
+    let other_mark = format!("✓ {}", login.targets[1].label.as_deref().unwrap());
+    let other_y = row_y(&other_mark);
+    let (other_x, _) = marks
+        .iter()
+        .find(|(_, my)| *my == other_y)
+        .copied()
+        .unwrap();
+    assert!(!buf[(other_x, other_y)].modifier.contains(Modifier::BOLD));
+    // `docs/tui.md`, "Logging in": the rest follow in the text colour.
+    for (x, y) in tag_cells(row_y("codex"), "browser") {
+        let cell = &buf[(x, y)];
+        assert!(
+            !cell.modifier.contains(Modifier::DIM),
+            "an unsigned tag draws in the text colour"
+        );
+        assert!(!cell.modifier.contains(Modifier::BOLD));
+    }
+    // The focused row keeps `bold` on its tag with the bar.
+    for (x, y) in tag_cells(focused_y, "key") {
+        assert!(
+            buf[(x, y)].modifier.contains(Modifier::BOLD),
+            "the focused tag keeps bold with the bar"
+        );
+    }
+    // Every row can be picked, so a signed-in provider can be signed
+    // in again or under another label. The walk follows the sorted
+    // targets' own order, whatever it is.
+    let order: Vec<String> = login
+        .targets
+        .iter()
+        .map(|target| target.name.clone())
+        .collect();
+    for (downs, name) in order.iter().enumerate() {
+        let mut picked = Login::open(&ctx(&fake));
+        for _ in 0..downs {
+            press(&mut picked, &fake, &[Key::Down]);
+        }
+        let act = picked.key(&Key::Enter, &ctx(&fake));
+        if name == "codex" {
+            assert!(
+                matches!(act, Act::Login(browser) if browser == "codex"),
+                "{name}"
+            );
+        } else {
+            assert!(matches!(act, Act::Stay), "{name}");
+            assert!(panel_open(&picked), "{name}");
+        }
+    }
+    // Esc closes the sorted list.
+    let mut closed = Login::open(&ctx(&fake));
+    assert!(matches!(closed.key(&Key::Esc, &ctx(&fake)), Act::Close));
+    insta::assert_snapshot!("login_signed_in_first_80x24", drawn(&login, 80, 24));
+}
+
+#[test]
+fn a_long_mark_keeps_its_row_on_one_row() {
+    // A long variable name comes out of the shared cut budget: the
+    // name shortens, the whole mark stays on the row.
+    let label = "ZETA_".repeat(12);
+    let fake = fake_with(vec![LoginTarget {
+        name: "zeta".repeat(10),
+        kind: LoginKind::Key,
+        label: Some(label.clone()),
+    }]);
+    let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
+    let marked: Vec<&str> = screen.lines().filter(|row| row.contains('✓')).collect();
+    assert_eq!(marked.len(), 1, "{screen}");
+    assert!(marked[0].contains(&format!("✓ {label}")), "{screen}");
+}
+
+#[test]
 fn a_click_selects_a_row_and_the_x_closes() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
@@ -1425,15 +1617,26 @@ fn an_overflowing_label_keeps_its_caret_in_its_row() {
     let mut buf = Buffer::empty(area);
     let mut targets_out = Vec::new();
     login.draw(area, &mut buf, &mut targets_out);
-    // Caret at the start: the head shows with the first cell in the
-    // slab's colour on the text colour.
-    let caret = (0..24).any(|y| {
-        (0..80).any(|x| {
-            buf[(x, y)].fg == crate::theme::Role::Surface.color()
-                && buf[(x, y)].bg == crate::theme::Role::Text.color()
-        })
-    });
-    assert!(caret, "no reversed caret cell");
+    // Caret at the start: the head shows with the first cell reversed
+    // over its own colours.
+    let rows = text_of(&buf, 80, 24);
+    let label_y = rows
+        .iter()
+        .position(|row| row.contains("Label (--as):"))
+        .unwrap_or_else(|| panic!("no label row in {rows:?}"));
+    let yu = u16::try_from(label_y).unwrap_or(u16::MAX);
+    let mut found = 0;
+    for x in 0..80u16 {
+        if buf[(x, yu)]
+            .style()
+            .add_modifier
+            .contains(Modifier::REVERSED)
+        {
+            assert_eq!(buf[(x, yu)].symbol(), "l", "the caret covers the head");
+            found += 1;
+        }
+    }
+    assert_eq!(found, 1, "one reversed caret cell on the label row");
 }
 
 #[test]
@@ -2077,6 +2280,7 @@ fn a_wrapping_prompt_drops_rows_in_order_at_the_body_cap() {
         vec![LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         }],
     ] {
         let cap = if targets.len() == 1 { 3 } else { 6 };
@@ -2349,6 +2553,7 @@ fn the_starting_step_keeps_the_lists_height() {
     let one = fake_with(vec![LoginTarget {
         name: "codex".to_owned(),
         kind: LoginKind::Browser,
+        label: None,
     }]);
     let context = ctx(&one);
     let mut login = Login::open(&context);
@@ -2368,6 +2573,7 @@ fn a_very_long_name_cuts_within_the_step_and_matches_the_panel() {
     let fake = fake_with(vec![LoginTarget {
         name: long.clone(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let context = ctx(&fake);
     let mut starting = Login::open(&context);
@@ -2447,6 +2653,7 @@ fn a_saturated_body_clips_to_the_lists_budget() {
             .map(|at| LoginTarget {
                 name: format!("key-{at}"),
                 kind: LoginKind::Key,
+                label: None,
             })
             .collect();
         let fake = fake_with(many);
@@ -2532,6 +2739,7 @@ fn a_secret_only_list_is_as_wide_as_its_heading_or_row() {
     let targets = vec![LoginTarget {
         name: "k".to_owned(),
         kind: LoginKind::Secret,
+        label: None,
     }];
     assert_eq!(super::list_widest(&targets), 7);
 }
@@ -2543,6 +2751,7 @@ fn a_key_only_list_is_as_wide_as_its_heading_or_row() {
     let targets = vec![LoginTarget {
         name: "k".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }];
     assert_eq!(super::list_widest(&targets), 9);
 }
@@ -2553,6 +2762,7 @@ fn a_long_row_sets_the_list_width_uncut() {
     let targets = vec![LoginTarget {
         name: "a-long-provider-name".to_owned(),
         kind: LoginKind::Browser,
+        label: None,
     }];
     assert_eq!(super::list_widest(&targets), 31);
 }
@@ -2567,6 +2777,7 @@ fn key_choices(
     let fake = fake_with(vec![LoginTarget {
         name: name.to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     press(&mut login, &fake, &[Key::Enter]);
@@ -3022,6 +3233,7 @@ fn a_failed_read_keeps_the_login_with_its_message() {
     let fake = fake_with(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     press(&mut login, &fake, &[Key::Enter]);
@@ -3052,6 +3264,7 @@ fn esc_in_preparing_and_choices_returns_to_the_rows_saving_nothing() {
     let fake = fake_with(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     press(&mut login, &fake, &[Key::Enter]);
@@ -3336,6 +3549,7 @@ fn preparing_view() -> (Fake, Login) {
     let fake = fake_with(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     login.wait_reviewer(LoginTicket(1), "acme".to_owned());
@@ -3606,6 +3820,7 @@ fn many_targets() -> Vec<LoginTarget> {
         .map(|at| LoginTarget {
             name: format!("p{at:02}"),
             kind: LoginKind::Key,
+            label: None,
         })
         .collect()
 }

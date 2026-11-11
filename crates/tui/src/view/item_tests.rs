@@ -155,13 +155,20 @@ fn opened(app: &mut App) {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        crate::app::Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
@@ -237,14 +244,14 @@ fn open_job(app: &mut App, job: &str) {
         .serial_of_job(&contract::JobId(job.to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
     match app.on_click(TargetId::Panel(crate::app::panel::Spot::Job(serial))) {
-        crate::app::Effect::Send(_) => {}
+        crate::app::Effect::Send(_) | crate::app::Effect::SendTracked(_) => {}
         crate::app::Effect::None => {}
         crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
@@ -312,13 +319,13 @@ fn open_item(app: &mut App) {
                 }
             }
         }
-        crate::app::Effect::None => {}
+        crate::app::Effect::SendTracked(_) | crate::app::Effect::None => {}
         crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
@@ -630,13 +637,20 @@ fn clicking_stop_sends_job_stop_to_the_parent() {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        crate::app::Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
@@ -684,13 +698,20 @@ fn the_stop_target_is_reached_from_the_keyboard() {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        crate::app::Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
@@ -850,12 +871,13 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
         crate::app::Effect::Copy(text) => assert!(text.contains("review it"), "{text}"),
         crate::app::Effect::None
         | crate::app::Effect::Send(_)
+        | crate::app::Effect::SendTracked(_)
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
         | crate::app::Effect::FindPause { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
         | crate::app::Effect::ReadImage(_)
@@ -1636,13 +1658,20 @@ fn click_open(app: &mut App) -> String {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        crate::app::Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)

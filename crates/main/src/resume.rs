@@ -16,6 +16,7 @@ use contract::events::EventKind;
 use contract::shapes::{Failure, Worktree};
 use log::Log;
 
+use crate::keeper::Handover;
 use crate::{ask_failed, failed};
 
 /// Whether the session in `dir` continues its chain as a delegate's fork:
@@ -177,29 +178,83 @@ fn keeper_refusal(dir: &Path, id: &SessionId, keeper: log::Error) -> Failure {
     }
 }
 
+/// What opening the session's log came to.
+enum Opening {
+    /// The log is open. When the lock was a keeper's, the keeper handed it
+    /// over along with the jobs it still runs.
+    Opened(Box<Log>, Option<Handover>),
+    /// Another process holds the lock: a live session to attach to.
+    Held(log::Error),
+    /// The resume declines, with the reason.
+    Refused(Failure),
+}
+
+/// Opens the session's log. A lock held by the session's own keeper is taken
+/// through its handover (`docs/tools.md`, "The keeper"): the keeper names
+/// the session it holds, releases the lock and lists its running jobs. A
+/// keeper this build cannot read, one that does not answer as the session,
+/// and a lock another writer takes first all decline with `session_held`.
+fn open_log(
+    home: &Path,
+    sessions: &Path,
+    id: &SessionId,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> Opening {
+    let dir = log::SessionDir::new(sessions, id);
+    match Log::open(sessions, id.clone(), Arc::clone(clock)) {
+        Ok(log) => Opening::Opened(Box::new(log), None),
+        Err(error @ log::Error::Held { .. }) => match keeper_held(dir.path(), id) {
+            Some(keeper) => take_from_keeper(home, sessions, id, clock, keeper),
+            None => Opening::Held(error),
+        },
+        Err(error) => Opening::Refused(failed(error.code(), error)),
+    }
+}
+
+fn take_from_keeper(
+    home: &Path,
+    sessions: &Path,
+    id: &SessionId,
+    clock: &Arc<dyn contract::clock::Clock>,
+    keeper: log::Error,
+) -> Opening {
+    let dir = log::SessionDir::new(sessions, id);
+    // Preserved: a version this build cannot read is declined by name,
+    // before the keeper is asked to release anything.
+    if keeper_schema_version(dir.path())
+        .is_some_and(|version| version != u64::from(contract::SCHEMA_VERSION))
+    {
+        return Opening::Refused(keeper_refusal(dir.path(), id, keeper));
+    }
+    let Ok(handover) = crate::keeper::takeover(home, id, clock) else {
+        return Opening::Refused(keeper_refusal(dir.path(), id, keeper));
+    };
+    match Log::open(sessions, id.clone(), Arc::clone(clock)) {
+        Ok(log) => Opening::Opened(Box::new(log), Some(handover)),
+        // Another writer took the lock the keeper released: nothing forced,
+        // nothing retried, and the keeper's connection ends with the refusal.
+        Err(log::Error::Held { .. }) => Opening::Refused(keeper_refusal(dir.path(), id, keeper)),
+        Err(error) => Opening::Refused(failed(error.code(), error)),
+    }
+}
+
 fn open_or_attach(
+    home: &Path,
     sessions: &Path,
     id: SessionId,
     clock: Arc<dyn contract::clock::Clock>,
     attach: impl FnOnce(log::Error) -> i32,
-) -> Result<Log, i32> {
-    let dir = log::SessionDir::new(sessions, &id);
+) -> Result<(Log, Option<Handover>), i32> {
     #[cfg(test)]
     BEFORE_RESUME_OPEN.with(|cell| {
         if let Some(hook) = cell.borrow_mut().take() {
             hook();
         }
     });
-    match Log::open(sessions, id.clone(), clock) {
-        Ok(log) => Ok(log),
-        Err(error @ log::Error::Held { .. }) => {
-            if let Some(keeper) = keeper_held(dir.path(), &id) {
-                Err(ask_failed(keeper_refusal(dir.path(), &id, keeper)))
-            } else {
-                Err(attach(error))
-            }
-        }
-        Err(error) => Err(ask_failed(failed(error.code(), error))),
+    match open_log(home, sessions, &id, &clock) {
+        Opening::Opened(log, handover) => Ok((*log, handover)),
+        Opening::Held(error) => Err(attach(error)),
+        Opening::Refused(failure) => Err(ask_failed(failure)),
     }
 }
 
@@ -243,12 +298,9 @@ pub(crate) fn ask_resume(
     // A held lock means a live session: attach to it instead of opening a
     // second writer (`docs/invocation.md`, "Processes"). Its failure
     // already names the holder, which attach takes as its refusal.
-    let log =
-        match open_or_attach(
-            &sessions,
-            id.clone(),
-            Arc::clone(&clock),
-            |e| match doors::attach(
+    let (log, handover) =
+        match open_or_attach(&home, &sessions, id.clone(), Arc::clone(&clock), |e| {
+            match doors::attach(
                 &home,
                 &id,
                 resuming.credential.as_deref(),
@@ -258,14 +310,15 @@ pub(crate) fn ask_resume(
             ) {
                 Ok(code) => code,
                 Err(e) => ask_failed(Failure::from(e)),
-            },
-        ) {
-            Ok(log) => Arc::new(log),
+            }
+        }) {
+            Ok((log, handover)) => (Arc::new(log), handover),
             Err(code) => return code,
         };
     let dir = log::SessionDir::new(&sessions, &id);
     resume_session(
         log,
+        handover,
         &sessions,
         &dir,
         id,
@@ -344,18 +397,20 @@ pub(crate) fn session_resume(
     };
     let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     log::crash::attach(&id);
-    let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
-        Ok(log) => Arc::new(log),
-        Err(error @ log::Error::Held { .. }) => {
+    // The hub attaches to a live session by its socket, so any holder but
+    // the session's own keeper fails instead of attaching.
+    let (log, handover) = match open_log(&home, &sessions, &id, &clock) {
+        Opening::Opened(log, handover) => (Arc::new(*log), handover),
+        Opening::Held(error) => {
             return ask_failed(session_held_failure(&sessions, &id, error));
         }
-        Err(e) => return ask_failed(failed(e.code(), e)),
+        Opening::Refused(failure) => return ask_failed(failure),
     };
     let dir = log::SessionDir::new(&sessions, &id);
     let admission = crate::session_command::StartupAdmission::for_run(prompt.is_some(), true);
     resume_session(
-        log, &sessions, &dir, id, overrides, credential, prompt, admission, true, clock, signals,
-        process,
+        log, handover, &sessions, &dir, id, overrides, credential, prompt, admission, true, clock,
+        signals, process,
     )
 }
 
@@ -371,6 +426,7 @@ pub(crate) fn session_resume(
 )]
 fn resume_session(
     log: Arc<Log>,
+    handover: Option<Handover>,
     sessions: &Path,
     dir: &log::SessionDir,
     id: SessionId,
@@ -449,6 +505,7 @@ fn resume_session(
     }
     let result = resumed_session(
         log,
+        handover,
         sessions,
         dir,
         id,
@@ -479,6 +536,7 @@ fn resume_session(
 )]
 fn resumed_session(
     log: Arc<Log>,
+    handover: Option<Handover>,
     sessions: &Path,
     dir: &log::SessionDir,
     id: SessionId,
@@ -550,7 +608,8 @@ fn resumed_session(
         Arc::clone(&log),
         folded,
         opened,
-    )?;
+    )?
+    .with_handover(handover);
     let inputs = crate::session_command::SessionInputs {
         prompt,
         admission,

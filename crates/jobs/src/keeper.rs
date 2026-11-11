@@ -41,6 +41,8 @@ enum Phase {
     #[default]
     Live,
     Holding,
+    /// A resuming session took the log and holds these jobs' endings.
+    HandedOver,
     Shutdown,
     Gone,
 }
@@ -155,6 +157,28 @@ impl Supervisor {
         stops
     }
 
+    /// Hands the held jobs to a resuming session, returning each call with
+    /// its durable job. Valid only while holding and before the bound has
+    /// marked a job expired: a job the bound is already stopping stays with
+    /// the keeper that is writing its `keeper_timeout`, so any other phase
+    /// returns `None` and changes nothing. After this, an ending is
+    /// recorded for the session to deliver, and the keeper exits when the
+    /// last of them is confirmed.
+    pub fn hand_over(&mut self) -> Option<Vec<(String, JobId)>> {
+        if !matches!(self.phase, Phase::Holding)
+            || self.processes.values().any(|process| process.expired)
+        {
+            return None;
+        }
+        self.phase = Phase::HandedOver;
+        Some(
+            self.processes
+                .iter()
+                .filter_map(|(id, process)| Some((id.clone(), process.job.clone()?)))
+                .collect(),
+        )
+    }
+
     /// Abandons takeover when another writer already holds the log.
     pub fn lock_lost(&mut self) -> Vec<Step> {
         let mut steps = self.tool_stops();
@@ -199,18 +223,35 @@ impl Supervisor {
                 }
                 steps
             }
+            Phase::HandedOver => {
+                // The session delivers this ending and writes it; the keeper
+                // keeps it until the session confirms the write.
+                if process.job.is_some() {
+                    process.exit = Some(exit);
+                    self.processes.insert(id.to_owned(), process);
+                }
+                Vec::new()
+            }
             Phase::Shutdown | Phase::Gone => Vec::new(),
         }
     }
 
-    /// Forgets an ending already appended by the live session.
+    /// Forgets an ending already appended by the live session. Once handed
+    /// over, the last confirmed ending lets the keeper exit.
     pub fn confirmed(&mut self, id: &str) -> Vec<Step> {
-        if self
+        let ended = self
             .processes
             .get(id)
-            .is_some_and(|process| process.exit.is_some())
-        {
+            .is_some_and(|process| process.exit.is_some());
+        if ended {
             self.processes.remove(id);
+        }
+        if ended
+            && matches!(self.phase, Phase::HandedOver)
+            && !self.processes.values().any(|process| process.job.is_some())
+        {
+            self.phase = Phase::Gone;
+            return vec![Step::Exit];
         }
         Vec::new()
     }

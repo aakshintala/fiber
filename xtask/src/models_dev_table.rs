@@ -369,6 +369,8 @@ const MUSE: Package = Package {
             MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
+        ("muse-ember-1.0", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("muse-wonder-1.0", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
     ],
 };
 

@@ -77,16 +77,14 @@ fn install_test_provider(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "test",
@@ -123,16 +121,14 @@ fn install_late_provider(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "late",
@@ -708,16 +704,14 @@ fn install_hook_http(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A hook's `host.http` call writes one `extension` line with the

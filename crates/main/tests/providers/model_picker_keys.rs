@@ -56,16 +56,14 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
             "models": models,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}}),
@@ -412,16 +410,14 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
                         "base_url": "https://{workspace}/v1", "context_window": 100000}],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}}),
@@ -613,16 +609,14 @@ fn install_lua_catalogue_provider(setup: &Setup, server_url: &str, debug: bool) 
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     let mut config = json!({
         "model": "cat/m1",
         "hub": {"idle_exit_ms": 200},

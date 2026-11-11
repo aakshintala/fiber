@@ -28,8 +28,11 @@ impl App {
         let recent =
             home.recent
                 .reset_for_connection(&home.sessions, launch_project.as_deref(), outbox);
-        for line in recent {
-            home.subs.queue(line);
+        // The queued refetch cruises the fold: each id rides paired,
+        // so a failed write settles by the carried id.
+        for sent in recent {
+            outbox.note_hub_sent(&sent.id, &sent.line);
+            home.subs.queue(sent.line);
         }
         self.settle_deletes();
     }

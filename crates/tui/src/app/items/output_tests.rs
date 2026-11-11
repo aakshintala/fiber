@@ -124,13 +124,14 @@ fn opened(app: &mut App) {
         .unwrap_or_else(|| panic!("a row"));
     let out = match app.on_click(crate::mouse::TargetId::Home(crate::home::Spot::Entry(key))) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -243,13 +244,13 @@ fn rewrite(app: &mut App, action: &str, arguments: Value) {
 /// Opens job `job`'s view; opening sends or nothing, never anything else.
 fn open_job(app: &mut App, job: &str) {
     match app.open_item(&JobId(job.to_owned())) {
-        Effect::None | Effect::Send(_) => {}
+        Effect::None | Effect::Send(_) | Effect::SendTracked(_) => {}
         Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
