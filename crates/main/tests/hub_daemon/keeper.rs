@@ -53,11 +53,6 @@ fn probe(
     }
 }
 
-/// One `pgrep` execution's kill-bound for the expiry-time keeper sample:
-/// the fakes per-`pgrep` budget (2500 ms), spelled here because that const
-/// is crate-private. A sample, never a poll.
-const KEEPER_SAMPLE_WITHIN: std::time::Duration = std::time::Duration::from_millis(2_500);
-
 /// The expiry-time session-log read keeps at most this many bytes from the
 /// end of the events log: a bounded tail, never the full read.
 const SESSION_LOG_TAIL_CAP: usize = 64 * 1024;
@@ -119,7 +114,8 @@ fn session_log_tail(read: &std::io::Result<Vec<u8>>) -> String {
 /// events log, each run once on the expiry path, never in a loop. No
 /// exit-wait, no second wait, no sleep, no retry.
 fn keeper_state_at_expiry(pattern: &str, setup: &Setup, id: &str) -> String {
-    let listing = fakes::matching(pattern, KEEPER_SAMPLE_WITHIN);
+    // One-shot sample spelling the fakes per-`pgrep` budget (2500 ms).
+    let listing = fakes::matching(pattern, std::time::Duration::from_millis(2_500));
     let log = fs::read(session_dir(setup, id).join("events.jsonl"));
     format!(
         "{}\n{}",
