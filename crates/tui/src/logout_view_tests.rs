@@ -18,6 +18,7 @@ fn many_targets() -> Vec<LoginTarget> {
         .map(|at| LoginTarget {
             name: format!("p{at:02}"),
             kind: LoginKind::Key,
+            label: None,
         })
         .collect()
 }

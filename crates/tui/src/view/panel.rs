@@ -562,12 +562,6 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
         tint: None,
         edge: false,
     });
-    out.push(Row {
-        line: Line::styled("then a summary, fresh context", style(Role::Muted)),
-        spot: Some(Spot::Context),
-        tint: None,
-        edge: false,
-    });
     // Every figure row draws from the first frame: a figure not known
     // yet shows a dim dash, so no row moves when its data arrives
     // (`docs/tui.md`, "The panel").

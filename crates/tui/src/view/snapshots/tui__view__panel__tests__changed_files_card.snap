@@ -10,7 +10,6 @@ expression: "super::super::text(&buf)"
 
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
    compacts at —                —
-   then a summary, fresh context
    tokens in / out              —
    cache hits                   —
    cache resets in              —

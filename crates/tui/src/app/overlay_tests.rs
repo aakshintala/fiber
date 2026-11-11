@@ -5266,6 +5266,7 @@ mod outside_click {
             *targets = Ok(vec![LoginTarget {
                 name: "acme".to_owned(),
                 kind: LoginKind::Key,
+                label: None,
             }]);
         }
         app.set_configure(Arc::new(fake) as Arc<dyn Configure>);

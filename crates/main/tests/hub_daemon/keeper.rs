@@ -1017,25 +1017,33 @@ fn holds_open(pid: u32, path: &std::path::Path) -> bool {
 /// What the handover relay tells the test about the lines it forwards.
 enum RelayEvent {
     Identify {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     Handover {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     HandoverReply {
+        #[cfg(target_os = "linux")]
         raw: String,
+        #[cfg(target_os = "linux")]
         jobs: Vec<(String, String)>,
     },
     AdoptedHeld {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     AdoptDone {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     Output {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     Exit {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
 }
@@ -1053,6 +1061,7 @@ struct RelayCounts {
 }
 
 /// The running jobs a Handover reply carries, as job id and output path.
+#[cfg(target_os = "linux")]
 fn running_jobs(value: &Value) -> Vec<(String, String)> {
     value["handover"]["running"]
         .as_array()
@@ -1405,15 +1414,25 @@ fn forward_upstream(
         let Some((raw, value)) = parse_line(&line) else {
             continue;
         };
+        #[cfg(not(target_os = "linux"))]
+        drop(raw);
         if value.get("adopt_done").is_some() {
             counts.lock().unwrap().adopt_done += 1;
-            send_event(events, RelayEvent::AdoptDone { raw });
+            send_event(
+                events,
+                RelayEvent::AdoptDone {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         } else if value.get("handover").is_some() {
             counts.lock().unwrap().handover_reply += 1;
             send_event(
                 events,
                 RelayEvent::HandoverReply {
+                    #[cfg(target_os = "linux")]
                     raw,
+                    #[cfg(target_os = "linux")]
                     jobs: running_jobs(&value),
                 },
             );
@@ -1422,10 +1441,22 @@ fn forward_upstream(
             .and_then(|output| output.get("bytes"))
             .is_some_and(|bytes| bytes.as_str().is_some_and(|text| !text.is_empty()))
         {
-            send_event(events, RelayEvent::Output { raw });
+            send_event(
+                events,
+                RelayEvent::Output {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         } else if value.get("exit").is_some() {
             counts.lock().unwrap().exit += 1;
-            send_event(events, RelayEvent::Exit { raw });
+            send_event(
+                events,
+                RelayEvent::Exit {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         }
     }
 }
@@ -1466,9 +1497,17 @@ fn forward_session(
             }
             continue;
         };
+        #[cfg(not(target_os = "linux"))]
+        drop(raw);
         if value.get("adopted").is_some() {
             counts.lock().unwrap().adopted += 1;
-            send_event(events, RelayEvent::AdoptedHeld { raw });
+            send_event(
+                events,
+                RelayEvent::AdoptedHeld {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
             break line.clone();
         }
         if writer.write_all(&line).is_err() {
@@ -1476,13 +1515,25 @@ fn forward_session(
         }
         if value.get("identify").is_some() {
             counts.lock().unwrap().identify += 1;
-            send_event(events, RelayEvent::Identify { raw });
+            send_event(
+                events,
+                RelayEvent::Identify {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         } else if value
             .get("handover")
             .is_some_and(|handover| handover.is_boolean())
         {
             counts.lock().unwrap().handover += 1;
-            send_event(events, RelayEvent::Handover { raw });
+            send_event(
+                events,
+                RelayEvent::Handover {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         }
     };
     // Held until the test releases, holding no lock and no writer mutex:

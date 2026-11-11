@@ -666,6 +666,17 @@ stable release exists. That pull request passes CI like any other. A lint
 renamed in the new release fails it, because `unknown_lints` is denied
 (`docs/code-quality.md`).
 
+## The model catalog
+
+A workflow runs `cargo xtask models-dev` every night at 03:00 UTC on `main`
+and opens a pull request when a committed model list or
+`providers/models-corrections.toml` changes (`docs/model-routing.md`,
+"What a provider extension declares"). It fetches models.dev's public catalog and needs no secret. Its
+pull request passes CI like any other. When an open pull request from an
+earlier run exists, the workflow updates that branch instead of opening a
+second one. This is the only CI job that fetches over the network outside a
+build's dependencies.
+
 ## Releases
 
 `.github/workflows/release.yml` runs on a push to `main` that changes the
