@@ -2019,15 +2019,56 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
     assert_eq!(unit.len(), 64);
     let at_cap = unit.repeat(SESSION_LOG_TAIL_CAP / 64);
     assert_eq!(at_cap.len(), SESSION_LOG_TAIL_CAP);
-    // At exactly the cap the whole log renders: the header plus every
-    // input line, nothing dropped and nothing read past the cap.
-    let expected = format!("session log tail:\n{}", at_cap.trim_end());
+    // At exactly the cap the whole log renders: nothing dropped and nothing
+    // read past the cap. Assert the cap by length and the content by its
+    // edges, without pinning all 1,024 generated lines to a count no doc
+    // promises. Failures report lengths and the first differing offset,
+    // never the whole ~64 KiB tail (docs/testing.md, "What a test asserts").
     let rendered = session_log_tail(&Ok(at_cap.into_bytes()));
-    assert!(rendered.contains("\"pad\":\""), "{rendered}");
+    let header = "session log tail:\n";
+    let first_line = unit.trim_end();
     assert_eq!(
-        rendered, expected,
-        "at the cap the tail holds the whole log",
+        rendered.len(),
+        header.len() + SESSION_LOG_TAIL_CAP - 1,
+        "at the cap the tail holds the whole log: lengths",
     );
+    assert!(
+        rendered.contains("\"pad\":\""),
+        "at the cap the tail keeps JSON lines: rendered len {}",
+        rendered.len(),
+    );
+    {
+        let head = format!("{header}{first_line}");
+        let offset = rendered
+            .bytes()
+            .take(head.len())
+            .zip(head.bytes())
+            .position(|(got, want)| got != want)
+            .or_else(|| (rendered.len() < head.len()).then_some(rendered.len()));
+        assert!(
+            rendered.starts_with(head.as_str()),
+            "at the cap the tail keeps the first line: rendered len {}, head len {}, first diff at {offset:?}",
+            rendered.len(),
+            head.len(),
+        );
+    }
+    {
+        let last = first_line;
+        let start = rendered.len().saturating_sub(last.len());
+        let offset = rendered
+            .bytes()
+            .skip(start)
+            .zip(last.bytes())
+            .position(|(got, want)| got != want)
+            .or_else(|| (rendered.len() < last.len()).then_some(rendered.len()))
+            .map(|pos| start + pos);
+        assert!(
+            rendered.ends_with(last),
+            "at the cap the tail keeps the last line: rendered len {}, last len {}, first diff at {offset:?}",
+            rendered.len(),
+            last.len(),
+        );
+    }
     let filler = "x".repeat(SESSION_LOG_TAIL_CAP + 1);
     let cut = format!("{filler}\n{line}");
     let rendered = session_log_tail(&Ok(cut.into_bytes()));
