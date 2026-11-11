@@ -907,11 +907,16 @@ fn the_changed_files_committed_file_stays_dim_with_no_exit_code() {
     let x = col_at(&grid, y + 1, "+2");
     // The totals row opens the Changed files list.
     click(&mut run, x, y + 1);
-    run.wait_screen("the undone file row", |grid| {
+    // The undone file reads dim without being chosen: the figures
+    // answer omits it and tracking does not call it untracked.
+    let grid = run.wait_screen("the dim no-diff row", |grid| {
         grid.rows[0].contains("Changed files")
             && list_row(grid, "f.txt")
-                .is_some_and(|y| grid.rows[usize::from(y)].contains("A  f.txt"))
+                .is_some_and(|y| grid.rows[usize::from(y)].contains("no changes"))
     });
+    let y = list_row_with(&grid, "f.txt");
+    // settled: the wait above matched the whole no-diff row.
+    assert!(is_dim(&grid, y, "no changes"), "{}", contents(&grid));
     // Choosing the file reads its empty diff against HEAD.
     run.write(b"\r");
     run.wait_screen("the no-diff sentence", |grid| {
@@ -923,7 +928,7 @@ fn the_changed_files_committed_file_stays_dim_with_no_exit_code() {
     });
     // Back in the list, the undone file stays listed and dim.
     run.write(b"\x1b[D");
-    let grid = run.wait_screen("the dim no-diff row", |grid| {
+    let grid = run.wait_screen("the dim no-diff row after choosing", |grid| {
         grid.rows[0].contains("Changed files")
             && list_row(grid, "f.txt")
                 .is_some_and(|y| grid.rows[usize::from(y)].contains("no changes"))

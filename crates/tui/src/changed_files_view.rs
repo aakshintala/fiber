@@ -119,12 +119,97 @@ pub(crate) struct NumstatAnswer {
     pub(crate) lines: BTreeMap<String, u64>,
 }
 
+/// The shell line for the view-open tracking query over the listed
+/// paths: one `git status --porcelain` limited to the listed paths,
+/// sent on the same side and channel as the numstat query. Each listed
+/// path the query reports unstaged-clean stays silent; anything else
+/// reports its class with hub-side line counts for untracked paths, so
+/// the fold needs no path parsing: the rows stay absolute card paths.
+pub(crate) fn tracking_command(paths: &[&str]) -> String {
+    let quoted: Vec<String> = paths
+        .iter()
+        .map(|path| format!("'{}'", path.replace('\'', "'\\''")))
+        .collect();
+    let each = quoted.join(" ");
+    format!(
+        "for p in {each}; do s=$(git --no-optional-locks status --porcelain=v1 --no-renames -- \"$p\" 2>/dev/null | head -c 2); case \"$s\" in '??'*) c=$(wc -l < \"$p\" 2>/dev/null | tr -d '[:space:]'); printf 'untracked\\t%s\\t%s\\0' \"$c\" \"$p\";; A*) printf 'added\\t\\t%s\\0' \"$p\";; *D*) printf 'deleted\\t\\t%s\\0' \"$p\";; esac; done"
+    )
+}
+
+/// One listed path's tracking class, folded with the figures answer:
+/// `untracked` (with hub-side line counts) and `added` (staged-new)
+/// draw `A`; `deleted` with a numstat row draws `D`; anything the
+/// numstat answer omits outside `untracked` joins no-diff.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Tracking {
+    /// Paths git does not track, with their line counts at query time.
+    pub(crate) untracked: BTreeSet<String>,
+    /// Paths staged new in the index.
+    pub(crate) added: BTreeSet<String>,
+    /// Paths deleted against `HEAD`.
+    pub(crate) deleted: BTreeSet<String>,
+    /// Line counts for untracked paths: the answer carries hub-side
+    /// counts, since `count_lines` runs only against a local root.
+    pub(crate) counts: BTreeMap<String, u64>,
+}
+
+/// Folds a tracking answer into per-path classes. Records are NUL
+/// separated `class`, count, path fields; an empty count means the
+/// count did not survive, a missing or malformed record rejects the
+/// whole answer, and blank fragments (the closing-line strip's
+/// trailing newline, an empty answer) are valid: every path is clean.
+pub(crate) fn parse_tracking(output: &str) -> Option<Tracking> {
+    let mut tracking = Tracking::default();
+    for record in output.split('\0') {
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut fields = record.splitn(3, '\t');
+        let (Some(class), Some(count), Some(path)) = (fields.next(), fields.next(), fields.next())
+        else {
+            return None;
+        };
+        if path.is_empty() {
+            return None;
+        }
+        let count = if count.trim().is_empty() {
+            None
+        } else {
+            Some(count.trim().parse::<u64>().ok()?)
+        };
+        match class {
+            "untracked" => {
+                tracking.untracked.insert(path.to_owned());
+                if let Some(lines) = count {
+                    tracking.counts.insert(path.to_owned(), lines);
+                }
+            }
+            "added" if count.is_none() => {
+                tracking.added.insert(path.to_owned());
+            }
+            "deleted" if count.is_none() => {
+                tracking.deleted.insert(path.to_owned());
+            }
+            _ => return None,
+        }
+    }
+    Some(tracking)
+}
+
 /// Displayed figures for the card's paths, with the paths the
 /// numstat answer omits marked untracked for the row form.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedFigures {
     pub(crate) figures: BTreeMap<String, (u64, u64)>,
+    /// Paths new relative to `HEAD`, per the tracking answer.
     pub(crate) untracked: BTreeSet<String>,
+    /// Staged-new paths: `A` with numstat figures.
+    pub(crate) added: BTreeSet<String>,
+    /// Deleted paths with a numstat row: `D`.
+    pub(crate) deleted: BTreeSet<String>,
+    /// Tracked paths the numstat answer omits: no-diff candidates the
+    /// fold marks at answer time.
+    pub(crate) dim: BTreeSet<String>,
 }
 
 /// Counts lines for `paths` under `root`: the added figure for
@@ -158,10 +243,19 @@ pub(crate) fn count_lines(root: &std::path::Path, paths: &[&str]) -> BTreeMap<St
 /// On a remote terminal the card holds hub workspace paths, so a path
 /// the launch workspace does not strip also matches by its viewed
 /// workspace-relative form.
+///
+/// The tracking answer classifies each listed path as well: `untracked`
+/// paths resolve to their line counts (the answer's hub-side counts
+/// first, the local line counts where those never ran); `added` keeps
+/// numstat figures with `A`; `deleted` with a numstat row draws `D`.
+/// Omitted paths outside `untracked` join `dim` for the no-diff fold —
+/// no-diff beats `D`, since only an uncommitted deletion carries a
+/// numstat row. Without tracking no class applies.
 pub(crate) fn resolve_figures(
     changes: &BTreeMap<String, (u64, u64)>,
     numstat: Option<&str>,
     untracked_lines: &BTreeMap<String, u64>,
+    tracking: Option<&Tracking>,
     workspace: Option<&std::path::Path>,
     viewed: Option<&std::path::Path>,
 ) -> ResolvedFigures {
@@ -169,22 +263,64 @@ pub(crate) fn resolve_figures(
     let answered = numstat.is_some();
     let mut figures = BTreeMap::new();
     let mut untracked = BTreeSet::new();
+    let mut added = BTreeSet::new();
+    let mut deleted = BTreeSet::new();
+    let mut dim = BTreeSet::new();
+    if let Some(tracking) = tracking {
+        for path in changes.keys() {
+            if tracking.added.contains(path.as_str()) {
+                added.insert(path.clone());
+            }
+            if tracking.deleted.contains(path.as_str()) {
+                deleted.insert(path.clone());
+            }
+        }
+    }
     for (path, card) in changes.iter() {
         let figure = match lookup(&parsed, path, workspace, viewed) {
-            Some(NumstatFigure::Counted(added, removed)) => (*added, *removed),
+            Some(NumstatFigure::Counted(added_count, removed_count)) => {
+                (*added_count, *removed_count)
+            }
             Some(NumstatFigure::Binary) => *card,
-            None if answered => match untracked_lines.get(path) {
-                Some(lines) => {
-                    untracked.insert(path.clone());
-                    (*lines, 0)
+            None if answered => match tracking {
+                Some(tracking) if tracking.untracked.contains(path.as_str()) => {
+                    match tracking
+                        .counts
+                        .get(path.as_str())
+                        .or_else(|| untracked_lines.get(path.as_str()))
+                    {
+                        Some(lines) => {
+                            untracked.insert(path.clone());
+                            (*lines, 0)
+                        }
+                        // Undone-new: tracking saw it untracked, but no
+                        // count survived, so it joins no-diff, not A.
+                        None => {
+                            dim.insert(path.clone());
+                            *card
+                        }
+                    }
                 }
+                Some(_) if added.contains(path.as_str()) => *card,
+                Some(_) => {
+                    dim.insert(path.clone());
+                    *card
+                }
+                // Without tracking no class applies: the card's figures
+                // with no letter and no no-diff marking.
                 None => *card,
             },
             None => *card,
         };
         figures.insert(path.clone(), figure);
     }
-    ResolvedFigures { figures, untracked }
+    ResolvedFigures {
+        figures,
+        untracked,
+        added,
+        deleted,
+        dim,
+    }
 }
 
 /// The answer's figure for a card path: the path as listed, its launch
@@ -391,11 +527,15 @@ fn display_path<'a>(
 fn letter(
     path: &str,
     untracked: &BTreeSet<String>,
+    added: &BTreeSet<String>,
+    deleted: &BTreeSet<String>,
     root: Option<&std::path::Path>,
 ) -> (String, Ink) {
-    if untracked.contains(path) {
+    if untracked.contains(path) || added.contains(path) {
         ("A  ".to_owned(), Ink::Role(crate::theme::Role::Added))
-    } else if root.is_some_and(|root| !root.join(path).exists()) {
+    } else if deleted.contains(path) || root.is_some_and(|root| !root.join(path).exists()) {
+        // A query-reported deletion and a frame-time absence draw the
+        // same D; each side has its own test.
         ("D  ".to_owned(), Ink::Role(crate::theme::Role::Removed))
     } else {
         ("M  ".to_owned(), Ink::Role(crate::theme::Role::Attention))
@@ -435,6 +575,9 @@ pub(crate) fn frame(
     if let Some((path, diff)) = chosen {
         return diff_frame(path, diff, list);
     }
+    // Until the figures answer arrives the rows show the card's figures
+    // with M: the presence read stays off, so nothing draws D early.
+    let answered = figures.is_some();
     let resolved;
     let figures = match figures {
         Some(figures) => figures,
@@ -442,10 +585,14 @@ pub(crate) fn frame(
             resolved = ResolvedFigures {
                 figures: changes.clone(),
                 untracked: BTreeSet::new(),
+                added: BTreeSet::new(),
+                deleted: BTreeSet::new(),
+                dim: BTreeSet::new(),
             };
             &resolved
         }
     };
+    let presence = if answered { root } else { None };
     let plan = list_rows(changes, root, viewed);
     // The figures column's widths: every figured row right-aligns its
     // counts in them, and the totals reuse them below.
@@ -491,6 +638,7 @@ pub(crate) fn frame(
                     no_diff,
                     root,
                     viewed,
+                    presence,
                     at == list.selected() && list.is_accent(),
                     added_w,
                     removed_w,
@@ -529,10 +677,11 @@ pub(crate) fn frame(
 /// own path drives the letter, the figures and the no-diff set; only
 /// the shown name relativizes. A no-diff path draws wholly dim with
 /// "no changes" where the figures go; the focused name draws bold in
-/// accent.
+/// accent. The presence root stays off until the figures answer
+/// arrives, so no row draws D early.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the row reads the figures, the no-diff set, both workspace roots, the focus and the column widths"
+    reason = "the row reads the figures, the no-diff set, both workspace roots, the presence read, the focus and the column widths"
 )]
 fn file_row(
     path: &str,
@@ -541,6 +690,7 @@ fn file_row(
     no_diff: &BTreeSet<String>,
     root: Option<&std::path::Path>,
     viewed: Option<&std::path::Path>,
+    presence: Option<&std::path::Path>,
     focused: bool,
     added_w: usize,
     removed_w: usize,
@@ -555,7 +705,13 @@ fn file_row(
             ("no changes".to_owned(), None, Ink::Muted),
         ];
     }
-    let (letter, letter_ink) = letter(path, &figures.untracked, root);
+    let (letter, letter_ink) = letter(
+        path,
+        &figures.untracked,
+        &figures.added,
+        &figures.deleted,
+        presence,
+    );
     let name_ink = if focused {
         Ink::Bold(crate::theme::Role::Accent)
     } else {

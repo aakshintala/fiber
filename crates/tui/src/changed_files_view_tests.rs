@@ -18,9 +18,9 @@ use ratatui::layout::Rect;
 
 use super::{
     Diff, answer, diff_command, file_takes, first_hunk_line, frame, list_rows, numstat_command,
-    ranked, resolve_figures, row_path,
+    parse_tracking, ranked, resolve_figures, row_path, tracking_command,
 };
-use super::{ListRow, ResolvedFigures};
+use super::{ListRow, ResolvedFigures, Tracking};
 use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
@@ -118,15 +118,22 @@ fn app_with_files() -> App {
         .unwrap_or_default(),
     }));
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
-        panic!("opening the list sends the numstat query");
+        panic!("opening the list sends its queries");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
-    assert_eq!(lines.len(), 1);
+    // `docs/tui.md`, "Swapped views" promises one numstat query plus the
+    // one tracking query, run when the view opens, in that order.
+    assert_eq!(lines.len(), 2);
     let request: serde_json::Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     assert_eq!(
         request["args"]["command"],
         numstat_command(&["src/a.rs", "src/b.rs"])
+    );
+    let tracking: serde_json::Value = serde_json::from_str(&lines[1])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    assert_eq!(
+        tracking["args"]["command"],
+        tracking_command(&["src/a.rs", "src/b.rs"])
     );
     app
 }
@@ -194,9 +201,17 @@ fn displayed_paths_strip_the_workspace_root_but_mapping_keeps_the_card_path() {
         .unwrap_or_else(|| panic!("workspace path"))
         .to_owned();
     let card = changes(&[(absolute.as_str(), 4, 2)]);
+    let resolved = resolve_figures(
+        &card,
+        Some(""),
+        &BTreeMap::new(),
+        None,
+        Some(dir.path()),
+        None,
+    );
     let frame = frame(
         &card,
-        None,
+        Some(&resolved),
         None,
         List::default(),
         &BTreeSet::new(),
@@ -239,9 +254,10 @@ fn displayed_paths_fall_back_to_the_viewed_workspace_without_a_local_root() {
 fn a_path_outside_every_root_shows_whole() {
     let dir = fakes::TempDir::new("tui-changed-files-display-outside");
     let card = changes(&[("/elsewhere/f.rs", 2, 1)]);
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), None, None, None);
     let frame = frame(
         &card,
-        None,
+        Some(&resolved),
         None,
         List::default(),
         &BTreeSet::new(),
@@ -301,14 +317,30 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
     let dir = fakes::TempDir::new("tui-changed-files-letters");
     std::fs::write(dir.path().join("kept.rs"), "x\n")
         .unwrap_or_else(|error| panic!("write kept file: {error}"));
-    let card = changes(&[("gone.rs", 2, 0), ("kept.rs", 1, 0), ("new.rs", 3, 0)]);
+    std::fs::write(dir.path().join("staged.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("write staged file: {error}"));
+    let card = changes(&[
+        ("gone.rs", 2, 0),
+        ("kept.rs", 1, 0),
+        ("new.rs", 3, 0),
+        ("staged.rs", 5, 0),
+    ]);
     let mut figures = BTreeMap::new();
     figures.insert("gone.rs".to_owned(), (2, 0));
     figures.insert("kept.rs".to_owned(), (1, 0));
     figures.insert("new.rs".to_owned(), (3, 0));
+    figures.insert("staged.rs".to_owned(), (5, 0));
     let mut untracked = BTreeSet::new();
     untracked.insert("new.rs".to_owned());
-    let resolved = ResolvedFigures { figures, untracked };
+    let mut added = BTreeSet::new();
+    added.insert("staged.rs".to_owned());
+    let resolved = ResolvedFigures {
+        figures,
+        untracked,
+        added,
+        deleted: BTreeSet::new(),
+        dim: BTreeSet::new(),
+    };
     let lettered = frame(
         &card,
         Some(&resolved),
@@ -324,6 +356,8 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
     assert_eq!(lettered.rows[2][1].2, Ink::Role(Role::Attention));
     assert_eq!(row(&lettered, 3), "    A  new.rs  +3 −0");
     assert_eq!(lettered.rows[3][1].2, Ink::Role(Role::Added));
+    assert_eq!(row(&lettered, 4), "    A  staged.rs  +5 −0");
+    assert_eq!(lettered.rows[4][1].2, Ink::Role(Role::Added));
     // Restoring the deleted file flips its letter back to changed.
     std::fs::write(dir.path().join("gone.rs"), "x\n")
         .unwrap_or_else(|error| panic!("restore deleted file: {error}"));
@@ -679,19 +713,23 @@ fn resolve_figures_prefers_git_counts_untracked_lines_then_card() {
     let answered = "7\t1\tsrc/a.rs\n-\t-\tbin/x\n";
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let displayed = resolve_figures(&card, Some(answered), &lines, None, None);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let displayed = resolve_figures(&card, Some(answered), &lines, Some(&parsed), None, None);
     assert_eq!(displayed.figures.get("src/a.rs"), Some(&(7, 1)));
     // A binary path keeps the card's figures.
     assert_eq!(displayed.figures.get("bin/x"), Some(&(1, 1)));
     // An answered-but-omitted path resolves to its line count as added.
     assert_eq!(displayed.figures.get("new.txt"), Some(&(3, 0)));
-    // An answered-but-omitted and uncounted path keeps the card's figures.
+    // An answered-but-omitted and untracked-absent path keeps the card's
+    // figures and joins no-diff.
     assert_eq!(displayed.figures.get("gone.txt"), Some(&(2, 0)));
-    // Only the counted omitted path draws the untracked row form.
+    assert!(displayed.dim.contains("gone.txt"));
+    // Only the tracking-untracked path draws the untracked row form.
     assert!(displayed.untracked.contains("new.txt"));
     assert!(!displayed.untracked.contains("gone.txt"));
     assert!(!displayed.untracked.contains("bin/x"));
     assert!(!displayed.untracked.contains("src/a.rs"));
+    assert!(!displayed.dim.contains("new.txt"));
 }
 
 #[test]
@@ -700,14 +738,50 @@ fn resolve_figures_without_an_answer_keeps_the_card() {
     let mut lines = BTreeMap::new();
     lines.insert("src/a.rs".to_owned(), 9u64);
     assert_eq!(
-        resolve_figures(&card, None, &lines, None, None).figures,
+        resolve_figures(&card, None, &lines, None, None, None).figures,
         card
     );
     assert!(
-        resolve_figures(&card, None, &lines, None, None)
+        resolve_figures(&card, None, &lines, None, None, None)
             .untracked
             .is_empty()
     );
+    assert!(
+        resolve_figures(&card, None, &lines, None, None, None)
+            .dim
+            .is_empty()
+    );
+}
+
+/// Runs a shell `command` in `root`, returning its stdout: the numstat
+/// and tracking queries run the same way over the same paths, so the
+/// shell watching lives here once.
+fn shell_out(command: &str, root: &std::path::Path) -> String {
+    let mut child = Command::new("/bin/sh");
+    child
+        .args(["-c", command])
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = child
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn shell command: {error}"));
+    let watchdog = fakes::Watchdog::matching(command);
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let output = child
+            .wait_with_output()
+            .unwrap_or_else(|error| panic!("wait for shell command: {error}"));
+        done.send(output).unwrap_or(());
+    });
+    let output = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .expect("waited for the shell command");
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
+    let stdout = String::from_utf8(output.stdout)
+        .unwrap_or_else(|error| panic!("shell output was not UTF-8: {error}"));
+    assert!(output.status.success(), "shell command failed: {stdout}");
+    stdout
 }
 
 #[test]
@@ -738,39 +812,28 @@ fn numstat_command_output_parses_and_resolves_against_git() {
     std::fs::write(root.join("new.txt"), "x\ny\nz\n")
         .unwrap_or_else(|error| panic!("write new.txt: {error}"));
 
-    let command = numstat_command(&["a.rs", "new.txt"]);
-    let mut child = Command::new("/bin/sh");
-    child
-        .args(["-c", command.as_str()])
-        .current_dir(root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = child
-        .spawn()
-        .unwrap_or_else(|error| panic!("spawn numstat command: {error}"));
-    let watchdog = fakes::Watchdog::matching(&command);
-    let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || {
-        let output = child
-            .wait_with_output()
-            .unwrap_or_else(|error| panic!("wait for numstat command: {error}"));
-        done.send(output).unwrap_or(());
-    });
-    let output = Deadline::after(Duration::from_secs(10))
-        .recv(&finished)
-        .expect("waited for the shell numstat command");
-    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
-    let stdout = String::from_utf8(output.stdout)
-        .unwrap_or_else(|error| panic!("numstat output was not UTF-8: {error}"));
-    assert!(output.status.success(), "numstat failed: {stdout}");
+    let stdout = shell_out(&numstat_command(&["a.rs", "new.txt"]), root);
     // The card's sums are deliberately wrong: the resolved figures
     // must be git's, not the card's.
     let card = changes(&[("a.rs", 5, 5), ("new.txt", 9, 9)]);
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let displayed = resolve_figures(&card, Some(&stdout), &lines, None, None);
+    let displayed = resolve_figures(&card, Some(&stdout), &lines, None, None, None);
     assert_eq!(displayed.figures.get("a.rs"), Some(&(2, 1)));
-    assert_eq!(displayed.figures.get("new.txt"), Some(&(3, 0)));
+    // Without tracking no class applies: the omitted path keeps the
+    // card's figures with no letter and no no-diff marking.
+    assert_eq!(displayed.figures.get("new.txt"), Some(&(9, 9)));
+    assert!(displayed.untracked.is_empty());
+    assert!(displayed.dim.is_empty());
+    // The tracking query runs the same way over the same paths: the
+    // modified file stays clean, the untracked one carries its counts.
+    let tracked = shell_out(&tracking_command(&["a.rs", "new.txt"]), root);
+    let parsed = tracking(&tracked);
+    let resolved = resolve_figures(&card, Some(&stdout), &lines, Some(&parsed), None, None);
+    assert_eq!(resolved.figures.get("a.rs"), Some(&(2, 1)));
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(3, 0)));
+    assert!(resolved.untracked.contains("new.txt"));
+    assert!(resolved.dim.is_empty());
 }
 
 #[test]
@@ -1175,7 +1238,15 @@ fn answered_rows_show_git_figures_and_the_untracked_row_form() {
     let card = changes(&[("src/a.rs", 4, 2), ("new.txt", 4, 1)]);
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None, None);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let resolved = resolve_figures(
+        &card,
+        Some("7\t1\tsrc/a.rs\n"),
+        &lines,
+        Some(&parsed),
+        None,
+        None,
+    );
     let frame = resolved_frame(&card, &resolved, List::default());
     assert_eq!(row(&frame, 0), "./");
     assert_eq!(row(&frame, 1), "    A  new.txt  +3 −0");
@@ -1194,6 +1265,223 @@ fn answered_rows_show_git_figures_and_the_untracked_row_form() {
     assert_eq!(row(&frame, 2), "src/");
     assert_eq!(row(&frame, 3), "    M  a.rs  +7 −1");
     assert_eq!(frame.below, ["2 files  +10 −1"]);
+}
+
+fn tracking(body: &str) -> Tracking {
+    parse_tracking(body).unwrap_or_else(|| panic!("tracking parses: {body:?}"))
+}
+
+#[test]
+fn tracking_command_queries_each_listed_path_s_porcelain_state() {
+    let command = tracking_command(&["src/a.rs", "my file.rs"]);
+    assert!(command.starts_with("for p in "), "{command}");
+    assert!(command.contains("'src/a.rs'"), "{command}");
+    assert!(command.contains("'my file.rs'"), "{command}");
+    assert!(
+        command.contains("status --porcelain=v1 --no-renames"),
+        "{command}"
+    );
+    assert!(command.contains("wc -l"), "{command}");
+    // One query per view-open: a single shell line, no chaining.
+    assert!(!command.contains("&&"), "{command}");
+    assert_eq!(command.matches("git ").count(), 1, "{command}");
+}
+
+#[test]
+fn tracking_command_quotes_embedded_quotes() {
+    let command = tracking_command(&["src/a'b.rs"]);
+    assert!(command.contains("'src/a'\\''b.rs'"), "{command}");
+}
+
+#[test]
+fn parse_tracking_reads_classes_counts_and_nothing_else() {
+    let parsed = tracking("untracked\t3\tnew.txt\0added\t\tstaged.rs\0deleted\t\tgone.rs\0");
+    assert!(parsed.untracked.contains("new.txt"));
+    assert_eq!(parsed.counts.get("new.txt"), Some(&3u64));
+    assert!(parsed.added.contains("staged.rs"));
+    assert!(parsed.deleted.contains("gone.rs"));
+    assert_eq!(parsed.untracked.len(), 1);
+    assert_eq!(parsed.added.len(), 1);
+    assert_eq!(parsed.deleted.len(), 1);
+    // Empty output (every path clean) is valid.
+    assert_eq!(parse_tracking(""), Some(Tracking::default()));
+    // The closing-line strip leaves a trailing newline fragment: valid.
+    let parsed = tracking("untracked\t3\tnew.txt\0\n");
+    assert!(parsed.untracked.contains("new.txt"));
+    assert_eq!(parsed.counts.get("new.txt"), Some(&3u64));
+}
+
+#[test]
+fn parse_tracking_rejects_garbage_records() {
+    for body in [
+        "bogus\t3\tnew.txt\0",
+        "untracked\tnan\tnew.txt\0",
+        "untracked\t3\0",
+        "untracked\tnew.txt\0",
+        "untracked\t3\tnew.txt\0garbage",
+    ] {
+        assert_eq!(parse_tracking(body), None, "{body:?}");
+    }
+}
+
+#[test]
+fn resolve_folds_tracking_classes_with_numstat() {
+    let card = changes(&[
+        ("src/a.rs", 4, 2),
+        ("staged.rs", 1, 1),
+        ("gone.rs", 2, 0),
+        ("clean.rs", 0, 0),
+    ]);
+    let answered = "7\t1\tsrc/a.rs\n5\t0\tstaged.rs\n0\t3\tgone.rs\n";
+    let parsed = tracking("added\t\tstaged.rs\0deleted\t\tgone.rs\0");
+    let resolved = resolve_figures(
+        &card,
+        Some(answered),
+        &BTreeMap::new(),
+        Some(&parsed),
+        None,
+        None,
+    );
+    // Staged-new keeps numstat figures; only the letter is A.
+    assert_eq!(resolved.figures.get("staged.rs"), Some(&(5, 0)));
+    assert!(resolved.added.contains("staged.rs"));
+    // A reported deletion with a numstat row draws D.
+    assert_eq!(resolved.figures.get("gone.rs"), Some(&(0, 3)));
+    assert!(resolved.deleted.contains("gone.rs"));
+    // A tracked-but-omitted path joins no-diff without being chosen.
+    assert!(resolved.dim.contains("clean.rs"));
+    assert!(!resolved.untracked.contains("clean.rs"));
+    assert_eq!(resolved.figures.get("clean.rs"), Some(&(0, 0)));
+    // An ordinary row is unaffected.
+    assert_eq!(resolved.figures.get("src/a.rs"), Some(&(7, 1)));
+    assert!(!resolved.dim.contains("src/a.rs"));
+}
+
+#[test]
+fn resolve_marks_omitted_clean_paths_dim_and_keeps_untracked_counts() {
+    let card = changes(&[("new.txt", 4, 1), ("clean.rs", 0, 0), ("missing.rs", 2, 0)]);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    // Hub-side counts put the untracked row on its lines as added.
+    assert!(resolved.untracked.contains("new.txt"));
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(3, 0)));
+    // Omitted paths tracking does not call untracked join no-diff.
+    assert!(resolved.dim.contains("clean.rs"));
+    assert!(resolved.dim.contains("missing.rs"));
+    assert!(!resolved.untracked.contains("clean.rs"));
+    assert!(!resolved.untracked.contains("missing.rs"));
+    assert_eq!(resolved.figures.get("clean.rs"), Some(&(0, 0)));
+}
+
+#[test]
+fn resolve_sends_untracked_vanished_paths_to_no_diff() {
+    // Undone-new: tracking saw it untracked, but no count survived.
+    let card = changes(&[("gone-new.txt", 4, 1)]);
+    let parsed = tracking("untracked\t\tgone-new.txt\0");
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    assert!(!resolved.untracked.contains("gone-new.txt"));
+    assert!(resolved.dim.contains("gone-new.txt"));
+    assert_eq!(resolved.figures.get("gone-new.txt"), Some(&(4, 1)));
+}
+
+#[test]
+fn resolve_without_tracking_keeps_card_rows_and_no_dim() {
+    // Strict fallback: no tracking classes, no marking.
+    let card = changes(&[("new.txt", 4, 1), ("gone.txt", 2, 0)]);
+    let mut lines = BTreeMap::new();
+    lines.insert("new.txt".to_owned(), 3u64);
+    let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None, None, None);
+    assert!(!resolved.untracked.contains("new.txt"));
+    assert!(resolved.dim.is_empty());
+    assert!(resolved.added.is_empty());
+    assert!(resolved.deleted.is_empty());
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(4, 1)));
+    assert_eq!(resolved.figures.get("gone.txt"), Some(&(2, 0)));
+}
+
+#[test]
+fn staged_added_draws_a_with_numstat_figures() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("staged.rs", 1, 1)]);
+    let parsed = tracking("added\t\tstaged.rs\0");
+    let resolved = resolve_figures(
+        &card,
+        Some("5\t0\tstaged.rs\n"),
+        &BTreeMap::new(),
+        Some(&parsed),
+        None,
+        None,
+    );
+    let frame = resolved_frame(&card, &resolved, List::default());
+    assert_eq!(row(&frame, 1), "    A  staged.rs  +5 −0");
+    assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Added));
+}
+
+#[test]
+fn deleted_with_a_row_draws_d_even_when_present() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let dir = fakes::TempDir::new("tui-changed-files-tracking-deleted");
+    std::fs::write(dir.path().join("gone.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("write counted file: {error}"));
+    let absolute = dir
+        .path()
+        .join("gone.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 2, 0)]);
+    let parsed = tracking(&format!("deleted\t\t{absolute}\0"));
+    let resolved = resolve_figures(
+        &card,
+        Some("0\t2\tgone.rs\n"),
+        &BTreeMap::new(),
+        Some(&parsed),
+        Some(dir.path()),
+        None,
+    );
+    let frame = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+    );
+    assert_eq!(row(&frame, 1), "    D  gone.rs  +0 −2");
+    assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Removed));
+}
+
+#[test]
+fn rows_show_m_until_answers_arrive() {
+    let dir = fakes::TempDir::new("tui-changed-files-no-answers");
+    let card = changes(&[("gone.rs", 2, 0)]);
+    // No numstat answer yet: the presence read stays off, so the row
+    // shows the card's figures with M.
+    let unanswered = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+    );
+    assert_eq!(row(&unanswered, 1), "    M  gone.rs  +2 −0");
+    // The same missing path with an answer draws D.
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), None, None, None);
+    let answered = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+    );
+    assert_eq!(row(&answered, 1), "    D  gone.rs  +2 −0");
 }
 
 #[test]
@@ -1241,7 +1529,14 @@ fn resolve_figures_matches_git_s_relative_paths_against_absolute_card_paths() {
         .to_owned();
     let card = changes(&[(absolute.as_str(), 4, 2)]);
     let lines = BTreeMap::new();
-    let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, Some(dir.path()), None);
+    let displayed = resolve_figures(
+        &card,
+        Some("7\t1\ta.rs\n"),
+        &lines,
+        None,
+        Some(dir.path()),
+        None,
+    );
     assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
     assert!(displayed.untracked.is_empty());
 }
@@ -1258,7 +1553,14 @@ fn resolve_figures_matches_git_s_relative_paths_against_viewed_card_paths() {
     let card = changes(&[(absolute.as_str(), 4, 2)]);
     let lines = BTreeMap::new();
     // No launch workspace strips the hub card path; the viewed one does.
-    let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, None, Some(dir.path()));
+    let displayed = resolve_figures(
+        &card,
+        Some("7\t1\ta.rs\n"),
+        &lines,
+        None,
+        None,
+        Some(dir.path()),
+    );
     assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
     assert!(displayed.untracked.is_empty());
 }

@@ -4,8 +4,8 @@ expression: screen(&app_with_files())
 ---
   Changed files  diff against HEAD                                   Esc returns
    src/
- ›     D  a.rs  +4 −2
-       D  b.rs  +1 −0
+ ›     M  a.rs  +4 −2
+       M  b.rs  +1 −0
    ──────────────────
 
 

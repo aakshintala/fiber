@@ -91,6 +91,8 @@ pub(in crate::app) struct SessionViews {
     diff_list: List,
     figures_request: Option<String>,
     figures: Option<changed_files_view::NumstatAnswer>,
+    tracking_request: Option<String>,
+    tracking: Option<changed_files_view::Tracking>,
     /// Changed files paths whose latest diff answer read empty: the
     /// view learns a path is no-diff only from an `Empty` answer, so
     /// the set lives per view-open and its rows draw dim.
@@ -205,8 +207,9 @@ impl App {
     }
 
     /// Opens Changed files and fetches `rank` from the displayed
-    /// figures ordering. The open sends the numstat query first, so a
-    /// file click yields its line then the diff line, in that order.
+    /// figures ordering. The open sends the numstat query first, then
+    /// the tracking query, so a file click yields their lines before
+    /// the diff line, in that order.
     pub(in crate::app) fn open_changed_file(&mut self, rank: usize) -> Effect {
         let effect = self.open_session_view(SessionView::ChangedFiles);
         if !self.session_view_open() {
@@ -226,10 +229,14 @@ impl App {
     /// Sends the Changed files figures query over the card's listed
     /// paths, like `open_hooks` sends its query: a late answer after
     /// another open folds nowhere, and with no driver the view opens
-    /// showing the card's figures.
+    /// showing the card's figures. The tracking query runs on the same
+    /// side and channel right after it, over the same paths: both
+    /// answers fold through the figures path.
     fn send_figures_request(&mut self) -> Effect {
         self.session_views.figures_request = None;
         self.session_views.figures = None;
+        self.session_views.tracking_request = None;
+        self.session_views.tracking = None;
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
@@ -252,13 +259,22 @@ impl App {
         );
         self.outbox.wait(&id, super::Waiting::Figures);
         self.session_views.figures_request = Some(id);
-        Effect::Send(vec![line])
+        let tracking_id = support::mint("c_");
+        let tracking_line = shell::command(
+            &tracking_id,
+            &session,
+            &changed_files_view::tracking_command(&paths),
+            false,
+        );
+        self.outbox.wait(&tracking_id, super::Waiting::Figures);
+        self.session_views.tracking_request = Some(tracking_id);
+        Effect::Send(vec![line, tracking_line])
     }
 
     /// The Changed files rows' figures: the numstat answer resolved
-    /// over the card's sums, or the card's sums until it answers. The
-    /// list and the Enter rank share this, so rows and fetching
-    /// always agree.
+    /// over the card's sums, or the card's sums until the figures and
+    /// tracking answers both arrive. The list and the Enter rank share
+    /// this, so rows and fetching always agree.
     fn displayed_figures(&self) -> changed_files_view::ResolvedFigures {
         // The viewed workspace names the hub workspace on a remote
         // terminal, whose card holds hub workspace paths.
@@ -268,6 +284,7 @@ impl App {
                 self.panel_state.changes(),
                 Some(answer.raw.as_str()),
                 &answer.lines,
+                self.session_views.tracking.as_ref(),
                 self.workspace_root(),
                 viewed.as_deref(),
             ),
@@ -275,9 +292,35 @@ impl App {
                 self.panel_state.changes(),
                 None,
                 &std::collections::BTreeMap::new(),
+                None,
                 self.workspace_root(),
                 viewed.as_deref(),
             ),
+        }
+    }
+
+    /// Unions the fold's no-diff paths into the view-open set: paths the
+    /// numstat answer omits that tracking does not call untracked. Runs
+    /// only with both answers stored; until then the rows show the card.
+    fn mark_fold_no_diff(&mut self) {
+        let (Some(figures), Some(tracking)) = (
+            self.session_views.figures.as_ref(),
+            self.session_views.tracking.as_ref(),
+        ) else {
+            return;
+        };
+        let viewed = self.workspace();
+        let dim = changed_files_view::resolve_figures(
+            self.panel_state.changes(),
+            Some(figures.raw.as_str()),
+            &figures.lines,
+            Some(tracking),
+            self.workspace_root(),
+            viewed.as_deref(),
+        )
+        .dim;
+        for path in dim {
+            self.session_views.no_diff.insert(path);
         }
     }
 
@@ -626,10 +669,17 @@ impl App {
                 } else {
                     *list
                 };
+                // Until the figures answer arrives the frame shows the
+                // card's figures with M.
+                let displayed = self
+                    .session_views
+                    .figures
+                    .as_ref()
+                    .map(|_| self.displayed_figures());
                 let (workspace, viewed) = self.changed_files_roots();
                 Some(changed_files_view::frame(
                     self.panel_state.changes(),
-                    Some(&self.displayed_figures()),
+                    displayed.as_ref(),
                     chosen,
                     list,
                     &self.session_views.no_diff,
@@ -1152,6 +1202,12 @@ impl App {
         if self.session_views.figures_request.as_deref() == Some(accepted.command_id.0.as_str()) {
             self.session_views.figures_request = None;
             self.session_views.figures = self.answered_figures(accepted);
+            self.mark_fold_no_diff();
+        }
+        if self.session_views.tracking_request.as_deref() == Some(accepted.command_id.0.as_str()) {
+            self.session_views.tracking_request = None;
+            self.session_views.tracking = self.answered_tracking(accepted);
+            self.mark_fold_no_diff();
         }
         let Some((id, path)) = self.session_views.request.as_ref() else {
             return;
@@ -1224,6 +1280,30 @@ impl App {
         Some(changed_files_view::NumstatAnswer { raw, lines })
     }
 
+    /// Folds a tracking answer into per-path classes: anything but a
+    /// readable tracking answer stores nothing, so the rows keep the
+    /// card's figures with no class applied.
+    fn answered_tracking(
+        &self,
+        accepted: &CommandAccepted,
+    ) -> Option<changed_files_view::Tracking> {
+        let Some(contract::events::CommandResult::Shell {
+            output, process, ..
+        }) = accepted.result.as_ref()
+        else {
+            return None;
+        };
+        if process.signal.is_some() || process.timed_out {
+            return None;
+        }
+        // Only a clean run counts, as with the numstat answer.
+        if process.exit_code != Some(0) {
+            return None;
+        }
+        let body = changed_files_view::numstat_body(output, process.exit_code);
+        changed_files_view::parse_tracking(body)
+    }
+
     /// The local launch workspace, when the terminal has one: the
     /// root the Changed files paths read against.
     fn workspace_root(&self) -> Option<&std::path::Path> {
@@ -1252,6 +1332,9 @@ impl App {
     pub(in crate::app) fn session_views_refused(&mut self, id: &str, message: &str) {
         if self.session_views.figures_request.as_deref() == Some(id) {
             self.session_views.figures_request = None;
+        }
+        if self.session_views.tracking_request.as_deref() == Some(id) {
+            self.session_views.tracking_request = None;
         }
         let Some((request, path)) = self.session_views.request.as_ref() else {
             return;
