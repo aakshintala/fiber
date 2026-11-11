@@ -4664,7 +4664,9 @@ fn home_after_forgot_drops_the_row() {
         .unwrap_or_else(|| panic!("a feed: {lines:?}"));
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({})))
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {lines:?}"));
     assert!(
