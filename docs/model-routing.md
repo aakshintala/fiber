@@ -807,6 +807,18 @@ fills it, and the declared variable when one exists.
   with a 400 and take `max_tokens`, while the GPT and Gemini services on
   the same route take `max_completion_tokens`
   (`research/databricks-gateway-probe`).
+- A gateway serving Gemini returns a tool call's `extra_content` (such as
+  `extra_content.google.thought_signature`) on the call; the last delta
+  carrying one wins. Fiber decodes each such call with its carrier
+  immediately before it, an empty-text `Reasoning` holding the verbatim
+  `{"extra_content": ...}`, the calls in stream order. Under
+  `compat.gemini` a bare `{"extra_content": ...}` carrier waits for its own
+  model's next tool call and replays back byte-identical on that call only,
+  in conversation order; a user turn, a tool result or a foreign-model call
+  clears it, a trailing carrier is dropped, and without the flag no
+  `extra_content` is ever sent. A wider object is no carrier: it merges
+  into the assistant message as before, and a foreign model's carrier never
+  merges.
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
@@ -887,8 +899,13 @@ a new list only through a tool result (`docs/prompt-cache.md`).
 
 The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A service the vendor lists but backs with no serving
-endpoint is deliberately left out of discovery, and each omission is named once in
-the diagnostic log (see #4337).
+endpoint is deliberately left out of discovery: its entry keeps its place in
+the returned list and carries `omit_reason` with the provider's reason, and
+Fiber drains each marked entry into one `model_omitted` notice naming the
+model and the reason, the way `model_invalid` names a defective declaration.
+Each omission is also named once in the diagnostic log. The mark applies to
+static provider data too: a static entry carrying `omit_reason` drains the
+same way.
 
 #### Which models exist, and what Fiber knows about them
 

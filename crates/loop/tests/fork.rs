@@ -757,6 +757,7 @@ fn prepared() -> ReloadPrepared {
             server_failures: Vec::new(),
             new_prompts: None,
         },
+        extension_failures: Vec::new(),
         hooks: None,
         reviewer: Err(contract::shapes::Failure {
             code: ErrorCode::NoModel,
