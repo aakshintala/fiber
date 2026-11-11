@@ -357,3 +357,5 @@ docs/model-routing.md	fiber-4609	plan	2026-11-11T18:38:02Z	Amoghs-MacBook-Pro:/U
 crates/extensions/src/lib.rs	fiber-2720	plan	2026-11-11T18:42:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/lua.rs	fiber-2720	plan	2026-11-11T18:42:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/lua/vm.rs	fiber-2720	plan	2026-11-11T18:42:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+providers/models-corrections.toml	fiber-4644	plan	2026-11-11T18:44:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+research/opencode-thinking/raw	fiber-4644	plan	2026-11-11T18:44:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
