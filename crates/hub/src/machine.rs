@@ -95,6 +95,16 @@ pub trait Machine: Send + Sync {
     ) -> Result<PruneOutcome, Failure>;
 }
 
+/// The keepers of gone sessions on the hub's machine, for `/close all`
+/// and `fiber stop`: the hub's feed counts them and its `stop_keepers`
+/// command stops them. One classifier lives behind this trait, the same
+/// pattern as the hub's configuration reads, so `hub` gains no `doors`
+/// edge. The ids come in id order; the count is their length.
+pub trait KeeperProbe: Send + Sync {
+    /// The keepers of gone sessions under `home`'s `run/`, in id order.
+    fn keepers(&self, home: &Path, clock: Arc<dyn Clock>) -> Vec<SessionId>;
+}
+
 /// What a `prune` run answers: the preview lines and items for a dry
 /// run, which removes nothing, or the space freed, how many items the
 /// confirmed run tried to remove, and each item that failed or was

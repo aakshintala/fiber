@@ -99,6 +99,9 @@ fn serve(process: &crate::startup::Process, mode: hub::Mode) -> i32 {
     // The hub's inherited environment, read once: the login-shell capture
     // falls back to it, with `FIBER_HOME` set to the hub's own home.
     let environments = hub::Environments::new(std::env::vars_os().collect(), &home);
+    // One seam supplies both hub traits: the configuration reads and
+    // the keeper probe over the one classifier.
+    let seam = Arc::new(crate::configure::Seam::new(home.clone()));
     finish(hub::serve(
         &home,
         mode,
@@ -108,7 +111,8 @@ fn serve(process: &crate::startup::Process, mode: hub::Mode) -> i32 {
         Arc::new(hub::SpawnStarter::new(exe, Arc::clone(&environments))),
         clock,
         environments,
-        Arc::new(crate::configure::Seam::new(home.clone())),
+        Arc::clone(&seam) as Arc<dyn hub::Machine>,
+        Some(Arc::clone(&seam) as Arc<dyn hub::KeeperProbe>),
     ))
 }
 

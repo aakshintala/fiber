@@ -769,6 +769,23 @@ impl App {
                         lines.push(sent.line);
                     }
                     Some(lines)
+                } else if kind == contract::HubEventKind::Keepers {
+                    // The feed's count, folded beside `SessionLeft`: only
+                    // minted ids land in the set, and a malformed payload
+                    // keeps the current one, never clears it. No feed
+                    // attached reads no line at all, which stays no
+                    // keepers the way an old hub's silence does.
+                    let keepers = hub.payload.get("keepers").and_then(Value::as_array)?;
+                    let mut folded = Vec::new();
+                    for keeper in keepers {
+                        let id = keeper.as_str()?;
+                        if !crate::home::valid_session_id(id) {
+                            return Some(Vec::new());
+                        }
+                        folded.push(SessionId(id.to_owned()));
+                    }
+                    self.home.sessions.keepers = Some(folded);
+                    Some(Vec::new())
                 } else if kind == contract::HubEventKind::SessionDeleted
                     || kind == contract::HubEventKind::SessionArchived
                 {
