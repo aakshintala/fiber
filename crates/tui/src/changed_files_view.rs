@@ -7,7 +7,8 @@ use contract::events::CommandResult;
 
 use crate::diff::{DiffLine, diff_lines, gutter_prefix, gutter_width, ink_spans, safe_line};
 use crate::format;
-use crate::swapped::{Frame, Ink, List, Spot};
+use crate::swapped::{Chrome, Frame, Ink, List, Span, Spot};
+use ratatui::style::{Modifier, Style};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
@@ -269,17 +270,129 @@ fn hunk_start(line: &str) -> Option<u64> {
     start.parse::<u64>().ok().map(|start| start.max(1))
 }
 
+/// One body row of the grouped Changed files list, in display order:
+/// each folder holding a listed file with its files under it, then the
+/// rule above the totals. Folder and rule rows hold no path; file rows
+/// hold their path, so selection, Enter and clicks share this map and
+/// never send a diff request for a folder or the rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ListRow {
+    /// A dim folder row with its trailing slash, or `"./"` for files at
+    /// the workspace's top level.
+    Folder(String),
+    /// A file row: its path in the displayed figures.
+    File(String),
+    /// The rule above the totals.
+    Rule,
+}
+
+/// The grouped list's body rows for `changes`: each folder holding a
+/// listed file in path order with its files under it in name order,
+/// then the rule above the totals. With no files the plan holds no
+/// rule, since the totals have no last file to follow.
+pub(crate) fn list_rows(changes: &BTreeMap<String, (u64, u64)>) -> Vec<ListRow> {
+    let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in changes.keys() {
+        folders
+            .entry(folder_of(path))
+            .or_default()
+            .push(path.clone());
+    }
+    let mut rows = Vec::new();
+    for (folder, mut paths) in folders {
+        rows.push(ListRow::Folder(folder));
+        paths.sort();
+        rows.extend(paths.into_iter().map(ListRow::File));
+    }
+    if rows.iter().any(|row| matches!(row, ListRow::File(_))) {
+        rows.push(ListRow::Rule);
+    }
+    rows
+}
+
+/// The display rows holding files: the rows selection, Enter and clicks
+/// move over, so folder and rule rows never send a diff request.
+pub(crate) fn file_takes(changes: &BTreeMap<String, (u64, u64)>) -> Vec<usize> {
+    list_rows(changes)
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| matches!(row, ListRow::File(_)))
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// The grouped row's path: the file's path on a file row, `None` on a
+/// folder or rule row, which Enter and clicks leave alone.
+pub(crate) fn row_path(rows: &[ListRow], at: usize) -> Option<&str> {
+    match rows.get(at) {
+        Some(ListRow::File(path)) => Some(path),
+        _ => None,
+    }
+}
+
+/// The folder row a path groups under: its directory with the trailing
+/// slash, or `"./"` for a file at the workspace's top level.
+fn folder_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(at) => path[..=at].to_owned(),
+        None => "./".to_owned(),
+    }
+}
+
+/// The file name a file row shows: the path past its last slash.
+fn name_of(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(at) => &path[at + 1..],
+        None => path,
+    }
+}
+
+/// A file row's letter: `A` in `added` for a path the answered figures
+/// count as untracked, `D` in `removed` for a path missing from the
+/// local workspace root at frame time, `M` in `attention` otherwise,
+/// including on a remote terminal with no local root to stat.
+fn letter(
+    path: &str,
+    untracked: &BTreeSet<String>,
+    root: Option<&std::path::Path>,
+) -> (String, Ink) {
+    if untracked.contains(path) {
+        ("A  ".to_owned(), Ink::Role(crate::theme::Role::Added))
+    } else if root.is_some_and(|root| !root.join(path).exists()) {
+        ("D  ".to_owned(), Ink::Role(crate::theme::Role::Removed))
+    } else {
+        ("M  ".to_owned(), Ink::Role(crate::theme::Role::Attention))
+    }
+}
+
+/// A figured row's figures: git's where the answer counts the path, the
+/// card's everywhere else.
+fn display_figures(
+    figures: &ResolvedFigures,
+    changes: &BTreeMap<String, (u64, u64)>,
+    path: &str,
+) -> (u64, u64) {
+    figures
+        .figures
+        .get(path)
+        .or_else(|| changes.get(path))
+        .copied()
+        .unwrap_or((0, 0))
+}
+
 /// Builds the file list or the selected file's diff frame. The list
-/// rows show `figures` where answered, the card's figures until
-/// then; an untracked path draws its line count with
-/// "· untracked, wholly added" dim. Ctrl+G edits the shown file on a
-/// local terminal, and fetches the hub file to edit on a remote one:
-/// either way the footer keeps the hint.
+/// groups the displayed figures' paths by folder, each file row a
+/// letter, its name and its figures right-aligned in one column; a
+/// no-diff path stays listed with "no changes" dim. Ctrl+G edits the
+/// shown file on a local terminal, and fetches the hub file to edit on
+/// a remote one: either way the footer keeps the hint.
 pub(crate) fn frame(
     changes: &BTreeMap<String, (u64, u64)>,
     figures: Option<&ResolvedFigures>,
     chosen: Option<(&str, &Diff)>,
     list: List,
+    no_diff: &BTreeSet<String>,
+    root: Option<&std::path::Path>,
 ) -> Frame {
     if let Some((path, diff)) = chosen {
         return diff_frame(path, diff, list);
@@ -295,49 +408,151 @@ pub(crate) fn frame(
             &resolved
         }
     };
-    let paths = ranked(&figures.figures);
-    let rows = paths
-        .iter()
-        .map(|(path, added, removed)| {
-            if figures.untracked.contains(*path) {
-                return vec![
-                    (safe_line(path), None, Ink::Heading),
-                    (" · ".to_owned(), None, Ink::Muted),
-                    ("untracked, wholly added".to_owned(), None, Ink::Muted),
-                ];
+    let plan = list_rows(changes);
+    // The figures column's widths: every figured row right-aligns its
+    // counts in them, and the totals reuse them below.
+    let mut added_w = 0;
+    let mut removed_w = 0;
+    for row in &plan {
+        let ListRow::File(path) = row else {
+            continue;
+        };
+        if no_diff.contains(path.as_str()) {
+            continue;
+        }
+        let (added, removed) = display_figures(figures, changes, path);
+        added_w = added_w.max(crate::text::width(&format!("+{added}")));
+        removed_w = removed_w.max(crate::text::width(&format!("−{removed}")));
+    }
+    // The content's width so far: the rule spans it, since the frame
+    // knows no terminal width to span instead.
+    let mut content_w = 0;
+    let mut rows = Vec::new();
+    for (at, row) in plan.iter().enumerate() {
+        match row {
+            ListRow::Folder(folder) => {
+                let folder = safe_line(folder);
+                content_w = content_w.max(crate::text::width(&folder));
+                rows.push(vec![(folder, None, Ink::Muted)]);
             }
-            vec![
-                (safe_line(path), None, Ink::Heading),
-                (" · ".to_owned(), None, Ink::Muted),
-                (
-                    format!("+{added}"),
+            ListRow::Rule => {
+                rows.push(vec![(
+                    "─".repeat(content_w),
                     None,
-                    Ink::Role(crate::theme::Role::Added),
-                ),
-                (" ".to_owned(), None, Ink::Plain),
-                (
-                    format!("−{removed}"),
-                    None,
-                    Ink::Role(crate::theme::Role::Removed),
-                ),
-            ]
-        })
-        .collect();
+                    Ink::Role(crate::theme::Role::Rule),
+                )]);
+            }
+            ListRow::File(path) => {
+                // The focused name draws bold in accent only for the
+                // accent list: any other list keeps its plain names, so
+                // the focus stays scoped to the Changed files list.
+                rows.push(file_row(
+                    path,
+                    figures,
+                    changes,
+                    no_diff,
+                    root,
+                    at == list.selected() && list.is_accent(),
+                    added_w,
+                    removed_w,
+                ));
+                content_w = content_w.max(row_width(&rows[rows.len() - 1]));
+            }
+        }
+    }
     let (files, added, removed) = totals(&figures.figures);
+    let below = format!(
+        "{}  {:>added_w$} {:>removed_w$}",
+        format::count(files, "file", "files"),
+        format!("+{added}"),
+        format!("−{removed}"),
+    );
     Frame {
         joins: Vec::new(),
-        chrome: None,
+        chrome: Some(Chrome {
+            top: Vec::new(),
+            draft: None,
+            footer: footer_spans(),
+        }),
         title: "Changed files".to_owned(),
         command: "diff against HEAD".to_owned(),
         rows,
         list,
-        below: vec![format!(
-            "{} changed  +{added} −{removed}",
-            format::count(files, "file", "files")
-        )],
+        below: vec![below],
         field: None,
-        footer: "↑↓ move · Enter show diff · Ctrl+G edits · Esc close".to_owned(),
+        footer: "↑↓ file · Ctrl+G open in editor".to_owned(),
     }
+}
+
+/// One file row: the indent, the letter, the name, then the figures
+/// right-aligned in the column's widths. A no-diff path draws wholly
+/// dim with "no changes" where the figures go; the focused name draws
+/// bold in accent.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the row reads the figures, the no-diff set, the local root, the focus and the column widths"
+)]
+fn file_row(
+    path: &str,
+    figures: &ResolvedFigures,
+    changes: &BTreeMap<String, (u64, u64)>,
+    no_diff: &BTreeSet<String>,
+    root: Option<&std::path::Path>,
+    focused: bool,
+    added_w: usize,
+    removed_w: usize,
+) -> Vec<(String, Option<Spot>, Ink)> {
+    if no_diff.contains(path) {
+        return vec![
+            ("    ".to_owned(), None, Ink::Muted),
+            ("·  ".to_owned(), None, Ink::Muted),
+            (safe_line(name_of(path)), None, Ink::Muted),
+            ("  ".to_owned(), None, Ink::Muted),
+            ("no changes".to_owned(), None, Ink::Muted),
+        ];
+    }
+    let (letter, letter_ink) = letter(path, &figures.untracked, root);
+    let name_ink = if focused {
+        Ink::Bold(crate::theme::Role::Accent)
+    } else {
+        Ink::Heading
+    };
+    let (added, removed) = display_figures(figures, changes, path);
+    vec![
+        ("    ".to_owned(), None, Ink::Plain),
+        (letter, None, letter_ink),
+        (safe_line(name_of(path)), None, name_ink),
+        ("  ".to_owned(), None, Ink::Plain),
+        (
+            format!("{:>added_w$}", format!("+{added}")),
+            None,
+            Ink::Role(crate::theme::Role::Added),
+        ),
+        (" ".to_owned(), None, Ink::Plain),
+        (
+            format!("{:>removed_w$}", format!("−{removed}")),
+            None,
+            Ink::Role(crate::theme::Role::Removed),
+        ),
+    ]
+}
+
+/// A row's drawn width: its cells' display widths joined.
+fn row_width(row: &[(String, Option<Spot>, Ink)]) -> usize {
+    row.iter()
+        .map(|(text, _, _)| crate::text::width(text))
+        .sum()
+}
+
+/// The list footer's styled keys: the keys bold, what they do dim.
+fn footer_spans() -> Vec<Span> {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    vec![
+        ("↑↓".to_owned(), bold),
+        (" file · ".to_owned(), Ink::Muted.style()),
+        ("Ctrl+G".to_owned(), bold),
+        (" open in editor".to_owned(), Ink::Muted.style()),
+    ]
 }
 
 /// The current diff frame, with its file in the title.

@@ -2,7 +2,7 @@
 //! (`docs/tui.md`, "Swapped views").
 
 use fakes::MUST_SUCCEED_WITHIN;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -17,8 +17,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::{
-    Diff, answer, diff_command, first_hunk_line, frame, numstat_command, ranked, resolve_figures,
+    Diff, answer, diff_command, file_takes, first_hunk_line, frame, list_rows, numstat_command,
+    ranked, resolve_figures, row_path,
 };
+use super::{ListRow, ResolvedFigures};
 use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
@@ -52,6 +54,23 @@ fn row(frame: &crate::swapped::Frame, at: usize) -> String {
         .flatten()
         .map(|(text, _, _)| text.as_str())
         .collect()
+}
+
+/// The grouped list frame for `changes` with the card's figures, an
+/// empty no-diff set and no local root: what the view shows before the
+/// numstat answer.
+fn list_frame(changes: &BTreeMap<String, (u64, u64)>, list: List) -> crate::swapped::Frame {
+    frame(changes, None, None, list, &BTreeSet::new(), None)
+}
+
+/// The grouped list frame over `resolved` figures with the card's
+/// changes, an empty no-diff set and no local root.
+fn resolved_frame(
+    changes: &BTreeMap<String, (u64, u64)>,
+    resolved: &ResolvedFigures,
+    list: List,
+) -> crate::swapped::Frame {
+    frame(changes, Some(resolved), None, list, &BTreeSet::new(), None)
 }
 
 fn screen(app: &App) -> String {
@@ -132,20 +151,259 @@ fn app_with_diff() -> App {
 }
 
 #[test]
-fn a_file_row_is_its_path_bold_then_dim_dot_added_and_removed() {
+fn files_group_by_folder_in_path_order_with_top_level_under_dot_slash() {
+    let card = changes(&[
+        ("z.rs", 1, 0),
+        ("src/b.rs", 2, 0),
+        ("delegate/src/session/a.rs", 3, 0),
+        ("delegate/src/c.rs", 4, 0),
+        ("src/a.rs", 5, 0),
+    ]);
+    assert_eq!(
+        list_rows(&card),
+        [
+            ListRow::Folder("./".to_owned()),
+            ListRow::File("z.rs".to_owned()),
+            ListRow::Folder("delegate/src/".to_owned()),
+            ListRow::File("delegate/src/c.rs".to_owned()),
+            ListRow::Folder("delegate/src/session/".to_owned()),
+            ListRow::File("delegate/src/session/a.rs".to_owned()),
+            ListRow::Folder("src/".to_owned()),
+            ListRow::File("src/a.rs".to_owned()),
+            ListRow::File("src/b.rs".to_owned()),
+            ListRow::Rule,
+        ]
+    );
+}
+
+#[test]
+fn an_empty_change_set_lists_no_rows_and_zero_totals() {
+    let frame = list_frame(&changes(&[]), List::default());
+    assert!(frame.rows.is_empty());
+    assert_eq!(frame.below, ["0 files  +0 −0"]);
+}
+
+#[test]
+fn a_file_row_shows_its_letter_name_and_right_aligned_figures() {
     use crate::swapped::Ink;
     use crate::theme::Role;
-    let frame = frame(&changes(&[("src/a.rs", 4, 2)]), None, None, List::default());
+    let frame = list_frame(&changes(&[("src/a.rs", 4, 2)]), List::default());
+    // The folder row, the file row, then the rule above the totals.
+    assert_eq!(frame.rows.len(), 3);
+    assert_eq!(frame.rows[0], [("src/".to_owned(), None, Ink::Muted)]);
     assert_eq!(
-        frame.rows[0],
+        frame.rows[1],
         [
-            ("src/a.rs".to_owned(), None, Ink::Heading),
-            (" · ".to_owned(), None, Ink::Muted),
+            ("    ".to_owned(), None, Ink::Plain),
+            ("M  ".to_owned(), None, Ink::Role(Role::Attention)),
+            ("a.rs".to_owned(), None, Ink::Heading),
+            ("  ".to_owned(), None, Ink::Plain),
             ("+4".to_owned(), None, Ink::Role(Role::Added)),
             (" ".to_owned(), None, Ink::Plain),
             ("−2".to_owned(), None, Ink::Role(Role::Removed)),
         ]
     );
+    assert_eq!(row(&frame, 1), "    M  a.rs  +4 −2");
+}
+
+#[test]
+fn figure_widths_pad_short_counts_to_the_widest() {
+    // One, two and three digit counts: the added column spans the
+    // widest "+N", the removed column the widest "−N".
+    let card = changes(&[("a.rs", 9, 0), ("b.rs", 10, 1), ("c.rs", 100, 10)]);
+    let frame = list_frame(&card, List::default());
+    assert_eq!(row(&frame, 1), "    M  a.rs    +9  −0");
+    assert_eq!(row(&frame, 2), "    M  b.rs   +10  −1");
+    assert_eq!(row(&frame, 3), "    M  c.rs  +100 −10");
+    assert_eq!(frame.below, ["3 files  +119 −11"]);
+}
+
+#[test]
+fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let dir = fakes::TempDir::new("tui-changed-files-letters");
+    std::fs::write(dir.path().join("kept.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("write kept file: {error}"));
+    let card = changes(&[("gone.rs", 2, 0), ("kept.rs", 1, 0), ("new.rs", 3, 0)]);
+    let mut figures = BTreeMap::new();
+    figures.insert("gone.rs".to_owned(), (2, 0));
+    figures.insert("kept.rs".to_owned(), (1, 0));
+    figures.insert("new.rs".to_owned(), (3, 0));
+    let mut untracked = BTreeSet::new();
+    untracked.insert("new.rs".to_owned());
+    let resolved = ResolvedFigures { figures, untracked };
+    let lettered = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+    );
+    assert_eq!(row(&lettered, 1), "    D  gone.rs  +2 −0");
+    assert_eq!(lettered.rows[1][1].2, Ink::Role(Role::Removed));
+    assert_eq!(row(&lettered, 2), "    M  kept.rs  +1 −0");
+    assert_eq!(lettered.rows[2][1].2, Ink::Role(Role::Attention));
+    assert_eq!(row(&lettered, 3), "    A  new.rs  +3 −0");
+    assert_eq!(lettered.rows[3][1].2, Ink::Role(Role::Added));
+    // Restoring the deleted file flips its letter back to changed.
+    std::fs::write(dir.path().join("gone.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("restore deleted file: {error}"));
+    let restored = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+    );
+    assert_eq!(row(&restored, 1), "    M  gone.rs  +2 −0");
+}
+
+#[test]
+fn a_missing_file_without_a_local_root_stays_changed() {
+    let card = changes(&[("gone.rs", 2, 0)]);
+    let frame = frame(&card, None, None, List::default(), &BTreeSet::new(), None);
+    assert_eq!(row(&frame, 1), "    M  gone.rs  +2 −0");
+}
+
+#[test]
+fn the_focused_name_draws_bold_accent_with_an_accent_gutter_mark() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
+    let mut list = List::gutter_accent();
+    list.select(2, 4, 24);
+    let accented = frame(&card, None, None, list, &BTreeSet::new(), None);
+    // The unfocused file row keeps its heading name.
+    assert_eq!(accented.rows[1][2].2, Ink::Heading);
+    assert_eq!(accented.rows[2][2].2, Ink::Bold(Role::Accent));
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&accented, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 3)].symbol(), "›");
+    assert_eq!(buf[(0, 3)].fg, Role::Accent.color());
+    // A plain gutter list keeps the uncoloured mark on the same row.
+    let mut plain = List::gutter();
+    plain.select(2, 4, 24);
+    let unaccented = frame(&card, None, None, plain, &BTreeSet::new(), None);
+    assert_eq!(unaccented.rows[2][2].2, Ink::Heading);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&unaccented, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 3)].symbol(), "›");
+    assert_eq!(buf[(0, 3)].fg, ratatui::style::Color::Reset);
+}
+
+#[test]
+fn a_blurred_accent_list_draws_no_accent_name_or_mark() {
+    use crate::swapped::Ink;
+    let card = changes(&[("src/a.rs", 4, 2)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::gutter_accent().blur(),
+        &BTreeSet::new(),
+        None,
+    );
+    assert_eq!(frame.rows[1][2].2, Ink::Heading);
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&frame, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 2)].symbol(), " ");
+}
+
+#[test]
+fn folder_and_rule_rows_hold_no_path_while_file_rows_do() {
+    let card = changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)]);
+    let plan = list_rows(&card);
+    assert_eq!(row_path(&plan, 0), None);
+    assert_eq!(row_path(&plan, 1), Some("top.rs"));
+    assert_eq!(row_path(&plan, 2), None);
+    assert_eq!(row_path(&plan, 3), Some("src/b.rs"));
+    assert_eq!(row_path(&plan, 4), None);
+    assert_eq!(row_path(&plan, 5), None);
+}
+
+#[test]
+fn file_takes_names_the_file_rows_only() {
+    assert_eq!(
+        file_takes(&changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)])),
+        [1, 3]
+    );
+    assert!(file_takes(&changes(&[])).is_empty());
+    assert_eq!(file_takes(&changes(&[("top.rs", 2, 0)])), [1]);
+}
+
+#[test]
+fn totals_count_files_not_folders_and_the_rule_spans_the_content() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 3)]);
+    let frame = list_frame(&card, List::default());
+    assert_eq!(frame.rows.len(), 4);
+    assert_eq!(frame.below, ["2 files  +5 −5"]);
+    let widest = [0, 1, 2]
+        .iter()
+        .map(|at| crate::text::width(&row(&frame, *at)))
+        .max()
+        .unwrap_or(0);
+    assert_eq!(frame.rows[3][0].0, "─".repeat(widest));
+    assert_eq!(frame.rows[3][0].2, Ink::Role(Role::Rule));
+}
+
+#[test]
+fn the_list_footer_names_file_and_open_in_editor_with_bold_keys() {
+    use crate::swapped::Ink;
+    use ratatui::style::{Modifier, Style};
+    let frame = list_frame(&changes(&[("src/a.rs", 4, 2)]), List::default());
+    assert_eq!(frame.footer, "↑↓ file · Ctrl+G open in editor");
+    let chrome = frame.chrome.expect("the list carries styled keys");
+    assert!(chrome.top.is_empty());
+    assert!(chrome.draft.is_none());
+    let text: String = chrome
+        .footer
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect();
+    assert_eq!(text, "↑↓ file · Ctrl+G open in editor");
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    assert_eq!(chrome.footer[0].1, bold);
+    assert_eq!(chrome.footer[1].1, Ink::Muted.style());
+    assert_eq!(chrome.footer[2].1, bold);
+    assert_eq!(chrome.footer[3].1, Ink::Muted.style());
+}
+
+#[test]
+fn a_no_diff_row_stays_dim_with_no_changes_where_the_figures_go() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("src/a.rs", 4, 2)]);
+    let mut no_diff = BTreeSet::new();
+    no_diff.insert("src/a.rs".to_owned());
+    let dimmed = frame(&card, None, None, List::default(), &no_diff, None);
+    assert_eq!(row(&dimmed, 1), "    ·  a.rs  no changes");
+    assert!(
+        dimmed.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, Ink::Muted))
+    );
+    assert_eq!(dimmed.below, ["1 file  +4 −2"]);
+    // Focus marks the gutter but leaves the dim row alone.
+    let mut list = List::gutter_accent();
+    list.select(1, 3, 24);
+    let focused = frame(&card, None, None, list, &no_diff, None);
+    assert!(
+        focused.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, Ink::Muted))
+    );
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&focused, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 2)].symbol(), "›");
+    assert_eq!(buf[(0, 2)].fg, Role::Accent.color());
 }
 
 #[test]
@@ -499,26 +757,23 @@ fn a_missing_or_non_shell_answer_cannot_be_read() {
 #[test]
 fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let changes = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
-    let list = frame(&changes, None, None, List::default());
+    let list = list_frame(&changes, List::default());
     assert_eq!(list.title, "Changed files");
-    assert_eq!(row(&list, 0), "src/a.rs · +4 −2");
-    assert_eq!(row(&list, 1), "src/b.rs · +1 −0");
-    assert_eq!(list.below, ["2 files changed  +5 −2"]);
-    assert_eq!(
-        list.footer,
-        "↑↓ move · Enter show diff · Ctrl+G edits · Esc close"
-    );
-    let remote_list = frame(&changes, None, None, List::default());
-    assert_eq!(
-        remote_list.footer,
-        "↑↓ move · Enter show diff · Ctrl+G edits · Esc close"
-    );
+    assert_eq!(list.command, "diff against HEAD");
+    assert_eq!(row(&list, 0), "src/");
+    assert_eq!(row(&list, 1), "    M  a.rs  +4 −2");
+    assert_eq!(row(&list, 2), "    M  b.rs  +1 −0");
+    assert!(row(&list, 3).chars().all(|cell| cell == '─'));
+    assert_eq!(list.below, ["2 files  +5 −2"]);
+    assert_eq!(list.footer, "↑↓ file · Ctrl+G open in editor");
 
     let reading = frame(
         &changes,
         None,
         Some(("src/a.rs", &Diff::Reading)),
         List::default(),
+        &BTreeSet::new(),
+        None,
     );
     assert_eq!(
         reading.title,
@@ -530,13 +785,27 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         lines: vec!["+new".to_owned()],
         cut: None,
     };
-    let local_diff = frame(&changes, None, Some(("src/a.rs", &diff)), List::default());
+    let local_diff = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+    );
     assert_eq!(row(&local_diff, 0), "+new");
     assert_eq!(
         local_diff.footer,
         "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
     );
-    let remote_diff = frame(&changes, None, Some(("src/a.rs", &diff)), List::default());
+    let remote_diff = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+    );
     assert_eq!(
         remote_diff.footer,
         "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
@@ -548,6 +817,8 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
                 None,
                 Some(("src/a.rs", &Diff::Empty)),
                 List::default(),
+                &BTreeSet::new(),
+                None,
             ),
             0
         ),
@@ -556,7 +827,14 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let failed = Diff::Failed("denied".to_owned());
     assert_eq!(
         row(
-            &frame(&changes, None, Some(("src/a.rs", &failed)), List::default(),),
+            &frame(
+                &changes,
+                None,
+                Some(("src/a.rs", &failed)),
+                List::default(),
+                &BTreeSet::new(),
+                None,
+            ),
             0
         ),
         "denied"
@@ -566,7 +844,15 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         cut: Some("artifacts/full.diff".to_owned()),
     };
     assert_eq!(
-        frame(&changes, None, Some(("src/a.rs", &cut)), List::default(),).below,
+        frame(
+            &changes,
+            None,
+            Some(("src/a.rs", &cut)),
+            List::default(),
+            &BTreeSet::new(),
+            None,
+        )
+        .below,
         ["Cut: the whole diff is in artifacts/full.diff"]
     );
 }
@@ -588,6 +874,8 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
         None,
         Some(("src/a.rs", &diff)),
         List::default(),
+        &BTreeSet::new(),
+        None,
     )
 }
 
@@ -671,22 +959,29 @@ fn an_unpaired_run_marks_nothing() {
 #[test]
 fn answered_rows_show_git_figures_and_the_untracked_row_form() {
     use crate::swapped::Ink;
+    use crate::theme::Role;
     let card = changes(&[("src/a.rs", 4, 2), ("new.txt", 4, 1)]);
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
     let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None, None);
-    let frame = frame(&card, Some(&resolved), None, List::default());
-    assert_eq!(row(&frame, 0), "src/a.rs · +7 −1");
-    assert_eq!(row(&frame, 1), "new.txt · untracked, wholly added");
+    let frame = resolved_frame(&card, &resolved, List::default());
+    assert_eq!(row(&frame, 0), "./");
+    assert_eq!(row(&frame, 1), "    A  new.txt  +3 −0");
     assert_eq!(
         frame.rows[1],
         [
+            ("    ".to_owned(), None, Ink::Plain),
+            ("A  ".to_owned(), None, Ink::Role(Role::Added)),
             ("new.txt".to_owned(), None, Ink::Heading),
-            (" · ".to_owned(), None, Ink::Muted),
-            ("untracked, wholly added".to_owned(), None, Ink::Muted),
+            ("  ".to_owned(), None, Ink::Plain),
+            ("+3".to_owned(), None, Ink::Role(Role::Added)),
+            (" ".to_owned(), None, Ink::Plain),
+            ("−0".to_owned(), None, Ink::Role(Role::Removed)),
         ]
     );
-    assert_eq!(frame.below, ["2 files changed  +10 −1"]);
+    assert_eq!(row(&frame, 2), "src/");
+    assert_eq!(row(&frame, 3), "    M  a.rs  +7 −1");
+    assert_eq!(frame.below, ["2 files  +10 −1"]);
 }
 
 #[test]

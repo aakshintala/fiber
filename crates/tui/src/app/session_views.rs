@@ -3,6 +3,7 @@
 //! These views fold the stream the terminal already reads and fetch a file's
 //! diff only when the person chooses it.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::call_view::CallView;
@@ -90,6 +91,10 @@ pub(in crate::app) struct SessionViews {
     diff_list: List,
     figures_request: Option<String>,
     figures: Option<changed_files_view::NumstatAnswer>,
+    /// Changed files paths whose latest diff answer read empty: the
+    /// view learns a path is no-diff only from an `Empty` answer, so
+    /// the set lives per view-open and its rows draw dim.
+    no_diff: BTreeSet<String>,
     hooks_request: Option<String>,
     hooks_rows: Option<Vec<contract::events::HookInfo>>,
     /// The remote Changed files copy the editor holds: fetched from the
@@ -154,7 +159,7 @@ impl App {
             SessionView::Quota => Open::Quota(List::default()),
             SessionView::Context => Open::Context(List::default()),
             SessionView::Status => Open::Status(List::default()),
-            SessionView::ChangedFiles => Open::Files(List::default()),
+            SessionView::ChangedFiles => Open::Files(List::gutter_accent()),
             SessionView::ReleaseNotes => Open::ReleaseNotes(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
@@ -174,9 +179,24 @@ impl App {
         self.rewind = super::rewind::Rewind::default();
         self.session_views.hooks_request = None;
         if matches!(view, SessionView::ChangedFiles) {
+            self.session_views.no_diff.clear();
+            self.reseat_files_list();
             return self.send_figures_request();
         }
         Effect::None
+    }
+
+    /// Puts the Changed files selection on a file row: folder and rule
+    /// rows take no Enter or click, so the view opens with a file
+    /// focused.
+    fn reseat_files_list(&mut self) {
+        let takes = changed_files_view::file_takes(self.panel_state.changes());
+        let Some((rows, height)) = self.session_view_list_metrics() else {
+            return;
+        };
+        if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
+            list.rest_on(&takes, rows, height);
+        }
     }
 
     /// Opens Changed files and fetches `rank` from the displayed
@@ -580,6 +600,8 @@ impl App {
                     Some(&self.displayed_figures()),
                     chosen,
                     list,
+                    &self.session_views.no_diff,
+                    self.workspace_root(),
                 ))
             }
             Open::ReleaseNotes(list) => {

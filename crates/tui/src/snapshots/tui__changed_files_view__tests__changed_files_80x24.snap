@@ -3,10 +3,10 @@ source: crates/tui/src/changed_files_view_tests.rs
 expression: screen(&app_with_files())
 ---
   Changed files  diff against HEAD                                   Esc returns
- src/a.rs · +4 −2
- src/b.rs · +1 −0
-
-
+   src/
+ ›     D  a.rs  +4 −2
+       D  b.rs  +1 −0
+   ──────────────────
 
 
 
@@ -19,8 +19,8 @@ expression: screen(&app_with_files())
 
 
 
- 2 files changed  +5 −2
- ↑↓ move · Enter show diff · Ctrl+G edits · Esc close
+ 2 files  +5 −2
+ ↑↓ file · Ctrl+G open in editor
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▌─────────────────────────────────────────────────────────────────────────────

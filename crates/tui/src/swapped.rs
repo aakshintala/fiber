@@ -46,8 +46,9 @@ pub(crate) enum Spot {
 }
 
 /// How a cell draws: plain text, a provider heading, dimmed text such
-/// as a row's roles, or one role's colour. The selected row still
-/// reverses over it, so it shows on every theme and with no colour.
+/// as a row's roles, one role's colour, or one role's colour in bold.
+/// The selected row still reverses over it, so it shows on every theme
+/// and with no colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ink {
     /// Plain text.
@@ -58,6 +59,8 @@ pub(crate) enum Ink {
     Muted,
     /// One role's colour, such as a context category's.
     Role(Role),
+    /// One role's colour in bold, such as a focused row's label.
+    Bold(Role),
     /// One role's colour in reverse video, such as a diff's differing words.
     Marked(Role),
 }
@@ -72,6 +75,7 @@ impl Ink {
                 .fg(Role::Muted.color())
                 .add_modifier(Modifier::DIM),
             Ink::Role(role) => Style::new().fg(role.color()),
+            Ink::Bold(role) => Style::new().fg(role.color()).add_modifier(Modifier::BOLD),
             Ink::Marked(role) => Style::new()
                 .fg(role.color())
                 .add_modifier(Modifier::REVERSED),
@@ -87,6 +91,10 @@ pub(crate) struct List {
     /// Whether the selected row is marked by a "› " gutter instead of the
     /// selection bar.
     gutter: bool,
+    /// Whether the gutter mark draws in the accent role: the Changed
+    /// files list's focused row (`docs/tui.md`, "Swapped views"). Every
+    /// other gutter list keeps the plain mark.
+    accent: bool,
 }
 
 impl List {
@@ -98,6 +106,23 @@ impl List {
             gutter: true,
             ..Self::default()
         }
+    }
+
+    /// A gutter list whose mark draws in the accent role: the Changed
+    /// files list's focused row (`docs/tui.md`, "Swapped views"). The
+    /// focused name still draws from its own row, so other views keep
+    /// their plain marks and names.
+    pub(crate) fn gutter_accent() -> Self {
+        Self {
+            gutter: true,
+            accent: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the list marks its selection with an accent gutter.
+    pub(crate) fn is_accent(&self) -> bool {
+        self.accent
     }
 
     /// Brings the selection and the first row shown back onto the last
@@ -720,7 +745,15 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         let mut x = area.x;
         if gutter {
             if at == frame.list.selected() {
-                buf.set_stringn(x, y, "› ", GUTTER, Style::default());
+                // The Changed files list's focused row takes its mark in
+                // accent; every other gutter list keeps the plain mark
+                // (`docs/tui.md`, "Swapped views").
+                let mark = if frame.list.is_accent() {
+                    Style::new().fg(Role::Accent.color())
+                } else {
+                    Style::default()
+                };
+                buf.set_stringn(x, y, "› ", GUTTER, mark);
             }
             x = x
                 .saturating_add(crate::text::to_u16(GUTTER))
