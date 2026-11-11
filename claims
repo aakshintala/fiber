@@ -368,3 +368,6 @@ crates/tools/tests/shell.rs	fiber-4260	plan	2026-11-11T22:51:36Z	Amoghs-MacBook-
 docs/events.md	fiber-4260	plan	2026-11-11T22:51:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4260	plan	2026-11-11T22:51:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4260	plan	2026-11-11T22:51:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/models_dev.rs	fiber-4635	plan	2026-11-11T22:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/main/src/parts_tests.rs	fiber-4635	plan	2026-11-11T22:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/anthropic/providers/anthropic.json	fiber-4635	plan	2026-11-11T22:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
