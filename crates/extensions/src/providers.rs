@@ -551,10 +551,13 @@ impl Providers {
                 // A warm cache feeds this admission and `add_lua` with the
                 // same marked list, so the marks drain here without emitting:
                 // each omission draws its one `model_omitted` notice there,
-                // not twice. A static list still emits through `admit`.
+                // and each invalid entry its one `model_invalid` notice per
+                // reason there, not twice. A static list still emits through
+                // `admit`.
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
                     let _ = leave_out_omitted(&data.name, &manifest.name, &mut data.models);
+                    let _ = leave_out_invalid(&data.name, &manifest.name, &mut data.models);
                 }
                 notices.extend(providers.admit(&data.name, &manifest.name, &mut data.models));
                 // One extension's addenda are read into a local buffer
