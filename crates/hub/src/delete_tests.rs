@@ -1249,6 +1249,13 @@ fn a_held_delete_notifies_nothing_then_the_real_delete_notifies() {
     let dir = temp.session("-p", 1, None);
     let hub = temp.hub();
     let mut sub = Sub::new(&hub.feed);
+    // The subscribe-time snapshot is the always-on keepers line,
+    // empty here (`docs/events.md`, "Hub feed", "keepers"): read it
+    // before the broadcast lines, so the refusal wait below still
+    // proves nothing else is enqueued.
+    let snapshotted = sub.line("the snapshot keepers line");
+    assert_eq!(snapshotted["kind"], "keepers");
+    assert_eq!(snapshotted["payload"], json!({"keepers": []}));
     let _lock = hold(&dir);
     let refused = refused(&hub, json!({"session": id(1)}));
     assert_eq!(refused.code(), ErrorCode::SessionHeld);
@@ -1271,6 +1278,14 @@ fn two_clients_see_the_delete_line() {
     let hub = temp.hub();
     let mut first = Sub::new(&hub.feed);
     let mut second = Sub::new(&hub.feed);
+    // The subscribe-time snapshot is the always-on keepers line,
+    // empty here (`docs/events.md`, "Hub feed", "keepers"): read it
+    // before the broadcast lines it precedes.
+    for sub in [&mut first, &mut second] {
+        let snapshotted = sub.line("the snapshot keepers line");
+        assert_eq!(snapshotted["kind"], "keepers");
+        assert_eq!(snapshotted["payload"], json!({"keepers": []}));
+    }
     assert_eq!(delete(&hub, &args(json!({"session": id(1)}))), Ok(None));
     for sub in [&mut first, &mut second] {
         let line = sub.line("the delete's session_deleted");
@@ -1289,6 +1304,14 @@ fn two_clients_see_each_cascade_line_with_its_own_project() {
     let hub = temp.hub();
     let mut first = Sub::new(&hub.feed);
     let mut second = Sub::new(&hub.feed);
+    // The subscribe-time snapshot is the always-on keepers line,
+    // empty here (`docs/events.md`, "Hub feed", "keepers"): read it
+    // before the broadcast lines it precedes.
+    for sub in [&mut first, &mut second] {
+        let snapshotted = sub.line("the snapshot keepers line");
+        assert_eq!(snapshotted["kind"], "keepers");
+        assert_eq!(snapshotted["payload"], json!({"keepers": []}));
+    }
     assert_eq!(
         delete(
             &hub,
@@ -1325,6 +1348,12 @@ fn a_cascade_delete_notifies_removed_sessions_before_an_io_failure() {
     fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o500)).unwrap();
     let hub = temp.hub();
     let mut sub = Sub::new(&hub.feed);
+    // The subscribe-time snapshot is the always-on keepers line,
+    // empty here (`docs/events.md`, "Hub feed", "keepers"): read it
+    // before the broadcast lines it precedes.
+    let snapshotted = sub.line("the snapshot keepers line");
+    assert_eq!(snapshotted["kind"], "keepers");
+    assert_eq!(snapshotted["payload"], json!({"keepers": []}));
     let failed = refused(
         &hub,
         json!({"session": id(1), "cascade": true, "expect": [id(1), id(3)]}),

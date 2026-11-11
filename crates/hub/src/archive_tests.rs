@@ -638,13 +638,29 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
     temp.start_feed(&hub);
     temp.await_running(&hub, 10);
     let mut sub = Sub::new(&hub.feed);
-    // The snapshot replays the running status; the close's line comes next.
-    let snapshot: Value = {
+    // The snapshot is a set: the replayed status plus the always-on
+    // line (`docs/events.md`, "Hub feed", "keepers"), empty here.
+    // Place is not promised and the close's line comes after the set, so
+    // both snapshot lines are read before either one is asserted.
+    let mut snapshot: Vec<Value> = Vec::new();
+    for _ in 0..2 {
         let mut text = String::new();
-        sub.read.read_line(&mut text).expect("the snapshot arrives");
-        serde_json::from_str(&text).unwrap()
-    };
-    assert_eq!(snapshot["kind"], "session_status");
+        sub.read
+            .read_line(&mut text)
+            .expect("the snapshot lines arrive");
+        snapshot.push(serde_json::from_str(&text).unwrap());
+    }
+    let mut kinds: Vec<&str> = snapshot
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap_or("?"))
+        .collect();
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["keepers", "session_status"]);
+    let keepers = snapshot
+        .iter()
+        .find(|line| line["kind"] == "keepers")
+        .expect("the snapshot holds a keepers line");
+    assert_eq!(keepers["payload"], serde_json::json!({"keepers": []}));
     temp.sessions.pop().unwrap().close();
     sub.left(&testkit::id(10), "crashed");
     let id = testkit::id(10);
@@ -734,6 +750,18 @@ fn two_clients_see_fresh_and_retry_archive_lines() {
     temp.exited_row(9);
     let mut first = Sub::new(&hub.feed);
     let mut second = Sub::new(&hub.feed);
+    // The subscribe-time snapshot is the always-on keepers line,
+    // empty here (`docs/events.md`, "Hub feed", "keepers"): read it
+    // before the broadcast lines it precedes.
+    for sub in [&mut first, &mut second] {
+        let mut text = String::new();
+        sub.read
+            .read_line(&mut text)
+            .expect("the snapshot keepers line arrives");
+        let snapshotted: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(snapshotted["kind"], "keepers");
+        assert_eq!(snapshotted["payload"], serde_json::json!({"keepers": []}));
+    }
     assert_eq!(
         call(&hub, serde_json::json!({"session": testkit::id(9)})),
         Ok(None)

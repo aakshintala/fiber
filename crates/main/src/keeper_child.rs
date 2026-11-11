@@ -47,6 +47,12 @@ fn keeper_bound() -> Duration {
     KEEPER_BOUND
 }
 
+/// The exact bytes `fiber stop` and `/close all` write on a crashed
+/// session's socket to stop its keeper (`docs/invocation.md`, "Commands and
+/// flags"). Only this line acts; anything else is dropped unread, so a
+/// probe's read sees EOF exactly as before.
+const CRASHED_STOP_LINE: &str = "{\"shutdown\":true}";
+
 enum Sink {
     Control,
     Hold(Vec<(Stream, Vec<u8>)>),
@@ -734,8 +740,11 @@ impl Runtime {
         *log = None;
     }
 
-    /// One connection on the keeper's socket: it may identify the session
-    /// and ask for the handover, within one deadline, and does nothing else.
+    /// One connection on the keeper's socket: a frozen stop line stops
+    /// the keeper, and anything else may identify the session and ask
+    /// for the handover, within one deadline. The stop message predates
+    /// versioning, so its bytes are checked before any parse
+    /// (`docs/invocation.md`, "Commands and flags").
     fn candidate(self: &Arc<Self>, stream: UnixStream) {
         let Ok(reader) = stream.try_clone() else {
             return;
@@ -744,7 +753,22 @@ impl Runtime {
         let expiry =
             crate::keeper::Expiry::start(&self.clock, &stream, crate::keeper::KEEPER_START);
         let asked = (|| -> io::Result<bool> {
-            let Some(ToKeeper::Identify(asked)) = crate::keeper::read_request(&mut reader)? else {
+            let Some(frame) = crate::keeper::read_frame(&mut reader)? else {
+                return Ok(false);
+            };
+            if frame == CRASHED_STOP_LINE.as_bytes() {
+                self.discard();
+                match self.decide(Supervisor::shutdown_requested) {
+                    Ok(()) | Err(_) => {}
+                }
+                match self.decide(|_| vec![Step::Exit]) {
+                    Ok(()) | Err(_) => {}
+                }
+                return Ok(false);
+            }
+            let Some(ToKeeper::Identify(asked)) =
+                serde_json::from_slice(&frame).map_err(io::Error::from)?
+            else {
                 return Ok(false);
             };
             if asked != self.id {

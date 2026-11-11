@@ -70,7 +70,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends eight lines of its own, only on a connection to the hub and
+The hub sends nine lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -89,6 +89,10 @@ is about the hub or names its session in the payload:
 - `session_left`, on the feed when a session's process ends: `payload` holds
   `session_id` (string) and `how`, `exited` or `crashed`, a closed set
   (`docs/invocation.md`, "The hub").
+- `keepers`, on the feed when the hub's keeper set changes, and once to every
+  new feed subscriber: `payload` holds `keepers` (array of session ids, in id
+  order), every keeper-held `run/` entry the hub's probe confirms, empty when
+  none.
 - `session_deleted`, on the feed when a session is deleted: `payload` holds
   `session_id` (string) and `project` (string), the project's key, the name
   of its `projects/<key>/` directory. It carries no `seq`, and a new
@@ -1551,7 +1555,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
-| `stop` | `sessions_stopped` (integer, the sessions that confirmed closed), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
+| `stop` | `sessions_stopped` (integer, the sessions that confirmed closed) and `keepers_stopped` (integer, the keepers that confirmed stopped; absent on old hubs and read as zero), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
+| `stop_keepers` | `keepers_stopped` (integer, the keepers that confirmed stopped), over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `call` | `value` (any JSON value, absent when the call returns nothing), what the Lua call returns (`docs/extensions.md`, "Process extensions") |
 
@@ -1569,6 +1574,19 @@ A workspace move to the folder the session is already in answers:
 ```json
 {"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
 ```
+
+## Hub feed
+
+#### `keepers`
+
+Ephemeral. The hub feed's keeper set, for a client that counts the keepers
+of gone sessions: every keeper-held `run/` entry the hub's probe confirms,
+in id order, empty when none. Written when the set changes, and once to every
+new feed subscriber; the latest wins.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `keepers` | array of strings | yes | the keeper-held session ids, in id order; empty when none |
 
 ## Resume
 
