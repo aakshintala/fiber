@@ -30,6 +30,7 @@ fn seam() -> Arc<Fake> {
         *targets = Ok(vec![LoginTarget {
             name: "acme".to_owned(),
             kind: LoginKind::Key,
+            label: None,
         }]);
     }
     Arc::new(fake)
@@ -184,6 +185,7 @@ fn browser_seam() -> Arc<Fake> {
         *targets = Ok(vec![LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         }]);
     }
     Arc::new(fake)
@@ -375,10 +377,12 @@ fn two_key_seam() -> Arc<Fake> {
             LoginTarget {
                 name: "acme".to_owned(),
                 kind: LoginKind::Key,
+                label: None,
             },
             LoginTarget {
                 name: "beta".to_owned(),
                 kind: LoginKind::Key,
+                label: None,
             },
         ]);
     }
@@ -435,6 +439,7 @@ fn first_run_secret_save_opens_unselected_picker_on_connected_home() {
     *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
         name: "acme.api_key".to_owned(),
         kind: LoginKind::Secret,
+        label: None,
     }]);
     let mut app = home(Arc::clone(&seam));
     app.outbox.link = crate::app::Link::Up;
@@ -460,6 +465,7 @@ fn a_declared_secret_ends_without_a_reviewer_read() {
         *targets = Ok(vec![LoginTarget {
             name: "acme.api_key".to_owned(),
             kind: crate::configure::LoginKind::Secret,
+            label: None,
         }]);
     }
     let seam = Arc::new(fake);

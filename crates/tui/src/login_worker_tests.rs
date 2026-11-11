@@ -30,6 +30,7 @@ fn seam() -> Arc<Fake> {
         *targets = Ok(vec![LoginTarget {
             name: "codex".to_owned(),
             kind: crate::configure::LoginKind::Browser,
+            label: None,
         }]);
     }
     Arc::new(fake)
@@ -190,6 +191,7 @@ fn gaps_post_the_host_step_with_no_reviewer_read() {
         *targets = Ok(vec![LoginTarget {
             name: "codex".to_owned(),
             kind: crate::configure::LoginKind::Browser,
+            label: None,
         }]);
     }
     let seam = Arc::new(seam);

@@ -165,29 +165,99 @@ pub(super) fn save_host(
     Ok(tui::HostSaved { masked })
 }
 
-/// The installed providers as key rows, then the declared secrets.
-pub(super) fn targets(home: &Path) -> Result<Vec<LoginTarget>, ConfigureError> {
-    ::cli::login_targets(home)
-        .map(|names| {
-            names
+/// One provider row's sign-in mark: the default label, or the variable's
+/// name when the proving source reads the environment. `None` while the
+/// provider holds no usable credential. Presence always comes from
+/// `has_credential`; the origins below only choose the mark's text,
+/// never a second credential check.
+fn mark(
+    credentials: &config::Credentials,
+    providers: &extensions::Providers,
+    data: &config::ProviderData,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    // The row lists what the same providers snapshot proves: the data
+    // comes from that listing, never a second query.
+    debug_assert!(providers.get(&data.name).is_some());
+    if !credentials.has_credential(data, env) {
+        return None;
+    }
+    let base = credentials.credential_label(data);
+    match &data.credential_from {
+        config::CredentialFrom::Function(sources) => Some(
+            sources
+                .credential_env
+                .iter()
+                .find(|var| env(var).is_some_and(|value| !value.is_empty()))
+                .cloned()
+                .unwrap_or(base),
+        ),
+        config::CredentialFrom::Stored { .. } => Some(
+            credentials
+                .credential_origins(data)
                 .into_iter()
-                .map(|name| match name {
-                    ::cli::LoginName::Provider(name) => LoginTarget {
-                        name,
-                        kind: LoginKind::Key,
-                    },
-                    ::cli::LoginName::Browser(name) => LoginTarget {
-                        name,
-                        kind: LoginKind::Browser,
-                    },
-                    ::cli::LoginName::Secret(name) => LoginTarget {
-                        name,
-                        kind: LoginKind::Secret,
-                    },
+                .find(|(label, _)| *label == base)
+                .and_then(|(_, origin)| match origin {
+                    Ok(config::Origin::Env(var))
+                        if env(&var).is_some_and(|value| !value.is_empty()) =>
+                    {
+                        Some(var)
+                    }
+                    _ => None,
                 })
-                .collect()
+                .unwrap_or(base),
+        ),
+    }
+}
+
+/// The installed providers as key rows, then the declared secrets. Each
+/// provider row carries its sign-in mark, read hub-side with the same
+/// credential check the model list's `logged_out` uses; secrets never
+/// carry one. Declaration order never moves here: the view sorts.
+pub(super) fn targets(home: &Path) -> Result<Vec<LoginTarget>, ConfigureError> {
+    let names = ::cli::login_targets(home).map_err(|e| from_failure(Failure::from(e)))?;
+    let providers = ::cli::providers_in(home).map_err(|e| from_failure(Failure::from(e)))?;
+    // The hub has no terminal and no workspace argument, so the project
+    // layer is read from the hub's own working directory, and the hub's
+    // own environment answers the variable reads.
+    let workspace = std::env::current_dir()
+        .map_err(|e| from_failure(Failure::from(::cli::CliError::CurrentDirectory(e))))?;
+    let (_, project) =
+        ::cli::project_of(home, &workspace).map_err(|e| from_failure(Failure::from(e)))?;
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace,
+        project,
+        overrides: Vec::new(),
+    })
+    .map_err(from_config)?;
+    let credentials = config.credentials();
+    let env: &dyn Fn(&str) -> Option<String> = &|var| std::env::var(var).ok();
+    let marked = |name: &str| {
+        providers
+            .get(name)
+            .and_then(|data| mark(credentials, &providers, data, env))
+    };
+    Ok(names
+        .into_iter()
+        .map(|name| match name {
+            ::cli::LoginName::Provider(name) => LoginTarget {
+                label: marked(&name),
+                name,
+                kind: LoginKind::Key,
+            },
+            ::cli::LoginName::Browser(name) => LoginTarget {
+                label: marked(&name),
+                name,
+                kind: LoginKind::Browser,
+            },
+            ::cli::LoginName::Secret(name) => LoginTarget {
+                name,
+                kind: LoginKind::Secret,
+                label: None,
+            },
         })
-        .map_err(|e| from_failure(Failure::from(e)))
+        .collect())
 }
 
 /// Stores `key` for provider or secret `name`, under `label` for a
