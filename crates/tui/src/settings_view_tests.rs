@@ -746,6 +746,8 @@ fn a_layer_tag_and_a_boolean_keep_their_roles() {
     assert!(!off.modifier.contains(Modifier::BOLD), "[ ] Off bold");
 }
 
+/// ←→ moves between tabs and wraps from the last tab to the first
+/// and back (`docs/tui.md:1108-1109`, `/settings`).
 #[test]
 fn left_and_right_wrap_between_the_first_and_last_tabs() {
     let fake = Fake::new(rows());
@@ -1888,6 +1890,8 @@ fn ctrl_g_opens_the_focused_rows_file_and_the_global_one_for_a_default() {
     assert!(matches!(act, Act::OpenLocal(None)), "{act:?}");
 }
 
+/// ↑↓ move between rows and wrap from the last row to the first and
+/// back (`docs/tui.md:1123-1124`, `/settings`).
 #[test]
 fn up_and_down_wrap_between_the_first_and_last_rows() {
     let fake = Fake::new(rows());
@@ -1930,7 +1934,7 @@ fn up_and_down_wrap_between_the_first_and_last_rows() {
 }
 
 /// The list sub-page wraps ↑↓ past either end while pages stay
-/// clamped (`docs/tui.md`, "Swapped views").
+/// clamped (`docs/tui.md:666-667`, "Swapped views").
 #[test]
 fn a_sub_page_wraps_up_and_down_past_either_end() {
     let fake = Fake::new(rows());
@@ -1955,7 +1959,7 @@ fn a_sub_page_wraps_up_and_down_past_either_end() {
 }
 
 /// The theme choices wrap ↑↓ past either end, and the preview
-/// follows the wrapped choice.
+/// follows the wrapped choice (`docs/tui.md:666-667`, "Swapped views").
 #[test]
 fn the_theme_choices_wrap_up_and_down_past_either_end() {
     let fake = themed(rows());
@@ -3061,9 +3065,14 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("tui.rail.width", "15"), "15% of screen width");
     assert_eq!(number("tui.panel.width", "21"), "21% of screen width");
     assert_eq!(number("quota.notice_at", "80"), "80% used");
+    // The stored value is a fraction: the built-in 0.7 reads as 70%.
     assert_eq!(
-        number("compaction.window_fraction", "70"),
+        number("compaction.window_fraction", "0.7"),
         "70% of the context window"
+    );
+    assert_eq!(
+        number("compaction.window_fraction", "0.5"),
+        "50% of the context window"
     );
     assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
     assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
@@ -3116,6 +3125,9 @@ fn a_number_row_shows_its_unit_in_row_text() {
         "90 min (custom)"
     );
     assert_eq!(text("model_lists.refresh_after", Text, "\"soon\""), "soon");
+    // A non-ASCII value never splits a character boundary: it keeps its
+    // raw text instead of panicking.
+    assert_eq!(text("model_lists.refresh_after", Text, "\"é\""), "é");
     // Anything else keeps its raw text with no unit.
     assert_eq!(number("hub.port", "8080"), "8080");
     assert_eq!(number("tui.rail.width", "\"wide\""), "wide");

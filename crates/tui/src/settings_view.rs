@@ -2266,7 +2266,9 @@ fn number_text(key: &str, text: &str) -> String {
     match key {
         "tui.rail.width" | "tui.panel.width" => format!("{}% of screen width", trimmed(n)),
         "quota.notice_at" => format!("{}% used", trimmed(n)),
-        "compaction.window_fraction" => format!("{}% of the context window", trimmed(n)),
+        "compaction.window_fraction" => {
+            format!("{}% of the context window", trimmed(n * 100.0))
+        }
         "cache.warm_cap" => counted(n, "cache lifetime", "cache lifetimes"),
         "retry.attempts" => counted(n, "retry", "retries"),
         "compaction.tokens" => listed(
@@ -2324,7 +2326,11 @@ fn number_text(key: &str, text: &str) -> String {
 /// after it; anything unparseable keeps its raw text.
 fn refresh_text(text: &str) -> String {
     let raw = as_typed(text);
-    let (count, unit) = raw.split_at(raw.len().saturating_sub(1));
+    let at = raw.len().saturating_sub(1);
+    if !raw.is_char_boundary(at) {
+        return raw;
+    }
+    let (count, unit) = raw.split_at(at);
     let word = match unit {
         "s" => "s",
         "m" => "min",

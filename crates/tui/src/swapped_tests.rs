@@ -42,6 +42,8 @@ fn wheel_targets_window_moves_three_rows_and_clamps_to_targets() {
     assert_eq!(wheel_targets_window(false, 1, 0, 20, 0, &[1, 2]), (1, 0));
 }
 
+/// ↓ on the last row focuses the first, ↑ on the first focuses the
+/// last (`docs/tui.md:666-667`, "Swapped views").
 #[test]
 fn selection_wraps_past_either_end() {
     // ↑ on the first row goes to the last, and the key says so.
@@ -121,7 +123,8 @@ fn scroll_keeps_the_selection_in_view() {
 }
 
 /// ↑ and ↓ wrap past either end of the entries that take a key, in
-/// both directions; pages never reach this path.
+/// both directions; pages never reach this path (`docs/tui.md:666-667`,
+/// "Swapped views").
 #[test]
 fn key_over_wraps_past_either_end_of_takes() {
     let takes = vec![0, 3, 6];
