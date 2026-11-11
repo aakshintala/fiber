@@ -229,7 +229,11 @@ pub(crate) enum Diff {
     Failed(String),
 }
 
-/// Folds a shell answer into a safe diff display.
+/// Folds a shell answer into a safe diff display. The shell tool
+/// appends its closing "Exit code N." line to the command's own output,
+/// which is the driver's, not the diff's: strip it like the numstat
+/// answer does, so a committed file's reply reads empty and no "Exit
+/// code" text reaches any diff.
 pub(crate) fn answer(result: Option<&CommandResult>) -> Diff {
     let Some(CommandResult::Shell {
         output,
@@ -239,9 +243,10 @@ pub(crate) fn answer(result: Option<&CommandResult>) -> Diff {
     else {
         return failed();
     };
-    if !output.is_empty() {
+    let body = numstat_body(output, process.exit_code);
+    if !body.is_empty() {
         return Diff::Lines {
-            lines: output.lines().map(safe_line).collect(),
+            lines: body.lines().map(safe_line).collect(),
             cut: artifact.as_deref().map(safe_line),
         };
     }
@@ -555,7 +560,9 @@ fn footer_spans() -> Vec<Span> {
     ]
 }
 
-/// The current diff frame, with its file in the title.
+/// The current diff frame, with its file in the title. Above the
+/// hunks, the path row names the file bold with the editor target in
+/// `secondary`: a click on it runs the same editor path as Ctrl+G.
 fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
     let (rows, below) = match diff {
         Diff::Reading => (
@@ -577,9 +584,9 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
         }
         Diff::Empty => (
             vec![vec![(
-                "No changes against HEAD.".to_owned(),
+                "No changes against HEAD: committed or undone since Fiber changed it.".to_owned(),
                 None,
-                Ink::Plain,
+                Ink::Muted,
             )]],
             Vec::new(),
         ),
@@ -588,12 +595,22 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
             Vec::new(),
         ),
     };
+    let mut framed = vec![vec![
+        (safe_line(path), None, Ink::Heading),
+        ("  ".to_owned(), None, Ink::Plain),
+        (
+            "Open in editor ›".to_owned(),
+            Some(Spot::Cell(0, 1)),
+            Ink::Role(crate::theme::Role::Secondary),
+        ),
+    ]];
+    framed.extend(rows);
     Frame {
         joins: Vec::new(),
         chrome: None,
         title: format!("Changed files › {} · diff against HEAD", safe_line(path)),
         command: "diff against HEAD".to_owned(),
-        rows,
+        rows: framed,
         list,
         below,
         field: None,

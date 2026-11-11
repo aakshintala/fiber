@@ -683,6 +683,78 @@ fn numstat_command_output_parses_and_resolves_against_git() {
 }
 
 #[test]
+fn a_committed_file_reply_with_only_the_closing_line_reads_empty() {
+    // The shell appends its closing "Exit code N." line to the
+    // command's own output: stripped, the committed file's reply reads
+    // empty, never "Exit code 0.".
+    assert_eq!(
+        answer(Some(&shell("Exit code 0.\n", Some(0), None))),
+        Diff::Empty
+    );
+    assert_eq!(
+        answer(Some(&shell("Exit code 0.", Some(0), None))),
+        Diff::Empty
+    );
+}
+
+#[test]
+fn a_real_diff_keeps_its_hunks_without_the_closing_line() {
+    assert_eq!(
+        answer(Some(&shell(
+            "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\nExit code 1.\n",
+            Some(1),
+            None,
+        ))),
+        Diff::Lines {
+            lines: vec![
+                "diff --git a/a b/a".to_owned(),
+                "@@ -1 +1 @@".to_owned(),
+                "-old".to_owned(),
+                "+new".to_owned(),
+            ],
+            cut: None,
+        }
+    );
+}
+
+#[test]
+fn only_the_answer_s_own_closing_line_strips() {
+    // A closing line naming another exit is the diff's own text.
+    assert_eq!(
+        answer(Some(&shell("diff line\nExit code 0.\n", Some(1), None))),
+        Diff::Lines {
+            lines: vec!["diff line".to_owned(), "Exit code 0.".to_owned()],
+            cut: None,
+        }
+    );
+}
+
+#[test]
+fn no_exit_code_text_reaches_any_diff_frame() {
+    let answered = answer(Some(&shell(
+        "diff --git a/a b/a\n+new\nExit code 1.\n",
+        Some(1),
+        None,
+    )));
+    let frame = frame(
+        &changes(&[("a", 1, 0)]),
+        None,
+        Some(("a", &answered)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+    );
+    assert!(
+        frame
+            .rows
+            .iter()
+            .flatten()
+            .all(|(text, _, _)| !text.contains("Exit code")),
+        "{frame:?}"
+    );
+}
+
+#[test]
 fn nonempty_output_is_shown_even_when_the_command_exits_one() {
     assert_eq!(
         answer(Some(&shell("diff --git a/a b/a\n", Some(1), None))),
@@ -779,7 +851,8 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         reading.title,
         "Changed files › src/a.rs · diff against HEAD"
     );
-    assert_eq!(row(&reading, 0), "Reading the diff…");
+    assert_eq!(row(&reading, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(row(&reading, 1), "Reading the diff…");
 
     let diff = Diff::Lines {
         lines: vec!["+new".to_owned()],
@@ -793,7 +866,8 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         &BTreeSet::new(),
         None,
     );
-    assert_eq!(row(&local_diff, 0), "+new");
+    assert_eq!(row(&local_diff, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(row(&local_diff, 1), "+new");
     assert_eq!(
         local_diff.footer,
         "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
@@ -810,20 +884,25 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         remote_diff.footer,
         "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
     );
-    assert_eq!(
-        row(
-            &frame(
-                &changes,
-                None,
-                Some(("src/a.rs", &Diff::Empty)),
-                List::default(),
-                &BTreeSet::new(),
-                None,
-            ),
-            0
-        ),
-        "No changes against HEAD."
+    let empty = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &Diff::Empty)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
     );
+    assert_eq!(row(&empty, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(
+        row(&empty, 1),
+        "No changes against HEAD: committed or undone since Fiber changed it."
+    );
+    assert!(
+        empty.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Muted))
+    );
+    assert_eq!(empty.rows.len(), 2);
     let failed = Diff::Failed("denied".to_owned());
     assert_eq!(
         row(
@@ -835,7 +914,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
                 &BTreeSet::new(),
                 None,
             ),
-            0
+            1
         ),
         "denied"
     );
@@ -880,6 +959,38 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
 }
 
 #[test]
+fn the_diff_frame_shows_the_path_with_an_open_in_editor_target() {
+    use crate::swapped::{Ink, Spot};
+    use crate::theme::Role;
+    let diff = Diff::Lines {
+        lines: vec!["+new".to_owned()],
+        cut: None,
+    };
+    let frame = frame(
+        &changes(&[("src/a.rs", 1, 1)]),
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+    );
+    assert_eq!(
+        frame.rows[0],
+        [
+            ("src/a.rs".to_owned(), None, Ink::Heading),
+            ("  ".to_owned(), None, Ink::Plain),
+            (
+                "Open in editor ›".to_owned(),
+                Some(Spot::Cell(0, 1)),
+                Ink::Role(Role::Secondary),
+            ),
+        ]
+    );
+    assert_eq!(row(&frame, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(row(&frame, 1), "+new");
+}
+
+#[test]
 fn the_diff_frame_drops_git_headers() {
     let frame = diff_frame_of(&[
         "diff --git a/a.rs b/a.rs",
@@ -893,6 +1004,7 @@ fn the_diff_frame_drops_git_headers() {
     let texts: Vec<String> = frame
         .rows
         .iter()
+        .skip(1)
         .map(|cells| cells.iter().map(|(text, _, _)| text.as_str()).collect())
         .collect();
     assert_eq!(
@@ -908,22 +1020,22 @@ fn the_diff_frame_drops_git_headers() {
 #[test]
 fn the_diff_frame_has_a_gutter_from_the_hunk_header() {
     let frame = diff_frame_of(&["@@ -9 +10 @@", "-old", "+new"]);
-    let guttered: Vec<String> = frame.rows[1..]
+    let guttered: Vec<String> = frame.rows[2..]
         .iter()
         .map(|cells| cells.iter().map(|(text, _, _)| text.as_str()).collect())
         .collect();
     assert_eq!(guttered[0], " 9 -old");
     assert_eq!(guttered[1], "10 +new");
     // The gutter is dim; the hunk row is dim too.
-    assert!(matches!(frame.rows[1][0].2, crate::swapped::Ink::Muted));
-    assert!(matches!(frame.rows[0][1].2, crate::swapped::Ink::Muted));
+    assert!(matches!(frame.rows[2][0].2, crate::swapped::Ink::Muted));
+    assert!(matches!(frame.rows[1][1].2, crate::swapped::Ink::Muted));
 }
 
 #[test]
 fn a_paired_line_marks_its_words_with_ink_marked() {
     use crate::theme::Role;
     let frame = diff_frame_of(&["@@ -1 +1 @@", "-call foo(a);", "+call bar(a);"]);
-    let removed = &frame.rows[1];
+    let removed = &frame.rows[2];
     let marked: Vec<_> = removed
         .iter()
         .filter(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
@@ -934,7 +1046,7 @@ fn a_paired_line_marks_its_words_with_ink_marked() {
         marked[0].2,
         crate::swapped::Ink::Marked(Role::Removed)
     ));
-    let added = &frame.rows[2];
+    let added = &frame.rows[3];
     let marked: Vec<_> = added
         .iter()
         .filter(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
