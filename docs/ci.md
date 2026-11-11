@@ -19,11 +19,16 @@ x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
-alone: `lint` and `test_linux`, plus the two `bug_red` legs when an issue its
-body resolves carries the `bug` label. Draft and ready pull requests select
+(`lint` and `test_linux`, plus the two `bug_red` legs when an issue its
+body resolves carries the `bug` label) and one macOS check: when its diff
+touches a file containing `target_os`, `clippy_macos` lints the selected
+crates on the macOS arm64 runner ("On every pull request that changes code").
+The check holds one macOS slot against the 5-slot cap while it runs; no
+Linux-side job changes. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
-is the only pull request that uses a macOS job (`bug_red_macos`). The 40-job cap is the one CI reaches: from 2026-10-07 to
+uses a macOS job (`bug_red_macos`); so does any pull request whose diff
+touches a file containing `target_os` (`clippy_macos`). The 40-job cap is the one CI reaches: from 2026-10-07 to
 2026-10-09 every job that queued for more than 15 minutes waited while 38 or
 more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
@@ -32,8 +37,8 @@ queue; one that saves only macOS jobs does not.
 Nightly releases share the backstop pushes' concurrency group (`ci-main` in
 both `.github/workflows/release.yml` and `.github/workflows/ci.yml`). A
 nightly never overlaps a backstop run while either waits on the 5-slot macOS
-cap. The group does not cover the whole cap. Pull-request macOS legs
-(`bug_red_macos`), stable push releases (the `release-push` group), manually
+cap. The group does not cover the whole cap. Pull-request macOS jobs
+(`bug_red_macos` and `clippy_macos`), stable push releases (the `release-push` group), manually
 dispatched workflows, and other repositories on the account still use macOS
 slots beside a nightly.
 
@@ -200,6 +205,16 @@ Each job:
 - scans for processes the tests leaked, failing with their PIDs and commands
   (`docs/testing.md`, "Running tests")
 - reports how many tests ran
+
+When the pull request's diff touches a file containing `target_os`, a second
+job (`clippy_macos`) lints the xtask-selected crates on the macOS arm64
+runner: the workspace lints across all targets with `-D warnings`, clippy
+only, no tests. An empty selection logs and succeeds without running cargo.
+The trigger reads the names-only diff at the head commit, so a pull request
+that moved a gated file still fires it and a deleted file never does; it
+fires on pull requests only, never on the backstop. Its known gap: a
+macOS-only error in a file containing no `target_os` does not trigger the
+job.
 
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
