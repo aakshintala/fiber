@@ -1563,7 +1563,7 @@ spans carry `click` ids, and `run` receives `{ session_id = "…", click =
 `run` does below. Enter on a click target that has focus in navigate mode
 calls `on_click` as a click does (`docs/tui.md`, "Input and focus").
 
-`on_key`, `on_click` and `fiber.key`'s `run` make no host call: the terminal needs each answer before the next input. A host call from one raises a Lua error.
+`on_key`, `on_click`, `fiber.key`'s `run` and `fiber.command`'s `run` make no host call: the terminal needs each answer before the next input. A host call from one raises a Lua error.
 
 `fiber.on_focus({ timeout, run })` runs `run` when the session on screen
 changes, with `{ session_id = "…" }`, or no `session_id` key on home. It
@@ -1575,7 +1575,9 @@ A TUI extension adds a slash command with `fiber.command(name, {
 description, timeout, run })` in `tui/init.lua`, and `run` runs in the
 terminal's VM. It receives `{ session_id = "…", args = "…" }`: the session
 on screen, with no `session_id` key on home, and the text after the name,
-`""` when there is none. Its return value is ignored. The terminal shows one
+`""` when there is none. Only a `true`, `false` or `nil` return is ignored;
+any other value is a wrong-shape failure. `run` makes no host
+call, as the key handler's does not. The terminal shows one
 `/` list, and a name registered twice, by either half of any extensions,
 follows the rule above: neither gets it, a `notice` names both, and the
 configuration rename applies. A TUI command never takes a built-in

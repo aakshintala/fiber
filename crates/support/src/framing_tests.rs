@@ -1,5 +1,8 @@
-use super::{read_line, write_line};
+use super::{read_line, read_line_partial, write_line};
 use std::io::{self, BufRead};
+
+#[path = "../tests/support/framing_input.rs"]
+mod framing_input;
 
 #[test]
 fn an_lf_ends_a_line_and_eof_ends_the_input() {
@@ -181,4 +184,179 @@ fn write_line_appends_one_lf_and_flushes() {
     write_line(&mut out, b"x").unwrap();
     assert_eq!(out.writes, vec![b"x\n".to_vec()]);
     assert_eq!(out.flushes, 1);
+}
+
+#[test]
+fn a_fragment_then_error_returns_the_fragment() {
+    let mut read =
+        framing_input::FragmentThenError::new(br#"{"id":"c_2","command":"prompt"}"#.to_vec(), 1);
+    let (error, partial) = read_line_partial(&mut read, super::MAX_LINE).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(partial, b"{".to_vec());
+    assert_eq!(read_line_partial(&mut read, super::MAX_LINE).unwrap(), None);
+}
+
+#[test]
+fn a_body_cut_fragment_returns_every_consumed_byte() {
+    let line = br#"{"id":"c_2","command":"prompt"}"#.to_vec();
+    let cut = line.len() - 1;
+    let mut read = framing_input::FragmentThenError::new(line.clone(), cut);
+    let (error, partial) = read_line_partial(&mut read, super::MAX_LINE).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(partial, line[..cut].to_vec());
+    assert_eq!(read_line_partial(&mut read, super::MAX_LINE).unwrap(), None);
+}
+
+#[test]
+fn an_error_with_nothing_consumed_returns_an_empty_partial() {
+    let mut read = framing_input::FragmentThenError::new(b"abc".to_vec(), 0);
+    let (error, partial) = read_line_partial(&mut read, super::MAX_LINE).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert!(partial.is_empty());
+    assert_eq!(read_line_partial(&mut read, super::MAX_LINE).unwrap(), None);
+}
+
+#[test]
+fn a_complete_line_matches_the_existing_reader() {
+    for bytes in [
+        b"{\"id\":\"c_2\"}\n".to_vec(),
+        b"a\r\n".to_vec(),
+        b"\n".to_vec(),
+        b"a\nbc".to_vec(),
+        Vec::new(),
+    ] {
+        let mut old = &bytes[..];
+        let mut new = framing_input::FragmentThenError::new(bytes.clone(), bytes.len() + 1);
+        assert_eq!(
+            read_line_partial(&mut new, super::MAX_LINE).unwrap(),
+            read_line(&mut old, super::MAX_LINE).unwrap()
+        );
+        assert_eq!(
+            read_line_partial(&mut new, super::MAX_LINE).unwrap(),
+            read_line(&mut old, super::MAX_LINE).unwrap()
+        );
+    }
+}
+
+#[test]
+fn an_over_cap_error_matches_the_existing_reader() {
+    let mut old = &b"abcd"[..];
+    let mut new = framing_input::FragmentThenError::new(b"abcd".to_vec(), 5);
+    assert_eq!(
+        read_line_partial(&mut new, 3).unwrap_err().0.kind(),
+        read_line(&mut old, 3).unwrap_err().kind()
+    );
+    let (error, partial) = read_line_partial(
+        &mut framing_input::FragmentThenError::new(b"abcd".to_vec(), 5),
+        3,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(partial.is_empty());
+}
+
+#[test]
+fn an_interrupted_fill_is_retried_by_the_partial_reader() {
+    let mut read = Flaky { interrupted: true };
+    assert_eq!(
+        read_line_partial(&mut read, super::MAX_LINE).unwrap(),
+        Some(b"a".to_vec())
+    );
+}
+
+#[test]
+fn the_stall_fires_below_the_end_and_never_at_or_after_it() {
+    let line = b"ab".to_vec();
+    for (error_after, want_partial) in [(0, Vec::new()), (1, b"a".to_vec())] {
+        let mut read = framing_input::FragmentThenError::new(line.clone(), error_after);
+        let (error, partial) = read_line_partial(&mut read, super::MAX_LINE).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(partial, want_partial);
+        assert_eq!(read_line_partial(&mut read, super::MAX_LINE).unwrap(), None);
+    }
+    for error_after in [2, 3] {
+        let mut read = framing_input::FragmentThenError::new(line.clone(), error_after);
+        assert_eq!(
+            read_line_partial(&mut read, super::MAX_LINE).unwrap(),
+            Some(b"ab".to_vec())
+        );
+        assert_eq!(read_line_partial(&mut read, super::MAX_LINE).unwrap(), None);
+    }
+}
+
+#[test]
+fn empty_input_never_stalls() {
+    let mut read = framing_input::FragmentThenError::new(Vec::new(), 0);
+    assert_eq!(read_line_partial(&mut read, super::MAX_LINE).unwrap(), None);
+}
+
+#[test]
+fn the_jig_args_default_to_old_mode_and_full_cap() {
+    assert_eq!(
+        framing_input::parse(
+            [
+                "input".to_owned(),
+                "--error-after".to_owned(),
+                "3".to_owned()
+            ]
+            .into_iter()
+        )
+        .unwrap(),
+        framing_input::Args {
+            file: "input".into(),
+            error_after: 3,
+            max: None,
+            mode: framing_input::Mode::Old,
+        }
+    );
+    assert_eq!(
+        framing_input::parse(
+            [
+                "input".to_owned(),
+                "--error-after".to_owned(),
+                "3".to_owned(),
+                "--mode".to_owned(),
+                "new".to_owned(),
+                "--max".to_owned(),
+                "9".to_owned(),
+            ]
+            .into_iter()
+        )
+        .unwrap(),
+        framing_input::Args {
+            file: "input".into(),
+            error_after: 3,
+            max: Some(9),
+            mode: framing_input::Mode::New,
+        }
+    );
+}
+
+#[test]
+fn the_jig_args_reject_anything_else() {
+    for args in [
+        Vec::new(),
+        vec!["--error-after", "3"],
+        vec!["input"],
+        vec!["input", "--error-after"],
+        vec!["input", "--error-after", "-1"],
+        vec!["input", "--error-after", "x"],
+        vec!["input", "--error-after", "3", "--error-after", "4"],
+        vec![
+            "input",
+            "--mode",
+            "old",
+            "--mode",
+            "new",
+            "--error-after",
+            "3",
+        ],
+        vec!["input", "--error-after", "3", "--mode", "next"],
+        vec!["input", "--error-after", "3", "--max"],
+        vec!["input", "--error-after", "3", "extra"],
+        vec!["input", "--error-after", "3", "--bogus", "4"],
+    ] {
+        let parsed = framing_input::parse(args.iter().map(|arg| (*arg).to_owned()));
+        assert!(parsed.is_err(), "{args:?}");
+    }
 }

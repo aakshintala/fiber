@@ -33,6 +33,7 @@ mod steer_drawn;
 mod terminal;
 mod terminal_overrides;
 mod tui_click_extension;
+mod tui_command_extension;
 mod tui_context_after_cd;
 mod tui_key_whole_screen;
 mod wheel_garble;

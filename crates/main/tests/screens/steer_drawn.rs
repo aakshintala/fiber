@@ -47,16 +47,14 @@ fn provider(setup: &support::Setup, server: &ProviderServer) {
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),

@@ -74,8 +74,8 @@ impl Drop for Unreported {
     }
 }
 
-/// The jobs one session started. `open` is the only way in; `list`, `wait`
-/// and `stop` are what the `jobs` tool calls.
+/// The jobs one session started or took over. `open` and `restore` are the
+/// ways in; `list`, `wait` and `stop` are what the `jobs` tool calls.
 pub struct Registry {
     artifacts: PathBuf,
     clock: Arc<dyn Clock>,
@@ -292,6 +292,94 @@ impl Registry {
             end,
             emit: Arc::clone(&self.emit),
             lines,
+        })
+    }
+
+    /// Records a job a keeper handed over, under the `job_started` the log
+    /// already holds: no id is minted, no line is written and the output
+    /// file is not created or truncated. The file must exist under this
+    /// registry's artifacts and is opened for appending, so what the keeper
+    /// wrote stays and the session adds after it. The job's [`Stop`] and
+    /// [`Input`] are the owner's; its [`End`] reports once like any job's.
+    /// A path that is not `artifacts/<file>`, a missing or unopenable file
+    /// and a job already recorded each return [`OpenError`] and record
+    /// nothing.
+    pub fn restore(
+        &self,
+        started: JobStarted,
+        stop: Stop,
+        input: Option<contract::jobs::Input>,
+        lines: bool,
+    ) -> Result<Opened, OpenError> {
+        let Some(registry) = self.me.upgrade() else {
+            return Err(OpenError {
+                path: self.artifacts.clone(),
+                source: std::io::Error::other("the registry is gone"),
+            });
+        };
+        let invalid = |source: &str| OpenError {
+            path: PathBuf::from(&started.output_path),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidInput, source.to_owned()),
+        };
+        let mut parts = Path::new(&started.output_path).components();
+        let name = match (parts.next(), parts.next(), parts.next()) {
+            (
+                Some(std::path::Component::Normal(dir)),
+                Some(std::path::Component::Normal(name)),
+                None,
+            ) if dir == "artifacts" => name.to_owned(),
+            _ => return Err(invalid("a job's output file is artifacts/<file>")),
+        };
+        let path = self.artifacts.join(name);
+        let mut inner = lock(&self.inner);
+        if inner
+            .jobs
+            .iter()
+            .any(|job| job.started.job_id == started.job_id)
+        {
+            return Err(OpenError {
+                path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "the job is already recorded",
+                ),
+            });
+        }
+        let file = match std::fs::OpenOptions::new().append(true).open(&path) {
+            Ok(file) => file,
+            Err(source) => return Err(OpenError { path, source }),
+        };
+        let feed = lines.then(|| {
+            let registry = Weak::clone(&self.me);
+            Lines(Box::new(move |line| {
+                if let Some(registry) = registry.upgrade() {
+                    registry.send_line(line);
+                }
+            }))
+        });
+        let unreported = Unreported {
+            job_id: started.job_id.clone(),
+            run: 1,
+            registry: Some(registry),
+            delegate: false,
+        };
+        let end = End(Box::new(move |completed| {
+            unreported.report(completed, None)
+        }));
+        inner.jobs.push(Job::running(
+            started.clone(),
+            path.clone(),
+            Arc::from(stop.0),
+            input.map(|input| Arc::from(input.0)),
+            None,
+        ));
+        Ok(Opened {
+            started,
+            path,
+            file,
+            end,
+            emit: Arc::clone(&self.emit),
+            lines: feed,
         })
     }
 

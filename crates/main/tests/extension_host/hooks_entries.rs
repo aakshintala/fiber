@@ -52,18 +52,16 @@ fn entry(point: &str, command: &str, args: Value, timeout: u64, on_failure: &str
 impl Setup {
     /// Installs the real `hooks` package from the repository.
     fn install_hooks(&self) {
-        extensions::plan(
+        let request = extensions::Request::Path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks"),
+        );
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks"),
-            ),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// Removes the installed `hooks` package, leaving its settings behind.

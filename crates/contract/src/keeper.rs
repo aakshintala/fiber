@@ -2,27 +2,45 @@
 //! "The keeper").
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 use serde::{Deserialize, Serialize};
 
-use crate::JobId;
+use crate::{JobId, SessionId};
+
+/// How many output frames and endings a hosted call may hold ahead of its
+/// driver: past this the keeper's reader waits instead of buffering the
+/// flood in the session (see #4054). 64 frames of at most 8 KiB are 512 KiB
+/// standing. // ruling: #4054
+pub const HOST_EVENT_QUEUE: usize = 64;
+
+/// How many queued frames one runner pass takes: the pass copies its burst
+/// about eight times over (the burst itself, the fresh bytes, the decoded
+/// text, the splitter's carry and lines, the joined batch and its JSON), so
+/// 16 frames of at most 8 KiB peak near 1 MiB transiently. Queue plus burst
+/// stay under the handover's 4 MiB growth budget (see #4054). // ruling: #4054
+pub const HOST_BURST_FRAMES: usize = 16;
 
 /// Runs shell processes outside the session process.
 pub trait CommandHost: Send + Sync {
     /// Starts a process and delivers its output and ending through `events`.
-    fn start(&self, spec: Spawn, events: Sender<HostEvent>) -> Result<Started, HostError>;
+    /// The channel holds [`HOST_EVENT_QUEUE`] frames: a driver that falls
+    /// behind applies backpressure to the keeper instead of queueing without
+    /// bound. // ruling: #4054
+    fn start(&self, spec: Spawn, events: SyncSender<HostEvent>) -> Result<Started, HostError>;
     /// Asks a running process to stop, returning whether it was known.
     fn stop(&self, id: &str) -> bool;
     /// Writes text into a process's terminal.
     fn write(&self, id: &str, text: &str) -> Result<(), HostError>;
-    /// Names the job and files that survive the session's death.
+    /// Names the job and files that survive the session's death. `lines` is
+    /// whether the job delivers monitor lines, independent of `errors_path`.
     fn adopt(
         &self,
         id: &str,
         job_id: &JobId,
         output_path: &Path,
         errors_path: Option<&Path>,
+        lines: bool,
     ) -> Result<(), HostError>;
 }
 
@@ -156,11 +174,22 @@ pub enum ToKeeper {
         output_path: PathBuf,
         /// Absolute path to a monitor's error file, when separate.
         errors_path: Option<PathBuf>,
+        /// Whether the job delivers monitor lines to the model.
+        lines: bool,
     },
     /// The session has durably written this call's job ending.
     Confirmed(String),
     /// A normal session shutdown, rather than a crash.
     Shutdown(bool),
+    /// A resuming session asks which session this keeper holds. It changes
+    /// nothing: the keeper answers [`FromKeeper::Identity`].
+    Identify(SessionId),
+    /// The identified session asks the keeper to release the log and hand
+    /// over its jobs. `true` is the only valid value.
+    Handover(bool),
+    /// The resuming session holds the lock and is ready for the jobs' output
+    /// as frames. `true` is the only valid value.
+    Adopted(bool),
 }
 
 /// Keeper-to-session control lines. Output encoding happens at the process
@@ -199,6 +228,37 @@ pub enum FromKeeper {
         #[serde(flatten)]
         exit: Exit,
     },
+    /// The session this keeper holds, answering [`ToKeeper::Identify`].
+    Identity {
+        /// The held session.
+        session_id: SessionId,
+    },
+    /// The log is released and the jobs below are the session's again; an
+    /// empty list means the keeper has none left.
+    Handover {
+        /// The jobs still accounted for, each with its files.
+        running: Vec<KeptJob>,
+    },
+    /// Every handed-over job now sends its output as frames. `true` is the
+    /// only valid value.
+    AdoptDone(bool),
+}
+
+/// A job a keeper hands to a resuming session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptJob {
+    /// The keeper's identifier for the hosted call.
+    pub id: String,
+    /// The durable job.
+    pub job_id: JobId,
+    /// Absolute path to the job's output file.
+    pub output_path: PathBuf,
+    /// Absolute path to a monitor's error file, when separate.
+    pub errors_path: Option<PathBuf>,
+    /// Whether the keeper still holds the job's terminal input.
+    pub tty: bool,
+    /// Whether the job delivers monitor lines to the model.
+    pub lines: bool,
 }
 
 #[cfg(test)]
