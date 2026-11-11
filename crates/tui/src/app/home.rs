@@ -2,7 +2,7 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use std::cell::Cell;
 
@@ -18,6 +18,7 @@ use crate::home::{
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
+use contract::commands::hub::Start;
 use contract::{ErrorCode, SessionId};
 
 mod chips;
@@ -662,11 +663,20 @@ impl App {
         asks.extend(self.start_model_pick());
         let home = &mut self.home;
         let outbox = &mut self.outbox;
-        let Some(mut out) = home.recent.first_asks(outbox) else {
+        let Some(sent) = home.recent.first_asks(outbox) else {
             let mut out = home.subs.take_outbox();
             out.append(&mut asks);
             return out;
         };
+        // The feed and first page cruise the fold: each id rides
+        // paired, so a failed write settles by the carried id.
+        let mut out: Vec<String> = sent
+            .into_iter()
+            .map(|sent| {
+                outbox.note_hub_sent(&sent.id, &sent.line);
+                sent.line
+            })
+            .collect();
         // A reconnect queues its scoped refetch before this pass: the
         // asks ride here, beside the sessions request that follows.
         out.extend(home.subs.take_outbox());
@@ -727,18 +737,31 @@ impl App {
                     }
                     // The project's counts may have changed: ask again,
                     // each kind under its one-in-flight-plus-dirty
-                    // bound, never adjusting a count here.
-                    let mut lines = Vec::new();
+                    // bound, never adjusting a count here. Both asks
+                    // cruise the fold: each id rides paired, so a failed
+                    // write settles by the carried id.
+                    let mut lines: Vec<String> = Vec::new();
                     if let Some(project) = &project {
-                        lines.extend(self.scoped_first(project));
-                        lines.extend(self.archived_first(project));
+                        lines.extend(
+                            self.scoped_first(project)
+                                .into_iter()
+                                .map(|sent| self.outbox.fold_line(sent)),
+                        );
+                        lines.extend(
+                            self.archived_first(project)
+                                .into_iter()
+                                .map(|sent| self.outbox.fold_line(sent)),
+                        );
                     }
                     if how == Left::Exited {
                         self.rail_state.note_exited(&exited);
                     }
                     // The command's confirmed stops retire here: only an
                     // exit permits its one delete.
-                    lines.extend(self.delete_command_session_left(&exited));
+                    for sent in self.delete_command_session_left(&exited) {
+                        self.outbox.note_hub_sent(&sent.id, &sent.line);
+                        lines.push(sent.line);
+                    }
                     Some(lines)
                 } else if matches!(
                     kind,
@@ -951,18 +974,25 @@ impl App {
                     }
                     self.refresh_session_labels();
                     // The queued asks ride in home's outbox, drained by
-                    // `home_outgoing`; while one is in flight it marks
-                    // the project dirty instead. The status still
+                    // `home_outgoing`; while one is in flight each marks
+                    // its project dirty instead. The status still
                     // reaches the conversation below.
                     if let Some(project) = fresh {
                         if self.home.sessions.total_for(&project).is_none() {
-                            for line in self.scoped_first(&project) {
-                                self.home.subs.queue(line);
+                            // The queued ask cruises the fold: its id
+                            // rides paired, so a failed write settles by
+                            // the carried id.
+                            for sent in self.scoped_first(&project) {
+                                self.outbox.note_hub_sent(&sent.id, &sent.line);
+                                self.home.subs.queue(sent.line);
                             }
                         }
                         if self.home.sessions.archived_total_for(&project).is_none() {
-                            for line in self.archived_first(&project) {
-                                self.home.subs.queue(line);
+                            // The queued archived ask cruises the fold
+                            // the same way.
+                            for sent in self.archived_first(&project) {
+                                self.outbox.note_hub_sent(&sent.id, &sent.line);
+                                self.home.subs.queue(sent.line);
                             }
                         }
                     }
@@ -1362,7 +1392,7 @@ impl App {
                 if let Some((project, before)) = next {
                     let lines = self.scoped_page(&project, before.as_deref());
                     if !lines.is_empty() {
-                        return Effect::Send(lines);
+                        return Effect::SendTracked(lines);
                     }
                 }
                 Effect::None
@@ -1400,7 +1430,7 @@ impl App {
                             let lines = self
                                 .archived_page(&project, before.as_ref().map(|id| id.0.as_str()));
                             if !lines.is_empty() {
-                                return Effect::Send(lines);
+                                return Effect::SendTracked(lines);
                             }
                         }
                     }
@@ -1550,13 +1580,14 @@ impl App {
     /// worktree switch adds `"worktree": true` only while it shows and
     /// is on. Sending one hides the placeholder and clears the blocker
     /// lines until the run ends.
-    pub(super) fn start_args(&mut self) -> Value {
+    pub(super) fn start_args(&mut self) -> Option<Start> {
         let home = &mut self.home;
         home.prompted = true;
         home.blockers = Vec::new();
         home.blocker_keys = Vec::new();
-        // An empty pick or launch directory is none: no `workspace`
-        // key names a remote home, as the hub treats a missing key.
+        // An empty pick or launch directory is none: without one the
+        // hub would refuse the missing `workspace` as
+        // `invalid_arguments`, so no start goes out.
         let workspace = home
             .chooser
             .chosen()
@@ -1568,28 +1599,16 @@ impl App {
                     .workspace()
                     .filter(|workspace| !workspace.as_os_str().is_empty())
                     .map(|workspace| workspace.display().to_string())
-            });
-        let mut args = json!({});
-        if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
-            object.insert("workspace".to_owned(), Value::String(workspace));
-        }
-        if let Some(object) = args.as_object_mut() {
-            if !self.launch_overrides.is_empty() {
-                object.insert(
-                    "overrides".to_owned(),
-                    Value::Array(
-                        self.launch_overrides
-                            .iter()
-                            .map(|override_text| Value::String(override_text.clone()))
-                            .collect(),
-                    ),
-                );
-            }
-            if home.chooser.worktree() && home.in_git() {
-                object.insert("worktree".to_owned(), json!(true));
-            }
-        }
-        args
+            })?;
+        Some(Start {
+            workspace,
+            model: None,
+            overrides: (!self.launch_overrides.is_empty()).then(|| self.launch_overrides.clone()),
+            worktree: (home.chooser.worktree() && home.in_git()).then_some(true),
+            continues: None,
+            supervised: None,
+            content: None,
+        })
     }
 }
 

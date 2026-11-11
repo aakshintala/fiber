@@ -812,13 +812,14 @@ fn enter_sends_exactly_one_steer_naming_the_delegate() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -845,13 +846,14 @@ fn a_rejected_steer_shows_its_notice_and_puts_the_draft_back() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -876,13 +878,14 @@ fn a_slash_close_in_the_view_closes_the_parent_and_the_view() {
     app.draft.set("/close");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1226,13 +1229,14 @@ fn a_resumed_job_opens_from_its_row_again() {
     start_delegate(&mut app, "j_1", DELEGATE_A);
     let resumed = match app.open_serial(serial) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1269,13 +1273,14 @@ fn an_open_view_runs_and_steers_again_after_its_job_restarts() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1433,13 +1438,14 @@ fn an_accepted_delegate_steer_closes_its_pending_entry() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1542,13 +1548,14 @@ fn clicking_a_delegate_row_opens_that_delegate() {
         .unwrap_or_else(|| panic!("a serial"));
     let out = match app.on_click(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial))) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1661,13 +1668,14 @@ fn a_click_on_a_completed_job_serial_opens_and_subscribes() {
         .unwrap_or_else(|| panic!("a serial"));
     let out = match app.on_click(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial))) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1696,13 +1704,14 @@ fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
     app.focus = Some(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial)));
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1729,13 +1738,14 @@ fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
 fn open_serial_of(app: &mut App, serial: u64) -> Vec<Value> {
     match app.open_serial(serial) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None => Vec::new(),
         Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -2609,13 +2619,14 @@ fn steer_answer_reaches_its_handler() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)

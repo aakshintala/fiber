@@ -3,7 +3,7 @@
 use super::decode;
 use super::{Cancel, Router};
 use crate::configure::{BrowserLogin, ConfigureError, LoginShow, Stored};
-use serde_json::json;
+use contract::commands::hub::{DeviceLogin, HubCommand, NoArgs};
 use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
@@ -67,7 +67,9 @@ impl BrowserLogin for RemoteLogin {
             }
             #[cfg(test)]
             pause(&self.pause_before_start);
-            match self.router.send("device_login", json!({"name":self.name})) {
+            match self.router.send(HubCommand::DeviceLogin(DeviceLogin {
+                name: self.name.clone(),
+            })) {
                 Ok(pending) => {
                     *state = LoginState::Active {
                         epoch: pending.epoch(),
@@ -105,7 +107,7 @@ impl BrowserLogin for RemoteLogin {
             #[cfg(test)]
             pause(&self.pause_before_result_send);
             self.router
-                .send_on(epoch, "device_login_result", json!({}))
+                .send_on(epoch, HubCommand::DeviceLoginResult(NoArgs {}))
                 .map_err(super::ask_error)?
         };
         let line = pending.wait().map_err(super::ask_error)?;
@@ -127,9 +129,9 @@ impl BrowserLogin for RemoteLogin {
             self.router.wake();
             match previous {
                 LoginState::Idle | LoginState::Cancelled => return,
-                LoginState::Active { epoch } => {
-                    self.router.send_on(epoch, "device_login_cancel", json!({}))
-                }
+                LoginState::Active { epoch } => self
+                    .router
+                    .send_on(epoch, HubCommand::DeviceLoginCancel(NoArgs {})),
             }
         };
         if let Ok(pending) = pending {

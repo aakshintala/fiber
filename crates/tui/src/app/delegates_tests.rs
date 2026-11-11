@@ -351,13 +351,20 @@ fn open_first(app: &mut App) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -561,7 +568,7 @@ fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
         Effect::None
     );
     match app.session_view_key(&Key::Enter) {
-        Some(Effect::Send(_)) => {}
+        Some(Effect::Send(_)) | Some(Effect::SendTracked(_)) => {}
         Some(_) | None => panic!("opening sends"),
     }
     assert!(app.item_open());
@@ -578,14 +585,14 @@ fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
     opened(&mut app);
     finished_two_turn_delegate(&mut app);
     match app.on_click(TargetId::Panel(PanelSpot::Delegate(job_serial(&app)))) {
-        Effect::Send(_) => {}
+        Effect::Send(_) | Effect::SendTracked(_) => {}
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -648,12 +655,13 @@ fn a_job_view_draws_no_fallback() {
     match app.on_click(TargetId::Panel(PanelSpot::Job(job_serial(&app)))) {
         Effect::None => {}
         Effect::Send(_)
+        | Effect::SendTracked(_)
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)

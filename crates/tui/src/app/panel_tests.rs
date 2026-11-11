@@ -800,13 +800,20 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
@@ -1710,6 +1717,13 @@ fn the_quota_spot_opens_the_view_and_fetches() {
             .iter()
             .map(|line| serde_json::from_str::<Value>(line).unwrap_or_default())
             .collect::<Vec<_>>(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str::<Value>(line).unwrap_or_default()
+            })
+            .collect::<Vec<_>>(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1718,7 +1732,7 @@ fn the_quota_spot_opens_the_view_and_fetches() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("no fetch line"),

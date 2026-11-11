@@ -693,8 +693,12 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
         let (done, result) = mpsc::channel();
         std::thread::spawn(move || {
             done.send(worker.ask(
-                "configure",
-                json!({"operation":"settings"}),
+                contract::commands::hub::HubCommand::Configure(
+                    contract::commands::hub::Configure {
+                        operation: "settings".into(),
+                        arguments: serde_json::Map::new(),
+                    },
+                ),
                 crate::remote::Caller::Loop,
             ))
             .unwrap();

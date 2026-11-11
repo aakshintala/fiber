@@ -8,10 +8,12 @@
 
 use std::collections::HashMap;
 
+use contract::commands::hub::{HubCommand, HubCommandLine};
 use contract::commands::{Command, CommandLine, HistoryArgs, ImportSource, SubscribeLevel};
 use contract::{CommandId, Seq, SessionId};
 use serde_json::Value;
 
+use super::Sent;
 use crate::input::Draft;
 
 /// What the terminal is attached to.
@@ -197,6 +199,11 @@ pub(crate) struct Kept {
 /// pending keys: `start` carries no `session_id`, so it is never kept.
 /// `starts` holds every constructed `start` line with no answer yet, by
 /// command id: the hooks install offer's retry resends them unchanged.
+/// `hub_sent` pairs every fold-cruising hub line with the id it went
+/// out under, so a failed write settles by the carried id instead of
+/// parsing it back out of the line; an entry lives until the command
+/// settles, purged with its wait or with its pending entry, whichever
+/// goes first.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
     /// Feature owners, independent of generic draft settlement, in the
@@ -208,8 +215,12 @@ pub(crate) struct Outbox {
     starts: HashMap<String, String>,
     /// Commands waiting for their answer: kind and the draft they carried.
     pub(crate) pending: HashMap<String, (Kind, Draft)>,
-    /// Lines held until the hub connects: the `start` of an early Enter.
-    pub(crate) held: Vec<String>,
+    /// The id and line of every fold-cruising hub line with no answer
+    /// yet, in the order their waits registered.
+    hub_sent: Vec<(CommandId, String)>,
+    /// Lines held until the hub connects: the `start` of an early Enter,
+    /// with the id each goes out under once the hub speaks `hub_hello`.
+    pub(crate) held: Vec<Sent>,
     /// Session commands written and not yet answered, in the order they
     /// went out; no id appears twice.
     pub(crate) kept: Vec<Kept>,
@@ -236,6 +247,7 @@ impl Outbox {
     /// Takes a feature's wait once, without settling its draft.
     pub(crate) fn settled(&mut self, id: &str) -> Option<Waiting> {
         let at = self.waits.iter().position(|(wait, _)| wait == id)?;
+        self.purge_hub(id);
         Some(self.waits.remove(at).1)
     }
 
@@ -246,7 +258,18 @@ impl Outbox {
 
     /// Removes every tag `matches` accepts.
     pub(crate) fn settle_where(&mut self, matches: impl Fn(&Waiting) -> bool) {
-        self.waits.retain(|(_, owner)| !matches(owner));
+        let mut dropped = Vec::new();
+        self.waits.retain(|(id, owner)| {
+            if matches(owner) {
+                dropped.push(id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for id in dropped {
+            self.purge_hub(&id);
+        }
     }
 
     /// Whether any id waits for this feature, regardless of its payload.
@@ -290,28 +313,65 @@ impl Outbox {
         if kind == Kind::Start {
             self.starts.insert(id.clone(), line.clone());
         }
-        self.pending.insert(id, (kind, draft));
+        self.pending.insert(id.clone(), (kind, draft));
         if self.is_up() {
-            Some(line)
-        } else {
-            // An Enter before the hub connects is held, not lost: `start`
-            // goes out once the hub speaks `hub_hello`.
-            self.held.push(line);
-            None
+            return Some(line);
         }
+        // An Enter before the hub connects is held, not lost: `start`
+        // goes out once the hub speaks `hub_hello`, paired in the
+        // registry then with the line as flushed.
+        let sent = Sent {
+            id: CommandId(id),
+            line,
+        };
+        self.held.push(sent);
+        None
+    }
+
+    /// Pairs a fold-cruising hub line with its carried id, beside the
+    /// wait the line's answer settles.
+    pub(crate) fn note_hub_sent(&mut self, id: &CommandId, line: &str) {
+        self.hub_sent.push((id.clone(), line.to_owned()));
+    }
+
+    /// Pairs a fold-cruising hub line with its carried id and returns
+    /// the line: one step for the fold tails that note each id and
+    /// send each line in order.
+    pub(crate) fn fold_line(&mut self, sent: Sent) -> String {
+        self.note_hub_sent(&sent.id, &sent.line);
+        sent.line
+    }
+
+    /// The carried id of a fold-cruising hub line, if noted when it was
+    /// built: a failed write settles by it instead of parsing the line.
+    pub(crate) fn hub_id(&self, line: &str) -> Option<CommandId> {
+        self.hub_sent
+            .iter()
+            .find(|(_, noted)| noted == line)
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Drops a command's hub-line pairs: a missed purge degrades to the
+    /// parse fallback for that line, never to a wrong id.
+    fn purge_hub(&mut self, id: &str) {
+        self.hub_sent.retain(|(sent, _)| sent.0 != id);
     }
 
     /// Pops a pending command, returning the kind and draft applying its
     /// failure needs, without reaching the queue, the offer, the phase
-    /// or the draft.
+    /// or the draft. Its hub-line pair goes with the entry, so a later
+    /// disconnect cannot settle by it again.
     pub(crate) fn fail(&mut self, id: &str) -> Option<(Kind, Draft)> {
+        self.purge_hub(id);
         self.starts.remove(id);
         self.pending.remove(id)
     }
 
     /// A command's answer: its pending entry closes, and its line is no
-    /// longer kept for resending.
+    /// longer kept for resending. Its hub-line pair goes with the
+    /// entry, so a repeated disconnect retains no completed line.
     pub(crate) fn answered(&mut self, id: &str) -> Option<(Kind, Draft)> {
+        self.purge_hub(id);
         self.kept.retain(|kept| kept.id != id);
         self.starts.remove(id);
         self.pending.remove(id)
@@ -360,6 +420,20 @@ impl Outbox {
     pub(crate) fn is_kept(&self, id: &str) -> bool {
         self.kept.iter().any(|kept| kept.id == id)
     }
+}
+
+/// A command line for the hub: `command` serialized as a
+/// [`HubCommandLine`], with no `session_id` key, written as one JSON
+/// object line (`docs/invocation.md`, "The command line"). Key order is
+/// not a wire rule: the hub and the readers parse by key. The fallback
+/// never fires for typed structs.
+pub(crate) fn hub_line(id: &CommandId, command: HubCommand) -> String {
+    serde_json::to_value(HubCommandLine {
+        id: id.clone(),
+        command,
+    })
+    .unwrap_or(Value::Null)
+    .to_string()
 }
 
 /// A command line for a session: `command` serialized as a
