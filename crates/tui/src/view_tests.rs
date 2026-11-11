@@ -1730,9 +1730,9 @@ fn clicking_a_placeholder_opens_the_image_in_the_viewer() {
         "the placeholder carries the image target: {target:?}"
     );
     let effect = app.on_click(target);
-    if let crate::app::Effect::Send(lines) = effect {
-        assert_eq!(lines.len(), 1);
-        let line: serde_json::Value = serde_json::from_str(&lines[0]).expect("a command line");
+    if let crate::app::Effect::SendTracked(sents) = effect {
+        assert_eq!(sents.len(), 1);
+        let line: serde_json::Value = serde_json::from_str(&sents[0].line).expect("a command line");
         assert_eq!(
             line.get("command").and_then(serde_json::Value::as_str),
             Some("read_file")
@@ -1812,9 +1812,9 @@ fn prompt_bubble_with_inline_image() {
         "the placeholder carries the image target: {target:?}"
     );
     let effect = app.on_click(target);
-    if let crate::app::Effect::Send(lines) = effect {
-        assert_eq!(lines.len(), 1);
-        let line: serde_json::Value = serde_json::from_str(&lines[0]).expect("a command line");
+    if let crate::app::Effect::SendTracked(sents) = effect {
+        assert_eq!(sents.len(), 1);
+        let line: serde_json::Value = serde_json::from_str(&sents[0].line).expect("a command line");
         assert_eq!(
             line.get("command").and_then(serde_json::Value::as_str),
             Some("read_file")

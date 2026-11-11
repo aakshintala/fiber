@@ -392,12 +392,12 @@ fn a_history_refusal_keeps_its_code() {
         payload: serde_json::Map::default(),
     }));
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(sent) = app.on_key(Key::Up, now) else {
+    let crate::app::Effect::SendTracked(sent) = app.on_key(Key::Up, now) else {
         panic!("a send");
     };
     let id = sent
         .iter()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap_or_default())
+        .map(|sent| serde_json::from_str::<serde_json::Value>(&sent.line).unwrap_or_default())
         .find(|line| line["command"] == "prompt_history")
         .and_then(|line| line["id"].as_str().map(str::to_owned))
         .expect("a prompt_history send");
