@@ -2637,9 +2637,15 @@ fn tool_call_extra_content_decodes_to_a_carrier_before_its_call() {
             None,
         )
     };
+    let again = |index: u64, extra: Value| {
+        chunk(
+            json!({"tool_calls": [{"index": index, "extra_content": extra}]}),
+            None,
+        )
+    };
     let reply = decoded(&stream(&[
         call(0, "c1", overwritten),
-        call(0, "c1", first.clone()),
+        again(0, first.clone()),
         call(1, "c2", second.clone()),
         chunk(json!({}), Some("tool_calls")),
     ]))
