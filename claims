@@ -326,3 +326,10 @@ docs/events.md	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home
 crates/tui/src/changed_files_view.rs	fiber-4592	plan	2026-11-11T12:26:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/changed_files_view_tests.rs	fiber-4592	plan	2026-11-11T12:26:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/relay_tests.rs	fiber-4596	plan	2026-11-11T12:27:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/session_views.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/swapped.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/app/session_views_tests.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__changed_files_view__tests__changed_files_80x24.snap	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__changed_files_view__tests__changed_files_diff_80x24.snap	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/main/tests/hub_daemon/changed_files_remote.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
