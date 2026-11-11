@@ -296,6 +296,16 @@ mod import_tests {
                 r#"{"id":"unfit","command":"import","args":{"source":1}}"#,
             );
             assert_eq!(rejection(&response(client, "unfit")).0, "invalid_arguments");
+            // A bad source beside an extra key stays UNFIT: the
+            // structural checks run before the source-name lookup.
+            send(
+                client,
+                r#"{"id":"misfit","command":"import","args":{"source":"vim","extra":true}}"#,
+            );
+            assert_eq!(
+                rejection(&response(client, "misfit")),
+                ("invalid_arguments", super::super::UNFIT)
+            );
             send(
                 client,
                 r#"{"id":"extra","command":"import","args":{"future":true}}"#,

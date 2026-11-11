@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::ErrorCode;
 use crate::events::{
@@ -111,6 +112,22 @@ impl fmt::Debug for End {
         f.write_str("End(..)")
     }
 }
+
+/// The worktree a run ends, or only reports when resuming.
+#[derive(Debug, Clone)]
+pub struct EndWorktree {
+    /// The worktree directory.
+    pub path: PathBuf,
+    /// The recorded branch.
+    pub branch: String,
+    /// The initial commit, absent on resumed runs.
+    pub base: Option<String>,
+    /// Whether this runner owns removal.
+    pub remove: bool,
+}
+
+/// Inspects, optionally removes, and reports a worktree at run end.
+pub type FinishWorktree = Arc<dyn Fn(EndWorktree) -> crate::events::FinishedWorktree + Send + Sync>;
 
 /// Opens a running job. `jobs::Registry` and test fakes both implement it,
 /// so `tools` can move a command without depending on `jobs`

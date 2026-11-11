@@ -741,6 +741,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - `Timed out after N ms; Fiber stopped the whole process group.` for a timeout;
     a moved job's timeout adds the long-running-process hint ("When a
     command ends");
+    a foreground or moved timeout whose command text holds a `|` adds (``A pipeline
+    stage that prints only when it exits (such as `| tail`) lost its output
+    at the stop; rerun without it, or with `run_in_background`.``).
+    A completion the keeper writes after a restart carries no pipe sentence
+    ("The keeper").
   - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
   - `Cancelled and stopped.` for a cancellation;
   - `The command was stopped, and Fiber cannot tell whether it completed.` for
@@ -1163,6 +1168,12 @@ hub.
   process group does not reach it. It is the parent of every command's
   process group and of every delegate, and it reaps them. It lives
   until its session shuts down or, after a crash, by the rules below.
+  One exception: a resumed session takes the jobs of a keeper that
+  survived the crash but does not become that keeper's parent. The old
+  keeper keeps running those jobs and exits when the last of them has
+  ended and the session has written its end. A command the resumed
+  session starts runs under a fresh keeper that is the session's child,
+  so a session can hold jobs on more than one keeper.
 - **A command that is not yet a job ends with the crash.** When the session
   dies, the keeper stops each command still running as a tool call, as a
   shutdown does. The log already reads that call's outcome as unknown
@@ -1208,6 +1219,7 @@ hub.
   releases the lock and acknowledges. The resumed session takes the lock,
   binds its socket, and keeps the connection to the keeper open as its
   lifeline. The jobs still running are its jobs again, with no `orphaned`.
+  The keeper keeps writing each job's output file until the resumed session holds the lock, then sends that job's output to the session again. The session appends what it receives after the bytes the keeper wrote, so each byte of a job's output is in its file once, in order. A job that ends while the session takes over is ended by the session, which writes its `job_completed`; the keeper exits only after the session has written the last one.
 - **A keeper keeps its binary through `fiber update`,** as a session does
   (`docs/invocation.md`, "Processes"). A resume whose build cannot read the
   keeper's `schema_version` declines with `session_held` and names the
@@ -1223,6 +1235,15 @@ hub.
 - **A keeper that dies leaves its jobs unaccounted for.** If the keeper itself dies before
   a job's `job_completed` is written, the resumed session writes that job
   `orphaned` and touches no process.
+- **Two keepers that lose their session together keep one.** When a session
+  that holds jobs on an old keeper and a fresh one crashes, both keepers
+  take the log back at once, and only one can hold the lock. Either may win.
+  The winner keeps its jobs and serves the next resume. The other finds the
+  lock held, stops only the commands that were running as tool calls, writes
+  nothing, leaves the socket alone and exits. Its jobs go on running with
+  no keeper, and the next resume writes each of them `orphaned` and touches
+  no process. This is a known limit: such a job is lost to accounting, not
+  to the log.
 - **A delegate on another harness is kept.** The keeper holds its pipes and
   writes each line it prints to its output file, as for any job. While the
   session lives, the session reads the lines as they arrive. After a crash,
@@ -1636,9 +1657,11 @@ project. Messaging a session's own delegates is `delegate_message`
 
 **`session_list` shows running sessions only.** Each entry has the session's
 id, its name, its workspace, and its parent's id when it is a delegate. A
-session is running when its socket accepts a connection (`docs/invocation.md`, "Processes"). The name, workspace and parent come from
-each session's latest `session_status`, read on a `summary` subscription to
-its socket (`docs/events.md`). The list includes the calling session, marked
+session is running when it answers a `summary` subscription on its socket
+with its latest `session_status` (`docs/events.md`), which is also where its
+name, workspace and parent come from. A socket whose lock a keeper holds is
+no session: the call does not connect to it, so a keeper that kept its jobs
+after a crash is never listed (`docs/invocation.md`, "Processes"). The list includes the calling session, marked
 as itself, so the model can see its own id and name. The tool declares
 `reads`. The call connects to every session's socket at once and waits at most
 2 s in all, for up to 1,000 running sessions (`docs/performance.md`). A session that accepted the connection but

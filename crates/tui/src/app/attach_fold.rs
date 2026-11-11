@@ -144,12 +144,15 @@ impl App {
     }
 
     /// Installs the newest candidate built while reading the open's
-    /// tail, without folding it again. An empty log installs nothing
-    /// and shows no history. The screen follows, the overlay shows the
-    /// preview, and the screen freezes for the raise. The tail stays
-    /// behind as the post-frame count's cursor: older own-segment
-    /// windows and ancestors read through it without refolding the
-    /// preview.
+    /// tail, without folding it again. A completed tail swaps the
+    /// candidate into the screen, retains it as the post-frame count's
+    /// cursor, and floors the count at the candidate's oldest folded
+    /// line; an empty log installs nothing and shows no history. An
+    /// ended tail installs nothing: the previous transcript stays, the
+    /// candidate and cursor drop, and the overlay still shows for the
+    /// raise with no busy, leaving the indicator to the live session
+    /// (`docs/tui.md`, "History and paging"). Either way the screen
+    /// freezes for the raise.
     pub(crate) fn install_tail(&mut self) {
         if self.preview.is_none() {
             self.fold_preview();
@@ -164,6 +167,16 @@ impl App {
             self.overlay = Overlay::Reading(tail);
             return;
         };
+        if tail.ended() {
+            drop(preview);
+            self.overlay = Overlay::Shown {
+                session,
+                busy: None,
+                held: false,
+            };
+            self.attached_screen_mut().set_frozen(true);
+            return;
+        }
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
         // The candidate's oldest folded line bounds the count: lines at
@@ -230,11 +243,16 @@ impl App {
     /// the line following it as its trailer and carries its runs above
     /// the installed preview. The preview itself never refolds: the
     /// trailer closes the count fold so the ancestor run carries
-    /// instead of staying open behind it.
+    /// instead of staying open behind it. An ended count folds nothing
+    /// and keeps the installed preview (`docs/tui.md`, "History and
+    /// paging").
     pub(crate) fn finish_count(&mut self) {
         let Some(tail) = self.count.take() else {
             return;
         };
+        if tail.ended() {
+            return;
+        }
         if !matches!(&self.overlay, Overlay::Shown { .. }) {
             self.count = Some(tail);
             return;

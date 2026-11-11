@@ -1425,15 +1425,26 @@ fn an_overflowing_label_keeps_its_caret_in_its_row() {
     let mut buf = Buffer::empty(area);
     let mut targets_out = Vec::new();
     login.draw(area, &mut buf, &mut targets_out);
-    // Caret at the start: the head shows with the first cell in the
-    // slab's colour on the text colour.
-    let caret = (0..24).any(|y| {
-        (0..80).any(|x| {
-            buf[(x, y)].fg == crate::theme::Role::Surface.color()
-                && buf[(x, y)].bg == crate::theme::Role::Text.color()
-        })
-    });
-    assert!(caret, "no reversed caret cell");
+    // Caret at the start: the head shows with the first cell reversed
+    // over its own colours.
+    let rows = text_of(&buf, 80, 24);
+    let label_y = rows
+        .iter()
+        .position(|row| row.contains("Label (--as):"))
+        .unwrap_or_else(|| panic!("no label row in {rows:?}"));
+    let yu = u16::try_from(label_y).unwrap_or(u16::MAX);
+    let mut found = 0;
+    for x in 0..80u16 {
+        if buf[(x, yu)]
+            .style()
+            .add_modifier
+            .contains(Modifier::REVERSED)
+        {
+            assert_eq!(buf[(x, yu)].symbol(), "l", "the caret covers the head");
+            found += 1;
+        }
+    }
+    assert_eq!(found, 1, "one reversed caret cell on the label row");
 }
 
 #[test]

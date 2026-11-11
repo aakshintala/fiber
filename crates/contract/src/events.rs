@@ -317,6 +317,7 @@ kinds! {
     ShellCommandDelta(ShellCommandDelta) = "shell_command_delta", Ephemeral;
     DirectoryAdded(DirectoryAdded) = "directory_added", Durable;
     SessionNamed(SessionNamed) = "session_named", Durable;
+    Archived(Empty) = "archived", Durable;
     Clients(Clients) = "clients", Ephemeral;
     SessionStatus(SessionStatus) = "session_status", Ephemeral;
     ContextAdded(ContextAdded) = "context_added", Durable;

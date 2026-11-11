@@ -433,6 +433,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -448,6 +449,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -465,6 +467,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -482,6 +485,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -499,6 +503,68 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "--archived"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: None,
+                    all: false,
+                    json: false,
+                    archived: true,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "archive", "s_abc"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Archive {
+                        hub: None,
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                    archived: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "archive", "--hub", "box", "s_abc"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Archive {
+                        hub: Some("box".to_owned()),
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                    archived: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "archive", "s_abc", "--hub", "box"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Archive {
+                        hub: Some("box".to_owned()),
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -518,6 +584,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -547,6 +614,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -566,6 +634,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -578,6 +647,7 @@ fn parses_argv_into_its_invocation() {
                     command: None,
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -590,6 +660,7 @@ fn parses_argv_into_its_invocation() {
                     command: None,
                     all: true,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -602,6 +673,7 @@ fn parses_argv_into_its_invocation() {
                     command: None,
                     all: false,
                     json: true,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -614,6 +686,7 @@ fn parses_argv_into_its_invocation() {
                     command: None,
                     all: true,
                     json: true,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -630,6 +703,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -646,6 +720,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -662,6 +737,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -678,6 +754,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -694,6 +771,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -710,6 +788,7 @@ fn parses_argv_into_its_invocation() {
                     }),
                     all: false,
                     json: false,
+                    archived: false,
                 })),
                 TopLevel::default(),
             ),
@@ -1619,6 +1698,32 @@ fn setup_flags_conflict_in_pairs() {
         assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
         assert_eq!(said.lines().count(), 1, "{said}");
     }
+}
+
+#[test]
+fn sessions_flags_conflict_with_a_subcommand() {
+    for args in [
+        &["fiber", "sessions", "--archived", "archive", "s_abc"][..],
+        &["fiber", "sessions", "--all", "delete", "s_abc"],
+        &["fiber", "sessions", "--json", "export", "s_abc"],
+        &["fiber", "sessions", "--hub", "box", "archive", "s_abc"],
+    ] {
+        let said = sentence(args);
+        assert!(said.contains("cannot be used with"), "{said}");
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn a_sessions_flag_after_a_subcommand_is_unexpected() {
+    let said = sentence(&["fiber", "sessions", "archive", "s_abc", "--archived"]);
+    assert!(
+        said.starts_with("Unexpected argument '--archived'"),
+        "{said}"
+    );
+    assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+    assert_eq!(said.lines().count(), 1, "{said}");
 }
 
 #[test]
@@ -4379,7 +4484,7 @@ fn session_argv_round_trips_repeated_added_roots() {
 
 /// Synopses of built commands whose doc row names a flag the parser does
 /// not build yet; the build ticket (#3782) removes the entry.
-const UNBUILT_SYNOPSES: [&str; 1] = ["sessions [--all] [--archived] [--json]"];
+const UNBUILT_SYNOPSES: [&str; 0] = [];
 
 /// The Command column of `docs/invocation.md` is the synopsis, so the
 /// help menu holds each built command's row word for word. Rows the
@@ -4408,14 +4513,7 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(
-        unbuilt,
-        [
-            "mcp serve",
-            "sessions [--all] [--archived] [--json]",
-            "sessions archive"
-        ]
-    );
+    assert_eq!(unbuilt, ["mcp serve"]);
 }
 
 /// The session-host list beside the enum names exactly the variants that

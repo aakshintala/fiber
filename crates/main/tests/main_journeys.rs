@@ -313,16 +313,14 @@ fn install_fake_provider_extension(setup: &Setup, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Setup from an installed home with a provider picked, then a first
@@ -631,16 +629,14 @@ fn install_nightly_extension(setup: &Setup, nightlies: &JourneyNightlies) {
             "api": 1,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// `fiber update --channel nightly` against the stub feed: the
@@ -889,16 +885,14 @@ fn install_quota_provider(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A server answering every Lua purpose plus native model calls: the
@@ -1010,7 +1004,8 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
                 &json!({"model": "test/m1", "diagnostics": {"level": "debug"}, "hub": {"idle_exit_ms": 200}}),
             );
             let bin = journey_bin();
-            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &support::TRUECOLOUR);
+            let env = spawn_env_with_fake_key();
+            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &env);
             run.ready();
             dismiss_first_run_offer(&mut run);
             let from = run.output().len();
@@ -1172,16 +1167,14 @@ fn install_picker_states_provider(setup: &Setup, server_url: &str) {
             ],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     // The setting value is not a host, so the fill leaves the model out
     // per model rather than grouping it.
     support::write_json(
@@ -1221,16 +1214,14 @@ fn install_failing_lua_provider(setup: &Setup, server_url: &str, extension: &str
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Every model-picker notice code shown as itself: the picker band carries
@@ -1421,16 +1412,14 @@ fn install_many_models_provider(setup: &Setup, server_url: &str) {
             "models": models,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// The first row containing `needle`, as a `u16` screen row.
@@ -2214,11 +2203,23 @@ fn byte_form_drawn(grid: &Grid) -> bool {
     ) && shows(grid, "Which crates should the change touch?")
 }
 
+/// The spawn environment for journeys answered by the fake provider:
+/// truecolour flags plus its `FIBER_TEST_FAKE_KEY` credential, so the
+/// first-run login stays shut.
+fn spawn_env_with_fake_key() -> Vec<(&'static str, &'static str)> {
+    TRUECOLOUR
+        .iter()
+        .copied()
+        .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
+        .collect()
+}
+
 /// A TUI journey's terminal: ready, kitty flags pushed, the unseeded
 /// home's first-run import offer declined, so regression bytes go out
 /// only once the binary is ready for input.
 fn start_byte_journey(setup: &Setup, bin: &Path) -> Run {
-    let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &support::TRUECOLOUR);
+    let env = spawn_env_with_fake_key();
+    let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &env);
     run.ready();
     run.wait_bytes(0, support::pty::KITTY_PUSH, "kitty keyboard flags pushed");
     dismiss_first_run_offer(&mut run);
@@ -2516,16 +2517,14 @@ fn install_replay_anthropic_provider(setup: &Setup, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "anthropic-messages", "base_url": format!("{}/v1", server.url()), "context_window": 100000, "input": ["text", "image"]}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m"}),
@@ -2544,16 +2543,14 @@ fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> 
         include_str!("../../../providers/databricks/thinking.lua"),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(to);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(to),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     server.url().strip_prefix("http://").unwrap().to_owned()
 }
 
@@ -2562,7 +2559,7 @@ fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> 
 /// three services with full metadata), file-local. The row keeps what
 /// `entry_for` reads: the chat mode and name match, the ANTHROPIC type
 /// for the bearer route, and the window a model needs to count.
-fn replay_discovery() -> [Response; 2] {
+fn replay_discovery() -> [Response; 3] {
     [
         Response::status(
             200,
@@ -2577,6 +2574,13 @@ fn replay_discovery() -> [Response; 2] {
             json!({"models": [
                 {"model_name": "claude-opus-5", "mode": "chat", "provider_type": "ANTHROPIC",
                  "context_window": {"max_input": 200000, "max_output": 64000}},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"endpoints": [
+                {"name": "claude-opus-5"},
             ]})
             .to_string(),
         ),
@@ -2751,6 +2755,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
                 &[
                     ("DATABRICKS_TOKEN", "dapi-test"),
                     ("DATABRICKS_HOST", host.as_str()),
+                    ("FIBER_TEST_FAKE_KEY", "sk-test"),
                 ],
             );
             run.ready();
@@ -2899,16 +2904,14 @@ fn install_replay_bedrock_package(setup: &Setup) -> (ProviderServer, String) {
         "https://bedrock-runtime.{region}.amazonaws.com",
         "http://{region}",
     );
-    extensions::plan(
+    let request = extensions::Request::Path(to);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(to),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     // The region setting is the per-account host, read from `AWS_REGION`.
     let host = server.url().strip_prefix("http://").unwrap().to_owned();
     (server, host)
@@ -2942,6 +2945,7 @@ fn replay_bedrock_converse_text_turn() {
                 &[
                     ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
                     ("AWS_REGION", host.as_str()),
+                    ("FIBER_TEST_FAKE_KEY", "sk-test"),
                 ],
             );
             run.ready();

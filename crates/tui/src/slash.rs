@@ -2,7 +2,9 @@
 //! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
 use crate::app::commands::{TABLE, aliases_of};
+use crate::ext::TuiCommand;
 use contract::events::CommandInfo;
+use std::collections::BTreeSet;
 
 /// How many rows a completion panel shows at most.
 pub(crate) const SHOWN: usize = 8;
@@ -27,6 +29,10 @@ pub(crate) struct Row {
     /// `command`, `skill`, `template`, or the name of the extension or MCP
     /// server the row comes from.
     pub(crate) tag: String,
+    /// Whether an extension owns the row: a session command with
+    /// `extension` set, or a TUI command. One row per name merges an
+    /// extension-owned session row and a TUI row of the same name.
+    pub(crate) extension: bool,
 }
 
 impl Row {
@@ -85,6 +91,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
                 description: command.description.clone(),
                 hint: command.argument_hint.clone(),
                 tag: command.tag.clone(),
+                extension: command.extension,
             }
         } else {
             Row {
@@ -93,6 +100,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),
+                extension: false,
             }
         }
     });
@@ -112,8 +120,53 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             description: command.description.clone(),
             hint: command.argument_hint.clone(),
             tag: command.tag.clone(),
+            extension: command.extension,
         });
     built_ins.chain(session).collect()
+}
+
+/// The TUI extension commands as `/` rows, in order: the extension's
+/// name tags each row, with no argument hint
+/// (`docs/extensions.md`, "Commands and screens").
+pub(crate) fn tui_rows(commands: &[TuiCommand]) -> Vec<Row> {
+    commands
+        .iter()
+        .map(|command| Row {
+            name: command.name.clone(),
+            aliases: Vec::new(),
+            description: command.description.clone(),
+            hint: None,
+            tag: command.extension.clone(),
+            extension: true,
+        })
+        .collect()
+}
+
+/// Merges the TUI rows after the session rows: one row per name
+/// (`docs/extensions.md`, "Commands and screens"). An
+/// extension-marked session row sharing a TUI name keeps no row on
+/// either side and joins the conflict set; a skill, template or
+/// MCP-prompt row sharing a TUI name is left out with no notice while
+/// the TUI row stays.
+pub(crate) fn without_conflicts(session: &[Row], tui: &[Row]) -> (Vec<Row>, BTreeSet<String>) {
+    let tui_names: BTreeSet<&str> = tui.iter().map(|row| row.name.as_str()).collect();
+    let mut conflicts = BTreeSet::new();
+    for row in session {
+        if row.extension && tui_names.contains(row.name.as_str()) {
+            conflicts.insert(row.name.clone());
+        }
+    }
+    let mut merged: Vec<Row> = session
+        .iter()
+        .filter(|row| !tui_names.contains(row.name.as_str()))
+        .cloned()
+        .collect();
+    merged.extend(
+        tui.iter()
+            .filter(|row| !conflicts.contains(row.name.as_str()))
+            .cloned(),
+    );
+    (merged, conflicts)
 }
 
 /// The names of the extension's commands in the `commands` answer, in

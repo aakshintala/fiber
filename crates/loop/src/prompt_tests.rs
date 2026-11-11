@@ -240,8 +240,8 @@ fn messages_md_bytes_are_pinned() {
 fn reviewer_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/reviewer.md"),
-        9150,
-        0x378bf92e2e471af3,
+        10471,
+        0x8ca0933ad7c91d21,
     );
 }
 

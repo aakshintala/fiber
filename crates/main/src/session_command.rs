@@ -130,6 +130,9 @@ pub(crate) struct ResumeStart {
     pub(crate) log: Arc<Log>,
     pub(crate) folded: r#loop::Resumed,
     pub(crate) opened: Option<doors::WorktreeOpener>,
+    /// The jobs and connection of a keeper that held the log, when this
+    /// resume took it from one. Independent of the startup admission.
+    pub(crate) handover: Option<crate::keeper::Handover>,
 }
 
 impl ResumeStart {
@@ -150,7 +153,14 @@ impl ResumeStart {
             log,
             folded,
             opened,
+            handover: None,
         })
+    }
+
+    /// Attaches the keeper's handover this resume took the log with.
+    pub(crate) fn with_handover(mut self, handover: Option<crate::keeper::Handover>) -> Self {
+        self.handover = handover;
+        self
     }
 
     pub(crate) fn id(&self) -> SessionId {
@@ -701,8 +711,9 @@ pub(crate) fn assemble_session(
             let ResumeStart {
                 dir,
                 log,
-                folded,
+                mut folded,
                 opened,
+                handover,
             } = resume;
             let clock = Arc::clone(&process.clock);
             // The session directory's log: the opening message's
@@ -743,6 +754,10 @@ pub(crate) fn assemble_session(
                 seen_files,
                 ..
             } = parts;
+            // The settle reports each orphaned delegate's worktree through
+            // the session's own inspection: a resumed run reports only,
+            // never removes.
+            folded.settle_finish = Some(crate::delegates::worktree_finisher(&home, &clock));
             // The log is already open: install the writer before any append the
             // resumed process makes. The level is checked once; its answer gates
             // both the install and the connection timing below.
@@ -879,6 +894,35 @@ pub(crate) fn assemble_session(
             session.shell(driver);
             session.notes_workspace(workspace.clone());
             session.jobs(jobs.clone());
+            // The jobs a keeper still runs are this session's again: recorded
+            // in the registry, whose inbox is wired, and no longer candidates
+            // for `orphaned`. Their runners start just before the first turn.
+            let handed = match handover {
+                Some(handover) if !handover.running().is_empty() => {
+                    match crate::keeper_restore::take(
+                        &keeper,
+                        &jobs,
+                        &dir,
+                        handover,
+                        &clock,
+                        &mut folded,
+                    ) {
+                        Ok(handed) => Some(handed),
+                        Err(error) => {
+                            session_servers.servers.stop();
+                            return Err(failed(
+                                ErrorCode::IoFailed,
+                                format!(
+                                    "The jobs the keeper held could not be taken back: {error}."
+                                ),
+                            ));
+                        }
+                    }
+                }
+                // A keeper with nothing left to hand over has released the
+                // log and exits.
+                Some(_) | None => None,
+            };
             session.repository_code(
                 Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>
             );
@@ -1049,6 +1093,27 @@ pub(crate) fn assemble_session(
             let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
                 fetch_prompts.get(server, prompt, text, cancel)
             });
+            // Every wire is in place: the keeper switches its jobs' output to
+            // frames, and the runners append them after its own bytes. No turn
+            // starts for this.
+            if let Some(handed) = handed
+                && let Err(error) = handed.finish()
+            {
+                servers.stop();
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                );
+                return Err(failed(
+                    ErrorCode::IoFailed,
+                    format!("The keeper did not finish handing over its jobs: {error}."),
+                ));
+            }
             let code = run_turn(
                 &session,
                 &log,
@@ -1797,9 +1862,41 @@ pub(crate) fn close(
     let status = log
         .latest("session_status")
         .and_then(|line| serde_json::from_value(line.payload.into()).ok());
-    session.close(log);
+    // The clone keeps the session lock held until the exited row is
+    // published: without it the lock releases inside `close` before the
+    // row lands, and an archive in between would be reset by the row.
+    session.close(Arc::clone(&log));
+    #[cfg(test)]
+    pause_before_row();
     // A row that cannot be written loses only the listing, not the log.
     hub::append_exited(home, dir, workspace, status, clock).unwrap_or(());
+    drop(log);
+}
+
+/// Test seam: armed once by the close-publication test; fires after the
+/// door closes and before the exited row is appended, while the retained
+/// log still holds the session lock. Compiles to nothing outside tests.
+/// No outside seam observes the instant after the close returns: without
+/// the signal the test cannot stage an archive inside the window, and
+/// the weakened test would pass either way.
+#[cfg(test)]
+static BEFORE_ROW: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> = std::sync::Mutex::new(None);
+
+/// Tests only: arms the close-publication test's hook, firing after the
+/// door close and before the exited-row append.
+#[cfg(test)]
+pub(crate) fn pause_before_row_arm(hook: impl FnOnce() + Send + 'static) {
+    *support::lock(&BEFORE_ROW) = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn pause_before_row() {
+    // Taken then run without the lock held: a blocking hook must not
+    // stop another thread arming the seam.
+    let hook = support::lock(&BEFORE_ROW).take();
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 #[cfg(test)]

@@ -854,7 +854,7 @@ fn worktree_creator(home: &Path) -> jobs::CreateWorktree {
     )
 }
 
-fn worktree_finisher(home: &Path, clock: &Arc<dyn Clock>) -> jobs::FinishWorktree {
+pub(crate) fn worktree_finisher(home: &Path, clock: &Arc<dyn Clock>) -> jobs::FinishWorktree {
     let home = home.to_owned();
     let clock = Arc::clone(clock);
     Arc::new(move |end| {

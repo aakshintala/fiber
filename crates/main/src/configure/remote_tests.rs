@@ -40,7 +40,11 @@ fn claude_person(person: &Path) {
     }
 }
 
-fn import(seam: &Seam, person: &Path, source: Option<&str>) -> Result<Option<Value>, Failure> {
+fn import(
+    seam: &Seam,
+    person: &Path,
+    source: Option<config::ImportSource>,
+) -> Result<Option<Value>, Failure> {
     seam.import(person, source, fakes::clock::FakeClock::new())
 }
 
@@ -65,14 +69,10 @@ fn seam_import_runs_the_shared_import_into_the_seam_home() {
     assert!(home.join("import-claude-code.json").is_file());
     assert!(home.join("skills/review/SKILL.md").is_file());
     // A named source imports that source only.
-    let result = import(&seam, &person, Some("claude-code"))
+    let result = import(&seam, &person, Some(config::ImportSource::ClaudeCode))
         .unwrap()
         .unwrap();
     assert_eq!(result["imported"]["skills"], json!(["review"]));
-    // An unknown source is refused naming the two sources.
-    let error = import(&seam, &person, Some("vim")).unwrap_err();
-    assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert!(error.message.contains("claude-code") && error.message.contains("codex"));
 }
 
 /// The pending operation answers from the seam's own home: on the

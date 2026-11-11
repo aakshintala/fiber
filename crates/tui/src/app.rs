@@ -16,7 +16,7 @@ use contract::events::{
     TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
+use contract::{CommandId, Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value};
@@ -104,7 +104,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
-pub(crate) use outbox::{Kind, Link, Phase, history_args, session_line};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, hub_line, session_line};
 pub(crate) use select::SurfaceId;
 pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
@@ -157,6 +157,17 @@ pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
 /// up (`docs/permissions.md`, "Setting up the notes").
 const FIRST_BLOCK_NOTICE: &str = "The reviewer blocked a call while both layers of the notes are empty. Set them up with the reviewer-setup skill: run /reviewer-setup.";
 
+/// A hub command line with its command id carried alongside: the loop
+/// sends the line and settles a failed write by the carried id, never
+/// by parsing the id back out of the line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sent {
+    /// The command's id, as the hub answers it as `command_id`.
+    pub(crate) id: CommandId,
+    /// The line as written, with the same id under `id`.
+    pub(crate) line: String,
+}
+
 /// What a key does.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Effect {
@@ -164,10 +175,13 @@ pub(crate) enum Effect {
     None,
     /// Send these command lines to the hub.
     Send(Vec<String>),
+    /// Send these hub command lines to the hub, settling a failed
+    /// write by each carried id.
+    SendTracked(Vec<Sent>),
     /// Quit the terminal.
     Quit,
-    /// Send these command lines, then quit.
-    Exit(Vec<String>),
+    /// Send these hub command lines, then quit.
+    ExitTracked(Vec<Sent>),
     /// Start the `@` panel's search worker on a listing of the workspace's
     /// files, searching for an empty query at the current generation.
     ListFiles,
@@ -579,6 +593,9 @@ impl App {
         // A new session's images start over: a late answer or viewer
         // completion from the last one is dropped.
         self.forget_images();
+        // Attachment changes the halves the TUI commands gate on:
+        // refresh their eligibility before anything re-queries.
+        self.refresh_tui_commands();
     }
 
     /// Hands one key to the surfaces on top, topmost first
@@ -780,7 +797,11 @@ impl App {
             },
         };
         lines.extend(self.home_outgoing());
-        lines.extend(self.sessions_outgoing());
+        // The `sessions` snapshot cruises the fold: its id rides
+        // paired, so a failed write settles by the carried id.
+        for sent in self.sessions_outgoing() {
+            lines.push(self.outbox.fold_line(sent));
+        }
         self.reconcile_attention();
         if matches!(&self.overlay, Overlay::Folding { landing: true, .. }) {
             if let Overlay::Folding { landing, .. } = &mut self.overlay {
@@ -1019,34 +1040,71 @@ impl App {
 
     /// Handles the route without settling; the caller owns the layout pass.
     pub(crate) fn write_failed_inner(&mut self, unsent: &[String]) {
+        // A fold-cruising hub line settles by the id noted when it was
+        // built: capture the carried ids before the disconnect below
+        // drops their registry entries with their waits. A session line
+        // parses its id as before.
+        let carried: Vec<Option<String>> = unsent
+            .iter()
+            .map(|line| self.outbox.hub_id(line).map(|id| id.0))
+            .collect();
         self.home_unsent(unsent);
         self.disconnected_inner();
-        for line in unsent {
-            if let Some(id) = serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
-            {
-                if self.clear_lost(&id) {
-                    continue;
-                }
-                if self.outbox.is_kept(&id) {
-                    continue;
-                }
-                self.change_workspace_dropped(&id);
-                // A lost line settles a model, reply, steer or shell
-                // wait with its entry: those register at queue time, so
-                // the entry the failure pops is theirs. A find, commands
-                // or offered-file wait has no entry to pop, so its own
-                // exits settle it instead.
-                if matches!(
-                    self.outbox.waiting(&id),
-                    Some(Waiting::Model | Waiting::Reply | Waiting::Steer | Waiting::Shell)
-                ) {
-                    self.outbox.settled(&id);
-                }
-                self.fail(&id);
+        for (line, id) in unsent.iter().zip(carried) {
+            if let Some(id) = id.or_else(|| {
+                serde_json::from_str::<Value>(line)
+                    .ok()
+                    .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+            }) {
+                self.write_failed_id(&id);
             }
         }
+    }
+
+    /// Test entry point for a failed tracked write: applies it as its
+    /// own input and settles once, as the untracked test entry does.
+    #[cfg(test)]
+    pub(crate) fn write_failed_tracked(&mut self, unsent: &[Sent]) {
+        self.write_failed_tracked_inner(unsent);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    /// The same settlement as the untracked path, keyed by the carried
+    /// id, never parsed: a tampered line id cannot mis-settle.
+    pub(crate) fn write_failed_tracked_inner(&mut self, unsent: &[Sent]) {
+        let ids: Vec<String> = unsent.iter().map(|sent| sent.id.0.clone()).collect();
+        self.home_unsent_tracked(unsent);
+        self.disconnected_inner();
+        for id in &ids {
+            self.write_failed_id(id);
+        }
+    }
+
+    /// Settles one unwritten command by its id: a lost line clears the
+    /// clear wait, skips a kept line, drops a workspace change and fails
+    /// the pending entry, settling a model, reply, steer or shell wait
+    /// with its entry.
+    fn write_failed_id(&mut self, id: &str) {
+        if self.clear_lost(id) {
+            return;
+        }
+        if self.outbox.is_kept(id) {
+            return;
+        }
+        self.change_workspace_dropped(id);
+        // A lost line settles a model, reply, steer or shell
+        // wait with its entry: those register at queue time, so
+        // the entry the failure pops is theirs. A find, commands
+        // or offered-file wait has no entry to pop, so its own
+        // exits settle it instead.
+        if matches!(
+            self.outbox.waiting(id),
+            Some(Waiting::Model | Waiting::Reply | Waiting::Steer | Waiting::Shell)
+        ) {
+            self.outbox.settled(id);
+        }
+        self.fail(id);
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
@@ -1558,6 +1616,9 @@ impl App {
             }
         }
         self.handle.set(renderer);
+        // A new renderer brings new TUI commands: refresh the `/` list
+        // from it, covering both install paths.
+        self.refresh_tui_commands();
     }
 
     /// Installs once, then invalidates every live displayed or folding cache.
@@ -1640,7 +1701,14 @@ impl App {
         match hub.kind() {
             HubEventKind::HubHello if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.hub_hello_version(&hub.payload);
-                let mut lines = std::mem::take(&mut self.outbox.held);
+                // Held lines carry their ids into the fold: each is
+                // paired in the registry once here, with the line as
+                // flushed, so a failed flush settles by the carried id.
+                let mut lines = Vec::new();
+                for sent in std::mem::take(&mut self.outbox.held) {
+                    self.outbox.note_hub_sent(&sent.id, &sent.line);
+                    lines.push(sent.line);
+                }
                 lines.extend(self.reconnected());
                 self.outbox.link = Link::Up;
                 lines
@@ -2059,7 +2127,7 @@ impl App {
         };
         if let Some((Kind::Import(source), _)) = entry.as_ref() {
             let opened = accepted.is_some_and(|answer| {
-                self.import_answered(source.arg().map(str::to_owned), answer)
+                self.import_answered(source.map(|s| s.name()).map(str::to_owned), answer)
             });
             if !opened {
                 self.notices
@@ -2269,6 +2337,7 @@ impl App {
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
@@ -2379,6 +2448,7 @@ impl App {
                 | EventKind::ShellCommandDelta
                 | EventKind::DirectoryAdded
                 | EventKind::SessionNamed
+                | EventKind::Archived
                 | EventKind::Clients
                 | EventKind::SessionStatus
                 | EventKind::ContextAdded
@@ -2563,8 +2633,24 @@ impl App {
             // list (`docs/events.md`, "`extensions_loaded`"). A turn
             // start may change the runnable set, so `turn_started` asks
             // too (`docs/invocation.md`, "What each command does").
-            EventKind::Reloaded | EventKind::ExtensionsLoaded | EventKind::TurnStarted => {
+            // `docs/tui.md`, "When two extensions want one slot": the
+            // conflict notice comes once per contender set until
+            // `/reload`, so a reload clears the dedupe before re-merging.
+            EventKind::Reloaded => {
                 self.record_extensions(envelope);
+                self.completion.conflict_noticed.clear();
+                // The halves changed under the installed renderer:
+                // refresh TUI eligibility before re-querying the session.
+                self.refresh_tui_commands();
+                if self.outbox.is_up() {
+                    send.push(self.ask_commands(&envelope.session_id));
+                }
+            }
+            EventKind::ExtensionsLoaded | EventKind::TurnStarted => {
+                self.record_extensions(envelope);
+                // The halves changed under the installed renderer:
+                // refresh TUI eligibility before re-querying the session.
+                self.refresh_tui_commands();
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
@@ -2603,6 +2689,7 @@ impl App {
             | EventKind::TurnCompleted
             | EventKind::SteeringApplied
             | EventKind::DirectoryAdded
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded
@@ -2765,6 +2852,7 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded

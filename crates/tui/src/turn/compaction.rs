@@ -221,6 +221,7 @@ impl Band {
                         RowText {
                             tail: line.pad,
                             links: line.links.clone(),
+                            clicks: line.clicks.clone(),
                             spin: writing.then_some(0),
                             anim: line.anim.clone(),
                             ..RowText::plain()
@@ -490,6 +491,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded

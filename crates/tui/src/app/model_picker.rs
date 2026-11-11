@@ -14,6 +14,7 @@ use crate::swapped::{Spot, about};
 use contract::ErrorCode;
 use contract::ThinkingLevel;
 use contract::commands::Command;
+use contract::commands::hub::Start;
 
 impl App {
     /// Folds a model-list read's answer: the catalogue's notices show
@@ -359,45 +360,33 @@ impl App {
     /// holds canonical keys, as `main` hands them, so each comparison is
     /// one plain string: `model`, and the choice's canonical thinking
     /// key.
-    pub(in crate::app) fn with_start_model(&mut self, args: &mut serde_json::Value) {
+    pub(in crate::app) fn with_start_model(&mut self, args: &mut Start) {
         let Some(choice) = self.model_picker.start_model.as_ref() else {
             return;
         };
         let (model, override_text) = super::super::model_picker::start_args(choice);
         let thinking_key = canonical_thinking_key(&choice.reference);
-        let merged: Vec<serde_json::Value> = args
-            .get("overrides")
-            .and_then(serde_json::Value::as_array)
-            .map(|overrides| {
-                overrides
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .filter(|override_text| {
-                        // The choice names the model, so the layer's
-                        // `model=` never stands beside it; its
-                        // thinking key stands only without a chosen
-                        // level.
-                        let key = override_text
-                            .split_once('=')
-                            .map_or(*override_text, |(key, _)| key);
-                        key != "model" && (choice.level.is_none() || key != thinking_key)
-                    })
-                    .map(|override_text| serde_json::Value::String(override_text.to_owned()))
-                    .collect()
+        let mut merged: Vec<String> = args
+            .overrides
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|override_text| {
+                // The choice names the model, so the layer's
+                // `model=` never stands beside it; its
+                // thinking key stands only without a chosen
+                // level.
+                let key = override_text
+                    .split_once('=')
+                    .map_or(override_text.as_str(), |(key, _)| key);
+                key != "model" && (choice.level.is_none() || key != thinking_key)
             })
-            .unwrap_or_default();
-        let mut merged = merged;
+            .collect();
         if let Some(override_text) = override_text {
-            merged.push(serde_json::Value::String(override_text));
+            merged.push(override_text);
         }
-        if let Some(object) = args.as_object_mut() {
-            object.insert("model".to_owned(), serde_json::Value::String(model));
-            if merged.is_empty() {
-                object.remove("overrides");
-            } else {
-                object.insert("overrides".to_owned(), serde_json::Value::Array(merged));
-            }
-        }
+        args.model = Some(model);
+        args.overrides = (!merged.is_empty()).then_some(merged);
     }
 
     /// Whether a turn runs on screen: attached and busy, or a folded

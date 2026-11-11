@@ -22,6 +22,7 @@ use crate::tool_util::{cancelled_before, errored};
 
 mod background;
 pub(crate) mod hosted;
+pub(crate) mod restored;
 
 mod command;
 mod detached;
@@ -607,6 +608,7 @@ impl Shell {
         let limit: Option<Limit> = parsed.timeout_ms.map(|ms| Limit {
             ms,
             monitor: parsed.mode == Mode::Monitor,
+            has_pipe: parsed.command.contains('|'),
         });
         let spill = self.artifacts.clone().map(|dir| spill::Config {
             dir,
@@ -821,6 +823,9 @@ pub(crate) struct Limit {
     pub(crate) ms: u64,
     /// The limit is a monitor's `timeout_ms`.
     pub(crate) monitor: bool,
+    /// The command text holds a `|`: a pipeline stage may hold its output
+    /// until it exits, which the stop then loses.
+    pub(crate) has_pipe: bool,
 }
 
 impl Limit {
@@ -829,7 +834,7 @@ impl Limit {
         if self.monitor {
             deadline_line(self.ms)
         } else {
-            timeout_line(self.ms)
+            timeout_line(self.ms, self.has_pipe)
         }
     }
 
@@ -838,7 +843,10 @@ impl Limit {
         if self.monitor {
             ShellError::DeadlinePassed { ms: self.ms }
         } else {
-            ShellError::TimedOut { ms: self.ms }
+            ShellError::TimedOut {
+                ms: self.ms,
+                has_pipe: self.has_pipe,
+            }
         }
     }
 }
@@ -1276,8 +1284,15 @@ pub(crate) fn killed_line(name: &str) -> String {
     format!("Killed by {name}.")
 }
 
-pub(crate) fn timeout_line(timeout_ms: u64) -> String {
-    format!("Timed out after {timeout_ms} ms; Fiber stopped the whole process group.")
+pub(crate) fn timeout_line(timeout_ms: u64, has_pipe: bool) -> String {
+    let line = format!("Timed out after {timeout_ms} ms; Fiber stopped the whole process group.");
+    if has_pipe {
+        format!(
+            "{line} A pipeline stage that prints only when it exits (such as `| tail`) lost its output at the stop; rerun without it, or with `run_in_background`."
+        )
+    } else {
+        line
+    }
 }
 
 /// What a moved job's receipt and kill notice add when the job kept its

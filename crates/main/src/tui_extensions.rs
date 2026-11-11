@@ -113,6 +113,132 @@ fn register_keys(
     }
 }
 
+/// Whether `name` is plain: non-empty with no whitespace, `/` or `:`,
+/// the same rule the session's command rename check reads
+/// (`docs/extensions.md`, "Commands and screens").
+fn is_plain_command(name: &str) -> bool {
+    !name.is_empty()
+        && !name.chars().any(char::is_whitespace)
+        && !name.contains('/')
+        && !name.contains(':')
+}
+
+/// One extension's slash command after renames: its registered name,
+/// its description, and its final name for the shared list.
+struct ProposedCommand {
+    /// The name as registered.
+    registered: String,
+    /// The one-line description, empty when undeclared.
+    description: String,
+    /// The final name after renames.
+    final_name: String,
+    /// Whether a rename set the final name.
+    renamed: bool,
+}
+
+/// Moves one loaded extension's slash commands into the composite: each
+/// malformed registration becomes one `extension_failed` notice and is
+/// skipped. Config renames apply first, a non-plain rename is ignored
+/// with one notice, a built-in final name is skipped with one rejection,
+/// and a rename collision inside one extension keeps the first
+/// registration with one notice naming the dropped registration. Only a
+/// rename resolves a command clash: no slot winner applies to commands
+/// (`docs/extensions.md`, "Commands and screens").
+fn register_commands(
+    composite: &mut Composite,
+    candidate: &Candidate,
+    config: &config::Config,
+    notices: &mut Vec<(String, String)>,
+) {
+    let name = &candidate.manifest.name;
+    let vm = candidate.vm.borrow();
+    for rejection in vm.command_rejections() {
+        notices.push((
+            "extension_failed".into(),
+            format!(
+                "extension {name}: {}; loading skips that registration.",
+                rejection.reason
+            ),
+        ));
+    }
+    let mut proposed = Vec::new();
+    for command in vm.commands() {
+        let key = format!("extensions.\"{name}\".commands.\"{}\"", command.name);
+        let rename = config.text(&key, None);
+        let (final_name, renamed) = match rename {
+            Some(next) => {
+                if is_plain_command(&next) {
+                    (next, true)
+                } else {
+                    notices.push((
+                        "extension_failed".into(),
+                        format!(
+                            "Command rename `{next}` for `{name}` is not a plain name; it is ignored."
+                        ),
+                    ));
+                    (command.name.clone(), false)
+                }
+            }
+            None => (command.name.clone(), false),
+        };
+        proposed.push(ProposedCommand {
+            registered: command.name,
+            description: command.description,
+            final_name,
+            renamed,
+        });
+    }
+    // Unrenamed commands claim their names first; a rename onto a taken
+    // name keeps the first registration: the rename is dropped and the
+    // command keeps its registered name. Registered names are distinct
+    // per extension, so a reverted name is always free.
+    let mut claimed: BTreeSet<String> = BTreeSet::new();
+    for command in proposed.iter() {
+        if !command.renamed {
+            claimed.insert(command.final_name.clone());
+        }
+    }
+    for command in proposed.iter_mut() {
+        if !command.renamed {
+            continue;
+        }
+        if claimed.contains(&command.final_name) {
+            let dropped = command.registered.clone();
+            let final_name = command.final_name.clone();
+            notices.push((
+                "extension_failed".into(),
+                format!(
+                    "extension {name} renames command `{dropped}` onto `{final_name}`, which is taken; loading keeps the first registration."
+                ),
+            ));
+            command.final_name.clone_from(&command.registered);
+            command.renamed = false;
+        }
+        claimed.insert(command.final_name.clone());
+    }
+    for command in &proposed {
+        if contract::commands::BUILT_IN_COMMANDS.contains(&command.final_name.as_str()) {
+            notices.push((
+                "extension_failed".into(),
+                format!(
+                    "extension {name} registers command `{}`, which is a built-in command; loading skips that registration.",
+                    command.final_name
+                ),
+            ));
+            continue;
+        }
+        composite
+            .commands
+            .entry(command.final_name.clone())
+            .or_default()
+            .push(CommandContender {
+                extension: name.clone(),
+                registered: command.registered.clone(),
+                description: command.description.clone(),
+            });
+    }
+}
+
 /// Reports an incompatible extension once per extension, TUI version and
 /// half, with the same text the drawable path gives.
 fn notice_incompatible(
@@ -205,6 +331,69 @@ fn key_winner(composite: &Composite, ctx: &SessionCtx, canonical: &str) -> Optio
             format!(
                 "extensions {} replace {slot}; the built-in stays",
                 names.join(", ")
+            ),
+        ));
+    }
+    None
+}
+
+/// The winning contender for a slash command final: the lone eligible
+/// contender, in load order. Home has no session, so every loaded
+/// winner lists with no compatibility gate, which needs a session; a
+/// session screen gates through the compatible halves. Two or more
+/// eligible contenders share the neither-gets-it rule with one
+/// `command_conflict` notice naming them, worded as the session's
+/// (`docs/extensions.md`, "Commands and screens").
+fn command_winner(
+    composite: &Composite,
+    ctx: &SessionCtx,
+    final_name: &str,
+) -> Option<CommandContender> {
+    let contenders = composite.commands.get(final_name)?;
+    let mut eligible = Vec::new();
+    for contender in contenders {
+        let Some(candidate) = composite.candidates.get(&contender.extension) else {
+            continue;
+        };
+        if candidate.off.get() {
+            continue;
+        }
+        if ctx.session_id.is_none() {
+            eligible.push(contender.clone());
+            continue;
+        }
+        if candidate.compatible(ctx) {
+            eligible.push(contender.clone());
+            continue;
+        }
+        notice_incompatible(
+            composite,
+            &contender.extension,
+            &candidate.manifest.version,
+            candidate.half(ctx),
+        );
+    }
+    if eligible.is_empty() {
+        return None;
+    }
+    if eligible.len() == 1 {
+        return eligible.into_iter().next();
+    }
+    let names: Vec<String> = eligible
+        .iter()
+        .map(|contender| contender.extension.clone())
+        .collect();
+    let key = ConflictNoticeKey {
+        slot: format!("command:{final_name}"),
+        contenders: names.clone(),
+        configured: None,
+    };
+    if composite.conflicts.borrow_mut().insert(key) {
+        composite.pending.borrow_mut().push((
+            "command_conflict".into(),
+            format!(
+                "Two extensions register the command `{final_name}`: {}. Neither gets it; rename one under extensions.\"<name>\".commands.",
+                names.join(" and ")
             ),
         ));
     }
@@ -306,6 +495,7 @@ impl Load for Loader {
                         }
                     }
                     register_keys(&mut composite, &candidate, &person_owned, &mut notices);
+                    register_commands(&mut composite, &candidate, &config, &mut notices);
                     composite
                         .candidates
                         .insert(candidate.manifest.name.clone(), candidate);
@@ -434,6 +624,16 @@ struct KeyContender {
     action: Option<(String, Option<String>)>,
 }
 
+/// One extension's contender for a slash command final: the extension,
+/// its registered name for the VM call, and its description for the
+/// `/` list.
+#[derive(Debug, Clone)]
+struct CommandContender {
+    extension: String,
+    registered: String,
+    description: String,
+}
+
 /// A key slot and extension pair already noticed: hook and person notices
 /// come once per extension and key slot until `/reload`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -453,6 +653,9 @@ struct Composite {
     /// (`key:<canonical>`), in load order: a dormant person-owned binding
     /// contends on, reactivated at once when the person binding lifts.
     keys: BTreeMap<String, Vec<KeyContender>>,
+    /// Slash command contenders by final name, in load order: winners
+    /// plus the conflict set the winner query resolves.
+    commands: BTreeMap<String, Vec<CommandContender>>,
     /// Person-owned key and extension pairs already noticed: load seeds
     /// the pairs it reports, so load and runtime share the once-until-
     /// reload rule.
@@ -758,6 +961,116 @@ impl Renderer for Composite {
                         "hook_failed".into(),
                         format!(
                             "extension {}'s key binding for `{slot}` failed: {error}",
+                            winner.extension
+                        ),
+                    ));
+                }
+                tui::ext::KeyOutcome::NotHandled
+            }
+        }
+    }
+    fn on_click(&self, ctx: &SessionCtx, slot: &str, id: &str) -> tui::ext::KeyOutcome {
+        // The winner and compatibility gate are the drawable path's:
+        // a suppressed or absent slot keeps the built-in, and an inert
+        // session never reaches the VM. Home has no session, so the
+        // handler runs with the field omitted.
+        let SlotSelection::Draw { extension } = self.fills_for(ctx, slot) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        let Some(candidate) = self.candidates.get(&extension) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        match candidate.vm.borrow_mut().run_click(
+            slot,
+            id,
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+        ) {
+            Ok(true) => tui::ext::KeyOutcome::Handled,
+            Ok(false) => tui::ext::KeyOutcome::NotHandled,
+            Err(extensions::Error::TuiTimeout) => {
+                candidate.off.set(true);
+                self.pending.borrow_mut().push((
+                    "extension_failed".into(),
+                    format!(
+                        "extension {extension} passed its click timeout for `{slot}`; it is switched off until `/reload`"
+                    ),
+                ));
+                tui::ext::KeyOutcome::NotHandled
+            }
+            Err(extensions::Error::TuiOff) => tui::ext::KeyOutcome::NotHandled,
+            Err(error) => {
+                // Key slots carry the `key:` prefix a slot name cannot
+                // take, so clicks share the hook-failure set with no
+                // collision: one notice per extension and slot.
+                let seen = KeyNoticeKey {
+                    slot: slot.to_owned(),
+                    extension: extension.clone(),
+                };
+                if self.key_hooks.borrow_mut().insert(seen) {
+                    self.pending.borrow_mut().push((
+                        "hook_failed".into(),
+                        format!(
+                            "extension {extension}'s click handler for `{slot}` failed: {error}"
+                        ),
+                    ));
+                }
+                tui::ext::KeyOutcome::NotHandled
+            }
+        }
+    }
+    fn tui_commands(&self, ctx: &SessionCtx) -> Vec<tui::ext::TuiCommand> {
+        let mut out = Vec::new();
+        for final_name in self.commands.keys() {
+            let Some(winner) = command_winner(self, ctx, final_name) else {
+                continue;
+            };
+            out.push(tui::ext::TuiCommand {
+                name: final_name.clone(),
+                description: winner.description.clone(),
+                extension: winner.extension.clone(),
+            });
+        }
+        out
+    }
+    fn run_tui_command(&self, ctx: &SessionCtx, name: &str, args: &str) -> tui::ext::KeyOutcome {
+        let Some(winner) = command_winner(self, ctx, name) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        let Some(candidate) = self.candidates.get(&winner.extension) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        // A command name never holds a colon, so the `command:` prefix
+        // shares the hook-failure set with no collision: one notice per
+        // extension and command.
+        let slot = format!("command:{name}");
+        match candidate.vm.borrow_mut().run_command(
+            &winner.registered,
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+            args,
+        ) {
+            Ok(()) => tui::ext::KeyOutcome::Handled,
+            Err(extensions::Error::TuiTimeout) => {
+                candidate.off.set(true);
+                self.pending.borrow_mut().push((
+                    "extension_failed".into(),
+                    format!(
+                        "extension {} passed its command timeout for `{slot}`; it is switched off until `/reload`",
+                        winner.extension
+                    ),
+                ));
+                tui::ext::KeyOutcome::NotHandled
+            }
+            Err(extensions::Error::TuiOff) => tui::ext::KeyOutcome::NotHandled,
+            Err(error) => {
+                let seen = KeyNoticeKey {
+                    slot: slot.clone(),
+                    extension: winner.extension.clone(),
+                };
+                if self.key_hooks.borrow_mut().insert(seen) {
+                    self.pending.borrow_mut().push((
+                        "hook_failed".into(),
+                        format!(
+                            "extension {}'s command `{name}` with args `{args}` failed: {error}",
                             winner.extension
                         ),
                     ));

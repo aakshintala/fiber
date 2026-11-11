@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::diag::{Op, Timing, TimingName};
 use contract::events::{EventKind, FiberExited};
-use contract::jobs::Stop;
+use contract::jobs::{EndWorktree, FinishWorktree, Stop};
 use contract::shapes::Usage;
 use contract::{Envelope, JobId, PreSessionExit, SessionId};
 use rustix::process::Signal;
@@ -54,6 +54,7 @@ fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
         | Kind::ShellCommandDelta
         | Kind::DirectoryAdded
         | Kind::SessionNamed
+        | Kind::Archived
         | Kind::Clients
         | Kind::SessionStatus
         | Kind::ContextAdded
@@ -138,19 +139,6 @@ pub enum Watched {
     Closed,
 }
 
-/// The worktree a run ends, or only reports when resuming.
-#[derive(Debug, Clone)]
-pub struct EndWorktree {
-    /// The worktree directory.
-    pub path: PathBuf,
-    /// The recorded branch.
-    pub branch: String,
-    /// The initial commit, absent on resumed runs.
-    pub base: Option<String>,
-    /// Whether this runner owns removal.
-    pub remove: bool,
-}
-
 /// A shared, idempotent release of the parent's worktree lock.
 #[derive(Clone)]
 pub struct WorktreeGuard(Arc<WorktreeHold>);
@@ -189,10 +177,6 @@ pub type CreateWorktree = Arc<
         + Send
         + Sync,
 >;
-
-/// Inspects, optionally removes, and reports a worktree at run end.
-pub type FinishWorktree =
-    Arc<dyn Fn(EndWorktree) -> contract::events::FinishedWorktree + Send + Sync>;
 
 pub(crate) struct WorktreeRun {
     pub(crate) end: EndWorktree,

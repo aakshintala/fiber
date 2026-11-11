@@ -22,6 +22,7 @@ mod delegates;
 mod hub_command;
 mod keeper;
 mod keeper_child;
+mod keeper_restore;
 mod late_emit;
 mod launch;
 mod mcp_servers;
@@ -218,7 +219,16 @@ fn run() -> i32 {
             hub_command::run(command, &process)
         }
         cli::Invocation::Run(Some(cli::Commands::Sessions(args)), _) => match args.command {
-            None => sessions_list(args.all, args.json, args.hub.as_deref(), &process),
+            None => sessions_list(
+                args.all,
+                args.json,
+                args.archived,
+                args.hub.as_deref(),
+                &process,
+            ),
+            Some(cli::SessionsCommands::Archive { hub, id }) => {
+                sessions_archive(&id, hub.as_deref(), &process)
+            }
             Some(cli::SessionsCommands::Delete {
                 hub,
                 cascade,
@@ -1376,13 +1386,33 @@ fn hub_target(named: Option<&str>) -> Result<(PathBuf, doors::hub::Target), Fail
 }
 
 /// `fiber sessions`: the hub it reaches is started when none runs.
-fn sessions_list(all: bool, json: bool, named: Option<&str>, process: &startup::Process) -> i32 {
+fn sessions_list(
+    all: bool,
+    json: bool,
+    archived: bool,
+    named: Option<&str>,
+    process: &startup::Process,
+) -> i32 {
     let (home, target) = match hub_target(named) {
         Ok(target) => target,
         Err(error) => return fail(error),
     };
     let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
-    ::cli::sessions_list(all || target.is_listed(), json, &mut connect)
+    ::cli::sessions_list(all || target.is_listed(), json, archived, &mut connect)
+}
+
+/// `fiber sessions archive`: the hub it reaches is started when none runs.
+fn sessions_archive(id: &str, named: Option<&str>, process: &startup::Process) -> i32 {
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
+    };
+    let hub = match &target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
+    };
+    let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
+    ::cli::archive(id, hub, &mut connect)
 }
 
 /// `fiber sessions delete`: the hub it reaches is started when none runs.

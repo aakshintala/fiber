@@ -593,6 +593,7 @@ impl Fold {
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::DirectoryAdded(_)
+            | Event::Archived(_)
             | Event::CommandRejected(_) => {}
         }
     }
@@ -1060,6 +1061,7 @@ impl Observer {
             | EventKind::ShellCommandDelta
             | EventKind::DirectoryAdded
             | EventKind::SessionNamed
+            | EventKind::Archived
             | EventKind::Clients
             | EventKind::SessionStatus
             | EventKind::ContextAdded

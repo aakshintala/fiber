@@ -1,13 +1,17 @@
 //! Sweep core, parameterised over `Arc<dyn Provider>`: set-line parse,
 //! `Prepared` + `Reviewed` rebuild, one entry driven through
 //! `Loop::review`, the outcome record, the miss/false-block fold, and the
-//! rate table. No provider construction, no config or env reads, no network
-//! in code: the caller injects the provider and the clock.
+//! rate table, plus the shared reviewer-provider constructor the example
+//! and the pin test build through the session's Lua load. No config or env
+//! reads beside that constructor's: the caller injects the clock.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::events::{
@@ -402,11 +406,12 @@ pub(crate) fn read_set_file(path: &Path) -> Result<Vec<Entry>, String> {
 /// (`crates/loop/tests/support/review.rs`): only a directory carrying one
 /// of these names converts, so an untracked directory placed beside them is
 /// rejected. The parity test pins the port to the loop list.
-pub(crate) const COMMITTED_DIRS: [&str; 16] = [
+pub(crate) const COMMITTED_DIRS: [&str; 22] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
     "control-4-swapped-push-target",
+    "control-5-approval-claim",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",
@@ -414,11 +419,16 @@ pub(crate) const COMMITTED_DIRS: [&str; 16] = [
     "field-6-restart-it-kill-and-start",
     "field-7-tkt-build-from-gate",
     "shape-1-verbatim-retype",
+    "shape-10-posts-undecidable-decision",
+    "shape-11-state-change-beyond-brief",
     "shape-2-effect-named-by-reply",
     "shape-3-prerequisite",
     "shape-4-conceded-then-new-demand",
     "shape-5-task-names-action",
     "shape-6-reason-names-different-call",
+    "shape-7-send-quotes-earlier-block",
+    "shape-8-issue-comment-asks-ruling",
+    "shape-9-send-quotes-reviewer-refusal",
 ];
 
 /// The committed `review_person_input/` session name `--dirs` accepts
@@ -889,6 +899,7 @@ fn fold_index(dir: &Path, chain: &[contract::Envelope]) -> Result<FoldIndex, Str
             | Event::JobCompleted(_)
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
+            | Event::Archived(_)
             | Event::CommandRejected(_) => {}
         }
     }
@@ -2085,4 +2096,118 @@ pub(crate) fn render_run_detail(rows: &[Sourced], outcomes: &[Outcome], runs: u3
         }
     }
     detail
+}
+
+/// Runs a credential `command` source with `timeout`: kills the child and
+/// reports a timeout when it overruns, so a hung helper cannot hang the
+/// sweep.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "person-run credential runner: bounds a hung helper on the wall clock; tests never run it"
+)]
+pub(crate) fn run_command(
+    command: &mut Command,
+    timeout: Duration,
+    clock: &Arc<dyn Clock>,
+) -> io::Result<std::process::Output> {
+    command.stdin(Stdio::null()).stderr(Stdio::null());
+    let mut child = command.spawn()?;
+    let start = clock.now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if clock.now().saturating_duration_since(start) >= timeout {
+            child.kill()?;
+            child.wait()?;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "review_sweep: the credential command timed out",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Builds the reviewer provider and its resolved model metadata for one
+/// `--models` entry through the public `routing::reviewer::{reference,
+/// model, choose}` seam. The `--models` entry rides `reviewer.model`, so
+/// `reference` returns it before reading the session; the session model
+/// only feeds the fallback that never runs. Resolution failures name
+/// `reviewer.model`.
+pub(crate) fn reviewer_provider(
+    home: &Path,
+    workspace: &Path,
+    bare: &str,
+    clock: &Arc<dyn Clock>,
+) -> Result<(Arc<dyn contract::provider::Provider>, SweepModel), String> {
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: config::ProjectKey::new("review-sweep").map_err(|error| error.to_string())?,
+        overrides: vec![format!("reviewer.model={bare}")],
+    })
+    .map_err(|error| error.to_string())?;
+    let (mut providers, _notices) =
+        extensions::Providers::load(home).map_err(|error| error.to_string())?;
+    // The session's extensions load exactly like a session start, so a
+    // subscription credential's signing headers ride the sweep's requests
+    // (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    let loaded = extensions::SessionExtensions::load(
+        home,
+        &config,
+        Arc::clone(clock),
+        Arc::new(tools::PathLocks::new()),
+        None,
+    );
+    let run = |command: &mut Command, timeout: Duration| run_command(command, timeout, clock);
+    let lookup = cli::placeholder_lookup(home, &providers, clock.as_ref());
+    routing::lua_providers::add_lua(&loaded, &mut providers, &config, &run, &lookup)
+        .map_err(|error| format!("review_sweep: reviewer setup: {}", error.message))?;
+    // The session is the candidate itself: `reviewer.model` is set, so the
+    // lookup below returns before reading it.
+    let session = providers
+        .resolve(bare)
+        .map_err(|error| format!("review_sweep: reviewer.model {bare}: {error}"))?;
+    let here = routing::connect::Here {
+        workspace: workspace.to_path_buf(),
+        clock: Arc::clone(clock),
+        cache_diagnostics: false,
+        databricks_request_tags: None,
+    };
+    let mut lookup =
+        |data: &config::ProviderData| -> Result<(String, routing::lua_providers::Access), Failure> {
+            let label = config.credentials().credential_label(data);
+            let lua = providers.lua(&data.name);
+            let (key, signer) =
+                routing::lua_providers::session_credential(lua, data, &label, || {
+                    let clock = Arc::clone(clock);
+                    config
+                        .credentials()
+                        .credential_with(data, &label, &|command, timeout| {
+                            run_command(command, timeout, &clock)
+                        })
+                        .map(|read| read.secret)
+                        .map_err(|error| Failure {
+                            code: error.code(),
+                            message: error.to_string(),
+                            retry_after_ms: None,
+                            provider: None,
+                        })
+                })?;
+            Ok((
+                label,
+                routing::lua_providers::Access::new(lua, (key, signer)),
+            ))
+        };
+    let chosen = routing::reviewer::choose(&providers, &config, &session, &here, &mut lookup, None)
+        .map_err(|error| format!("review_sweep: reviewer.model {bare}: {}", error.message))?
+        .ok_or_else(|| format!("review_sweep: reviewer.model {bare} names no reviewer"))?;
+    let model = SweepModel {
+        reference: chosen.model.reference(),
+        cost: chosen.model.model.cost.clone(),
+        subscription: chosen.model.model.subscription,
+        thinking_levels: chosen.model.model.thinking_levels.clone(),
+    };
+    Ok((chosen.provider, model))
 }

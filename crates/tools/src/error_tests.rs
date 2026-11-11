@@ -1362,9 +1362,22 @@ fn a_stopped_command_keeps_its_closing_line() {
         error.to_string(),
         "The command was stopped, and Fiber cannot tell whether it completed."
     );
-    let error = ShellError::TimedOut { ms: 1000 };
-    assert_eq!(error.code(), ErrorCode::Timeout);
-    assert_eq!(error.to_string(), crate::shell::timeout_line(1000));
+    for has_pipe in [false, true] {
+        let error = ShellError::TimedOut { ms: 1000, has_pipe };
+        assert_eq!(error.code(), ErrorCode::Timeout);
+        assert_eq!(
+            error.to_string(),
+            crate::shell::timeout_line(1000, has_pipe)
+        );
+    }
+    assert_eq!(
+        ShellError::TimedOut {
+            ms: 1000,
+            has_pipe: false,
+        }
+        .to_string(),
+        "Timed out after 1000 ms; Fiber stopped the whole process group."
+    );
     let error = ShellError::DeadlinePassed { ms: 1000 };
     assert_eq!(error.code(), ErrorCode::Timeout);
     assert_eq!(error.to_string(), crate::shell::deadline_line(1000));
@@ -1383,8 +1396,14 @@ fn a_stopped_command_keeps_its_closing_line() {
 #[test]
 fn a_limit_stop_says_what_its_line_says() {
     for monitor in [false, true] {
-        let limit = crate::shell::Limit { ms: 1000, monitor };
-        assert_eq!(limit.stopped().to_string(), limit.line());
+        for has_pipe in [false, true] {
+            let limit = crate::shell::Limit {
+                ms: 1000,
+                monitor,
+                has_pipe,
+            };
+            assert_eq!(limit.stopped().to_string(), limit.line());
+        }
     }
 }
 

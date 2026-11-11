@@ -89,7 +89,7 @@ pub struct Span {
 // at registration, while the VM stores the validated raw value.
 const PRELUDE: &str = r#"
 local create, loading, valid = ...
-local slots, violations, key_bindings, key_rejections = {}, {}, {}, {}
+local slots, violations, key_bindings, key_rejections, commands, command_rejections = {}, {}, {}, {}, {}, {}
 local seen_keys = {}
 local resume, pack, unpack = coroutine.resume, table.pack, table.unpack
 
@@ -150,7 +150,24 @@ fiber = {
         end
       end
     end
-    slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate }
+    -- A click handler is optional, and has its own timeout: it answers
+    -- whether a click on a span carrying a `click` id was handled
+    -- (`docs/extensions.md`, "Commands and screens").
+    if spec.on_click ~= nil then
+      if type(spec.on_click) ~= "table" then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click` must be a table with `timeout` and `run`")
+      end
+      if spec.on_click.timeout == nil then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click` is missing `timeout`")
+      end
+      if math.type(spec.on_click.timeout) ~= "integer" or spec.on_click.timeout <= 0 then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click.timeout` must be a whole number of milliseconds above 0")
+      end
+      if type(spec.on_click.run) ~= "function" then
+        refuse("fiber.slot: `" .. shown .. "`: `on_click.run` must be a function")
+      end
+    end
+    slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate, on_click = spec.on_click }
   end,
   -- A malformed binding records one rejection and skips that
   -- registration, leaving the extension loaded; the adapter reports
@@ -230,17 +247,76 @@ fiber = {
       key_bindings[#key_bindings + 1] = { raw = name, action = action, variant = spec.variant }
     end
   end,
+  -- A malformed command records one rejection and skips that
+  -- registration, leaving the extension loaded; the adapter reports
+  -- each rejection with its named field. A second registration of one
+  -- name keeps the last, as one table assignment overwrites the last
+  -- (`docs/extensions.md`, "Commands and screens").
+  command = function(name, spec)
+    if not loading() then
+      error("fiber.command: registers only while the extension loads", 2)
+    end
+    local shown = tostring(name)
+    local function reject(why)
+      command_rejections[#command_rejections + 1] = {
+        reason = "fiber.command: `" .. shown .. "` command not registered: " .. why,
+      }
+    end
+    if type(name) ~= "string" then
+      reject("the name must be a string")
+      return
+    end
+    if name == "" or name:find("%s") or name:find("/") or name:find(":") then
+      reject("names are plain: `" .. shown .. "` is empty or holds whitespace, `/` or `:`")
+      return
+    end
+    if type(spec) ~= "table" then
+      reject("it takes a table of `timeout`, `run` and `description`")
+      return
+    end
+    if spec.timeout == nil then
+      reject("missing `timeout`")
+      return
+    end
+    if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+      reject("`timeout` must be a whole number of milliseconds above 0")
+      return
+    end
+    if type(spec.run) ~= "function" then
+      reject("`run` must be a function")
+      return
+    end
+    local description = spec.description
+    if description == nil then description = "" end
+    if type(description) ~= "string" or description:find("\n") then
+      reject("`description` must be a single-line string")
+      return
+    end
+    commands[name] = { timeout = spec.timeout, run = spec.run, description = description }
+  end,
 }
 
-return slots, violations, key_bindings, key_rejections
+return slots, violations, key_bindings, key_rejections, commands, command_rejections
 "#;
 
-/// A registered slot: its declared timeout, its renderer, and the raw
-/// validated animation interval when the slot animates.
+/// A registered slot: its declared timeout, its renderer, the raw
+/// validated animation interval when the slot animates, and its click
+/// handler with its own declared timeout when the slot handles clicks.
 struct Slot {
     timeout: Duration,
     render: Function,
     animate: Option<Duration>,
+    on_click: Option<ClickReg>,
+}
+
+/// A click handler: its callback with its own declared timeout, separate
+/// from the renderer's, so a slow click answer never spends the draw
+/// budget (`docs/extensions.md`, "Commands and screens").
+struct ClickReg {
+    /// The declared timeout.
+    timeout: Duration,
+    /// The callback.
+    run: Function,
 }
 
 /// What an animated call returned: its lines, and whether the item keeps
@@ -291,6 +367,35 @@ pub struct KeyRejection {
     pub reason: String,
 }
 
+/// One slash command, in name order for a deterministic merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiCommand {
+    /// The command name as registered, spelling kept.
+    pub name: String,
+    /// The one-line description, empty when undeclared.
+    pub description: String,
+}
+
+/// One skipped `fiber.command` registration: its reason names the
+/// command and the offending field, so the adapter reports it with one
+/// notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandRejection {
+    /// What was wrong, naming the command and the offending field.
+    pub reason: String,
+}
+
+/// A registered command: its callback with its declared timeout and
+/// its one-line description.
+struct CommandReg {
+    /// The declared timeout.
+    timeout: Duration,
+    /// The callback.
+    run: Function,
+    /// The one-line description, empty when undeclared.
+    description: String,
+}
+
 /// A registered key binding: a `run` binding with its callback, or an
 /// action binding. Separate variants so a `run` always holds its callback
 /// and an action never does (`docs/code-quality.md`, "Types").
@@ -328,6 +433,11 @@ pub struct TuiVm {
     keys: Vec<KeyReg>,
     /// The skipped registrations, taken once by the loader.
     key_rejections: Cell<Vec<KeyRejection>>,
+    /// The slash commands by name: a second registration of one name
+    /// kept the last, so the map holds the winner.
+    commands: BTreeMap<String, CommandReg>,
+    /// The skipped command registrations, taken once by the loader.
+    command_rejections: Cell<Vec<CommandRejection>>,
     /// Set by a timeout: the VM answers nothing until the caller drops it
     /// (`docs/tui.md`, "When an extension fails").
     off: bool,
@@ -416,7 +526,14 @@ impl TuiVm {
         let valid = lua
             .create_function(|_, name: String| Ok(slot_name_ok(&name)))
             .map_err(lua_error)?;
-        let (registered, violations, bound, rejected): (Table, Table, Table, Table) = lua
+        let (registered, violations, bound, rejected, commanded, command_rejected): (
+            Table,
+            Table,
+            Table,
+            Table,
+            Table,
+            Table,
+        ) = lua
             .load(PRELUDE)
             .set_name("=prelude")
             .call((create, is_loading, valid))
@@ -477,6 +594,31 @@ impl TuiVm {
                 reason: entry.raw_get("reason").map_err(lua_error)?,
             });
         }
+        let mut skipped_commands = Vec::new();
+        for number in 1..=command_rejected.raw_len() {
+            let entry: Table = command_rejected.raw_get(number).map_err(lua_error)?;
+            skipped_commands.push(CommandRejection {
+                reason: entry.raw_get("reason").map_err(lua_error)?,
+            });
+        }
+        let mut commands = BTreeMap::new();
+        for entry in commanded.pairs::<String, Table>() {
+            let (name, spec) = entry.map_err(lua_error)?;
+            let timeout: mlua::Integer = spec.raw_get("timeout").map_err(lua_error)?;
+            let timeout = u64::try_from(timeout)
+                .map(Duration::from_millis)
+                .map_err(|_| shape("`timeout` must be a whole number above 0"))?;
+            let run: Function = spec.raw_get("run").map_err(lua_error)?;
+            let description: String = spec.raw_get("description").map_err(lua_error)?;
+            commands.insert(
+                name,
+                CommandReg {
+                    timeout,
+                    run,
+                    description,
+                },
+            );
+        }
         let mut slots = BTreeMap::new();
         for entry in registered.pairs::<String, Table>() {
             let (slot, spec) = entry.map_err(lua_error)?;
@@ -492,12 +634,24 @@ impl TuiVm {
                         .map_err(|_| shape("`animate.interval_ms` must be a whole number above 0"))
                 })
                 .transpose()?;
+            let on_click: Option<Table> = spec.raw_get("on_click").map_err(lua_error)?;
+            let on_click: Option<ClickReg> = on_click
+                .map(|table| {
+                    let timeout: mlua::Integer = table.raw_get("timeout").map_err(lua_error)?;
+                    let timeout = u64::try_from(timeout)
+                        .map(Duration::from_millis)
+                        .map_err(|_| shape("`on_click.timeout` must be a whole number above 0"))?;
+                    let run: Function = table.raw_get("run").map_err(lua_error)?;
+                    Ok::<ClickReg, Error>(ClickReg { timeout, run })
+                })
+                .transpose()?;
             slots.insert(
                 slot,
                 Slot {
                     timeout,
                     render,
                     animate,
+                    on_click,
                 },
             );
         }
@@ -509,6 +663,8 @@ impl TuiVm {
             slots,
             keys,
             key_rejections: Cell::new(skipped),
+            commands,
+            command_rejections: Cell::new(skipped_commands),
             off: false,
         })
     }
@@ -555,10 +711,72 @@ impl TuiVm {
         self.key_rejections.take()
     }
 
+    /// The slash commands in name order, so the adapter's merge is
+    /// deterministic.
+    pub fn commands(&self) -> Vec<TuiCommand> {
+        self.commands
+            .iter()
+            .map(|(name, registered)| TuiCommand {
+                name: name.clone(),
+                description: registered.description.clone(),
+            })
+            .collect()
+    }
+
+    /// The skipped `fiber.command` registrations, taken once: the loader
+    /// reports each with one notice. A second call finds none.
+    pub fn command_rejections(&self) -> Vec<CommandRejection> {
+        self.command_rejections.take()
+    }
+
     /// The Lua state, for tests to register host callbacks against.
     #[cfg(test)]
     pub(crate) fn lua(&self) -> &Lua {
         &self.lua
+    }
+
+    // The shared deadline/arm/resume/off/match for key and click
+    // callbacks: the caller looked up the handler and built the arg.
+    fn run_callback(
+        &mut self,
+        run: Function,
+        timeout: Duration,
+        arg: Table,
+        resume_msg: &'static str,
+        shape_msg: &'static str,
+    ) -> Result<bool, Error> {
+        let thread = self.lua.create_thread(run).map_err(lua_error)?;
+        self.deadline.arm(&thread).map_err(lua_error)?;
+        // `None` when the timeout is too large to add to an `Instant`: such
+        // a callback is never cut off.
+        let at = self.clock.now().checked_add(timeout);
+        self.deadline.restore(at);
+        let returned = resume(&self.deadline, &thread, arg, resume_msg);
+        self.deadline.restore(None);
+        // The conversion ran no Lua, but a finish is late when the clock
+        // says so, whichever path it took.
+        let result = if self.deadline.passed() {
+            Err(Error::TuiTimeout)
+        } else {
+            returned
+        };
+        if matches!(result, Err(Error::TuiTimeout)) {
+            self.off = true;
+        }
+        match result? {
+            mlua::Value::Boolean(handled) => Ok(handled),
+            mlua::Value::Nil => Ok(false),
+            mlua::Value::LightUserData(_)
+            | mlua::Value::Integer(_)
+            | mlua::Value::Number(_)
+            | mlua::Value::String(_)
+            | mlua::Value::Table(_)
+            | mlua::Value::Function(_)
+            | mlua::Value::Thread(_)
+            | mlua::Value::UserData(_)
+            | mlua::Value::Error(_)
+            | mlua::Value::Other(_) => Err(shape(shape_msg)),
+        }
     }
 
     /// Runs the `raw` binding's `run` with `session_id`, and returns
@@ -590,43 +808,107 @@ impl TuiVm {
                 Ok(input)
             })
             .map_err(lua_error)?;
-        let thread = self.lua.create_thread(run).map_err(lua_error)?;
-        self.deadline.arm(&thread).map_err(lua_error)?;
-        // `None` when the timeout is too large to add to an `Instant`: such
-        // a callback is never cut off.
-        let at = self.clock.now().checked_add(timeout);
-        self.deadline.restore(at);
-        let returned = resume(
-            &self.deadline,
-            &thread,
+        self.run_callback(
+            run,
+            timeout,
             arg,
             "a key handler makes no host call",
-        );
-        self.deadline.restore(None);
-        // The conversion ran no Lua, but a finish is late when the clock
-        // says so, whichever path it took.
-        let result = if self.deadline.passed() {
-            Err(Error::TuiTimeout)
-        } else {
-            returned
+            "a key handler returns only true, false or nil",
+        )
+    }
+
+    /// Runs the `slot` click handler with the clicked `id` and `session_id`,
+    /// and returns whether it handled the click. Only `true` handles;
+    /// `false` and `nil` do not, and any other value is the existing
+    /// wrong-shape failure. A yielded handler makes no host call, like a
+    /// key handler. A slot with no handler, or an unknown slot, is a
+    /// terminal fallback, not a failure: it answers not-handled with no
+    /// notice (`docs/tui.md`, "When an extension fails").
+    ///
+    /// A home call sends no `session_id` key and Lua reads nil: no previous
+    /// session's identity is reused. A timeout switches the VM off: every
+    /// later call is [`Error::TuiOff`].
+    pub fn run_click(
+        &mut self,
+        slot: &str,
+        id: &str,
+        session_id: Option<&str>,
+    ) -> Result<bool, Error> {
+        if self.off {
+            return Err(Error::TuiOff);
+        }
+        let Some(click) = self
+            .slots
+            .get(slot)
+            .and_then(|registered| registered.on_click.as_ref())
+        else {
+            return Ok(false);
         };
-        if matches!(result, Err(Error::TuiTimeout)) {
-            self.off = true;
+        let (timeout, run) = (click.timeout, click.run.clone());
+        let arg = self
+            .lua
+            .create_table()
+            .and_then(|input| {
+                if let Some(session_id) = session_id {
+                    input.raw_set("session_id", session_id)?;
+                }
+                input.raw_set("click", id)?;
+                Ok(input)
+            })
+            .map_err(lua_error)?;
+        self.run_callback(
+            run,
+            timeout,
+            arg,
+            "a click handler makes no host call",
+            "a click handler returns only true, false or nil",
+        )
+    }
+
+    /// Runs the `name` command with `args` and the session on screen. The
+    /// command receives `{ session_id, args }`, with no `session_id` key
+    /// on home (`docs/extensions.md`, "Commands and screens"). Its return
+    /// value is ignored: `true`, `false` and `nil` pass, and any other
+    /// value is the existing wrong-shape failure. A `run` that yields
+    /// makes no host call, like a key handler. An unknown `name` is a
+    /// stale dispatch, not a failure: it answers done with no notice
+    /// (`docs/tui.md`, "When an extension fails").
+    ///
+    /// A home call sends no `session_id` key and Lua reads nil: no previous
+    /// session's identity is reused. A timeout switches the VM off: every
+    /// later call is [`Error::TuiOff`].
+    pub fn run_command(
+        &mut self,
+        name: &str,
+        session_id: Option<&str>,
+        args: &str,
+    ) -> Result<(), Error> {
+        if self.off {
+            return Err(Error::TuiOff);
         }
-        match result? {
-            mlua::Value::Boolean(handled) => Ok(handled),
-            mlua::Value::Nil => Ok(false),
-            mlua::Value::LightUserData(_)
-            | mlua::Value::Integer(_)
-            | mlua::Value::Number(_)
-            | mlua::Value::String(_)
-            | mlua::Value::Table(_)
-            | mlua::Value::Function(_)
-            | mlua::Value::Thread(_)
-            | mlua::Value::UserData(_)
-            | mlua::Value::Error(_)
-            | mlua::Value::Other(_) => Err(shape("a key handler returns only true, false or nil")),
-        }
+        let Some(registered) = self.commands.get(name) else {
+            return Ok(());
+        };
+        let (timeout, run) = (registered.timeout, registered.run.clone());
+        let arg = self
+            .lua
+            .create_table()
+            .and_then(|input| {
+                if let Some(session_id) = session_id {
+                    input.raw_set("session_id", session_id)?;
+                }
+                input.raw_set("args", args)?;
+                Ok(input)
+            })
+            .map_err(lua_error)?;
+        self.run_callback(
+            run,
+            timeout,
+            arg,
+            "a command handler makes no host call",
+            "a command handler returns only true, false or nil",
+        )
+        .map(|_| ())
     }
 
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,

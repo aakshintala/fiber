@@ -42,15 +42,15 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
     });
     // `\x01` moves to the start of the cursor's line: typing lands
     // before it, not at the draft's start. The cursor keeps the covered
-    // character, so the row reads "Xjz" with `j` in the slab colour on
-    // the text colour.
+    // character, so the row reads "Xjz" with `j` reversed over its own
+    // colours.
     run.write(b"\x01X");
     let grid = run.wait_screen("the line-start edit", |grid| {
         grid.rows.iter().any(|row| row.contains("Xjz"))
             && !grid.rows.iter().any(|row| row.contains("Xqx"))
     });
-    // The covered `j` sits one cell past the `X`: its colours swap
-    // against its neighbour.
+    // The covered `j` sits one cell past the `X`: it keeps its
+    // neighbour's colours and inverts them.
     let (x, y) = grid
         .rows
         .iter()
@@ -66,8 +66,9 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
         .expect("the edited line");
     let (before, covered) = (grid.cell(x, y), grid.cell(x + 1, y));
     assert_eq!(covered.symbol, "j");
-    assert_eq!(covered.fg, before.bg, "the cursor swaps its cell");
-    assert_eq!(covered.bg, before.fg, "the cursor swaps its cell");
+    assert_eq!(covered.fg, before.fg, "the cursor keeps its cell");
+    assert_eq!(covered.bg, before.bg, "the cursor keeps its cell");
+    assert!(covered.inverse, "the cursor inverts its cell");
     assert!(
         !grid.rows.iter().any(|row| row.contains("Xqx")),
         "the start edit left the cursor's line: {}",

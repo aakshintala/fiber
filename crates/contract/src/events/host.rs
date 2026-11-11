@@ -318,7 +318,11 @@ pub struct DelegateFinished {
     /// The extensions whose hooks changed the final message, when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_by: Option<Vec<String>>,
-    /// When isolated.
+    /// When isolated: set on the live finish at run end, and on a settled
+    /// finish at settle time. A settled finish reports a `dirty` read taken
+    /// at settle time, which is later than the live path's and may describe
+    /// a worktree that has since changed or been removed. `None` for
+    /// non-isolated delegates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<FinishedWorktree>,
 }
