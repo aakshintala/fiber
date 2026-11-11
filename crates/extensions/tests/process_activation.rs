@@ -529,6 +529,30 @@ impl contract::extension::HostDelegate for FakeDelegate {
     }
 }
 
+struct PairDelegate(std::sync::atomic::AtomicUsize);
+
+impl contract::extension::HostDelegate for PairDelegate {
+    fn start(
+        &self,
+        _extension: &str,
+        _arguments: &Map<String, Value>,
+        bind: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, contract::shapes::Failure> {
+        let next = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let id = contract::JobId(format!("j_pair_{next}"));
+        bind(&id);
+        Ok(id)
+    }
+
+    fn retain(&self, _loaded: &[String]) -> usize {
+        0
+    }
+
+    fn cancel(&self, jobs: &[contract::JobId]) -> usize {
+        jobs.len()
+    }
+}
+
 /// One command recorded by the fake driver.
 type DriveCall = (String, String, Map<String, Value>);
 
@@ -739,13 +763,15 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     let env = Env::new("fiber-process-host-seal");
     let markers = env.workspace().join("markers");
     std::fs::create_dir_all(&markers).unwrap();
-    env.install_process("svc", &json!({}), &services_plan(&markers));
+    env.install_process("svc", &json!({}), &delegate_pair_plan(&markers));
     let config = env.config_with(&[]);
     let session = env.load_with(&config, ExtensionReason::New, 0);
     let emit = Arc::new(Recorder::default());
     session.emit_to(emit.clone());
     session.model_to(Arc::new(FakeModel));
-    session.delegate_to(Arc::new(FakeDelegate));
+    session.delegate_to(Arc::new(PairDelegate(std::sync::atomic::AtomicUsize::new(
+        0,
+    ))));
     let tool = session
         .tools()
         .into_iter()
@@ -766,9 +792,61 @@ fn process_host_tool_model_delegate_live_and_sealed() {
         "model-says-hi"
     );
     assert_eq!(
-        ack("delegate-ack.json")["payload"]["result"]["value"],
-        "j_delegate"
+        ack("delegate-one.json")["payload"]["result"]["value"],
+        "j_pair_1"
     );
+    assert_eq!(
+        ack("delegate-two.json")["payload"]["result"]["value"],
+        "j_pair_2"
+    );
+
+    let finish = |job: &str, text: &str| {
+        Event::DelegateFinished(contract::events::DelegateFinished {
+            job_id: contract::JobId(job.to_owned()),
+            text: text.to_owned(),
+            artifact: None,
+            artifact_absolute: None,
+            questions: None,
+            usage: contract::shapes::Usage::default(),
+            changed_by: None,
+            worktree: None,
+        })
+    };
+    let completed = |job: &str| {
+        Event::JobCompleted(contract::events::JobCompleted {
+            job_id: contract::JobId(job.to_owned()),
+            status: contract::events::Outcome::Completed,
+            error: None,
+            process: None,
+            output_tail: None,
+            notice: None,
+            changed_by: None,
+            protected_paths: None,
+        })
+    };
+    for (job, text) in [("j_pair_1", "first-result"), ("j_pair_2", "second-result")] {
+        session.deliver(&finish(job, text), None);
+    }
+    session.deliver(&completed("j_pair_2"), None);
+    session.deliver(&completed("j_pair_1"), None);
+    for (handle, job, text) in [
+        ("delegate-call-one", "j_pair_1", "first-result"),
+        ("delegate-call-two", "j_pair_2", "second-result"),
+    ] {
+        let marker = markers.join(format!("{handle}.json"));
+        fakes::wait_until(
+            &format!("the {handle} run callback"),
+            Deadline::after(WAIT),
+            {
+                let marker = marker.clone();
+                move || marker.exists()
+            },
+        );
+        let route = read_json_file(&marker, handle);
+        assert_eq!(route["payload"]["registration"], handle);
+        assert_eq!(route["payload"]["args"][0]["job_id"], job);
+        assert_eq!(route["payload"]["args"][0]["text"], text);
+    }
 
     contract::extension::ExtensionDoor::seal(session.as_ref());
     let second = tool.run(&Map::new(), &cancel, &*emit);
@@ -783,6 +861,73 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     assert_eq!(ack("delegate-ack.json")["payload"]["code"], "closing");
 
     session.finish_processes(&CancelToken::new());
+}
+
+fn delegate_pair_plan(markers: &Path) -> Value {
+    let marker = |name: &str| markers.join(name).to_str().unwrap().to_owned();
+    let mut callback = Vec::new();
+    callback.extend(probe(
+        "inner-call",
+        "host.tool",
+        json!(["inner", {}]),
+        &marker("inner-ack.json"),
+    ));
+    callback.extend(probe(
+        "model-call",
+        "host.model",
+        json!([{"model": "fake/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8}]),
+        &marker("model-ack.json"),
+    ));
+    callback.extend(probe(
+        "delegate-call-one",
+        "host.delegate",
+        json!([{"description": "one", "prompt": "one"}, {"timeout": 1000, "run": true}]),
+        &marker("delegate-one.json"),
+    ));
+    callback.extend(probe(
+        "delegate-call-two",
+        "host.delegate",
+        json!([{"description": "two", "prompt": "two"}, {"timeout": 1000, "run": true}]),
+        &marker("delegate-two.json"),
+    ));
+    callback.push(json!({"send": {"id": "a-probe", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "probe-done"}}}));
+    let route = |name: &str| {
+        json!([
+            {"write_file": {"path": marker(name), "value": {"$ref": "req"}}},
+            {"send": {"id": format!("answer-{name}"), "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}}
+        ])
+    };
+    let serve = json!([
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": [
+            {"if": {"path": "req.payload.registration", "equals": "t_probe", "then": callback, "else": [
+                {"if": {"path": "req.payload.registration", "equals": "t_inner", "then": [
+                    {"send": {"id": "a-inner", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "inner-done"}}}
+                ], "else": [
+                    {"if": {"path": "req.payload.registration", "equals": "delegate-call-one", "then": route("delegate-call-one.json"), "else": [
+                        {"if": {"path": "req.payload.registration", "equals": "delegate-call-two", "then": route("delegate-call-two.json")}}
+                    ]}}
+                ]}}
+            ]}}
+        ]}}
+    ]);
+    let mut plan = vec![json!({"read": {"as": "hello"}})];
+    for action in register("fiber.tool", "t_probe", json!(["probe", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    for action in register("fiber.tool", "t_inner", json!(["inner", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}}));
+    plan.push(json!({"loop": serve}));
+    Value::Array(plan)
 }
 
 /// The peer plan receiving session events: after `ready`, every line the
