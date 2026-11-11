@@ -190,9 +190,10 @@ of a split ticket. Earlier parts say `Part of #<ticket>`. A pull request that
 advances a ticket without resolving it, such as a diagnostic, says
 `Refs #<ticket>`; the ticket stays open, and the red-commit rule below does
 not apply. A ticket worked as separate part tickets has each part's
-pull request name the parent as `Part of #<parent>`. The last part's pull
-request checks the parent's acceptance: it says `Resolves #<parent>` when every
-criterion is met, and otherwise posts on the parent what is left. Every pull request
+pull request name the parent as `Part of #<parent>`. The last part's
+orchestrator checks the parent's acceptance. When every criterion is met, that
+part's pull request says `Resolves #<parent>`. Otherwise the orchestrator posts
+on the parent what is left. Every pull request
 also says `Doc friction: none` or links each `needs-owner` issue it raised
 ("When a doc should change").
 
