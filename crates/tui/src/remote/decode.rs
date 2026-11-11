@@ -215,6 +215,7 @@ pub(super) fn targets(value: &Value) -> Option<Vec<LoginTarget>> {
                     "secret" => LoginKind::Secret,
                     _ => return None,
                 },
+                label: None,
             })
         })
         .collect()
