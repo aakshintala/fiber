@@ -130,6 +130,9 @@ pub(crate) struct ResumeStart {
     pub(crate) log: Arc<Log>,
     pub(crate) folded: r#loop::Resumed,
     pub(crate) opened: Option<doors::WorktreeOpener>,
+    /// The jobs and connection of a keeper that held the log, when this
+    /// resume took it from one. Independent of the startup admission.
+    pub(crate) handover: Option<crate::keeper::Handover>,
 }
 
 impl ResumeStart {
@@ -150,7 +153,14 @@ impl ResumeStart {
             log,
             folded,
             opened,
+            handover: None,
         })
+    }
+
+    /// Attaches the keeper's handover this resume took the log with.
+    pub(crate) fn with_handover(mut self, handover: Option<crate::keeper::Handover>) -> Self {
+        self.handover = handover;
+        self
     }
 
     pub(crate) fn id(&self) -> SessionId {
@@ -703,6 +713,7 @@ pub(crate) fn assemble_session(
                 log,
                 mut folded,
                 opened,
+                handover,
             } = resume;
             let clock = Arc::clone(&process.clock);
             // The session directory's log: the opening message's
@@ -883,6 +894,35 @@ pub(crate) fn assemble_session(
             session.shell(driver);
             session.notes_workspace(workspace.clone());
             session.jobs(jobs.clone());
+            // The jobs a keeper still runs are this session's again: recorded
+            // in the registry, whose inbox is wired, and no longer candidates
+            // for `orphaned`. Their runners start just before the first turn.
+            let handed = match handover {
+                Some(handover) if !handover.running().is_empty() => {
+                    match crate::keeper_restore::take(
+                        &keeper,
+                        &jobs,
+                        &dir,
+                        handover,
+                        &clock,
+                        &mut folded,
+                    ) {
+                        Ok(handed) => Some(handed),
+                        Err(error) => {
+                            session_servers.servers.stop();
+                            return Err(failed(
+                                ErrorCode::IoFailed,
+                                format!(
+                                    "The jobs the keeper held could not be taken back: {error}."
+                                ),
+                            ));
+                        }
+                    }
+                }
+                // A keeper with nothing left to hand over has released the
+                // log and exits.
+                Some(_) | None => None,
+            };
             session.repository_code(
                 Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>
             );
@@ -1053,6 +1093,27 @@ pub(crate) fn assemble_session(
             let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
                 fetch_prompts.get(server, prompt, text, cancel)
             });
+            // Every wire is in place: the keeper switches its jobs' output to
+            // frames, and the runners append them after its own bytes. No turn
+            // starts for this.
+            if let Some(handed) = handed
+                && let Err(error) = handed.finish()
+            {
+                servers.stop();
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                );
+                return Err(failed(
+                    ErrorCode::IoFailed,
+                    format!("The keeper did not finish handing over its jobs: {error}."),
+                ));
+            }
             let code = run_turn(
                 &session,
                 &log,

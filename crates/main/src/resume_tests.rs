@@ -10,8 +10,10 @@
 )]
 
 use std::cell::RefCell;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use contract::SessionId;
 use contract::events::{
@@ -44,6 +46,7 @@ fn keeper_acquiring_the_lock_after_precheck_is_refused_without_attach() {
     let (send, result) = mpsc::channel();
     let worker_sessions = sessions.clone();
     let worker_clock = clock.clone();
+    let worker_home = home.path().to_path_buf();
     std::thread::spawn(move || {
         super::before_resume_open(move || {
             observed.send(()).unwrap();
@@ -53,6 +56,7 @@ fn keeper_acquiring_the_lock_after_precheck_is_refused_without_attach() {
         });
         let mut attached = 0;
         let result = super::open_or_attach(
+            &worker_home,
             &worker_sessions,
             SessionId("s_0123456789abcdef".into()),
             worker_clock,
@@ -103,9 +107,11 @@ fn keeper_precheck_allows_pid_attach_and_stale_unlocked_recovery() {
     let held = session_with(&dir, None);
     let (send, result) = std::sync::mpsc::channel();
     let worker_sessions = sessions.clone();
+    let worker_home = home.path().to_path_buf();
     std::thread::spawn(move || {
         let mut attached = 0;
         let result = super::open_or_attach(
+            &worker_home,
             &worker_sessions,
             SessionId("s_0123456789abcdef".into()),
             fakes::clock::FakeClock::new(),
@@ -123,9 +129,11 @@ fn keeper_precheck_allows_pid_attach_and_stale_unlocked_recovery() {
     drop(held);
     std::fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
     let (send, result) = std::sync::mpsc::channel();
+    let worker_home = home.path().to_path_buf();
     std::thread::spawn(move || {
         let mut attached = 0;
         let result = super::open_or_attach(
+            &worker_home,
             &sessions,
             SessionId("s_0123456789abcdef".into()),
             fakes::clock::FakeClock::new(),
@@ -257,42 +265,41 @@ fn keeper_schema_version_names_the_latest_in_a_mixed_history() {
 
 #[test]
 fn keeper_schema_version_refusal_names_the_keepers_version() {
-    let home = fakes::TempDir::new("main-resume-version-refusal");
-    let sessions = home.path().join("sessions");
-    let id = SessionId("s_0123456789abcdef".into());
-    let dir = sessions.join(&id.0);
-    drop(session_with(&dir, None));
+    let mut fixture = Fixture::spawn("main-resume-version-refusal", Keeper::HoldOnly);
+    fixture.wait_bound();
     let next = u64::from(contract::SCHEMA_VERSION) + 1;
     forge_fiber_started_version(
-        &dir,
+        &fixture.dir,
         1,
         &contract::SCHEMA_VERSION.to_string(),
         &next.to_string(),
     );
     // A keeper-held lock at an unreadable version declines instead of
     // attaching: the lock is held through the resume's failed open.
-    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let _keeper = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
-    let mut attached = 0;
-    let result = super::open_or_attach(&sessions, id.clone(), clock, |_| {
-        attached += 1;
-        7
-    });
+    let (result, attached) = fixture.spawn_open();
     assert_eq!(result.err(), Some(1), "a refused resume exits 1");
     assert_eq!(attached, 0, "a keeper-held lock never attaches");
     // The refusal built from that version names the keeper's version.
     let keeper = log::Error::Held {
-        session: id.0.clone(),
+        session: fixture.id.0.clone(),
         holder: "keeper 4242".to_owned(),
     };
-    let failure = super::keeper_refusal(&dir, &id, keeper);
+    let failure = super::keeper_refusal(&fixture.dir, &fixture.id, keeper);
     let mismatch = doors::SessionError::VersionMismatch {
-        id: id.clone(),
+        id: fixture.id.clone(),
         version: next,
     };
     assert_eq!(failure.code, ErrorCode::SessionHeld);
     assert_eq!(failure.code, mismatch.code());
     assert_eq!(failure.message, mismatch.to_string());
+    fixture.release_hold();
+    let (_seen, held) = fixture.keeper_out();
+    assert!(held.is_some(), "the returned lock outlives the keeper");
+    assert_eq!(
+        log::lock_label(&fixture.dir).as_deref(),
+        Some("keeper 4242"),
+        "the keeper still holds the lock past its completion"
+    );
 }
 
 #[test]
@@ -986,4 +993,607 @@ fn a_vanished_following_child_fails_the_seed_as_missing() {
         matches!(error, log::Error::NotFound(_)),
         "a missing following-child header fails as missing: {error:?}"
     );
+}
+
+// ---- one teardown owner for a scripted keeper and its open worker ----
+// (`docs/tools.md`, "The keeper": a resume takes the log back.)
+
+/// How a scripted keeper behaves once the resume contacts it.
+#[derive(Clone, Copy)]
+enum Keeper {
+    /// Answers as the session's keeper and hands its one job over.
+    Hands,
+    /// Answers for another session.
+    Mistaken,
+    /// Hands over, but another writer takes the released lock first.
+    Beaten,
+    /// Binds and waits for a connection without answering: the test
+    /// cancels while the keeper is still waiting, before any connection.
+    Silent,
+    /// Answers as the session, then waits: the test cancels after that
+    /// partial request, before any handover.
+    Partial,
+    /// Holds the lock without binding: the open refuses before connecting.
+    HoldOnly,
+}
+
+/// A scripted keeper's progress the test waits for before cancelling it.
+enum Step {
+    /// The keeper holds the lock and bound its socket, at `0`.
+    Bound(PathBuf),
+    /// The keeper answered the resume's first line as the session.
+    Partial,
+}
+
+/// The cancel state: one small mutex guards the flag and the accepted
+/// socket's shutdown clone. A socket registered after cancellation is shut
+/// down too, so a cancel that lands between accept and registration still
+/// releases both ends.
+struct CancelState {
+    cancelled: bool,
+    socket: Option<UnixStream>,
+}
+
+type KeeperOut = (Vec<String>, Option<Log>);
+type OpenOut = (Result<(Log, Option<crate::keeper::Handover>), i32>, usize);
+
+/// One scripted keeper and one open worker under a single teardown owner.
+/// Cancelling wakes a keeper still blocked in accept with a local
+/// self-connection and shuts down an accepted socket, before any worker is
+/// collected. Workers hold only path clones; the temporary home outlives
+/// them: every collected worker is joined before it is dropped. Cleanup
+/// never panics: a worker that never finishes is detached rather than
+/// joined forever, after cancellation released what it could.
+struct Fixture {
+    home: fakes::TempDir,
+    sessions: PathBuf,
+    id: SessionId,
+    dir: PathBuf,
+    clock: Arc<dyn Clock>,
+    state: Arc<Mutex<CancelState>>,
+    socket_path: Arc<Mutex<Option<PathBuf>>>,
+    steps: mpsc::Receiver<Step>,
+    keeper_done: mpsc::Receiver<std::thread::Result<KeeperOut>>,
+    keeper_handle: Option<std::thread::JoinHandle<()>>,
+    keeper_reaped: bool,
+    open_result: Option<mpsc::Receiver<OpenOut>>,
+    open_handle: Option<std::thread::JoinHandle<()>>,
+    open_reaped: bool,
+    hold_release: Option<mpsc::Sender<()>>,
+    bind_release: Option<mpsc::Sender<()>>,
+    /// Self-connection client ends, held open so a woken accept reads a
+    /// silent peer rather than an end of file.
+    wake: Vec<UnixStream>,
+}
+
+fn lock<T>(state: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn open_deadline() -> fakes::Deadline {
+    fakes::Deadline::after(Duration::from_secs(10))
+}
+
+/// Sends a keeper outcome to a test that may have left: a keeper panic
+/// still fails loudly instead of vanishing with the receiver.
+fn send_keeper_outcome(
+    send: mpsc::Sender<std::thread::Result<KeeperOut>>,
+    outcome: std::thread::Result<KeeperOut>,
+) {
+    match send.send(outcome) {
+        Ok(()) => {}
+        Err(failed) => {
+            if let Err(payload) = failed.0 {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+/// Registers an accepted socket for cancellation: when cancellation already
+/// ran, the socket is shut down at once instead of being stored.
+fn register(state: &Mutex<CancelState>, stream: &UnixStream) {
+    let clone = stream.try_clone().unwrap();
+    let mut state = lock(state);
+    if state.cancelled {
+        // Already cancelled: shut the just-accepted socket down now, so
+        // both ends see the end instead of waiting for a first line.
+        match stream.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+        match clone.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+    } else {
+        state.socket = Some(clone);
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a scripted keeper needs its home, id, behaviour, clock and teardown handles"
+)]
+fn keeper_thread(
+    home: PathBuf,
+    sessions: PathBuf,
+    id: SessionId,
+    behaviour: Keeper,
+    clock: Arc<dyn Clock>,
+    state: Arc<Mutex<CancelState>>,
+    socket_path: Arc<Mutex<Option<PathBuf>>>,
+    progress: mpsc::Sender<Step>,
+    bind_gate: Option<mpsc::Receiver<()>>,
+    hold_release: mpsc::Receiver<()>,
+    done: mpsc::Sender<std::thread::Result<KeeperOut>>,
+) {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut held =
+            Some(Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap());
+        if matches!(behaviour, Keeper::HoldOnly) {
+            // No socket: the open refuses before connecting. The test
+            // releases the hold, and the test ending drops the sender,
+            // which releases it too.
+            match progress.send(Step::Bound(PathBuf::new())) {
+                Ok(()) | Err(_) => {}
+            }
+            match hold_release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            return (Vec::new(), held);
+        }
+        if let Some(gate) = bind_gate {
+            // Held before binding until the test releases it: cancelling
+            // first leaves the keeper waiting before any connection.
+            match gate.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            if lock(&state).cancelled {
+                return (Vec::new(), held);
+            }
+        }
+        let (path, listener) = doors::bind(&home, &sessions.join(&id.0)).unwrap();
+        *lock(&socket_path) = Some(path.clone());
+        match progress.send(Step::Bound(path)) {
+            Ok(()) | Err(_) => {}
+        }
+        let (stream, _) = listener.accept().unwrap();
+        register(&state, &stream);
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let mut seen = Vec::new();
+        let mut line = String::new();
+        // A cancelled accept leaves a shut socket: the read ends at once.
+        match reader.read_line(&mut line) {
+            Ok(_) | Err(_) => {}
+        }
+        if line.is_empty() {
+            return (seen, held);
+        }
+        seen.push(line.trim().to_owned());
+        let answered = if matches!(behaviour, Keeper::Mistaken) {
+            "s_ffffffffffffffff".to_owned()
+        } else {
+            id.0.clone()
+        };
+        writeln!(writer, r#"{{"identity":{{"session_id":"{answered}"}}}}"#).unwrap();
+        if matches!(behaviour, Keeper::Partial) {
+            match progress.send(Step::Partial) {
+                Ok(()) | Err(_) => {}
+            }
+            // Past the partial request, read until the connection ends: a
+            // cancelled handover ends through the shutdown, and without it
+            // this waits, so removing the shutdown fails this wait.
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            return (seen, held);
+        }
+        line.clear();
+        if reader.read_line(&mut line).unwrap() > 0 {
+            seen.push(line.trim().to_owned());
+            // Released before the acknowledgement, as the keeper does.
+            drop(held.take());
+            held = matches!(behaviour, Keeper::Beaten)
+                .then(|| Log::open_as(&sessions, id.clone(), clock, "other 1").unwrap());
+            writeln!(
+                writer,
+                r#"{{"handover":{{"running":[{{"id":"call_0","job_id":"j_one","output_path":"/x","errors_path":null,"tty":false,"lines":false}}]}}}}"#
+            )
+            .unwrap();
+            // The connection ends when the resume is done with it.
+            line.clear();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                seen.push(line.trim().to_owned());
+                line.clear();
+            }
+        }
+        // Returned so the lock outlives the join: the test reads who holds it.
+        (seen, held)
+    }));
+    send_keeper_outcome(done, outcome);
+}
+
+impl Fixture {
+    /// A fixture whose keeper runs `behaviour` from a fresh session home.
+    fn spawn(name: &str, behaviour: Keeper) -> Self {
+        Self::spawn_inner(name, behaviour, false)
+    }
+
+    /// A fixture whose keeper waits before binding until released: for a
+    /// cancel that lands before any connection.
+    fn spawn_gated(name: &str, behaviour: Keeper) -> Self {
+        Self::spawn_inner(name, behaviour, true)
+    }
+
+    fn spawn_inner(name: &str, behaviour: Keeper, gated: bool) -> Self {
+        let home = fakes::TempDir::under(Path::new("/tmp"), name);
+        let sessions = home.path().join("sessions");
+        let id = SessionId("s_0123456789abcdef".into());
+        let dir = sessions.join(&id.0);
+        drop(session_with(&dir, None));
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let state = Arc::new(Mutex::new(CancelState {
+            cancelled: false,
+            socket: None,
+        }));
+        let (progress_send, steps) = mpsc::channel();
+        let (done_send, keeper_done) = mpsc::channel();
+        let (hold_send, hold_release) = mpsc::channel();
+        let (bind_send, bind_gate) = mpsc::channel();
+        let socket_path = Arc::new(Mutex::new(None));
+        let thread_state = Arc::clone(&state);
+        let thread_path = Arc::clone(&socket_path);
+        let thread_home = home.path().to_path_buf();
+        let thread_sessions = sessions.clone();
+        let thread_id = id.clone();
+        let thread_clock = Arc::clone(&clock);
+        let keeper_handle = std::thread::spawn(move || {
+            keeper_thread(
+                thread_home,
+                thread_sessions,
+                thread_id,
+                behaviour,
+                thread_clock,
+                thread_state,
+                thread_path,
+                progress_send,
+                gated.then_some(bind_gate),
+                hold_release,
+                done_send,
+            );
+        });
+        Self {
+            home,
+            sessions,
+            id,
+            dir,
+            clock,
+            state,
+            socket_path,
+            steps,
+            keeper_done,
+            keeper_handle: Some(keeper_handle),
+            keeper_reaped: false,
+            open_result: None,
+            open_handle: None,
+            open_reaped: false,
+            hold_release: Some(hold_send),
+            bind_release: if gated { Some(bind_send) } else { None },
+            wake: Vec::new(),
+        }
+    }
+
+    /// The keeper's bound socket path, waited for with a deadline.
+    fn wait_bound(&self) -> PathBuf {
+        match open_deadline().recv(&self.steps) {
+            Ok(Step::Bound(path)) => path,
+            Ok(Step::Partial) => panic!("the keeper bound before any partial request"),
+            Err(_) => panic!("the keeper binds before its deadline"),
+        }
+    }
+
+    /// The keeper's partial request, waited for with a deadline.
+    fn wait_partial(&self) {
+        match open_deadline().recv(&self.steps) {
+            Ok(Step::Partial) => {}
+            Ok(Step::Bound(_)) => panic!("a partial request follows the bind"),
+            Err(_) => panic!("the keeper answers before its deadline"),
+        }
+    }
+
+    /// Starts the open worker and collects its result with a deadline: the
+    /// worker finishes on success and on cancellation, never past it.
+    fn spawn_open(&mut self) -> OpenOut {
+        self.start_open();
+        self.open_out()
+    }
+
+    /// Starts the open worker; the test collects it with [`Fixture::open_out`]
+    /// once the keeper reached the rendezvous the test waits for.
+    fn start_open(&mut self) {
+        let (send, result) = mpsc::channel();
+        let home = self.home.path().to_path_buf();
+        let sessions = self.sessions.clone();
+        let id = self.id.clone();
+        let clock = Arc::clone(&self.clock);
+        self.open_handle = Some(std::thread::spawn(move || {
+            let mut attached = 0;
+            let opened = super::open_or_attach(&home, &sessions, id, clock, |_| {
+                attached += 1;
+                7
+            });
+            // The test may have left: delivering the open result is best
+            // effort, and dropping it then is the documented outcome.
+            match send.send((opened, attached)) {
+                Ok(()) | Err(_) => {}
+            }
+        }));
+        self.open_result = Some(result);
+    }
+
+    /// The open worker's result, collected with a deadline.
+    fn open_out(&mut self) -> OpenOut {
+        let result = self
+            .open_result
+            .take()
+            .expect("the open worker started before its result is collected");
+        let outcome = open_deadline()
+            .recv(&result)
+            .expect("open_or_attach completes before its deadline");
+        self.open_reaped = true;
+        outcome
+    }
+
+    /// The keeper's outcome, collected with a deadline.
+    fn keeper_out(&mut self) -> KeeperOut {
+        let outcome = open_deadline()
+            .recv(&self.keeper_done)
+            .expect("scripted keeper exits before its deadline");
+        self.keeper_reaped = true;
+        outcome.expect("scripted keeper does not panic")
+    }
+
+    /// Releases a holding keeper.
+    fn release_hold(&mut self) {
+        if let Some(send) = self.hold_release.take() {
+            match send.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Cancels keeper and worker: flags first, shuts down the accepted
+    /// socket, then wakes a still-blocked accept with a local
+    /// self-connection. The waker stays open so the woken accept reads a
+    /// silent peer. Shutdown, wake and joins never hold the state lock.
+    fn cancel(&mut self) {
+        let socket = {
+            let mut state = lock(&self.state);
+            state.cancelled = true;
+            state.socket.take()
+        };
+        if let Some(socket) = socket {
+            match socket.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        self.hold_release.take();
+        self.bind_release.take();
+        let path = lock(&self.socket_path)
+            .clone()
+            .unwrap_or_else(|| config::run_dir(self.home.path()).join(&self.id.0));
+        if let Ok(waker) = UnixStream::connect(&path) {
+            self.wake.push(waker);
+        }
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // Release first: a worker blocked in accept, on a gate, or in a
+        // read ends through cancellation, so the joins below are prompt.
+        // None of this holds the state lock, and none of it panics, so a
+        // test failure still releases every resource.
+        self.cancel();
+        if self.keeper_reaped
+            && let Some(handle) = self.keeper_handle.take()
+        {
+            match handle.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        if self.open_reaped
+            && let Some(handle) = self.open_handle.take()
+        {
+            match handle.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn a_readable_keeper_hands_over_instead_of_refusing() {
+    let mut fixture = Fixture::spawn("main-resume-handover", Keeper::Hands);
+    fixture.wait_bound();
+    let (opened, attached) = fixture.spawn_open();
+    let Ok((log, Some(handover))) = opened else {
+        panic!("a keeper that answers as the session hands the log over")
+    };
+    assert_eq!(attached, 0, "a keeper is not a live session to attach to");
+    // The session holds the lock now, and the keeper's job comes with it.
+    assert!(!log::lock_label(&fixture.dir).is_some_and(|label| label.starts_with("keeper ")));
+    assert_eq!(handover.running().len(), 1);
+    assert_eq!(handover.running()[0].job_id, JobId("j_one".into()));
+    // The kernel names the keeper's process: here, the scripted one in-process.
+    assert_eq!(handover.pid(), support::peer::Pid(std::process::id()));
+    drop((log, handover));
+    let (seen, _held) = fixture.keeper_out();
+    assert_eq!(
+        seen,
+        [
+            r#"{"identify":"s_0123456789abcdef"}"#,
+            r#"{"handover":true}"#
+        ]
+    );
+}
+
+#[test]
+fn a_keeper_that_answers_for_another_session_is_refused_and_keeps_the_lock() {
+    let mut fixture = Fixture::spawn("main-resume-mistaken", Keeper::Mistaken);
+    fixture.wait_bound();
+    let before = log::read(&fixture.dir).unwrap().len();
+    let (result, attached) = fixture.spawn_open();
+    assert_eq!(result.err(), Some(1));
+    assert_eq!(attached, 0);
+    // Only the identity was asked for: no handover was requested, so the
+    // keeper released nothing and still holds the log.
+    let (seen, _held) = fixture.keeper_out();
+    assert_eq!(seen, [r#"{"identify":"s_0123456789abcdef"}"#]);
+    assert_eq!(
+        log::lock_label(&fixture.dir).as_deref(),
+        Some("keeper 4242")
+    );
+    assert_eq!(
+        log::read(&fixture.dir).unwrap().len(),
+        before,
+        "nothing appended"
+    );
+}
+
+#[test]
+fn a_lock_another_writer_takes_first_is_refused_held_and_the_connection_ends() {
+    let mut fixture = Fixture::spawn("main-resume-beaten", Keeper::Beaten);
+    fixture.wait_bound();
+    let before = log::read(&fixture.dir).unwrap().len();
+    let (result, attached) = fixture.spawn_open();
+    assert_eq!(result.err(), Some(1));
+    assert_eq!(attached, 0, "no attach to a lock only a keeper released");
+    // The keeper saw both requests and then the end of the connection.
+    let (seen, _held) = fixture.keeper_out();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(log::lock_label(&fixture.dir).as_deref(), Some("other 1"));
+    assert_eq!(
+        log::read(&fixture.dir).unwrap().len(),
+        before,
+        "nothing appended"
+    );
+}
+
+/// A session home with no keeper thread: for tests that never open
+/// through a scripted keeper.
+fn session_home(name: &str) -> (fakes::TempDir, PathBuf, SessionId, PathBuf) {
+    let home = fakes::TempDir::under(Path::new("/tmp"), name);
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    (home, sessions, id, dir)
+}
+
+#[test]
+fn cancelling_before_the_keeper_binds_leaves_nothing_waiting() {
+    // The keeper is gated before binding; cancelling first means no socket
+    // ever exists. The keeper leaves while still waiting, and the open that
+    // follows refuses without connecting.
+    let mut fixture = Fixture::spawn_gated("main-resume-cancel-before-bind", Keeper::Silent);
+    fixture.cancel();
+    let (seen, held) = fixture.keeper_out();
+    assert!(seen.is_empty(), "no connection ever reached the keeper");
+    assert!(held.is_some(), "the returned lock outlives the keeper");
+    assert_eq!(
+        log::lock_label(&fixture.dir).as_deref(),
+        Some("keeper 4242"),
+        "the keeper still holds the lock past its completion"
+    );
+    let (result, attached) = fixture.spawn_open();
+    assert_eq!(result.err(), Some(1), "a refused resume exits 1");
+    assert_eq!(attached, 0, "a keeper-held lock never attaches");
+}
+
+#[test]
+fn cancelling_while_the_keeper_waits_for_a_connection_wakes_it() {
+    // The keeper is blocked in accept; cancelling connects a waker the
+    // keeper shuts down at once instead of answering. Both sides finish,
+    // and the open that follows refuses without connecting.
+    let mut fixture = Fixture::spawn("main-resume-cancel-in-accept", Keeper::Silent);
+    fixture.wait_bound();
+    fixture.cancel();
+    let (seen, held) = fixture.keeper_out();
+    assert!(seen.is_empty(), "the waker is not a request");
+    assert!(held.is_some(), "the returned lock outlives the keeper");
+    assert_eq!(
+        log::lock_label(&fixture.dir).as_deref(),
+        Some("keeper 4242"),
+        "the keeper still holds the lock past its completion"
+    );
+    let (result, attached) = fixture.spawn_open();
+    assert_eq!(result.err(), Some(1), "a refused resume exits 1");
+    assert_eq!(attached, 0, "a keeper-held lock never attaches");
+}
+
+#[test]
+fn cancelling_after_a_partial_request_ends_both_sides() {
+    // The keeper answered the first line and waits past it; cancelling
+    // shuts the accepted socket down, so the keeper's read and the open's
+    // handover wait both end instead of hanging.
+    let mut fixture = Fixture::spawn("main-resume-cancel-partial", Keeper::Partial);
+    fixture.wait_bound();
+    fixture.start_open();
+    fixture.wait_partial();
+    fixture.cancel();
+    let (result, attached) = fixture.open_out();
+    assert_eq!(result.err(), Some(1), "a refused resume exits 1");
+    assert_eq!(attached, 0, "a keeper-held lock never attaches");
+    let (seen, held) = fixture.keeper_out();
+    assert_eq!(seen, [r#"{"identify":"s_0123456789abcdef"}"#]);
+    assert!(held.is_some(), "the returned lock outlives the keeper");
+    assert_eq!(
+        log::lock_label(&fixture.dir).as_deref(),
+        Some("keeper 4242"),
+        "the keeper still holds the lock past its completion"
+    );
+}
+
+#[test]
+fn an_unreadable_keeper_version_is_declined_without_contacting_the_keeper() {
+    let (home, sessions, id, dir) = session_home("main-resume-unreadable");
+    let next = u64::from(contract::SCHEMA_VERSION) + 1;
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let _held = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
+    let (_, listener) = doors::bind(home.path(), &dir).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| 7);
+    assert_eq!(result.err(), Some(1));
+    // Nobody connected: the keeper was not asked to release anything.
+    assert_eq!(
+        listener.accept().err().map(|error| error.kind()),
+        Some(std::io::ErrorKind::WouldBlock)
+    );
+}
+
+#[test]
+fn a_resume_start_carries_a_handover_without_changing_its_construction() {
+    let (_home, sessions, id, dir) = session_home("main-resume-start");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(Log::open(&sessions, id.clone(), clock).unwrap());
+    let folded = r#loop::resumed(&dir).unwrap();
+    let start = ResumeStart::new(log::SessionDir::new(&sessions, &id), log, folded, None)
+        .unwrap()
+        .with_handover(None);
+    assert!(start.handover.is_none());
 }
