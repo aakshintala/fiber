@@ -319,3 +319,9 @@ crates/hub/src/archive_tests.rs	fiber-3897	plan	2026-11-11T11:27:59Z	roundhouse-
 crates/provider/src/openai_completions.rs	fiber-4611	plan	2026-11-11T11:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/provider/src/openai_completions_messages.rs	fiber-4611	plan	2026-11-11T11:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4611	plan	2026-11-11T11:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/provider/tests/completions.rs	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/provider/src/google_generative_ai_decode.rs	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/provider/src/google_generative_ai_request.rs	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/conversation.rs	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/loop.md	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/events.md	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
