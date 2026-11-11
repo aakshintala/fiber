@@ -318,3 +318,7 @@ crates/main/tests/screen_looks/compaction_look.rs	fiber-4593	plan	2026-11-11T01:
 crates/main/tests/screen_looks/search_look.rs	fiber-4593	plan	2026-11-11T01:48:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screen_looks/working_line_look.rs	fiber-4593	plan	2026-11-11T01:48:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4593	plan	2026-11-11T01:48:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/panel.rs	fiber-4602	plan	2026-11-11T01:56:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/panel.rs	fiber-4602	plan	2026-11-11T01:56:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/panel_tests.rs	fiber-4602	plan	2026-11-11T01:56:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/panel/snapshots	fiber-4602	plan	2026-11-11T01:56:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
