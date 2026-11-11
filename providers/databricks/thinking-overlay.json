@@ -55,8 +55,7 @@
     "default": "low"
   },
   "gemini-4-argon": {
-    "levels": ["low", "medium", "high"],
-    "default": "medium"
+    "levels": []
   },
   "glm-5-2": {
     "levels": ["off", "high", "max"],

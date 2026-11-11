@@ -712,6 +712,7 @@ fn a_windowless_model_blocks_through_the_window_check() {
             thinking_levels: Vec::new(),
             thinking_default: None,
             prompt_addendum: None,
+            omit_reason: None,
         };
         let model = Model {
             provider: &provider,
