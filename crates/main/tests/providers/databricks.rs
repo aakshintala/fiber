@@ -918,3 +918,94 @@ fn all_services_backed_logs_no_omission() {
     // (`docs/model-routing.md`, "Model discovery"): no line.
     assert!(omissions.is_empty(), "{lines:?}");
 }
+
+/// The discovery answers for one Databricks Gemini service: the service
+/// list, its catalog row and its serving endpoint.
+fn argon_discovery() -> [Response; 3] {
+    [
+        Response::status(
+            200,
+            json!({"model_services": [
+                {"name": "model-services/system.ai.gemini-4-argon",
+                 "supported_api_types": ["mlflow/v1/chat/completions"]},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"models": [
+                {"model_name": "gemini-4-argon", "mode": "chat",
+                 "provider_type": "GEMINI_ENTERPRISE",
+                 "context_window": {"max_input": 1000000, "max_output": 64000},
+                 "capabilities": {"vision": false},
+                 "base_pricing": {"input_per_million_tokens": 0.5,
+                                  "output_per_million_tokens": 2}},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"endpoints": [{"name": "gemini-4-argon"}]}).to_string(),
+        ),
+    ]
+}
+
+/// A discovered Databricks `gemini-4-argon` service takes no thinking
+/// levels: its `openai-completions` request body carries no
+/// `reasoning_effort` key at all, and a `:level` suffix on the level-less
+/// model is rejected before the session starts (`docs/model-routing.md`,
+/// "Thinking").
+#[test]
+fn gemini_4_argon_takes_no_thinking_levels() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start(argon_discovery().into_iter().chain([completions_hello()])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "databricks/databricks-gemini-4-argon",
+            "hi",
+        ],
+        &credentials(&host),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.text_completed(), "Hello.");
+    let requests = server.requests();
+    assert_turn(&requests, "/ai-gateway/mlflow/v1/chat/completions");
+    let model = find_request(&requests, "/ai-gateway/mlflow/v1/chat/completions");
+    let body: Value = serde_json::from_slice(&model.body).unwrap();
+    assert!(body.get("reasoning_effort").is_none(), "{body}");
+
+    // A level suffix on the level-less model is refused with
+    // `invalid_arguments`, naming that the model takes no thinking level.
+    let denied = Setup::new();
+    let deny_server = ProviderServer::start(argon_discovery()).unwrap();
+    let deny_host = install(
+        &denied,
+        &deny_server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+    let mut command = denied.fiber(&[
+        "ask",
+        "--model",
+        "databricks/databricks-gemini-4-argon:medium",
+        "hi",
+    ]);
+    command.envs(credentials(&deny_host).iter().copied());
+    let output = run_to_exit(denied.deadline, "fiber ask", command);
+    let message = assert_pre_session(&output, 1, "invalid_arguments");
+    assert_eq!(
+        message,
+        "The thinking level `medium` is not one model \
+         `databricks/databricks-gemini-4-argon` takes: it takes no thinking level."
+    );
+}
