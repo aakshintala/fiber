@@ -7,11 +7,17 @@ use super::commands_testkit::{
     type_text,
 };
 use crate::app::{App, Effect};
+use crate::ext::{
+    Decision, Input as RendererInput, KeyOutcome, RawSpan, Renderer, SessionCtx, SessionVersion,
+    TuiCommand,
+};
 use crate::keys::Key;
 use crate::link::Line;
 use contract::ErrorCode;
 use serde_json::{Value, json};
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 #[test]
 fn first_run_enter_without_model_opens_login_and_preserves_the_draft() {
@@ -2361,4 +2367,219 @@ fn a_malformed_accept_leaves_a_non_import_entry_pending() {
             .pending
             .contains_key(id.as_str().unwrap_or_default())
     );
+}
+
+/// A renderer recording TUI command runs as `(name, session, args)`:
+/// the adapter's dispatch as the terminal sees it.
+#[derive(Debug)]
+struct CommandRecording {
+    served: Vec<TuiCommand>,
+    runs: RefCell<Vec<(String, Option<String>, String)>>,
+    handled: Cell<bool>,
+}
+
+impl CommandRecording {
+    fn serving(served: Vec<TuiCommand>, handled: bool) -> Self {
+        Self {
+            served,
+            runs: RefCell::new(Vec::new()),
+            handled: Cell::new(handled),
+        }
+    }
+
+    fn runs(&self) -> Vec<(String, Option<String>, String)> {
+        self.runs.borrow().clone()
+    }
+}
+
+/// A TUI command row for `name` from `extension`.
+fn tui_cmd(name: &str, extension: &str) -> TuiCommand {
+    TuiCommand {
+        name: name.to_owned(),
+        description: format!("Runs {name}."),
+        extension: extension.to_owned(),
+    }
+}
+
+impl Renderer for CommandRecording {
+    fn name(&self) -> &str {
+        "command-recording"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, _ctx: &SessionCtx) -> Vec<TuiCommand> {
+        self.served.clone()
+    }
+
+    fn run_tui_command(&self, ctx: &SessionCtx, name: &str, args: &str) -> KeyOutcome {
+        self.runs.borrow_mut().push((
+            name.to_owned(),
+            ctx.session_id.clone().map(|id| id.0.clone()),
+            args.to_owned(),
+        ));
+        if self.handled.get() {
+            KeyOutcome::Handled
+        } else {
+            KeyOutcome::NotHandled
+        }
+    }
+}
+
+/// Whether any notice carries `code`.
+fn has_code(app: &App, code: ErrorCode) -> bool {
+    app.notices().iter().any(
+        |notice| matches!(notice, crate::app::NoticeLine::Notice { code: found, .. } if *found == code),
+    )
+}
+
+#[test]
+fn command_tui_winner_runs_with_session_and_args_and_clears_draft() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    let effect = enter(&mut app, "/ledger-diff fast");
+    // A handled TUI command runs no built-in and no driver command for that stroke.
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "");
+    // `docs/extensions.md`, "Commands and screens": `run` receives the session on screen and the text after the name.
+    assert_eq!(
+        recording.runs(),
+        vec![(
+            "ledger-diff".to_owned(),
+            Some(SESSION.to_owned()),
+            "fast".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn command_tui_winner_on_home_runs_without_session() {
+    let mut app = connected();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    let effect = enter(&mut app, "/ledger-diff fast");
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "");
+    // `docs/extensions.md`, "Commands and screens": with no `session_id` key on home.
+    assert_eq!(
+        recording.runs(),
+        vec![("ledger-diff".to_owned(), None, "fast".to_owned())]
+    );
+}
+
+#[test]
+fn command_shadowed_skill_row_runs_the_tui_command() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("review", "acme")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    answer_rows(
+        &mut app,
+        json!([{"name": "review", "description": "Reviews.", "tag": "skill"}]),
+    );
+    // One row per name (`docs/extensions.md`, "Commands and screens"): typed Enter runs the TUI command, never the driver path.
+    let effect = enter(&mut app, "/review now");
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "");
+    assert_eq!(
+        recording.runs(),
+        vec![(
+            "review".to_owned(),
+            Some(SESSION.to_owned()),
+            "now".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn command_conflicted_name_is_consumed_with_draft_intact() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("deploy", "other")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    let effect = enter(&mut app, "/deploy now");
+    // A conflicted name runs nowhere: consumed, nothing sent, no second notice, draft preserved.
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "/deploy now");
+    assert!(recording.runs().is_empty());
+    assert!(!has_code(&app, ErrorCode::UnknownCommand));
+}
+
+#[test]
+fn command_conflicted_name_through_on_enter_keeps_draft_without_refusal() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(CommandRecording::serving(
+        vec![tui_cmd("deploy", "other")],
+        true,
+    )));
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    type_text(&mut app, "/deploy now");
+    assert_eq!(app.on_enter(), Effect::None);
+    assert_eq!(app.draft(), "/deploy now");
+    assert!(!has_code(&app, ErrorCode::UnknownCommand));
+}
+
+#[test]
+fn command_unknown_name_is_still_refused() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        true,
+    )));
+    answer_commands(&mut app, &[]);
+    let effect = enter(&mut app, "/nope now");
+    assert!(sent(effect).is_empty());
+    // An unrecognised `/name` is refused: the terminal keeps the text and shows its notice.
+    assert_eq!(app.draft(), "/nope now");
+    assert!(has_code(&app, ErrorCode::UnknownCommand));
+}
+
+#[test]
+fn command_tui_run_not_handled_keeps_draft() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        false,
+    ));
+    app.install_renderer(recording.clone());
+    let effect = enter(&mut app, "/ledger-diff fast");
+    // The run happened, but nothing handled it: consumed silently with the draft preserved.
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "/ledger-diff fast");
+    assert_eq!(recording.runs().len(), 1);
 }

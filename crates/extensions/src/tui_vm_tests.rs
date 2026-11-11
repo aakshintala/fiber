@@ -10,7 +10,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::tui_vm::{
-    KeyBinding, KeyForm, KeyRejection, RenderOut, SLOT_NAMES, SLOT_PREFIXES, Span, TuiVm,
+    CommandRejection, KeyBinding, KeyForm, KeyRejection, RenderOut, SLOT_NAMES, SLOT_PREFIXES,
+    Span, TuiCommand, TuiVm,
 };
 use crate::{Error, ErrorCode};
 
@@ -1447,4 +1448,330 @@ fn click_host_call_rejected() {
     assert!(message.contains("host call"), "{message}");
     // A rejected host call is an error, not a switch-off: the VM stays on.
     assert!(vm.run_click("home", "badge", Some("s1")).unwrap());
+}
+
+/// A VM with the one command `ledger-diff`, timeout 100 ms, whose `run`
+/// is `body`.
+fn commanding(body: &str) -> (Arc<FakeClock>, TuiVm) {
+    vm(&format!(
+        "fiber.command('ledger-diff', {{ timeout = 100, run = function(input) {body} end }})"
+    ))
+}
+
+/// The registered commands and rejections of `source`.
+fn command_regs(source: &str) -> (Vec<TuiCommand>, Vec<CommandRejection>) {
+    let (_, vm) = vm(source);
+    (vm.commands(), vm.command_rejections())
+}
+
+/// Runs the `ledger-diff` command for session `s1` with `args`.
+fn run_command(vm: &mut TuiVm, args: &str) -> Result<(), Error> {
+    vm.run_command("ledger-diff", Some("s1"), args)
+}
+
+/// Runs the `ledger-diff` command for session `s1`, moving the clock by
+/// `by` from inside `ticked`: the handler has started, and the clock
+/// moves only then.
+fn run_command_advancing(
+    vm: &mut TuiVm,
+    clock: Arc<FakeClock>,
+    args: &str,
+    by: Duration,
+) -> Result<(), Error> {
+    vm.lua()
+        .globals()
+        .set(
+            "ticked",
+            vm.lua()
+                .create_function(move |_, ()| {
+                    tick(&clock, by);
+                    Ok(())
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    vm.run_command("ledger-diff", Some("s1"), args)
+}
+
+#[test]
+fn command_registers_with_timeout_run_and_description() {
+    let (commands, rejected) = command_regs(
+        "fiber.command('ledger-diff', { timeout = 100, description = 'Diff the ledger row', \
+         run = function() end })",
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    // `docs/extensions.md`, "Commands and screens": `fiber.command` adds a command under its name with its description.
+    assert_eq!(
+        commands,
+        vec![TuiCommand {
+            name: "ledger-diff".to_owned(),
+            description: "Diff the ledger row".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn command_description_defaults_to_empty() {
+    let (commands, rejected) =
+        command_regs("fiber.command('ledger-diff', { timeout = 100, run = function() end })");
+    assert!(rejected.is_empty(), "{rejected:?}");
+    // `docs/extensions.md`, "Commands and screens": the description defaults to `""`.
+    assert_eq!(
+        commands,
+        vec![TuiCommand {
+            name: "ledger-diff".to_owned(),
+            description: String::new(),
+        }]
+    );
+}
+
+#[test]
+fn command_lists_both_registered_commands() {
+    let (commands, rejected) = command_regs(
+        "fiber.command('zulu', { timeout = 100, run = function() end })\n\
+         fiber.command('alpha', { timeout = 100, run = function() end })",
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    // `docs/extensions.md`, "Commands and screens": both registrations list.
+    let names: BTreeSet<&str> = commands
+        .iter()
+        .map(|command| command.name.as_str())
+        .collect();
+    assert_eq!(names, BTreeSet::from(["alpha", "zulu"]));
+}
+
+#[test]
+fn command_with_a_non_string_name_is_rejected() {
+    for name in ["5", "nil"] {
+        let (commands, rejected) = command_regs(&format!(
+            "fiber.command({name}, {{ timeout = 100, run = function() end }})"
+        ));
+        assert!(commands.is_empty(), "{name}: {commands:?}");
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; the load continues.
+        assert_eq!(rejected.len(), 1, "{name}: {rejected:?}");
+        assert!(
+            rejected[0].reason.contains("string"),
+            "{name}: {rejected:?}"
+        );
+    }
+}
+
+#[test]
+fn command_with_a_non_plain_name_is_rejected() {
+    for name in [
+        "''", "' '", "'a b'", "' a'", "'a '", "'a/b'", "'/x'", "'a:b'", "':'",
+    ] {
+        let (commands, rejected) = command_regs(&format!(
+            "fiber.command({name}, {{ timeout = 100, run = function() end }})"
+        ));
+        assert!(commands.is_empty(), "{name}: {commands:?}");
+        // `docs/extensions.md`, "Commands and screens": names are plain, so an empty name or one holding whitespace, `/` or `:` registers nothing.
+        assert_eq!(rejected.len(), 1, "{name}: {rejected:?}");
+        assert!(rejected[0].reason.contains("plain"), "{name}: {rejected:?}");
+    }
+}
+
+#[test]
+fn command_with_a_non_table_spec_is_rejected() {
+    for spec in ["5", "nil", "'run'"] {
+        let (commands, rejected) = command_regs(&format!("fiber.command('ledger-diff', {spec})"));
+        assert!(commands.is_empty(), "{spec}: {commands:?}");
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; the load continues.
+        assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
+        assert!(rejected[0].reason.contains("table"), "{spec}: {rejected:?}");
+    }
+}
+
+#[test]
+fn command_with_a_missing_or_invalid_timeout_names_timeout() {
+    for timeout in ["nil", "0", "-1", "1.5", "'100'"] {
+        let (commands, rejected) = command_regs(&format!(
+            "fiber.command('ledger-diff', {{ timeout = {timeout}, run = function() end }})"
+        ));
+        assert!(commands.is_empty(), "{timeout}: {commands:?}");
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; the load continues.
+        assert_eq!(rejected.len(), 1, "{timeout}: {rejected:?}");
+        assert!(
+            rejected[0].reason.contains("timeout"),
+            "{timeout}: {rejected:?}"
+        );
+    }
+    let (commands, rejected) =
+        command_regs("fiber.command('ledger-diff', { run = function() end })");
+    assert!(commands.is_empty());
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; the load continues.
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
+}
+
+#[test]
+fn command_with_a_non_function_run_is_rejected() {
+    for run in ["'yes'", "nil", "5"] {
+        let (commands, rejected) = command_regs(&format!(
+            "fiber.command('ledger-diff', {{ timeout = 100, run = {run} }})"
+        ));
+        assert!(commands.is_empty(), "{run}: {commands:?}");
+        // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; the load continues.
+        assert_eq!(rejected.len(), 1, "{run}: {rejected:?}");
+        assert!(rejected[0].reason.contains("run"), "{run}: {rejected:?}");
+    }
+}
+
+#[test]
+fn command_with_a_bad_description_is_rejected() {
+    let (commands, rejected) = command_regs(
+        "fiber.command('ledger-diff', { timeout = 100, run = function() end, description = 5 })",
+    );
+    assert!(commands.is_empty());
+    // `docs/extensions.md`, "Commands and screens": the description is a single-line string.
+    assert_eq!(rejected.len(), 1, "{rejected:?}");
+    assert!(rejected[0].reason.contains("description"), "{rejected:?}");
+    let (commands, rejected) = command_regs(
+        "fiber.command('ledger-diff', { timeout = 100, run = function() end, \
+         description = 'first' .. '\\n' .. 'second' })",
+    );
+    assert!(commands.is_empty());
+    // `docs/extensions.md`, "Commands and screens": the description is a single-line string.
+    assert_eq!(rejected.len(), 1, "{rejected:?}");
+    assert!(rejected[0].reason.contains("description"), "{rejected:?}");
+}
+
+#[test]
+fn command_accepts_builtin_names_at_this_layer() {
+    let (commands, rejected) = command_regs(
+        "fiber.command('quit', { timeout = 100, run = function() end })\n\
+         fiber.command('reload', { timeout = 100, run = function() end })",
+    );
+    // `docs/extensions.md`, "Commands and screens": a TUI command never takes a built-in name, and the adapter records that rejection; the VM still registers the name.
+    assert!(rejected.is_empty(), "{rejected:?}");
+    assert_eq!(commands.len(), 2, "{commands:?}");
+}
+
+#[test]
+fn command_second_registration_keeps_the_last() {
+    let (clock, mut vm) = vm(
+        "fiber.command('ledger-diff', { timeout = 100, description = 'old', \
+         run = function() ticked() end })\n\
+         fiber.command('ledger-diff', { timeout = 200, description = 'new', \
+         run = function() ticked() end })",
+    );
+    // The last registration wins, as one table assignment overwrites the last.
+    assert!(vm.command_rejections().is_empty());
+    assert_eq!(
+        vm.commands(),
+        vec![TuiCommand {
+            name: "ledger-diff".to_owned(),
+            description: "new".to_owned(),
+        }]
+    );
+    // The last timeout wins too: 150 ms finishes under the 200 ms timeout.
+    assert!(run_command_advancing(&mut vm, clock, "", 150 * MS).is_ok());
+}
+
+#[test]
+fn command_after_load_is_a_lua_error_and_registers_nothing() {
+    let (_, mut vm) = notice("fiber.command('late', { timeout = 100, run = function() end })");
+    let result = call(&mut vm, &json!({}));
+    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
+    assert!(vm.commands().is_empty());
+    assert!(vm.command_rejections().is_empty());
+}
+
+#[test]
+fn command_receives_session_id_and_args() {
+    // `docs/extensions.md`, "Commands and screens": `run` receives the session on screen and the text after the name.
+    let (_, mut vm) = commanding(
+        "if input.session_id ~= 's1' then error('session_id was ' .. tostring(input.session_id)) end\n\
+         if input.args ~= 'fast' then error('args was ' .. tostring(input.args)) end",
+    );
+    run_command(&mut vm, "fast").unwrap();
+    let (_, mut vm) = commanding("if input.args ~= '' then error('args was not empty') end");
+    vm.run_command("ledger-diff", Some("s1"), "").unwrap();
+}
+
+#[test]
+fn command_home_call_omits_the_session_id_key() {
+    // `docs/extensions.md`, "Commands and screens": with no `session_id` key on home.
+    let (_, mut vm) = commanding(
+        "if input.session_id ~= nil then error('session_id was present') end\n\
+         if input.args ~= '' then error('args was not empty') end",
+    );
+    vm.run_command("ledger-diff", None, "").unwrap();
+}
+
+#[test]
+fn command_ignores_true_false_and_nil_returns() {
+    // `docs/extensions.md`, "Commands and screens": its return value is ignored.
+    for body in ["return true", "return false", "return nil", "return"] {
+        let (_, mut vm) = commanding(body);
+        assert!(run_command(&mut vm, "").is_ok(), "{body}");
+    }
+}
+
+#[test]
+fn command_wrong_shape_is_a_shape() {
+    for body in ["return 5", "return 'done'", "return {}"] {
+        let (_, mut vm) = commanding(body);
+        assert!(
+            matches!(run_command(&mut vm, ""), Err(Error::TuiShape(_))),
+            "{body}"
+        );
+        // A wrong shape leaves the VM on.
+        assert!(matches!(run_command(&mut vm, ""), Err(Error::TuiShape(_))));
+    }
+}
+
+#[test]
+fn command_lua_error_leaves_the_vm_on() {
+    let (_, mut vm) = commanding("error('boom')");
+    let Err(Error::TuiLua(message)) = run_command(&mut vm, "") else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("boom"), "{message}");
+    assert!(matches!(run_command(&mut vm, ""), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn command_host_call_is_rejected() {
+    // `docs/extensions.md`, "Commands and screens": `run` makes no host call, as the key handler's does not.
+    let (_, mut vm) = commanding("coroutine.yield()");
+    let Err(Error::TuiLua(message)) = run_command(&mut vm, "") else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("host call"), "{message}");
+    // A rejected host call is an error, not a switch-off: the VM stays on.
+    assert!(matches!(run_command(&mut vm, ""), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn command_deadline_boundary() {
+    let source = "fiber.command('ledger-diff', { timeout = 100, run = function() ticked() end })";
+    let (clock, mut early) = vm(source);
+    assert!(run_command_advancing(&mut early, clock, "", 99 * MS).is_ok());
+    let (clock, mut timed) = vm(source);
+    let timed_out = run_command_advancing(&mut timed, clock, "", 100 * MS);
+    // `docs/tui.md`, "When an extension fails": a handler that passes its timeout switches the extension off.
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    let later = run_command(&mut timed, "");
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
+    let (clock, mut past) = vm(source);
+    let timed_out = run_command_advancing(&mut past, clock, "", 101 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+}
+
+#[test]
+fn command_unknown_name_is_a_noop() {
+    let (_, mut vm) = commanding("return true");
+    // Dispatch only calls winners, so a stale call is a no-op, never a notice.
+    assert!(vm.run_command("nope", Some("s1"), "fast").is_ok());
+    assert!(vm.command_rejections().is_empty());
+    assert!(run_command(&mut vm, "").is_ok());
+}
+
+#[test]
+fn command_rejections_are_taken_once() {
+    let (_, vm) = vm("fiber.command(5, { timeout = 100, run = function() end })");
+    assert_eq!(vm.command_rejections().len(), 1);
+    // The loader reports each rejection once: a second take finds none.
+    assert!(vm.command_rejections().is_empty());
 }
