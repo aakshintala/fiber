@@ -539,8 +539,8 @@ fn the_mark_shows_the_default_label_when_another_label_proves_the_login() {
 #[test]
 fn the_mark_names_a_set_variable_of_a_function_provider() {
     // A function provider's mark names a nonempty variable when one
-    // proves the login (`docs/model-routing.md`, "A provider whose
-    // credential comes from a function"): an empty value proves
+    // proves the login (`docs/model-routing.md`, "Credentials"): an
+    // empty value proves
     // nothing, so the mark falls through, else nothing when no
     // credential proves the login. The doc promises no order between
     // two set variables, so the test never sets both.
