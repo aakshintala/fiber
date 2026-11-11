@@ -397,6 +397,8 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   `openai-completions` requests, as the OpenAI provider does on every
   request; its `anthropic-messages` requests carry no `store` key.
 
+Which thinking level each Go and Zen model takes is probed in [research/opencode-thinking](../research/opencode-thinking/README.md).
+
 ### Bedrock Invoke wire facts
 
 Measured on October 20, 2026 against `bedrock-runtime.ap-south-1.amazonaws.com`
