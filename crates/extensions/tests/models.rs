@@ -810,6 +810,7 @@ fn leave_out_omitted_drains_a_marked_entry_with_its_reason() {
         models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
         ["ok"]
     );
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
@@ -817,6 +818,31 @@ fn leave_out_omitted_drains_a_marked_entry_with_its_reason() {
         notices[0].message,
         "The model `acme/gone` was left out of the model list: \
          no serving endpoint with a matching name."
+    );
+}
+
+#[test]
+fn leave_out_omitted_keeps_a_reason_terminal_period() {
+    // A provider reason that already ends with terminal punctuation draws no
+    // second period (`docs/code-quality.md`, "What a reviewer checks").
+    let list = json!([
+        {"id": "gone", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+         "omit_reason": "No endpoint."},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_omitted("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1);
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/gone` was left out of the model list: No endpoint."
     );
 }
 
@@ -833,6 +859,7 @@ fn leave_out_omitted_drains_every_entry_when_all_are_marked() {
     let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
     let notices = leave_out_omitted("acme", "acme", &mut models);
     assert!(models.is_empty(), "{models:?}");
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 2, "{notices:?}");
     assert!(
         notices
@@ -871,6 +898,7 @@ fn set_models_marks_an_omission_without_validating_it() {
     .unwrap();
     let notices = providers.set_models("ghost", vec![marked]);
     assert!(providers.resolve("ghost/gone").is_err());
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
     assert_eq!(notices[0].extension.as_deref(), Some("ghost"));
@@ -898,6 +926,7 @@ fn a_static_marked_model_is_left_out_with_an_omitted_notice() {
         providers.resolve("acme/gone").unwrap_err(),
         Error::UnknownModel { .. }
     ));
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));

@@ -114,7 +114,8 @@ impl Model<'_> {
 /// unchanged. Runs before [`leave_out_invalid`] at every call site, so a
 /// marked entry is never validated: an omission draws no `model_invalid`
 /// for whatever its declaration holds. The reason comes verbatim from the
-/// mark; parsing already rejects an empty one.
+/// mark, without duplicating its terminal punctuation; parsing already
+/// rejects an empty one.
 pub fn leave_out_omitted(
     provider: &str,
     extension: &str,
@@ -124,14 +125,21 @@ pub fn leave_out_omitted(
     let mut kept = Vec::new();
     for model in models.drain(..) {
         match model.omit_reason.as_deref() {
-            Some(reason) => notices.push(Notice {
-                code: ErrorCode::ModelOmitted,
-                message: format!(
-                    "The model `{provider}/{}` was left out of the model list: {reason}.",
-                    model.id
-                ),
-                extension: Some(extension.to_owned()),
-            }),
+            Some(reason) => {
+                let end = if reason.trim_end().ends_with(['.', '!', '?']) {
+                    ""
+                } else {
+                    "."
+                };
+                notices.push(Notice {
+                    code: ErrorCode::ModelOmitted,
+                    message: format!(
+                        "The model `{provider}/{}` was left out of the model list: {reason}{end}",
+                        model.id
+                    ),
+                    extension: Some(extension.to_owned()),
+                });
+            }
             None => kept.push(model),
         }
     }

@@ -335,6 +335,8 @@ fn list_models_parses_an_omission_mark_into_its_reason() {
         },
     )
     .unwrap();
+    // The mark keeps its entry's place (`docs/model-routing.md`, "Model discovery"):
+    // one marked plus one kept entry.
     assert_eq!(models.len(), 2);
     assert_eq!(
         models[0].omit_reason.as_deref(),

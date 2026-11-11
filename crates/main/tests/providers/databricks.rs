@@ -861,11 +861,13 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
         .collect();
     // The omission is a client-facing notice on the ask stream, the way
     // `model_invalid` is: one `notice` event naming the model and the
-    // provider's reason, with the remaining kinds equal to `HELLO_KINDS`.
+    // provider's reason (`docs/model-routing.md`, "Model discovery"), with
+    // the remaining kinds equal to `HELLO_KINDS`.
     let notices: Vec<&Value> = stream
         .iter()
         .filter(|line| line["kind"] == "notice")
         .collect();
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0]["payload"]["code"], "model_omitted");
     assert_eq!(
@@ -905,6 +907,8 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
         .filter(|model| model.starts_with("databricks/"))
         .collect();
     listed.sort_unstable();
+    // Discovery drains the marked entry (`docs/model-routing.md`, "Model discovery"):
+    // two backed models listed.
     assert_eq!(
         listed,
         [
@@ -961,6 +965,8 @@ fn two_services_without_endpoints_group_into_one_notice() {
 
     let models = run(&setup, &["models", "--json"], &credentials(&host));
     assert_eq!(models.code, Some(0), "stderr: {}", models.stderr);
+    // A pass that finds several problems of one code raises one notice whose
+    // message gives the count (`docs/errors.md`, "Notices"): two omissions.
     assert!(
         models.stderr.contains("2 `model_omitted` notices:"),
         "stderr: {}",
@@ -980,6 +986,7 @@ fn two_services_without_endpoints_group_into_one_notice() {
             models.stderr
         );
     }
+    // The grouped notice lists each item (`docs/errors.md`, "Notices"): two items.
     assert_eq!(
         models
             .stderr
@@ -995,6 +1002,8 @@ fn two_services_without_endpoints_group_into_one_notice() {
         .iter()
         .map(|line| line["model"].as_str().unwrap())
         .collect();
+    // Discovery drains the marked entries (`docs/model-routing.md`, "Model discovery"):
+    // one backed model listed.
     assert_eq!(listed, ["databricks/databricks-gpt-6-sol"], "{listed:?}");
 }
 
