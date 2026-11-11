@@ -1191,10 +1191,34 @@ fn a_second_crash_leaves_one_keeper_the_log_and_the_third_resume_orphans_the_oth
         move || !alive(loser)
     });
     assert!(alive(winner));
+    // The winner's takeover appends only its two marker records: no job
+    // ended, so no ending was written. The socket accepts once it serves,
+    // which races the bound append, so wait for the bound record first.
+    fakes::wait_until(
+        "the winner to append its bound record",
+        setup.deadline.start_wait(),
+        {
+            let dir = dir.clone();
+            move || {
+                fs::read(dir.join("events.jsonl"))
+                    .map(|bytes| String::from_utf8_lossy(&bytes).contains("keeper_bound"))
+                    .unwrap_or(false)
+            }
+        },
+    );
+    let after = fs::read(dir.join("events.jsonl")).unwrap();
+    let Some(new) = after.strip_prefix(crashed_log.as_slice()) else {
+        panic!("the takeover appends to the log, never rewrites it");
+    };
+    let new_lines = complete_lines(std::str::from_utf8(new).expect("takeover records are UTF-8"));
+    let kinds: Vec<&str> = new_lines
+        .iter()
+        .filter_map(|line| line.get("kind").and_then(Value::as_str))
+        .collect();
     assert_eq!(
-        fs::read(dir.join("events.jsonl")).unwrap(),
-        crashed_log,
-        "neither keeper appended: no job ended"
+        kinds,
+        ["keeper_started", "keeper_bound"],
+        "the winner appends only its takeover markers: no job ended"
     );
     // Its job runs on, with no keeper left to account for it.
     assert!(fakes::group_alive(lost_group));
