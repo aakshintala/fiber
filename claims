@@ -360,3 +360,5 @@ crates/tui/src/view/model_picker/snapshots/tui__view__model_picker__install__tes
 crates/tui/src/view/model_picker/snapshots/tui__view__model_picker__install__tests__model_picker_install_failed.snap	fiber-4612	plan	2026-11-11T18:12:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker/snapshots/tui__view__model_picker__install__tests__model_picker_install_installing.snap	fiber-4612	plan	2026-11-11T18:12:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker/snapshots/tui__view__model_picker__install__tests__model_picker_install_missing.snap	fiber-4612	plan	2026-11-11T18:12:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/setup_tests.rs	fiber-4609	plan	2026-11-11T18:38:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4609	plan	2026-11-11T18:38:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
