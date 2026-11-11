@@ -848,16 +848,25 @@ fn report_keys_keep_the_held_conversation_position() {
 
 #[test]
 fn a_rejected_import_keeps_the_existing_notice_path() {
+    // An unknown source is refused locally with the hub's message:
+    // nothing goes out, the draft stays, and one notice shows.
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));
-    let id = lines[0]["id"].clone();
-    let rejected = session_line(
-        "command_rejected",
-        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
-    );
-    assert!(app.on_line(rejected).is_empty());
+    assert!(lines.is_empty());
+    assert!(app.outbox.pending.is_empty());
     assert_eq!(app.draft(), "/import vim");
-    assert_eq!(app.notice(), Some("No."));
+    assert_eq!(
+        app.notice(),
+        Some("`source` must be `claude-code` or `codex`.")
+    );
+    assert!(
+        notice_with(
+            &app,
+            ErrorCode::InvalidArguments,
+            "`source` must be `claude-code` or `codex`."
+        ),
+        "the refusal carries the hub's code and message"
+    );
 }
 
 #[test]
@@ -2298,21 +2307,17 @@ fn a_rejected_named_import_returns_its_draft_with_the_notice() {
 }
 
 #[test]
-fn an_accepted_unknown_source_import_settles_without_a_report() {
+fn an_unknown_import_source_sends_no_line_and_holds_no_entry() {
+    // No string source can be dispatched after the retype, so unknown
+    // input is refused before anything is sent: no line, no outbox
+    // entry, no report, and the draft stays for a retry.
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));
-    let id = lines[0]["id"].clone();
-    assert_eq!(lines[0]["args"], json!({"source": "vim"}));
-    // An unknown source stays a plain command: its accept closes the
-    // entry with no report and no notice.
-    let accepted = session_line(
-        "command_accepted",
-        json!({"command_id": id, "result": import_result()}),
-    );
-    assert!(app.on_line(accepted).is_empty());
-    assert!(app.import_report().is_none());
-    assert!(app.notices().is_empty());
+    assert!(lines.is_empty());
     assert!(app.outbox.pending.is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(app.draft(), "/import vim");
+    assert_eq!(app.notices().len(), 1);
 }
 
 /// A refused prompt keeps the draft and the working loop: the refusal
@@ -2367,6 +2372,68 @@ fn a_malformed_accept_leaves_a_non_import_entry_pending() {
             .pending
             .contains_key(id.as_str().unwrap_or_default())
     );
+}
+
+/// A home app with the link down: Enter holds the start for `hub_hello`.
+fn unlinked() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
+}
+
+#[test]
+fn a_failed_hello_flush_settles_the_start_by_its_carried_id() {
+    let mut app = unlinked();
+    type_text(&mut app, "hi");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.outbox.held.len(), 1);
+    let carried = app.outbox.held[0].id.0.clone();
+    // Tamper with the held line's JSON id: the failure must settle by
+    // the carried id, never by parsing the tampered line.
+    let tampered = app.outbox.held[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, app.outbox.held[0].line);
+    app.outbox.held[0].line = tampered.clone();
+    // Hello flushes the held start; failing the flush settles the
+    // carried start: the draft is back, the phase is starting, and no
+    // entry waits on either id.
+    let flushed: Vec<String> = app.on_line(hub_line("hub_hello", json!({})));
+    assert!(flushed.contains(&tampered));
+    app.write_failed(&flushed);
+    assert!(app.outbox.pending.is_empty());
+    assert!(app.outbox.waiting("c_tampered").is_none());
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, crate::app::Phase::Starting));
+}
+
+#[test]
+fn a_failed_tracked_start_settles_by_its_carried_id() {
+    let mut app = connected();
+    type_text(&mut app, "hi");
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the start");
+    };
+    assert_eq!(sents.len(), 1);
+    let carried = sents[0].id.0.clone();
+    // Tamper with the start's JSON id: the failure must settle by the
+    // carried id, never by parsing the tampered line.
+    let tampered = sents[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, sents[0].line);
+    let sent = crate::app::Sent {
+        id: contract::CommandId(carried),
+        line: tampered,
+    };
+    app.write_failed_tracked(std::slice::from_ref(&sent));
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, crate::app::Phase::Starting));
 }
 
 /// A renderer recording TUI command runs as `(name, session, args)`:

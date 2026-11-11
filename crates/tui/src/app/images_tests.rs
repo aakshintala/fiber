@@ -213,9 +213,10 @@ fn image_id(app: &App, session: &str, path: &str) -> u32 {
 fn sent(effect: Effect) -> Vec<String> {
     match effect {
         Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }
@@ -367,11 +368,12 @@ fn enter_on_the_focused_image_opens_it() {
     started_with_image(&mut app, "artifacts/shot.png");
     app.focus = Some(TargetId::Line(Target::Image(1)));
     match app.focus_key(&Key::Enter) {
-        Some(Effect::Send(lines)) => assert_eq!(lines.len(), 1),
+        Some(Effect::SendTracked(sents)) => assert_eq!(sents.len(), 1),
+        Some(Effect::Send(_)) => panic!("expected a tracked send"),
         Some(
             Effect::None
             | Effect::Quit
-            | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::ReadImage(_)
             | Effect::Feedback { .. }
@@ -448,7 +450,7 @@ fn a_stale_viewer_failure_does_not_refuse() {
     let generation = app.images.generation;
     app.image_viewed(1, "shot.png", generation + 1, Err("boom".to_owned()));
     assert_eq!(app.notice(), None);
-    assert!(matches!(app.view_image(1), Effect::Send(_)));
+    assert!(matches!(app.view_image(1), Effect::SendTracked(_)));
 }
 
 #[test]

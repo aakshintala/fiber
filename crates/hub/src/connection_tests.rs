@@ -1178,9 +1178,9 @@ fn import_runs_through_the_machine() {
         let (code, echoed, message) = rejected(&client.next("the refusal"));
         assert_eq!(code, "invalid_arguments");
         assert_eq!(echoed.as_deref(), Some(id));
-        assert!(
-            message.contains("claude-code") && message.contains("codex"),
-            "{message}"
+        assert_eq!(
+            message, "`source` must be `claude-code` or `codex`.",
+            "{id}"
         );
     }
     client.send(&command(
