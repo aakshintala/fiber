@@ -345,3 +345,7 @@ crates/tui/src/app/commands.rs	fiber-4596	plan	2026-11-11T07:42:14Z	roundhouse-7
 crates/tui/src/view/input_box.rs	fiber-4596	plan	2026-11-11T07:42:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/open_at_tests.rs	fiber-4596	plan	2026-11-11T07:42:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home_tests.rs	fiber-4596	plan	2026-11-11T07:42:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/keys_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
+crates/tui/src/app/keyboard_screen_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
+crates/tui/src/view/key_map_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
+crates/tui/src/event_loop_tests.rs	fiber-4599	grant	2026-11-11T08:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
