@@ -120,6 +120,9 @@ struct Hooks {
     /// Runs after a takeover opens the log and before it appends its start
     /// record, so a test fails that append.
     before_start_append: Option<Box<dyn Fn(&Log) + Send + Sync>>,
+    /// Runs after a takeover appends its start record and before it binds,
+    /// so a test lands keeper death in that window.
+    before_bind: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs after a candidate registered and before it contends for the log,
     /// so a test lands the last job's exit in that window.
     registered: Option<Box<dyn Fn() + Send + Sync>>,
@@ -256,6 +259,23 @@ impl Runtime {
                                         .map(str::to_owned)
                                 })
                                 .collect();
+                            // The log is already stopped, and the next durable append reports it.
+                            if let Err(error) = held
+                                .append(
+                                    &contract::events::Event::KeeperStarted(
+                                        contract::events::Empty {},
+                                    ),
+                                    None,
+                                    None,
+                                )
+                                .map_err(|error| io::Error::other(error.to_string()))
+                            {
+                                drop(error);
+                            }
+                            #[cfg(test)]
+                            if let Some(pause) = &self.hooks.before_bind {
+                                pause();
+                            }
                             let (socket, listener) = doors::bind(&self.home, &dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *log = Some(HeldLog {
@@ -263,6 +283,22 @@ impl Runtime {
                                 log: held,
                             });
                             self.listen(socket, listener);
+                            // The log is already stopped, and the next durable append reports it.
+                            if let Some(log) = log.as_ref() {
+                                if let Err(error) = log
+                                    .log
+                                    .append(
+                                        &contract::events::Event::KeeperBound(
+                                            contract::events::Empty {},
+                                        ),
+                                        None,
+                                        None,
+                                    )
+                                    .map_err(|error| io::Error::other(error.to_string()))
+                                {
+                                    drop(error);
+                                }
+                            }
                             self.files()?;
                             #[cfg(test)]
                             if let Some(held) = &self.hooks.held {
