@@ -732,6 +732,59 @@ fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     session.finish_processes(&cancel);
 }
 
+/// Sealing the session clears process model and delegate services before
+/// callbacks drain, while the existing callback remains able to answer.
+#[test]
+fn process_host_tool_model_delegate_live_and_sealed() {
+    let env = Env::new("fiber-process-host-seal");
+    let markers = env.workspace().join("markers");
+    std::fs::create_dir_all(&markers).unwrap();
+    env.install_process("svc", &json!({}), &services_plan(&markers));
+    let config = env.config_with(&[]);
+    let session = env.load_with(&config, ExtensionReason::New, 0);
+    let emit = Arc::new(Recorder::default());
+    session.emit_to(emit.clone());
+    session.model_to(Arc::new(FakeModel));
+    session.delegate_to(Arc::new(FakeDelegate));
+    let tool = session
+        .tools()
+        .into_iter()
+        .find(|(_, tool)| tool.definition().name == "probe")
+        .map(|(_, tool)| tool)
+        .unwrap();
+    let cancel = CancelToken::new();
+
+    let first = tool.run(&Map::new(), &cancel, &*emit);
+    assert!(
+        first.error.is_none(),
+        "the live probe runs: {:?}",
+        first.error
+    );
+    let ack = |name: &str| read_json_file(&markers.join(name), name);
+    assert_eq!(
+        ack("model-ack.json")["payload"]["result"]["value"]["text"],
+        "model-says-hi"
+    );
+    assert_eq!(
+        ack("delegate-ack.json")["payload"]["result"]["value"],
+        "j_delegate"
+    );
+
+    contract::extension::ExtensionDoor::seal(session.as_ref());
+    let second = tool.run(&Map::new(), &cancel, &*emit);
+    assert!(
+        second.error.is_none(),
+        "the draining probe runs: {:?}",
+        second.error
+    );
+    assert_eq!(ack("model-ack.json")["kind"], "command_rejected");
+    assert_eq!(ack("model-ack.json")["payload"]["code"], "closing");
+    assert_eq!(ack("delegate-ack.json")["kind"], "command_rejected");
+    assert_eq!(ack("delegate-ack.json")["payload"]["code"], "closing");
+
+    session.finish_processes(&CancelToken::new());
+}
+
 /// The peer plan receiving session events: after `ready`, every line the
 /// test forwards is written to its marker, and requests are answered.
 fn events_plan(marker: &Path) -> Value {
