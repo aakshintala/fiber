@@ -472,6 +472,8 @@ fiber.provider("databricks", {
           if endpoint_keys[model_key(bare)] then
             list[#list + 1] = entry
           else
+            entry.omit_reason = "no serving endpoint with a matching name"
+            list[#list + 1] = entry
             omitted[#omitted + 1] = entry.id
           end
         end

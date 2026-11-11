@@ -1805,6 +1805,7 @@ and an expiry wakes the loop even with no input.
 | `login_url` | condition | No automatic clear: finish the login in X, then dismiss with ✕. |
 | `malformed` | event | Fades 10 s after it shows. |
 | `model_invalid` | event | Fades 10 s after it shows. |
+| `model_omitted` | event | Fades 10 s after it shows. |
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
 | `no_jobs_running` | event | Fades 10 s after it shows. |

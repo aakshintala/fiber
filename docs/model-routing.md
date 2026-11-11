@@ -879,8 +879,13 @@ a new list only through a tool result (`docs/prompt-cache.md`).
 
 The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A service the vendor lists but backs with no serving
-endpoint is deliberately left out of discovery, and each omission is named once in
-the diagnostic log (see #4337).
+endpoint is deliberately left out of discovery: its entry keeps its place in
+the returned list and carries `omit_reason` with the provider's reason, and
+Fiber drains each marked entry into one `model_omitted` notice naming the
+model and the reason, the way `model_invalid` names a defective declaration.
+Each omission is also named once in the diagnostic log. The mark applies to
+static provider data too: a static entry carrying `omit_reason` drains the
+same way.
 
 #### Which models exist, and what Fiber knows about them
 

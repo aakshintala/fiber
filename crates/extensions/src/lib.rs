@@ -123,7 +123,7 @@ pub use package::{Package, PackageOptions};
 pub use prepare::{Observe, platform};
 pub use providers::{
     Model, Providers, START_ONLY, StartedRefresh, Unconfigured, UnconfiguredModel,
-    leave_out_invalid, refresh_lists,
+    leave_out_invalid, leave_out_omitted, refresh_lists,
 };
 pub use providers::{closest_refs, distance, roles_line};
 pub use release::fetch_nightly_tag;

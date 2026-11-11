@@ -337,6 +337,7 @@ fn add_scripted_replaces_an_entry_it_did_not_build() {
                 thinking_levels: Vec::new(),
                 thinking_default: None,
                 prompt_addendum: None,
+                omit_reason: None,
             }],
             reviewer_model: None,
         },
