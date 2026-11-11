@@ -364,6 +364,19 @@ fn alt_arrows_in_their_csi_form() {
 }
 
 #[test]
+fn shift_arrows_in_their_csi_form() {
+    // Split across reads, the sequence is held and still parses.
+    assert_eq!(
+        feed_strokes(&[b"\x1b[1;", b"2A"]),
+        vec![modified(Code::Up, Mods::SHIFT)]
+    );
+    assert_eq!(
+        feed_strokes(&[b"\x1b[1;2", b"B"]),
+        vec![modified(Code::Down, Mods::SHIFT)]
+    );
+}
+
+#[test]
 fn esc_then_an_arrow_in_one_read_is_the_alt_arrow() {
     assert_eq!(
         feed_all(&[b"\x1b\x1b[", b"A"]),
@@ -967,8 +980,10 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
         ("end", key(Key::End)),
         ("up", key(Key::Up)),
         ("alt+up", key(Key::AltUp)),
+        ("shift+up", key(Key::ShiftUp)),
         ("down", key(Key::Down)),
         ("alt+down", key(Key::AltDown)),
+        ("shift+down", key(Key::ShiftDown)),
         ("left", edit(Edit::Left)),
         ("right", edit(Edit::Right)),
         ("alt+left", edit(Edit::WordLeft)),
@@ -1087,8 +1102,8 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Char('+'), ctrl), None),
         // `ESC 0x08` reads as Ctrl+Alt+H, which no binding uses.
         (modified(Code::Char('h'), ctrl | alt), None),
-        (modified(Code::Up, shift), None),
-        (modified(Code::Down, shift), None),
+        (modified(Code::Up, shift), key(Key::ShiftUp)),
+        (modified(Code::Down, shift), key(Key::ShiftDown)),
         (modified(Code::Left, shift), None),
         (modified(Code::Left, alt | ctrl), None),
         (modified(Code::Right, alt | super_), None),

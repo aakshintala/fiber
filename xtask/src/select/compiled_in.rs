@@ -18,6 +18,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/testing.md", "xtask"),
     (".github/workflows/ci.yml", "xtask"),
     ("crates/tui/assets/logo-mask.bin", "xtask"),
+    ("providers/models-corrections.toml", "xtask"),
     ("crates/tools/tests/pages/mdn-anchor.md", "tools"),
     ("crates/tools/tests/pages/mdn-code.md", "tools"),
     ("crates/tools/tests/pages/mdn-table.md", "tools"),

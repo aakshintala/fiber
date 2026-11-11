@@ -7,7 +7,7 @@ expression: "whole_screen(&app, 100, 40)"
    Key map                                                                                       ✕
 
    Every binding by area, with its other paths.
-   39 actions, 27 with other paths
+   40 actions, 28 with other paths
 
    All  Sessions  The input box  The conversation  Steering  Requests, models and help
    Type to search shortcuts› █
@@ -32,7 +32,7 @@ expression: "whole_screen(&app, 100, 40)"
      Requests, models and help  Refresh every model list in the     Ctrl+R · click "⟳ refresh all"
                                 model picker
    › Requests, models and help  Open the key map                    F1 · /? or /help
-   ↑ 26 more
+   ↑ 27 more
 
    ↑↓ move · ←→ tabs · Esc closes
 

@@ -504,6 +504,7 @@ impl Approval {
             }
             // The steering queue's keys do nothing while the panel is open.
             Key::AltUp | Key::AltDown | Key::AltX => {}
+            Key::ShiftUp | Key::ShiftDown => {}
         }
         Some(super::PanelKey::Handled)
     }

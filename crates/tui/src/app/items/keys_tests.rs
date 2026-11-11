@@ -57,6 +57,8 @@ fn every_key_encodes_to_the_bytes_the_job_reads() {
         (Key::AltA, "\x1ba"),
         (Key::AltUp, "\x1b[1;3A"),
         (Key::AltDown, "\x1b[1;3B"),
+        (Key::ShiftUp, "\x1b[1;2A"),
+        (Key::ShiftDown, "\x1b[1;2B"),
         (Key::AltX, "\x1bx"),
         (Key::AltP, "\x1bp"),
         (Key::AltR, "\x1br"),
