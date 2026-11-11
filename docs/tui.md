@@ -809,8 +809,11 @@ model's chips. A model chosen for this session only gets a third row,
 "ⓢ this session only · nothing saved" dim. While a query is typed, the
 characters of each id it matched are underlined and bold. If no model, count
 row, logged-out row or not-installed row matches, the picker shows one dim line,
-"No models match", and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
-Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+"No models match", and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab show all ·
+Ctrl+S session · Ctrl+R refresh · Esc close", keys bold. Its Tab entry
+names what Tab does next, as the count row's toggle does: "Tab show all"
+while only scoped models show, "Tab show scoped" while every model shows,
+and no Tab entry when `scoped_models` is unset.
 
 On a screen too short for every row, the list scrolls in the rows left
 between the count row and the footer, and it always shows at least one
