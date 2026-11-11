@@ -48,6 +48,7 @@ jobs:
       base: ${{ steps.base.outputs.base }}
       mode: ${{ steps.select.outputs.mode }}
       packages: ${{ steps.select.outputs.packages }}
+      package_specs: ${{ steps.select.outputs.package_specs }}
       jobs: ${{ steps.plan.outputs.jobs }}
       shards: ${{ steps.plan.outputs.shards }}
       shard_total: ${{ steps.plan.outputs.shard_total }}
@@ -246,6 +247,28 @@ jobs:
           fi
           cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
             --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
+          # The macOS clippy check runs only on a pull request whose diff
+          # touches a file containing `target_os` (docs/ci.md, "On every
+          # pull request that changes code"). The names-only diff is scanned
+          # at HEAD, so a file the pull request moved still fires and a
+          # deleted file never does.
+          clippy_macos=false
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            while IFS= read -r path; do
+              if [ -n "$path" ] && [ -f "$path" ] && grep -q 'target_os' "$path"; then
+                clippy_macos=true
+                break
+              fi
+            done <<<"$(git diff --name-only "$BASE...HEAD")"
+          fi
+          # Merge the flag into the selection's jobs map: a missing or
+          # malformed jobs line fails the step closed instead of silently
+          # dropping the key, which would skip the job and pass the verdict
+          # vacuously.
+          jobs_json=$(grep '^jobs=' "$GITHUB_OUTPUT" | tail -n 1 | sed 's/^jobs=//')
+          [ -n "$jobs_json" ] || exit 1
+          merged=$(printf '%s' "$jobs_json" | jq -c --argjson clippy_macos "$clippy_macos" '. + {clippy_macos: $clippy_macos}') || exit 1
+          echo "jobs=$merged" >>"$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
@@ -797,6 +820,39 @@ jobs:
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
+
+  # Clippy only, no tests: on a pull request whose diff touches a file
+  # containing `target_os`, the selected crates are linted on macOS arm64,
+  # where Linux-only code would otherwise die as dead code under
+  # `-D warnings` (docs/ci.md, "On every pull request that changes code").
+  clippy_macos:
+    name: Clippy (macOS arm64)
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).clippy_macos
+    runs-on: macos-26
+    # No history yet: a generous bound, retuned to twice the median after
+    # twenty runs (docs/ci.md, "Job time limits").
+    timeout-minutes: 30
+    env:
+      PACKAGE_SPECS: ${{ needs.select.outputs.package_specs }}
+    steps:
+      - *checkout-full
+      - *toolchain
+      - *cache-restore
+      - name: cargo clippy -q --all-targets -- -D warnings
+        run: |
+          # The specs expand to `-p` args exactly as the shared check
+          # script does (scripts/check): one package per spec, so a
+          # workspace crate sharing a dependency's name still names one
+          # package. An empty selection logs and succeeds without cargo.
+          package_spec_args=()
+          for p in $PACKAGE_SPECS; do package_spec_args+=(-p "$p"); done
+          if [ "${#package_spec_args[@]}" -eq 0 ]; then
+            echo "no crates selected: nothing to lint"
+            exit 0
+          fi
+          echo "== cargo clippy -q --all-targets -- -D warnings"
+          cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
 
   # The tests the push touches, each run 30 times (100 when the
   # push fixes a flaky test), beside the test jobs on the backstop: one failure
@@ -2126,7 +2182,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test_linux, test, mutants, bug_red, release, stress]
+    needs: [select, lint, test_linux, test, clippy_macos, mutants, bug_red, release, stress]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.
