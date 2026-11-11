@@ -5437,6 +5437,7 @@ fn the_foot_bolds_each_key_and_dims_the_rest() {
         })
         .map(|span| span.content.to_string())
         .collect();
+    // `docs/tui.md`, "Home" (the foot names the keys in this order, each bold with the rest dim).
     assert_eq!(
         bold,
         [
@@ -5505,6 +5506,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
         })
         .map(|span| span.content.to_string())
         .collect();
+    // `docs/tui.md`, "Home" (the foot names the keys in this order, each bold with the rest dim).
     assert_eq!(
         bold,
         ["Ctrl+O", "↑↓", "Shift+↑↓", "x", "Backspace", "F2", "Ctrl+C"]
