@@ -357,3 +357,14 @@ crates/extensions/tests/models.rs	fiber-4609	plan	2026-11-11T16:06:14Z	Amoghs-Ma
 crates/tui/src/model_picker.rs	fiber-4612	plan	2026-11-11T16:28:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/model_picker_view_tests.rs	fiber-4612	plan	2026-11-11T16:28:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/model_picker_tests.rs	fiber-4612	plan	2026-11-11T16:28:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/host.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/tui_vm_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/tui_extensions.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/tui_extensions_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/keyboard_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop_focus_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/keys_tests.rs	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tui.md	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/extensions.md	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
