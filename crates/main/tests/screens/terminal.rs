@@ -1280,7 +1280,6 @@ fn expected_card(text: usize, _panel: u16) -> Vec<String> {
         let kept: String = compaction.chars().take(room - 1).collect();
         rows.push(format!("{kept}… {share}"));
     }
-    rows.push(fit_row("then a summary, fresh context", text));
     // Every figure: its dim label with the value right-aligned.
     let figure = |label: &str, value: &str| {
         format!(

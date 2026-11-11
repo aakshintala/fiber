@@ -1938,9 +1938,11 @@ impl App {
                 }
                 Vec::new()
             }
-            HubEventKind::DeviceChanged | HubEventKind::SessionLeft | HubEventKind::Unknown(_) => {
-                Vec::new()
-            }
+            HubEventKind::DeviceChanged
+            | HubEventKind::SessionLeft
+            | HubEventKind::SessionDeleted
+            | HubEventKind::SessionArchived
+            | HubEventKind::Unknown(_) => Vec::new(),
         }
     }
 
