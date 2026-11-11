@@ -187,17 +187,11 @@ crates/tui/src/rebind_view_tests.rs	fiber-4491	plan	2026-11-10T22:01:41Z	roundho
 crates/tui/src/app/keyboard_screen_tests.rs	fiber-4491	plan	2026-11-10T22:01:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/overlay_tests.rs	fiber-4491	plan	2026-11-10T22:01:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/snapshots	fiber-4491	plan	2026-11-10T22:01:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/view/cursor.rs	fiber-4588	plan	2026-11-10T22:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/view/input_box.rs	fiber-4588	plan	2026-11-10T22:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/process/transport.rs	fiber-4557	plan	2026-11-10T22:32:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/transport/parse.rs	fiber-4557	plan	2026-11-10T22:32:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/calls/dispatch.rs	fiber-4557	plan	2026-11-10T22:32:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/tests.rs	fiber-4557	plan	2026-11-10T22:32:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/keeper.rs	fiber-4601	plan	2026-11-10T22:45:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/view/input_box_tests.rs	fiber-4588	plan	2026-11-10T23:00:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/login_view_tests.rs	fiber-4588	plan	2026-11-10T23:00:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/screens/line_start_end.rs	fiber-4588	plan	2026-11-10T23:00:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/screen_looks/look.rs	fiber-4588	plan	2026-11-10T23:00:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/home.rs	fiber-4491	plan	2026-11-10T23:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/home.rs	fiber-4491	plan	2026-11-10T23:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/providers.rs,crates/main/tests/providers/databricks.rs	fiber-4337	grant	2026-11-10T23:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4337	
