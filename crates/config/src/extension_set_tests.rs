@@ -1,5 +1,6 @@
 //! Unit tests for the extension-settings helpers: `host_shape`, the
-//! declared-settings readers, `settings_key` and the layered get. No
+//! declared-settings readers, `settings_key` and the layered get, plus the
+//! omission mark's parsing on `ModelData`. No
 //! set-routing coverage: the `cli` behaviour tests hold that.
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
@@ -8,7 +9,7 @@ use std::fs;
 
 use serde_json::json;
 
-use super::{declared_settings_in, host_shape, installed_dir};
+use super::{ModelData, declared_settings_in, host_shape, installed_dir};
 use crate::extension_settings::settings_key;
 use crate::{Config, ProjectKey, Source, Sources};
 
@@ -727,6 +728,47 @@ fn set_project_placeholder_write_returns_the_project_file() {
             .join("config")
             .join("acme.json")
     );
+}
+
+/// A present mark is kept verbatim: the drain in `extensions` reports the
+/// provider's own words (`docs/model-routing.md`, "Model discovery").
+#[test]
+fn omit_reason_present_is_kept_verbatim() {
+    let data: ModelData = serde_json::from_value(json!({
+        "id": "gone", "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1",
+        "omit_reason": "no serving endpoint with a matching name",
+    }))
+    .unwrap();
+    assert_eq!(
+        data.omit_reason.as_deref(),
+        Some("no serving endpoint with a matching name")
+    );
+}
+
+#[test]
+fn omit_reason_absent_means_kept() {
+    let data: ModelData = serde_json::from_value(json!({
+        "id": "ok", "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1",
+    }))
+    .unwrap();
+    assert_eq!(data.omit_reason, None);
+}
+
+/// An empty or blank mark names no reason, and neither do `null` or a
+/// non-string: `present_non_empty` refuses each, so a malformed `models()`
+/// list fails as `BadReturn` on the existing path.
+#[test]
+fn omit_reason_empty_blank_null_or_non_string_is_invalid() {
+    for reason in [json!(""), json!("   "), json!(null), json!(7)] {
+        let result = serde_json::from_value::<ModelData>(json!({
+            "id": "gone", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "omit_reason": reason,
+        }));
+        assert!(result.is_err(), "{reason}");
+    }
 }
 
 #[test]
