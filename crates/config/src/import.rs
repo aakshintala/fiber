@@ -25,68 +25,54 @@ use crate::write::atomic::{locked, write_atomic};
 use crate::{Source, valid_server_name};
 use crate::{get_global, valid_env_key};
 
-/// Which harness to import from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportSource {
-    /// Claude Code, read from `~/.claude`.
-    ClaudeCode,
-    /// Codex, read from `~/.codex`.
-    Codex,
+/// Which harness to import from: the one contract enum the session, the
+/// hub, the CLI and the TUI all use. The layout helpers stay here with
+/// the filesystem behaviour, as free functions over it.
+pub use contract::commands::ImportSource;
+
+/// The source's home directory name under the person's home.
+fn dir_name(source: ImportSource) -> &'static str {
+    match source {
+        ImportSource::ClaudeCode => ".claude",
+        ImportSource::Codex => ".codex",
+    }
 }
 
-impl ImportSource {
-    /// The name the receipt and the report use: `claude-code` or `codex`.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "claude-code",
-            Self::Codex => "codex",
-        }
+/// The receipt file's name at the top of Fiber home.
+fn receipt_name(source: ImportSource) -> &'static str {
+    match source {
+        ImportSource::ClaudeCode => "import-claude-code.json",
+        ImportSource::Codex => "import-codex.json",
     }
+}
 
-    /// The source's home directory name under the person's home.
-    fn dir_name(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => ".claude",
-            Self::Codex => ".codex",
-        }
+/// The instruction file's name, in the source and in Fiber home.
+fn instruction_name(source: ImportSource) -> &'static str {
+    match source {
+        ImportSource::ClaudeCode => "CLAUDE.md",
+        ImportSource::Codex => "AGENTS.md",
     }
+}
 
-    /// The receipt file's name at the top of Fiber home.
-    fn receipt_name(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "import-claude-code.json",
-            Self::Codex => "import-codex.json",
-        }
+/// The flat prompt directory's name in the source: `commands` or
+/// `prompts`.
+fn flat_dir(source: ImportSource) -> &'static str {
+    match source {
+        ImportSource::ClaudeCode => "commands",
+        ImportSource::Codex => "prompts",
     }
+}
 
-    /// The instruction file's name, in the source and in Fiber home.
-    fn instruction_name(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "CLAUDE.md",
-            Self::Codex => "AGENTS.md",
-        }
-    }
-
-    /// The flat prompt directory's name in the source: `commands` or
-    /// `prompts`.
-    fn flat_dir(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "commands",
-            Self::Codex => "prompts",
-        }
-    }
-
-    /// Reads the source's MCP servers: `settings.json` `mcpServers` for
-    /// Claude Code, `config.toml` `[mcp_servers]` for Codex.
-    fn read_servers(
-        &self,
-        source_home: &Path,
-        budget: &mut Budget,
-    ) -> (Vec<RawServer>, Vec<LeftBehind>) {
-        match self {
-            Self::ClaudeCode => read_claude_servers(&source_home.join("settings.json"), budget),
-            Self::Codex => read_codex_servers(&source_home.join("config.toml"), budget),
-        }
+/// Reads the source's MCP servers: `settings.json` `mcpServers` for
+/// Claude Code, `config.toml` `[mcp_servers]` for Codex.
+fn read_servers(
+    source: ImportSource,
+    source_home: &Path,
+    budget: &mut Budget,
+) -> (Vec<RawServer>, Vec<LeftBehind>) {
+    match source {
+        ImportSource::ClaudeCode => read_claude_servers(&source_home.join("settings.json"), budget),
+        ImportSource::Codex => read_codex_servers(&source_home.join("config.toml"), budget),
     }
 }
 
@@ -152,8 +138,8 @@ struct Receipt {
 /// has a completed receipt under `home`, so the offer fires at most
 /// until the first import lands.
 pub fn import_pending(home: &Path) -> bool {
-    !home.join(ImportSource::ClaudeCode.receipt_name()).is_file()
-        && !home.join(ImportSource::Codex.receipt_name()).is_file()
+    !home.join(receipt_name(ImportSource::ClaudeCode)).is_file()
+        && !home.join(receipt_name(ImportSource::Codex)).is_file()
 }
 
 /// Copies another harness's configuration into Fiber home, once. With a
@@ -171,7 +157,7 @@ pub fn import_source(
     check: &dyn PersonalSourceCheck,
     clock: &dyn Clock,
 ) -> Result<ImportReport, ConfigError> {
-    let receipt_file = home.join(source.receipt_name());
+    let receipt_file = home.join(receipt_name(source));
     if let Some(report) = read_receipt(&receipt_file, source)? {
         return Ok(report);
     }
@@ -291,7 +277,7 @@ fn classify(
         &mut left_behind,
         &mut budget,
     )?;
-    let (raw_servers, mut server_left) = source.read_servers(source_home, &mut budget);
+    let (raw_servers, mut server_left) = read_servers(source, source_home, &mut budget);
     left_behind.append(&mut server_left);
     let mut servers = Vec::new();
     for raw in raw_servers {
@@ -370,7 +356,7 @@ fn read_flat(
     left_behind: &mut Vec<LeftBehind>,
     budget: &mut Budget,
 ) -> Result<(), ConfigError> {
-    let flat = source.flat_dir();
+    let flat = flat_dir(source);
     let dir = source_home.join(flat);
     for name in read_source_dir(&dir, flat, left_behind)? {
         let path = dir.join(&name);
@@ -459,7 +445,7 @@ fn read_instruction(
     left_behind: &mut Vec<LeftBehind>,
     budget: &mut Budget,
 ) -> Result<(), ConfigError> {
-    let name = source.instruction_name();
+    let name = instruction_name(source);
     let bytes = match read_source(&source_home.join(name), name, budget, left_behind)? {
         SourceFile::Read(bytes) => bytes,
         // Missing reads as no instruction; an over-cap file already
@@ -494,7 +480,7 @@ fn top_level_left_behind(
         ImportSource::ClaudeCode => &["skills", "commands", "CLAUDE.md", "settings.json"],
         ImportSource::Codex => &["skills", "prompts", "config.toml", "AGENTS.md"],
     };
-    for name in read_source_dir(source_home, source.dir_name(), left_behind)? {
+    for name in read_source_dir(source_home, dir_name(source), left_behind)? {
         if mapped.contains(&name.as_str()) {
             continue;
         }
@@ -1637,7 +1623,7 @@ fn write_receipt(
 /// Resolves `~/.claude` or `~/.codex` under `home_env`: test code passes
 /// explicit paths, so only the CLI reads the environment.
 pub fn source_home(home_env: &Path, source: ImportSource) -> PathBuf {
-    home_env.join(source.dir_name())
+    home_env.join(dir_name(source))
 }
 
 #[cfg(test)]

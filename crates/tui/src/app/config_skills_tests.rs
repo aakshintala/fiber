@@ -84,6 +84,13 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -92,7 +99,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),

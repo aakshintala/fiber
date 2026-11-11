@@ -361,9 +361,10 @@ fn a_fan_out_for_a_new_project_ignores_an_in_flight_ask_for_another_project() {
     // skipped.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     let page_id = page["id"].as_str().unwrap_or_else(|| panic!("page id"));
     let lines = answer_value(
@@ -424,9 +425,10 @@ fn a_second_page_while_one_is_in_flight_sends_nothing() {
     let key = more_key(&app, "-w").expect("a more row");
     // The first page goes out past the last loaded row
     // (`docs/tui.md`, "The session list": opening it pages the project's `recent`).
-    let Effect::Send(first) = app.home_click(Spot::More(key)) else {
+    let Effect::SendTracked(sents) = app.home_click(Spot::More(key)) else {
         panic!("More opens the next scoped page");
     };
+    let first: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(first.len(), 1);
     let page: Value = serde_json::from_str(&first[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -473,9 +475,10 @@ fn page_recent_scopes_to_the_focused_project_not_its_neighbor() {
     // the paging path for the last row directly; the state around it
     // still arrives purely by messages.
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row pages its project");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(page.len(), 1);
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -505,9 +508,10 @@ fn page_recent_from_the_last_row_with_more_held_scopes_the_page() {
     // page stays unscoped too. ↓ would land on the drawn `More` row
     // first, so the test calls the paging path directly.
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row pages its project");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(page.len(), 1);
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -539,9 +543,11 @@ fn page_recent_off_the_last_row_sends_no_scoped_page() {
     // `||` either half suffices, so both send a scoped page.
     assert_eq!(app.page_recent(row_key(&app, "s_aaaaaaaaaaaaaaaa")), None);
     // The last row still pages its project: the feature ran.
-    let Some(Effect::Send(page)) = app.page_recent(row_key(&app, "s_bbbbbbbbbbbbbbbb")) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(row_key(&app, "s_bbbbbbbbbbbbbbbb"))
+    else {
         panic!("the last row pages its project");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["args"]["project"], "-w");
     assert_eq!(page["args"]["before"], "s_bbbbbbbbbbbbbbbb");
@@ -568,9 +574,10 @@ fn page_recent_at_the_total_pages_the_unscoped_cursor() {
     // as more and a scoped page goes out instead.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
     assert_eq!(page["args"]["before"], "s_aaaaaaaaaaaaaaaa");
@@ -604,9 +611,10 @@ fn page_recent_below_the_total_pages_the_unscoped_cursor() {
     // page instead.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
     assert_eq!(page["args"]["before"], "s_bbbbbbbbbbbbbbbb");
@@ -664,9 +672,10 @@ fn page_recent_keeps_the_unscoped_path_with_the_link_down() {
         json!({"sessions": [], "total": 2}),
     );
     let key = row_key(&scoped, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(while_up)) = scoped.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = scoped.page_recent(key) else {
         panic!("the last row pages its project while up");
     };
+    let while_up: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(while_up.len(), 1);
     // The drop keeps the held total: the scoped page now sends nothing.
     // With no link check on the scoped branch a page goes out.
@@ -690,9 +699,10 @@ fn page_recent_keeps_the_unscoped_path_with_the_link_down() {
     // The drop keeps the unscoped cursor: the unscoped page still goes
     // out with the link down. With a global offline guard this is `None`.
     unscoped.disconnected();
-    let Some(Effect::Send(page)) = unscoped.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = unscoped.page_recent(key) else {
         panic!("the unscoped page still goes out while down");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(page.len(), 1);
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -741,6 +751,39 @@ fn scoped_first_needs_a_project_and_the_link() {
     let mut projects = fanout_projects(&scoped);
     projects.sort_unstable();
     assert_eq!(projects, ["-w"]);
+}
+
+#[test]
+fn a_failed_scoped_refill_settles_by_its_carried_id() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // The unscoped answer fans the scoped ask out, paired at the fold.
+    let lines: Vec<String> = app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"recent\"") && line.contains("-w"))
+        .expect("a scoped ask");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("scoped id");
+    // Tamper with the scoped line's JSON id, then pair the tampered
+    // line as a builder whose line and id diverge would: settlement
+    // must follow the carried id, never the line's JSON.
+    let tampered = lines[at].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    let mut failed = lines;
+    failed[at] = tampered;
+    app.write_failed(&failed);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
 }
 
 /// The archived ask's id in `fanout`.
@@ -962,7 +1005,7 @@ fn archived_page_sends_nothing_without_a_project_the_link_or_while_in_flight() {
     assert!(app.archived_page("", None).is_empty());
     let page = app.archived_page("-new", None);
     assert_eq!(page.len(), 1);
-    let line: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    let line: Value = serde_json::from_str(&page[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
     assert_eq!(line["args"]["project"], "-new");
     assert!(is_archived(&line));
@@ -1010,7 +1053,7 @@ fn an_archived_answer_while_open_pages_only_while_rows_are_missing() {
     // assertion below fails.
     let retry = app.archived_first("-w");
     assert_eq!(retry.len(), 1);
-    let retry: Value = serde_json::from_str(&retry[0]).unwrap_or_else(|err| panic!("{err}"));
+    let retry: Value = serde_json::from_str(&retry[0].line).unwrap_or_else(|err| panic!("{err}"));
     let paging = answer_value(
         &mut app,
         line_id(&retry),
@@ -1089,11 +1132,12 @@ fn delete_fold_re_asks_both_the_scoped_and_the_archived_count() {
     ))));
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
-    let Effect::Send(delete) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(delete) = app.on_key(Key::Enter, now) else {
         panic!("Enter confirms the delete");
     };
     assert_eq!(delete.len(), 1);
-    let command: Value = serde_json::from_str(&delete[0]).unwrap_or_else(|err| panic!("{err}"));
+    let command: Value =
+        serde_json::from_str(&delete[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(command["command"], "delete");
     let refill = answer_value(
         &mut app,
@@ -1106,7 +1150,9 @@ fn delete_fold_re_asks_both_the_scoped_and_the_archived_count() {
     // dropping the archived leg of the delete refetch fails this.
     assert_eq!(refill.len(), 3);
     assert_eq!(refill[0]["command"], "recent");
-    assert!(refill[0].get("args").is_none());
+    // The typed line writes an empty `args` object where the raw
+    // builder leaves it out; the hub reads both the same.
+    assert_eq!(refill[0].get("args"), Some(&json!({})));
     assert_eq!(fanout_projects(&refill[1..]), ["-w"]);
     assert_eq!(archived_projects(&refill), ["-w"]);
 }
@@ -1117,7 +1163,12 @@ fn a_held_archived_total_is_not_fanned_out_again() {
     app.on_line(hello());
     // No rows on home: the delete-path refill asks the unscoped page
     // plus both counts for the project.
-    let lines = commands(app.ask_recent_first(Some("-w")));
+    let lines = commands(
+        app.ask_recent_first(Some("-w"))
+            .into_iter()
+            .map(|sent| sent.line)
+            .collect(),
+    );
     assert_eq!(lines.len(), 3);
     let first = line_id(&lines[0]).to_owned();
     let archived = archived_id(&lines);

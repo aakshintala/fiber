@@ -185,6 +185,11 @@ fn unknown_command(id: CommandId, command: &str) -> (CommandId, ErrorCode, Strin
 pub(crate) fn parse(
     line: Classified,
 ) -> Result<(CommandLine, String), (CommandId, ErrorCode, String)> {
+    // A failed `import` whose `args` are sound but whose `source` names
+    // no harness is refused naming the two sources. The check reads the
+    // raw line before the value moves into the command-line read.
+    let unknown_source =
+        contract::commands::is_unknown_import_source(&line.command, line.value.get("args"));
     match serde_json::from_value::<CommandLine>(line.value) {
         Ok(parsed) => {
             if matches!(parsed.command, Command::Unknown) {
@@ -198,6 +203,13 @@ pub(crate) fn parse(
             match serde_json::from_value::<Command>(serde_json::json!({ "command": &line.command }))
             {
                 Ok(Command::Unknown) => Err(unknown_command(line.id, &line.command)),
+                // An `import` whose `args` are sound but whose `source`
+                // names no harness is refused naming the two sources.
+                _ if unknown_source => Err((
+                    line.id,
+                    ErrorCode::InvalidArguments,
+                    "`source` must be `claude-code` or `codex`.".to_owned(),
+                )),
                 _ => Err((
                     line.id,
                     ErrorCode::InvalidArguments,

@@ -59,10 +59,10 @@ fn enter(app: &mut App, text: &str) {
     for ch in text.chars() {
         let _ = app.on_key(Key::Char(ch), now);
     }
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(lines.len(), 1);
+    assert_eq!(sents.len(), 1);
 }
 
 /// Refuses the sent start for missing hooks and answers the names

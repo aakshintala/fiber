@@ -28,7 +28,13 @@ impl App {
             for session in &sessions {
                 self.home.sessions.remove(session);
             }
-            let lines = self.ask_recent_first(project.as_deref());
+            // The refill cruises the fold: each id rides paired, so a
+            // failed write settles by the carried id.
+            let lines = self
+                .ask_recent_first(project.as_deref())
+                .into_iter()
+                .map(|sent| self.outbox.fold_line(sent))
+                .collect();
             self.delete_command_finish(false);
             self.go_home();
             return Some(lines);
@@ -66,7 +72,11 @@ impl App {
         }
         if code == ErrorCode::StaleRequest {
             let project = self.delete_target_project(&target);
-            let lines = self.ask_recent_first(project.as_deref());
+            let lines = self
+                .ask_recent_first(project.as_deref())
+                .into_iter()
+                .map(|sent| self.outbox.fold_line(sent))
+                .collect();
             self.delete_command_finish(false);
             self.notices
                 .push(code, format!("{message} The sessions remain stopped."));
@@ -75,7 +85,11 @@ impl App {
         }
 
         let project = self.delete_target_project(&target);
-        let lines = self.ask_recent_first(project.as_deref());
+        let lines = self
+            .ask_recent_first(project.as_deref())
+            .into_iter()
+            .map(|sent| self.outbox.fold_line(sent))
+            .collect();
         self.delete_command_finish(true);
         self.notices.push(code, format!("Delete failed: {message}"));
         self.go_home();
