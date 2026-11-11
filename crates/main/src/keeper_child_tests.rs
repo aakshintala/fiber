@@ -983,10 +983,14 @@ fn malformed_oversized_and_torn_candidates_leave_the_keeper_alone() {
         }
     });
     assert_eq!(hear(&flood, "the oversize rejection").map(|_| ()), None);
-    flood
-        .writer
-        .shutdown(std::net::Shutdown::Both)
-        .expect("end of the flood");
+    // The keeper already refused the oversized line and closed its end, so
+    // on macOS this shutdown fails with `NotConnected` (errno 57); any
+    // other error is still a failure.
+    match flood.writer.shutdown(std::net::Shutdown::Both) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotConnected => {}
+        Err(error) => panic!("end of the flood: {error:?}"),
+    }
     assert!(sender.join().is_ok());
     // The keeper still holds the log and still answers a real candidate.
     assert!(lock_holder(&keeper).is_some_and(|label| label.starts_with("keeper ")));
