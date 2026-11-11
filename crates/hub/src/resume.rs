@@ -92,6 +92,33 @@ fn is_delegate_in(dir: &Path) -> bool {
     recorded(dir).is_some_and(|recorded| recorded.delegate)
 }
 
+/// A session whose log ends in `fiber_exited` and whose workspace is
+/// gone and cannot be made again (`docs/invocation.md`, "Lifecycle"):
+/// its directory and the missing path. The hub serves a `full`
+/// subscribe and `history` for it from the log instead of resuming or
+/// refusing it. The missing path is the workspace for a plain folder,
+/// and the recorded repository when a recorded Fiber worktree's
+/// repository is gone too, exactly as the resume guard refuses them.
+/// A worktree whose repository still exists is made again, so `None`,
+/// as for a live log, a missing or unreadable one, and a delegate's:
+/// the delegate branch owns delegates, and the guard owns every other
+/// command.
+pub(crate) fn gone_readable(home: &Path, session: &SessionId) -> Option<(PathBuf, PathBuf)> {
+    let (_, dir) = crate::recent::lookup_logged(home, session)?;
+    if !exited_in(&dir) {
+        return None;
+    }
+    let found = recorded(&dir)?;
+    if found.delegate {
+        return None;
+    }
+    match (found.repository, missing(&found.workspace)) {
+        (None, true) => Some((dir, found.workspace)),
+        (Some(repository), true) if missing(&repository) => Some((dir, repository)),
+        (Some(_) | None, _) => None,
+    }
+}
+
 /// Whether `session` is a finished delegate whose parent holds no open run
 /// for its job: its log's tail is `fiber_exited`, its `session_started`
 /// names a parent session and job, and the parent's log holds no
