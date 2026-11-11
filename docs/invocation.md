@@ -757,6 +757,15 @@ repository: "<path> no longer exists". A recorded Fiber worktree whose
 repository still exists is made again, as "Isolation" says. A live session
 is attached as before, without the check.
 
+**A session whose workspace is gone and cannot be made again is still
+readable.** A `full` `subscribe` for it is not refused: the hub replays its
+log instead, as for a finished delegate. `command_accepted` carries
+`last_seq` and `workspace_gone`, the missing path, then the fold follows,
+with no live tail. The hub answers `history` for it from the log, its
+`forked_from` chain included, as the session would. Nothing resumes it, so
+nothing unarchives it. Every other command for it is refused `io_failed` as
+above.
+
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` and no `repository_code_offered` in its log
 deletes its own directory, unless its `session_started` has `forked_from`
@@ -1584,6 +1593,20 @@ session (`docs/tui.md`, "The session list"):
   and waits for exit evidence as `/delete` does, with the delegates that shut
   down with it, then sends `archive` for that one session. A stop the hub
   refuses archives nothing.
+- **The hub also archives on its own** when it answers `recent` or
+  `sessions`, with or without `archived`, before it answers, so the answer
+  and its `total` already count these as archived:
+  - an exited session whose workspace no longer exists, whether or not it
+    could be made again. Opening it resumes it, which makes a recorded
+    Fiber worktree again and unarchives it, or opens it read only
+    ("Lifecycle"). It costs one `stat` per exited row not yet archived
+    in the project asked for; an archived row is not checked again.
+  - in each project, every exited session past the `session.keep_exited`
+    most recent (`docs/configuration.md`), 10 by default; 0 keeps them
+    all. Live sessions do not count.
+
+  It archives as `archive` does and asks nothing. A session whose lock
+  another process holds is skipped and tried again at the next answer.
 - **With `--hub`, the id resolves on that hub,** as for `sessions delete`.
 
 ## Deleting and pruning
