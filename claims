@@ -209,14 +209,6 @@ providers/openai/providers/openai.json	fiber-4459	plan	2026-11-10T15:51:52Z	Amog
 xtask/tests/models_dev.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/models.rs	fiber-4459	plan	2026-11-10T15:51:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/support/src/framing.rs	fiber-4445	plan	2026-11-10T16:41:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/support/src/framing_tests.rs	fiber-4445	plan	2026-11-10T16:41:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/hub/src/fake.rs	fiber-4445	plan	2026-11-10T16:41:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/hub/src/fake_tests.rs	fiber-4445	plan	2026-11-10T16:41:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/testing/fakes.md	fiber-4445	plan	2026-11-10T16:41:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/support/examples/framing.rs	fiber-4445	plan	2026-11-10T16:44:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/support/tests/support/framing_input.rs	fiber-4445	plan	2026-11-10T16:44:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/support/tests/framing_jig.rs	fiber-4445	plan	2026-11-10T16:44:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/prompt/reviewer.md	fiber-4457	plan	2026-11-10T17:34:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer_tests.rs	fiber-4457	plan	2026-11-10T17:34:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/prompt_tests.rs	fiber-4457	plan	2026-11-10T17:34:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
