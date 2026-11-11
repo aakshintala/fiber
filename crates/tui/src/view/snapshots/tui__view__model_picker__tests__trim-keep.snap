@@ -10,7 +10,7 @@ expression: "screen(&app, 80, 16)"
    opencode
        1 model needs workspace: run `fiber login opencode`
 ⋮
-⋮  ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refr
+⋮  ↑↓ move · ←→ levels · Enter choose · Ctrl+S session · Ctrl+R refresh · Esc
 ⋮
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
