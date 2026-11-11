@@ -3,13 +3,16 @@
 //! generation (`docs/tui.md`, "Slash commands").
 
 use contract::SessionId;
-use contract::events::{CommandAccepted, CommandResult};
+use contract::events::{CommandAccepted, CommandInfo, CommandResult};
+use contract::{ErrorCode, commands::Command};
+
+use std::collections::BTreeSet;
 
 use super::{App, Effect, session_line};
 use crate::completion_rows::Completions;
+use crate::ext::{SessionCtx, TuiCommand};
 use crate::keys::Key;
 use crate::slash;
-use contract::commands::Command;
 
 /// The `@` panel's state.
 #[derive(Debug)]
@@ -24,13 +27,27 @@ pub(super) struct FilePanel {
 #[derive(Debug)]
 pub(super) struct Completion {
     /// The `/` list: built-in commands, then the attached session's
-    /// `commands` answer.
+    /// `commands` answer, then the TUI extension commands.
     pub(super) slash_rows: Vec<slash::Row>,
     /// The extension commands of the latest `commands` answer, in answer
     /// order: only its answer fills the list.
     pub(super) extensions: Vec<String>,
     /// The id of the latest `commands` sent; only its answer fills the list.
     pub(super) commands_id: Option<String>,
+    /// The latest session `commands` answer, for re-merging when the TUI
+    /// commands refresh.
+    pub(super) session_answer: Vec<CommandInfo>,
+    /// The TUI extension commands from the installed renderer: refreshed
+    /// on install, attach, `extensions_loaded`, reload and `reset_session`
+    /// with the home context, never by `ask_commands`, and never cleared
+    /// by `reset_session`.
+    pub(super) tui_commands: Vec<TuiCommand>,
+    /// Extension-against-extension conflict names from the latest merge:
+    /// no row on either side, and dispatch consumes the name.
+    pub(super) tui_conflicts: BTreeSet<String>,
+    /// Conflict contenders already noticed: one `command_conflict` per
+    /// name and set of contenders until `/reload`.
+    pub(super) conflict_noticed: BTreeSet<(String, String, String)>,
     /// Esc closed the `/` panel for this draft.
     slash_closed: bool,
     /// Esc closed the `/theme ` panel for this draft.
@@ -50,6 +67,10 @@ impl Default for Completion {
             slash_rows: slash::rows(&[]),
             extensions: Vec::new(),
             commands_id: None,
+            session_answer: Vec::new(),
+            tui_commands: Vec::new(),
+            tui_conflicts: BTreeSet::new(),
+            conflict_noticed: BTreeSet::new(),
             slash_closed: false,
             theme_closed: false,
             selected: 0,
@@ -62,11 +83,12 @@ impl Default for Completion {
 impl Completion {
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`; its answer, and no older one, fills the `/` list.
-    /// Until it answers, the list holds the built-ins only.
+    /// Until it answers, the list holds the built-ins and the TUI
+    /// commands only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let id = support::mint("c_");
         let line = session_line(&contract::CommandId(id.clone()), session, Command::Commands);
-        self.slash_rows = slash::rows(&[]);
+        self.session_answer.clear();
         self.extensions.clear();
         self.commands_id = Some(id);
         line
@@ -78,16 +100,50 @@ impl Completion {
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
-    /// sent replaces the session's rows of the `/` list.
-    pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
+    /// sent replaces the session's rows of the `/` list. True when the
+    /// answer fills the list and the caller re-merges the TUI rows.
+    pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) -> bool {
         if !self.awaits(&accepted.command_id.0) {
-            return;
+            return false;
         }
         if let Some(CommandResult::Commands { commands }) = &accepted.result {
-            self.slash_rows = slash::rows(commands);
+            self.session_answer = commands.clone();
             self.extensions = slash::extensions(commands);
             self.commands_id = None;
+            return true;
         }
+        false
+    }
+
+    /// Re-merges the `/` list from the latest session answer and the TUI
+    /// commands: built-ins, then session rows, then TUI rows, one row per
+    /// name. Returns each new extension-against-extension conflict with
+    /// both owners for its one `command_conflict` notice.
+    fn merge(&mut self) -> Vec<(String, String, String)> {
+        let session_rows = slash::rows(&self.session_answer);
+        let tui_rows = slash::tui_rows(&self.tui_commands);
+        let (merged, conflicts) = slash::without_conflicts(&session_rows, &tui_rows);
+        let mut fresh = Vec::new();
+        for name in &conflicts {
+            let owner = |rows: &[slash::Row]| {
+                rows.iter()
+                    .find(|row| &row.name == name)
+                    .map(|row| row.tag.clone())
+                    .unwrap_or_default()
+            };
+            let session_owner = owner(&session_rows);
+            let tui_owner = owner(&tui_rows);
+            if self.conflict_noticed.insert((
+                name.clone(),
+                session_owner.clone(),
+                tui_owner.clone(),
+            )) {
+                fresh.push((name.clone(), session_owner, tui_owner));
+            }
+        }
+        self.tui_conflicts = conflicts;
+        self.slash_rows = merged;
+        fresh
     }
 }
 
@@ -96,6 +152,52 @@ impl Completion {
 mod tests;
 
 impl App {
+    /// Re-merges the `/` list after the session answer or the TUI
+    /// commands change: one row per name, with one `command_conflict`
+    /// notice per new extension-against-extension clash until `/reload`.
+    pub(super) fn merge_slash_rows(&mut self) {
+        for (name, session_tag, tui_tag) in self.completion.merge() {
+            self.push_notice(
+                ErrorCode::from_name("command_conflict"),
+                format!(
+                    "Two extensions register the command `{name}`: {session_tag} and {tui_tag}. Neither gets it."
+                ),
+            );
+        }
+    }
+
+    /// The TUI command context: the session on screen with its halves,
+    /// or neither on home, which has no session.
+    pub(super) fn command_ctx(&self) -> SessionCtx {
+        match self.session().cloned() {
+            Some(session) => SessionCtx {
+                halves: self.pages().halves_for(&session),
+                session_id: Some(session),
+            },
+            None => SessionCtx {
+                session_id: None,
+                halves: None,
+            },
+        }
+    }
+
+    /// Refreshes the TUI commands from the installed renderer against
+    /// the session on screen and its halves, then re-merges the `/`
+    /// list. Runs on install, attach, `extensions_loaded`, reload and
+    /// `reset_session` with the home context: never from `ask_commands`,
+    /// and never cleared by `reset_session`.
+    pub(super) fn refresh_tui_commands(&mut self) {
+        let Some(renderer) = self.handle.get() else {
+            return;
+        };
+        let ctx = self.command_ctx();
+        self.completion.tui_commands = renderer.tui_commands(&ctx);
+        self.merge_slash_rows();
+        for (code, text) in renderer.take_pending() {
+            self.push_notice(ErrorCode::from_name(&code), text);
+        }
+    }
+
     /// The completion panel above the input line, while one is open and
     /// the approval panel is closed. An empty `/` list shows "no
     /// matches", an empty `@` result "no files match"; before an `@`

@@ -18,7 +18,7 @@ use contract::{Envelope, Seq, SessionId};
 
 use super::batch::{HUB_BATCH, batch, batchable, ready};
 use crate::Input;
-use crate::app::{App, history_args, session_line};
+use crate::app::{App, Sent, history_args, session_line};
 use crate::link::{self, Credits, Line};
 use crate::retry::Retry;
 use crate::tick::TickThread;
@@ -562,6 +562,24 @@ impl Connection {
                 return Some(lines.get(at..).unwrap_or_default().to_vec());
             }
             app.outbox.wrote(line);
+        }
+        None
+    }
+
+    /// Writes tracked hub lines to the hub, settling a failed write by
+    /// each carried id. A failed write hangs up and returns the lines
+    /// not sent for the loop to route as an input. With no hub, every
+    /// line is unsent: a tracked line is never silently dropped.
+    pub(super) fn send_tracked(&mut self, lines: &[Sent], app: &mut App) -> Option<Vec<Sent>> {
+        for (at, sent) in lines.iter().enumerate() {
+            let Some(hub) = &mut self.hub else {
+                return Some(lines.get(at..).unwrap_or_default().to_vec());
+            };
+            if link::write_line(hub, &sent.line).is_err() {
+                self.hang_up();
+                return Some(lines.get(at..).unwrap_or_default().to_vec());
+            }
+            app.outbox.wrote(&sent.line);
         }
         None
     }

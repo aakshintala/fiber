@@ -43,16 +43,14 @@ fn install(setup: &Setup) {
          end } })",
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(dir);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(dir),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A bare home and workspace with a connected hub and a scripted turn:

@@ -47,16 +47,14 @@ impl Setup {
     /// path.
     fn memory(&self) {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/memory");
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// The project's key: the canonical workspace with every `/` as `-`.

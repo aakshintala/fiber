@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 
 use ratatui::layout::Rect;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use super::super::reconnect::UNANSWERED;
-use super::super::{App, Effect, Kind, session_line};
+use super::super::{App, Effect, Kind, Sent, hub_line, session_line};
 use super::{refusal, refusal_code};
 use crate::home::{Spot, State, dependents};
 use crate::input::Draft;
@@ -15,10 +15,11 @@ use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::ErrorCode;
-use contract::SessionId;
 use contract::commands::SubscribeLevel;
-use contract::commands::{CloseArgs, Command};
+use contract::commands::hub::{Delete, HubCommand};
+use contract::commands::{CloseArgs, Command, ImportArgs};
 use contract::events::CommandAccepted;
+use contract::{CommandId, SessionId};
 
 mod exit;
 
@@ -418,13 +419,13 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let (command, line) = delete_line(&id, expect.as_deref());
+        let sent = delete_line(&id, expect.as_deref());
         self.home
             .questions
             .asks
-            .insert(command.clone(), Ask::Delete(id));
-        self.outbox.wait(&command, super::super::Waiting::Delete);
-        Effect::Send(vec![line])
+            .insert(sent.id.0.clone(), Ask::Delete(id));
+        self.outbox.wait(&sent.id.0, super::super::Waiting::Delete);
+        Effect::SendTracked(vec![sent])
     }
 
     /// `1` or `2` in the import offer: the hub `import` for `source`,
@@ -437,26 +438,31 @@ impl App {
         // and a swallowed press would read as a dead key. The held
         // line goes out with the hello pass, and the answer folds as
         // usual; a rejection returns an empty draft, keeping the box.
-        let command = support::mint("c_");
-        let line = json!({
-            "id": command,
-            "command": "import",
-            "args": {"source": source},
-        })
-        .to_string();
+        let id = CommandId(support::mint("c_"));
+        let sent = Sent {
+            line: hub_line(
+                &id,
+                HubCommand::Import(ImportArgs {
+                    source: Some(source.to_owned()),
+                }),
+            ),
+            id: id.clone(),
+        };
         self.home.questions.asks.insert(
-            command.clone(),
+            sent.id.0.clone(),
             Ask::Import {
                 source: source.to_owned(),
             },
         );
         self.outbox
-            .wait(&command, super::super::Waiting::OfferImport);
-        match self
-            .outbox
-            .send(command, Kind::Command, Draft::default(), line)
-        {
-            Some(line) => Effect::Send(vec![line]),
+            .wait(&sent.id.0, super::super::Waiting::OfferImport);
+        match self.outbox.send(
+            sent.id.0.clone(),
+            Kind::Command,
+            Draft::default(),
+            sent.line.clone(),
+        ) {
+            Some(_) => Effect::SendTracked(vec![sent]),
             None => Effect::None,
         }
     }
@@ -594,10 +600,19 @@ impl App {
                 if accepted {
                     self.clear_prompt(&id);
                     // The row's project goes with the refresh: the
-                    // removal below erases where to re-ask.
+                    // removal below erases where to re-ask. The refill
+                    // cruises the fold: each id rides paired, so a
+                    // failed write settles by the carried id.
                     let project = self.home.sessions.row(&id).map(|row| row.project.clone());
                     self.home.sessions.remove(&id);
-                    return self.ask_recent_first(project.as_deref());
+                    return self
+                        .ask_recent_first(project.as_deref())
+                        .into_iter()
+                        .map(|sent| {
+                            self.outbox.note_hub_sent(&sent.id, &sent.line);
+                            sent.line
+                        })
+                        .collect();
                 }
                 let (code, message) = refusal_parts(payload);
                 if code == ErrorCode::SessionHasDependents || code == ErrorCode::StaleRequest {
@@ -645,23 +660,28 @@ impl App {
     }
 }
 
-/// Builds the existing delete command line and its correlation id.
-fn delete_line(id: &SessionId, expect: Option<&[SessionId]>) -> (String, String) {
-    let command = support::mint("c_");
-    let line = match expect {
-        None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
-        Some(expect) => json!({
-            "id": command,
-            "command": "delete",
-            "args": {
-                "session": id.0,
-                "cascade": true,
-                "expect": expect.iter().map(|session| &session.0).collect::<Vec<_>>(),
-            },
-        }),
+/// Builds the existing delete command line with its command id
+/// carried alongside, and the correlation id the answer settles.
+fn delete_line(id: &SessionId, expect: Option<&[SessionId]>) -> Sent {
+    let command = CommandId(support::mint("c_"));
+    let delete = match expect {
+        None => Delete {
+            session: id.clone(),
+            cascade: None,
+            expect: None,
+            dry_run: None,
+        },
+        Some(expect) => Delete {
+            session: id.clone(),
+            cascade: Some(true),
+            expect: Some(expect.to_vec()),
+            dry_run: None,
+        },
+    };
+    Sent {
+        line: hub_line(&command, HubCommand::Delete(delete)),
+        id: command,
     }
-    .to_string();
-    (command, line)
 }
 
 /// A refusal's code and message.
