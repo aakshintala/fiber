@@ -365,6 +365,7 @@ pub(crate) trait ProcessHostServices: Send + Sync {
         context: &ProcessContext,
         callback: &CallbackContext,
         operation: HostOperation,
+        host_call: &super::requests::HostCallHandle,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)>;
 }

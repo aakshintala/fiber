@@ -1701,18 +1701,36 @@ impl SessionExtensions {
     /// thread appended the line, before the watcher fan-out below.
     fn observe_delegate(&self, event: &Event) {
         if let Event::DelegateFinished(finished) = event {
+            let mut held = false;
             for extension in &self.lua {
                 if extension.hub().hold_delegate_finish(finished) {
+                    held = true;
                     break;
                 }
             }
+            if !held {
+                for extension in &self.processes {
+                    if extension.owner.observe_delegate(event) {
+                        break;
+                    }
+                }
+            }
         } else if let Event::JobCompleted(completed) = event {
+            let mut routed = false;
             for extension in &self.lua {
                 if extension
                     .hub()
                     .push_delegate_run(extension.name(), completed)
                 {
+                    routed = true;
                     break;
+                }
+            }
+            if !routed {
+                for extension in &self.processes {
+                    if extension.owner.observe_delegate(event) {
+                        break;
+                    }
                 }
             }
         }

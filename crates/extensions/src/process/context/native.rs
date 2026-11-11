@@ -371,7 +371,8 @@ impl NativeHostServices {
         callback: &CallbackContext,
         arguments: Map<String, Value>,
         timeout: Duration,
-        _run: bool,
+        run: bool,
+        host_call: &super::super::requests::HostCallHandle,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if !callback.delegate_permitted() {
             return Err((
@@ -386,15 +387,24 @@ impl NativeHostServices {
                 "host.delegate: the session is closing".to_owned(),
             ));
         };
-        let _ = (callback, timeout);
         let mut bound: Option<contract::JobId> = None;
         let mut bind = |id: &contract::JobId| {
             bound = Some(id.clone());
+            host_call.bind_delegate(id.clone(), timeout, run);
         };
-        let id = delegate
-            .start(&context.extension, &arguments, &mut bind)
-            .map_err(|rejection| (rejection.code, rejection.message))?;
-        drop(bound);
+        let id = match delegate.start(&context.extension, &arguments, &mut bind) {
+            Ok(id) => id,
+            Err(rejection) => {
+                if let Some(id) = bound {
+                    host_call.unbind_delegate(&id);
+                }
+                return Err((rejection.code, rejection.message));
+            }
+        };
+        if callback.cancel.is_cancelled() {
+            delegate.cancel(std::slice::from_ref(&id));
+            host_call.unbind_delegate(&id);
+        }
         Ok(Some(Value::String(id.0.clone())))
     }
 
@@ -783,6 +793,7 @@ impl ProcessHostServices for NativeHostServices {
         context: &ProcessContext,
         callback: &CallbackContext,
         operation: HostOperation,
+        host_call: &super::super::requests::HostCallHandle,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         match operation {
@@ -844,7 +855,7 @@ impl ProcessHostServices for NativeHostServices {
                 arguments,
                 timeout,
                 run,
-            } => self.delegate(context, callback, arguments, timeout, run),
+            } => self.delegate(context, callback, arguments, timeout, run, host_call),
             HostOperation::OAuthCallback { port, path } => {
                 self.oauth_callback(context, callback, port, path.as_deref(), cancel)
             }

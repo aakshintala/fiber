@@ -155,6 +155,53 @@ struct Inner {
     pending: BTreeMap<RequestId, Pending>,
     /// The stream item waiting for its reply, when one is outstanding.
     stream_held: Option<RequestId>,
+    /// Process callbacks bound to extension-owned delegate jobs.
+    delegates: BTreeMap<contract::JobId, DelegateBinding>,
+}
+
+/// A process callback bound to one extension-owned delegate.
+struct DelegateBinding {
+    handle: contract::CommandId,
+    timeout: Duration,
+    run: bool,
+    finish: Option<contract::events::DelegateFinished>,
+}
+
+/// The host call whose callback owns a delegate binding.
+#[derive(Clone)]
+pub(crate) struct HostCallHandle {
+    id: contract::CommandId,
+    table: Arc<Table>,
+}
+
+impl HostCallHandle {
+    pub(crate) fn new(id: contract::CommandId, table: Arc<Table>) -> Self {
+        Self { id, table }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        Self::new(
+            contract::CommandId("test-host-call".to_owned()),
+            Arc::new(Table::new()),
+        )
+    }
+
+    pub(crate) fn bind_delegate(&self, id: contract::JobId, timeout: Duration, run: bool) {
+        self.table.bind_delegate(id, self.id.clone(), timeout, run);
+    }
+
+    pub(crate) fn unbind_delegate(&self, id: &contract::JobId) {
+        self.table.unbind_delegate(id);
+    }
+}
+
+/// A delegate completion's process callback route.
+pub(crate) struct DelegateRoute {
+    pub(crate) handle: contract::CommandId,
+    pub(crate) timeout: Duration,
+    pub(crate) run: bool,
+    pub(crate) finish: Option<contract::events::DelegateFinished>,
 }
 
 /// The request table: one generation of pending requests and the stream
@@ -169,6 +216,9 @@ pub(crate) struct Table {
     fixed_request_nonce: Mutex<Option<String>>,
     #[cfg(test)]
     next_stream_wait: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    #[cfg(test)]
+    next_delegate_bind_pause:
+        Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 /// The callback details used to mint one pending request.
@@ -192,12 +242,15 @@ impl Table {
                 next_request_id: 0,
                 pending: BTreeMap::new(),
                 stream_held: None,
+                delegates: BTreeMap::new(),
             }),
             stream_gate: Condvar::new(),
             #[cfg(test)]
             fixed_request_nonce: Mutex::new(None),
             #[cfg(test)]
             next_stream_wait: Mutex::new(None),
+            #[cfg(test)]
+            next_delegate_bind_pause: Mutex::new(None),
         }
     }
 
@@ -216,6 +269,82 @@ impl Table {
     /// The current generation.
     pub(crate) fn generation(&self) -> u64 {
         support::lock(&self.inner).generation
+    }
+
+    /// Binds a delegate before its service returns from start, under the
+    /// service's start gate, so completion can route to this process call.
+    fn bind_delegate(
+        &self,
+        id: contract::JobId,
+        handle: contract::CommandId,
+        timeout: Duration,
+        run: bool,
+    ) {
+        support::lock(&self.inner).delegates.insert(
+            id,
+            DelegateBinding {
+                handle,
+                timeout,
+                run,
+                finish: None,
+            },
+        );
+        #[cfg(test)]
+        self.pause_delegate_bind();
+    }
+
+    /// Forgets a binding when start failed after invoking bind.
+    fn unbind_delegate(&self, id: &contract::JobId) {
+        support::lock(&self.inner).delegates.remove(id);
+    }
+
+    /// Holds a finish until its matching completion arrives.
+    pub(crate) fn hold_delegate_finish(
+        &self,
+        finished: &contract::events::DelegateFinished,
+    ) -> bool {
+        let mut inner = support::lock(&self.inner);
+        let Some(binding) = inner.delegates.get_mut(&finished.job_id) else {
+            return false;
+        };
+        binding.finish = Some(finished.clone());
+        true
+    }
+
+    /// Takes the route and finish for the one completion of a bound job.
+    pub(crate) fn finish_delegate(
+        &self,
+        completed: &contract::events::JobCompleted,
+    ) -> Option<DelegateRoute> {
+        let binding = support::lock(&self.inner)
+            .delegates
+            .remove(&completed.job_id)?;
+        Some(DelegateRoute {
+            handle: binding.handle,
+            timeout: binding.timeout,
+            run: binding.run,
+            finish: binding.finish,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_next_delegate_bind(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, reached) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *support::lock(&self.next_delegate_bind_pause) = Some((entered, released));
+        (reached, release)
+    }
+
+    #[cfg(test)]
+    fn pause_delegate_bind(&self) {
+        let pause = support::lock(&self.next_delegate_bind_pause).take();
+        if let Some((entered, release)) = pause
+            && entered.send(()).is_ok()
+        {
+            let _ = release.recv();
+        }
     }
 
     /// Mints one pending request of `kind`, run as `ran_by` for
@@ -470,6 +599,7 @@ impl Table {
             let mut inner = support::lock(&self.inner);
             inner.generation += 1;
             inner.stream_held = None;
+            inner.delegates.clear();
             let mut retired = Vec::with_capacity(inner.pending.len());
             for pending in inner.pending.values_mut() {
                 if !pending.done {
