@@ -117,11 +117,12 @@ fn send_start(app: &mut App, text: &str) -> String {
     for ch in text.chars() {
         app.on_key(Key::Char(ch), now());
     }
-    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now()) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(lines.len(), 1);
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    assert_eq!(sents.len(), 1);
+    let line: Value =
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     line["id"].as_str().expect("the start has an id").to_owned()
 }
@@ -458,7 +459,7 @@ fn paste_over_a_clear_staged_offer_keeps_the_retained_draft() {
     app.on_line(hello());
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
-    let Effect::Send(_) = app.clear() else {
+    let Effect::SendTracked(_) = app.clear() else {
         panic!("clear sends its start");
     };
     // The stage cleared the draft; the person types behind the refusal.
@@ -1519,4 +1520,43 @@ fn install_failure_text_names_the_command_only_when_absent() {
         super::install_failure_text(&error),
         "run fiber extension install hooks now"
     );
+}
+
+#[test]
+fn a_failed_hello_flush_settles_the_import_by_its_carried_id() {
+    let mut app = home(fake());
+    app.set_import_offer(true);
+    // The link is down: the press queues the import instead of
+    // dropping it, and the offer stays open for its answer.
+    assert_eq!(app.on_key(Key::Char('1'), now()), Effect::None);
+    assert_eq!(app.outbox.held.len(), 1);
+    let carried = app.outbox.held[0].id.0.clone();
+    // Tamper with the held line's JSON id: the failure must settle by
+    // the carried id, never by parsing the tampered line.
+    let tampered = app.outbox.held[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, app.outbox.held[0].line);
+    app.outbox.held[0].line = tampered.clone();
+    // Hello flushes the held import; failing the flush settles the
+    // carried import: nothing waits on either id.
+    let flushed: Vec<String> = app.on_line(hello());
+    assert!(flushed.contains(&tampered));
+    app.write_failed(&flushed);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(app.outbox.waiting("c_tampered"), None);
+}
+
+#[test]
+fn intercepting_a_tracked_start_keeps_its_typed_args() {
+    let mut app = home(fake());
+    app.on_line(hello());
+    // The offer opens on a tracked start's refusal: the intercepted
+    // args are the typed `start` the line went out as.
+    let id = refuse_start(&mut app, "hi");
+    let state = match app.home.questions.prompt() {
+        Some(super::Prompt::HooksOffer(state)) => state.clone(),
+        _ => panic!("the tracked start opens the offer"),
+    };
+    assert_eq!(state.args.workspace, "/w");
+    assert_eq!(state.args.overrides, None);
+    assert_eq!(state.refused_id, id);
 }

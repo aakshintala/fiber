@@ -2210,9 +2210,9 @@ fn opening_a_row_by_key_calls_on_attach() {
     let mut reader = reader;
     let mut hello_lines: Vec<serde_json::Value> = Vec::new();
     while !(hello_lines.iter().any(|line| line["command"] == "feed")
-        && hello_lines
-            .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+        && hello_lines.iter().any(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        }))
     {
         let (next, line) = command(reader, "a hello command");
         reader = next;
@@ -2225,7 +2225,8 @@ fn opening_a_row_by_key_calls_on_attach() {
     assert!(
         hello_lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {hello_lines:?}"
     );
     let status = contract::Envelope {
@@ -2338,9 +2339,9 @@ fn an_exit_sends_its_lines_then_quits() {
     let mut reader = reader;
     let mut hello_lines: Vec<serde_json::Value> = Vec::new();
     while !(hello_lines.iter().any(|line| line["command"] == "feed")
-        && hello_lines
-            .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+        && hello_lines.iter().any(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        }))
     {
         let (next, line) = command(reader, "a hello command");
         reader = next;
@@ -2353,7 +2354,8 @@ fn an_exit_sends_its_lines_then_quits() {
     assert!(
         hello_lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {hello_lines:?}"
     );
     // The introducing status queues its project's scoped ask; no doc
@@ -2619,7 +2621,8 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     assert!(
         lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {lines:?}"
     );
     // One scoped ask for the newly seen project.

@@ -313,16 +313,14 @@ fn install_fake_provider_extension(setup: &Setup, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Setup from an installed home with a provider picked, then a first
@@ -631,16 +629,14 @@ fn install_nightly_extension(setup: &Setup, nightlies: &JourneyNightlies) {
             "api": 1,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// `fiber update --channel nightly` against the stub feed: the
@@ -889,16 +885,14 @@ fn install_quota_provider(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A server answering every Lua purpose plus native model calls: the
@@ -1173,16 +1167,14 @@ fn install_picker_states_provider(setup: &Setup, server_url: &str) {
             ],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     // The setting value is not a host, so the fill leaves the model out
     // per model rather than grouping it.
     support::write_json(
@@ -1222,16 +1214,14 @@ fn install_failing_lua_provider(setup: &Setup, server_url: &str, extension: &str
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Every model-picker notice code shown as itself: the picker band carries
@@ -1422,16 +1412,14 @@ fn install_many_models_provider(setup: &Setup, server_url: &str) {
             "models": models,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// The first row containing `needle`, as a `u16` screen row.
@@ -2529,16 +2517,14 @@ fn install_replay_anthropic_provider(setup: &Setup, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "anthropic-messages", "base_url": format!("{}/v1", server.url()), "context_window": 100000, "input": ["text", "image"]}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m"}),
@@ -2557,16 +2543,14 @@ fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> 
         include_str!("../../../providers/databricks/thinking.lua"),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(to);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(to),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     server.url().strip_prefix("http://").unwrap().to_owned()
 }
 
@@ -2920,16 +2904,14 @@ fn install_replay_bedrock_package(setup: &Setup) -> (ProviderServer, String) {
         "https://bedrock-runtime.{region}.amazonaws.com",
         "http://{region}",
     );
-    extensions::plan(
+    let request = extensions::Request::Path(to);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(to),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     // The region setting is the per-account host, read from `AWS_REGION`.
     let host = server.url().strip_prefix("http://").unwrap().to_owned();
     (server, host)

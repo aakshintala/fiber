@@ -29,18 +29,16 @@ const EXPORT_NAME: &str = "github.com/aakshintala/fiber/extensions/export";
 impl Setup {
     /// Installs the real `export` package from the repository.
     fn install_export(&self) {
-        extensions::plan(
+        let request = extensions::Request::Path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/export"),
+        );
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/export"),
-            ),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 }
 

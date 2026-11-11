@@ -479,7 +479,12 @@ fn approved_repository_start_times_connect_and_skipped_writes_none() {
     let fresh = setup.root.path().join("h2");
     fs::create_dir_all(&fresh).unwrap();
     let second_source = setup.root.path().join("src2");
-    install_provider(&fresh, &second_source, &provider);
+    install_provider(
+        &fresh,
+        &second_source,
+        &provider,
+        setup.deadline.start_wait(),
+    );
     configure_repo_debug_home(&fresh);
     let ask = setup.run_as(&fresh, &workspace, &["ask", "call the echo tool"]);
     assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
@@ -512,7 +517,7 @@ fn configure_repo_debug_home(home: &Path) {
 }
 
 /// Installs the fake provider with model `fake/m` in `home`.
-fn install_provider(home: &Path, root: &Path, server: &ProviderServer) {
+fn install_provider(home: &Path, root: &Path, server: &ProviderServer, wait: support::Deadline) {
     let source = root.join("src");
     support::write_json(
         &source.join("extension.json"),
@@ -526,16 +531,8 @@ fn install_provider(home: &Path, root: &Path, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
-        home,
-        &extensions::Request::Path(source),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(home, wait, &request, "0.0.0", None);
     support::write_json(&home.join("config.json"), &json!({"model": "fake/m"}));
 }
 
