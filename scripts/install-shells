@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# Installs zsh and fish on a Linux CI runner (`docs/ci.md`, "Job time limits").
+# Installs packages on a Linux CI runner (`docs/ci.md`, "Job time limits").
 # apt keeps partial archives, so retries resume downloads. The install stays
 # unbounded because killing dpkg mid-unpack leaves the dpkg lock held.
 #
-# Usage: scripts/install-shells [DIR]
+# Usage: scripts/install-shells [DIR] [PACKAGES...]
 # DIR is the archive cache directory. With no DIR, no archives are kept.
+# PACKAGES defaults to `zsh fish`.
 # APT_OPTS holds apt-get's options; it is split on whitespace on purpose.
 set -euo pipefail
 
 apt_opts="${APT_OPTS:-}"
 archives=/var/cache/apt/archives
-dir="${1:-}"
+dir=""
+packages=(zsh fish)
+if [ "$#" -gt 0 ]; then
+  dir="$1"
+  shift
+fi
+if [ "$#" -gt 0 ]; then
+  packages=("$@")
+fi
 
 if [ -n "$dir" ] && compgen -G "$dir/*.deb" >/dev/null; then
   echo "install-shells: installing cached archives from $dir"
@@ -19,10 +28,10 @@ if [ -n "$dir" ] && compgen -G "$dir/*.deb" >/dev/null; then
 fi
 
 download() {
-  # shellcheck disable=SC2016 # $1 expands in the inner shell
+  # shellcheck disable=SC2016,SC2086 # $1 and $@ expand in the inner shell; opts is a list
   sudo timeout 90 sh -c \
-    'apt-get $1 update && apt-get $1 install --download-only -y zsh fish' \
-    sh "$apt_opts"
+    'opts=$1; shift; apt-get $opts update && apt-get $opts install --download-only -y "$@"' \
+    sh "$apt_opts" "${packages[@]}"
 }
 
 attempt=1
@@ -38,4 +47,4 @@ if [ -n "$dir" ] && compgen -G "$archives/*.deb" >/dev/null; then
 fi
 
 # shellcheck disable=SC2086 # apt_opts is a list of options
-sudo apt-get $apt_opts install -y zsh fish
+sudo apt-get $apt_opts install -y "${packages[@]}"
