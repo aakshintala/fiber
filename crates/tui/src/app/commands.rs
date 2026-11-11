@@ -957,7 +957,7 @@ impl App {
     pub(crate) fn unwritable(&self) -> Option<&str> {
         match &self.phase {
             Phase::Attached { session, .. } => self.unwritable_session(session),
-            _ => None,
+            Phase::Starting | Phase::Pending { .. } => None,
         }
     }
 

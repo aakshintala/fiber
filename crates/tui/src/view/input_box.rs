@@ -108,7 +108,7 @@ fn draw_read_only(area: Rect, bottom: &mut u16, buf: &mut Buffer, path: &str) ->
         buf.set_stringn(
             text.x,
             y,
-            &crate::text::cut(&head, room, ""),
+            crate::text::cut(&head, room, ""),
             room,
             style(Role::Attention).add_modifier(Modifier::DIM),
         );
@@ -126,7 +126,7 @@ fn draw_read_only(area: Rect, bottom: &mut u16, buf: &mut Buffer, path: &str) ->
     buf.set_stringn(
         end,
         y,
-        &crate::text::cut(rest, rest_room, ""),
+        crate::text::cut(rest, rest_room, ""),
         rest_room,
         Style::new().add_modifier(Modifier::DIM),
     );
