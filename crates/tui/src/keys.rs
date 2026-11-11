@@ -56,6 +56,10 @@ pub(crate) enum Key {
     /// Alt+Down (`CSI 1;3B`, or `ESC` then `CSI B` in one read):
     /// `select_steering`.
     AltDown,
+    /// Shift+Up (`CSI 1;2A`): `focus_project`.
+    ShiftUp,
+    /// Shift+Down (`CSI 1;2B`): `focus_project`.
+    ShiftDown,
     /// Alt+X (`ESC x` in one read, `CSI 120;3u`): `drop_steering`.
     AltX,
     /// Alt+P (`ESC p` in one read, `CSI 112;3u`): `toggle_panel`.

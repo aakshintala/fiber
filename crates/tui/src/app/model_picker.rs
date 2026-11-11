@@ -1078,6 +1078,8 @@ impl App {
             | Key::CtrlL
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX => Some(super::Effect::None),
         }
     }

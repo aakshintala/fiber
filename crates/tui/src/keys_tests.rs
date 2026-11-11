@@ -364,6 +364,19 @@ fn alt_arrows_in_their_csi_form() {
 }
 
 #[test]
+fn shift_arrows_in_their_csi_form() {
+    // Split across reads, the sequence is held and still parses.
+    assert_eq!(
+        feed_strokes(&[b"\x1b[1;", b"2A"]),
+        vec![modified(Code::Up, Mods::SHIFT)]
+    );
+    assert_eq!(
+        feed_strokes(&[b"\x1b[1;2", b"B"]),
+        vec![modified(Code::Down, Mods::SHIFT)]
+    );
+}
+
+#[test]
 fn esc_then_an_arrow_in_one_read_is_the_alt_arrow() {
     assert_eq!(
         feed_all(&[b"\x1b\x1b[", b"A"]),
