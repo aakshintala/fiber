@@ -2109,7 +2109,7 @@ fn a_subscribe_result_names_the_last_fold_line() {
     // A result omitting the missing path reads as a live open, and a
     // live open stays byte-identical on the wire: the path is absent,
     // never null (`docs/invocation.md`, "Lifecycle").
-    let written = serde_json::to_value(&result_of(
+    let written = serde_json::to_value(result_of(
         json!({"command_id": "c", "result": {"last_seq": 41}}),
     ))
     .unwrap();
