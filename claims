@@ -381,3 +381,6 @@ providers/opencode/providers/opencode-zen.json	fiber-4635	grant	2026-11-11T23:03
 providers/vertex/providers/vertex.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
 providers/databricks/thinking.lua	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
 xtask/tests/models-dev.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+crates/extensions/src/extension_tools_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/extensions/src/hooks_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/extensions/src/search_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
