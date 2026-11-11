@@ -767,9 +767,11 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
         providers.resolve("acme/bad").unwrap_err(),
         Error::UnknownModel { .. }
     ));
-    // A cache-substituted invalid list drains silently at load: its one
-    // `model_invalid` notice per reason is drawn in `add_lua`, never here.
-    assert!(notices.is_empty(), "{notices:?}");
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
 }
 
 #[test]
@@ -777,6 +779,9 @@ fn a_warm_cache_names_an_invalid_model_once() {
     let setup = Setup::new();
     // A data-file provider under a warm cache: the cached list stands
     // in for the data file's at load and again in `add_lua`.
+    // The load reports each `model_invalid` once per reason; a later
+    // admission reports only invalid the load did not report
+    // (`docs/model-routing.md`, "Model discovery").
     let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["a"])]);
     install(&setup.home(), &source, "0.1.0").unwrap();
     // One single-reason invalid model: no `context_window` draws one
@@ -798,7 +803,8 @@ fn a_warm_cache_names_an_invalid_model_once() {
         .filter(|notice| notice.code == ErrorCode::ModelInvalid)
         .collect();
     // The same cached list feeds admission in `add_lua`: the cache
-    // serves, so the Lua body never runs.
+    // serves, so the Lua body never runs, and the load-emitted
+    // identity stays suppressed there.
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
     let lua_notices = providers.add_lua(
         "acme-ext",
@@ -821,12 +827,52 @@ fn a_warm_cache_names_an_invalid_model_once() {
         "one `model_invalid` per reason across load and `add_lua`: \
          load {load_notices:?}, `add_lua` {lua_notices:?}"
     );
-    assert!(load_invalid.is_empty(), "{load_notices:?}");
-    assert_eq!(lua_invalid.len(), 1, "{lua_notices:?}");
-    assert_eq!(lua_invalid[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(load_invalid.len(), 1, "{load_notices:?}");
+    assert!(lua_invalid.is_empty(), "{lua_notices:?}");
+    assert_eq!(load_invalid[0].extension.as_deref(), Some("acme-ext"));
     assert_eq!(
-        lua_invalid[0].message,
+        load_invalid[0].message,
         "The model `acme/bad` declares no `context_window`."
+    );
+}
+
+#[test]
+fn a_disabled_process_package_warm_cache_names_an_invalid_model_once() {
+    fakes::within(
+        "Providers::load_enabled",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        || {
+            let setup = Setup::new();
+            // A disabled process package: its provider data still loads,
+            // but no `add_lua` ever follows, so the load's notice is the
+            // only one. The load reports each `model_invalid` once per
+            // reason (`docs/model-routing.md`, "Model discovery").
+            let mut m = manifest("acme");
+            m["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+            let source = setup.source("acme", &m, &[provider("acme", &["a"])]);
+            install(&setup.home(), &source, "0.1.0").unwrap();
+            write_model_cache(
+                &setup.home(),
+                "acme",
+                &json!([{"id": "bad", "protocol": "openai-responses",
+                         "base_url": "http://127.0.0.1:1/v1"}]),
+            )
+            .unwrap();
+            let configuration = config(&setup, &["extensions.acme.enabled=false"]);
+            let (providers, notices) =
+                Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(matches!(
+                providers.resolve("acme/bad").unwrap_err(),
+                Error::UnknownModel { .. }
+            ));
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+            assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+            assert_eq!(
+                notices[0].message,
+                "The model `acme/bad` declares no `context_window`."
+            );
+        },
     );
 }
 
