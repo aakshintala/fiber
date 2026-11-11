@@ -337,16 +337,14 @@ fn models_runs_a_lua_providers_models_with_no_cached_copy() {
         json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
     )])
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(fakes::lua_fixture());
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(fakes::lua_fixture()),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     {
         let dir = setup
             .home()
@@ -387,16 +385,14 @@ fn openrouter(setup: &Setup, server: &fakes::ProviderServer) {
         "https://openrouter.ai",
         &server.url(),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(copied);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(copied),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "openrouter",
@@ -533,12 +529,12 @@ fn models_lists_a_thousand_openrouter_models_within_the_memory_cap() {
 }
 
 /// Every first-party model loads: `fiber models --json` lists each
-/// `provider/id` the six files hold, and none is dropped as
+/// `provider/id` the seven files hold, and none is dropped as
 /// `model_invalid`.
 #[test]
 fn models_lists_every_first_party_model_and_drops_none() {
     let setup = Setup::new();
-    for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
+    for package in ["anthropic", "codex", "gemini", "muse", "openai", "opencode"] {
         let dest = setup.home().join("extensions").join(package);
         support::package::copy_package(package, &dest, "", "");
         write_record(&dest);
@@ -560,15 +556,30 @@ fn models_lists_every_first_party_model_and_drops_none() {
     assert_eq!(run.stderr, "");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
     let mut expected = Vec::new();
-    for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
+    for package in ["anthropic", "codex", "gemini", "muse", "openai", "opencode"] {
         for provider in config::read_providers(&root.join(package)).unwrap() {
             for model in &provider.models {
                 expected.push(format!("{}/{}", provider.name, model.id));
             }
         }
     }
-    expected.sort_by_key(|reference| reference.split('/').next().unwrap_or("").to_owned());
-    assert_eq!(listed_ids(&run), expected);
+    // No doc promises the listing order (`docs/testing.md`, "Event streams"),
+    // so the membership comparison is order-insensitive.
+    expected.sort();
+    let mut listed = listed_ids(&run);
+    listed.sort();
+    assert_eq!(listed, expected);
+    let terra = run
+        .stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|row| row.get("model").and_then(Value::as_str) == Some("codex/gpt-6.1-terra"))
+        .expect("models --json names codex/gpt-6.1-terra");
+    assert_eq!(
+        terra.get("context_window").and_then(Value::as_u64),
+        Some(272000),
+        "codex/gpt-6.1-terra keeps the ChatGPT backend window"
+    );
 }
 
 #[test]
@@ -593,16 +604,14 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // is recorded first, so `await_requests` signals while the child waits,
     // and the cache must still equal `old` then.
     server.hold();
-    extensions::plan(
+    let request = extensions::Request::Path(fakes::lua_fixture());
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(fakes::lua_fixture()),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     {
         let dir = setup
             .home()

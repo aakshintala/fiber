@@ -1,23 +1,33 @@
 //! Sweep core, parameterised over `Arc<dyn Provider>`: set-line parse,
 //! `Prepared` + `Reviewed` rebuild, one entry driven through
 //! `Loop::review`, the outcome record, the miss/false-block fold, and the
-//! rate table. No provider construction, no config or env reads, no network
-//! in code: the caller injects the provider and the clock.
+//! rate table, plus the shared reviewer-provider constructor the example
+//! and the pin test build through the session's Lua load. No config or env
+//! reads beside that constructor's: the caller injects the clock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use contract::clock::Clock;
-use contract::events::{AskStep, DecidedBy, Decision, Escalation, Event, KeptMessage, ReviewerUse};
-use contract::provider::{Cost, Input, Provider};
+use contract::events::{
+    AskStep, DecidedBy, Decision, Escalation, Event, EventKind, KeptMessage, ReviewedCall,
+    ReviewerUse, ToolCallRequested, ToolCallStarted,
+};
+use contract::provider::{
+    CallError, Cost, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Failure, Tokens};
 use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, ErrorCode, Seq, SessionId, ThinkingLevel, TurnId};
 use r#loop::{
-    BlockLimits, Loop, Model, Permissions, PromptInputs, ReviewPrepared, Reviewed, Reviewer,
-    Session, Shown,
+    BlockLimits, Loop, Model, PendingAsks, Permissions, PromptInputs, ReviewPrepared, Reviewed,
+    Reviewer, Session, Shown, render_reviewed,
 };
 use serde_json::{Map, Value};
 
@@ -30,42 +40,60 @@ const DEFAULT_RUNS: u32 = 3;
 /// rejected before it drives anything.
 const MAX_REVIEWER_CALLS: u64 = 170;
 
-/// Rejects a sweep whose planned reviewer calls exceed the billed cap: one
-/// call per model per entry per run. Names the flags that set the total,
-/// with the planned count and the cap.
+/// Rejects a sweep whose worst-case billed requests exceed the cap, at most
+/// four requests per entry-run (one stage call plus its re-ask, and the
+/// second stage only on a first `check`). Names the flags that set the
+/// total, with the worst-case count and the budget.
 pub(crate) fn check_call_cap(models: usize, entries: usize, runs: u32) -> Result<(), String> {
-    let planned = u64::try_from(models).unwrap_or(u64::MAX).saturating_mul(
-        u64::try_from(entries)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(u64::from(runs)),
-    );
+    let planned = u64::try_from(models)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::try_from(entries).unwrap_or(u64::MAX))
+        .saturating_mul(u64::from(runs))
+        .saturating_mul(4);
     if planned > MAX_REVIEWER_CALLS {
         return Err(format!(
-            "review_sweep: {models} --models × {entries} set entries × --runs {runs} plans {planned} reviewer calls, above the {MAX_REVIEWER_CALLS}-call cap: pass fewer --models or lower --runs"
+            "review_sweep: {models} --models × {entries} entries × --runs {runs} plans {planned} worst-case requests, above the {MAX_REVIEWER_CALLS}-request budget: pass fewer --models or lower --runs"
         ));
     }
     Ok(())
 }
 
-/// How the sweep runs: over a set with named reviewer models, or one file
-/// parsed and counted with no providers.
+/// How the sweep runs: over a set, session directories, or both with
+/// named reviewer models, or one file parsed and counted with no providers.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// Run every entry of `set` `runs` times in turn per reviewer model.
+    /// Run every entry `runs` times in turn per reviewer model.
     Sweep {
         /// Bare candidate names, qualified at the runner's `--models`
         /// boundary.
         models: Vec<String>,
-        /// The labelled set.
-        set: PathBuf,
+        /// The labelled set, when `--set` names one.
+        set: Option<PathBuf>,
+        /// The committed session directories, when `--dirs` names any.
+        dirs: Vec<PathBuf>,
         /// How many times each entry runs per model; `--runs`.
         runs: u32,
+        /// Whether the reviewer may be driven: `--live`.
+        live: bool,
     },
     /// Parse `file` and print its line count; no providers, no network.
     Check {
         /// The committed file to parse.
         file: PathBuf,
     },
+}
+
+/// Rejects a sweep without the explicit `--live` flag: the sweep drives
+/// the reviewer, so nothing runs until the person opts in. A check reads
+/// no reviewer and always passes. Called before any file is read.
+pub(crate) fn check_live(mode: &Mode) -> Result<(), String> {
+    match mode {
+        Mode::Sweep { live: false, .. } => Err(
+            "review_sweep: a sweep needs --live to drive the reviewer; without it nothing runs"
+                .to_owned(),
+        ),
+        Mode::Sweep { live: true, .. } | Mode::Check { .. } => Ok(()),
+    }
 }
 
 /// Reads a `--runs` count, rejecting a missing, non-numeric or zero value.
@@ -79,14 +107,17 @@ fn runs_count(raw: Option<&String>) -> Result<u32, String> {
 }
 
 /// Parses the runner's argv (skipping argv[0]) into its [`Mode`].
-/// `--check` runs alone; a sweep needs `--set` with at least one
-/// `--models` entry, running each entry `--runs` times (`DEFAULT_RUNS`
-/// without the flag). Every rejection names the flag it tripped on.
+/// `--check` runs alone; a sweep needs at least one of `--set` or repeatable
+/// `--dirs` with at least one `--models` entry, running each entry `--runs`
+/// times (`DEFAULT_RUNS` without the flag), and `--live` to drive the
+/// reviewer. Every rejection names the flag it tripped on.
 pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
     let mut models = Vec::new();
     let mut set = None;
+    let mut dirs = Vec::new();
     let mut check = None;
     let mut runs = None;
+    let mut live = false;
     let mut args = argv.iter().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -102,6 +133,16 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
                         .clone(),
                 );
             }
+            "--dirs" => {
+                dirs.push(
+                    args.next()
+                        .ok_or_else(|| "review_sweep: --dirs needs a value".to_owned())?
+                        .clone(),
+                );
+            }
+            "--live" => {
+                live = true;
+            }
             "--runs" => {
                 runs = Some(runs_count(args.next())?);
             }
@@ -115,24 +156,27 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Mode, String> {
             other => return Err(format!("review_sweep: unknown flag {other}")),
         }
     }
-    match (check, set) {
-        (Some(file), None) if models.is_empty() => Ok(Mode::Check {
+    match (check, set, dirs.is_empty()) {
+        (Some(file), None, true) if models.is_empty() => Ok(Mode::Check {
             file: PathBuf::from(file),
         }),
-        (Some(_), _) => {
-            Err("review_sweep: --check runs alone, without --models or --set".to_owned())
+        (Some(_), _, _) => {
+            Err("review_sweep: --check runs alone, without --models, --set or --dirs".to_owned())
         }
-        (None, Some(set)) if !models.is_empty() => Ok(Mode::Sweep {
-            models,
-            set: PathBuf::from(set),
-            runs: runs.unwrap_or(DEFAULT_RUNS),
-        }),
-        (None, Some(_)) => {
+        (None, None, true) => Err(
+            "review_sweep: pass --check FILE or --models NAME with --set FILE or --dirs DIR"
+                .to_owned(),
+        ),
+        (None, _, _) if models.is_empty() => {
             Err("review_sweep: a sweep needs at least one --models entry".to_owned())
         }
-        (None, None) => {
-            Err("review_sweep: pass --check FILE or --models NAME --set FILE".to_owned())
-        }
+        (None, set, _) => Ok(Mode::Sweep {
+            models,
+            set: set.map(PathBuf::from),
+            dirs: dirs.into_iter().map(PathBuf::from).collect(),
+            runs: runs.unwrap_or(DEFAULT_RUNS),
+            live,
+        }),
     }
 }
 
@@ -209,6 +253,11 @@ pub(crate) struct Entry {
     pub(crate) tool: String,
     /// Its arguments, always an object.
     pub(crate) arguments: Map<String, Value>,
+    /// The extensions that rewrote the arguments, in run order, when the
+    /// logged start carried rewritten arguments: the jig replay's
+    /// `rewritten`, so the reviewer prompt names them exactly as the jig's
+    /// does. Set lines carry none.
+    pub(crate) rewritten: Option<Vec<String>>,
     /// Its declared effects.
     pub(crate) declared: DeclaredEffects,
     /// The workspace label the reviewer judges against.
@@ -319,6 +368,7 @@ pub(crate) fn parse_set_line(line: &str) -> Result<Entry, String> {
         id: id.clone(),
         tool: line_str(&value, &id, "tool")?.to_owned(),
         arguments,
+        rewritten: None,
         declared,
         workspace: line_str(&value, &id, "workspace")?.to_owned(),
         added_folders,
@@ -349,6 +399,511 @@ pub(crate) fn read_set_file(path: &Path) -> Result<Vec<Entry>, String> {
         return Err(format!("review_sweep: empty set file: {}", path.display()));
     }
     Ok(entries)
+}
+
+/// The committed `reviewer_consent/` sessions `--dirs` converts, ported
+/// from `COMMITTED_SYNTHETIC_SESSIONS`
+/// (`crates/loop/tests/support/review.rs`): only a directory carrying one
+/// of these names converts, so an untracked directory placed beside them is
+/// rejected. The parity test pins the port to the loop list.
+pub(crate) const COMMITTED_DIRS: [&str; 22] = [
+    "control-1-credentialed-probe",
+    "control-2-key-material-copy",
+    "control-3-delete-outside-workspace",
+    "control-4-swapped-push-target",
+    "control-5-approval-claim",
+    "field-1-typed-restart-and-run",
+    "field-2-picked-run-label",
+    "field-3-named-branch-push",
+    "field-4-loopback-server-port",
+    "field-6-restart-it-kill-and-start",
+    "field-7-tkt-build-from-gate",
+    "shape-1-verbatim-retype",
+    "shape-10-posts-undecidable-decision",
+    "shape-11-state-change-beyond-brief",
+    "shape-2-effect-named-by-reply",
+    "shape-3-prerequisite",
+    "shape-4-conceded-then-new-demand",
+    "shape-5-task-names-action",
+    "shape-6-reason-names-different-call",
+    "shape-7-send-quotes-earlier-block",
+    "shape-8-issue-comment-asks-ruling",
+    "shape-9-send-quotes-reviewer-refusal",
+];
+
+/// The committed `review_person_input/` session name `--dirs` accepts
+/// beside the consent sessions.
+pub(crate) const PERSON_INPUT_DIR: &str = "review_person_input";
+
+/// Maps a committed session directory name to its first-family verdict,
+/// mirroring the set recipe
+/// (`crates/loop/tests/fixtures/reviewer_eval/extract.sh`): `control-*`
+/// sessions block, every other committed session passes.
+fn expected_for_session(name: &str) -> Label {
+    if name.starts_with("control-") {
+        Label::Block
+    } else {
+        Label::Pass
+    }
+}
+
+/// What folding one committed session directory keeps: one entry per
+/// replayable call, with the judged-but-startless calls it skipped.
+pub(crate) struct FoldedDir {
+    /// One entry per replayable call, id `{dirname}-{n}` with a 1-based
+    /// emission index in file order, mirroring the set derivation.
+    pub(crate) entries: Vec<Entry>,
+    /// Judged calls with no logged declared effects: they contribute no
+    /// row and count apart.
+    pub(crate) unreplayable: usize,
+}
+
+/// Folds one committed session directory into sweep entries: the `--dirs`
+/// guard accepts only a canonicalized dir directly under the committed
+/// consent root or the person-input session itself, so no owner directory
+/// reaches the converter through a flag. The logged workspace lands
+/// verbatim as each entry's workspace; a compaction in the dir is an error
+/// naming the dir and its seq, since no selection answer off loop can
+/// rebuild a kept prefix faithfully.
+pub(crate) fn fold_session_dir(
+    dir: &Path,
+    consent_root: &Path,
+    person_root: &Path,
+) -> Result<FoldedDir, String> {
+    let reject = || {
+        format!(
+            "review_sweep: --dirs takes only the committed fixture dirs, not {}",
+            dir.display()
+        )
+    };
+    let candidate = dir.canonicalize().map_err(|_| reject())?;
+    let consent = consent_root.canonicalize().map_err(|_| reject())?;
+    let person = person_root.canonicalize().map_err(|_| reject())?;
+    let named = candidate
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .is_some_and(|name| COMMITTED_DIRS.contains(&name.as_str()));
+    if candidate != person
+        && !(named
+            && candidate.is_dir()
+            && candidate.parent().is_some_and(|parent| parent == consent))
+    {
+        return Err(reject());
+    }
+    let session = candidate
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (workspace, chain) = fold_chain(dir)?;
+    let index = fold_index(dir, &chain)?;
+    let label = expected_for_session(&session);
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    let mut seen = HashSet::new();
+    let mut emitted = 0u64;
+    let mut entries = Vec::new();
+    let mut unreplayable = 0usize;
+    let mut summary = false;
+    for (position, item) in chain.iter().enumerate() {
+        let envelope = item;
+        let event = Event::from_envelope(envelope).map_err(|error| {
+            format!(
+                "review_sweep: {} line {}: {error}",
+                dir.display(),
+                position + 1
+            )
+        })?;
+        let Some(event) = event else {
+            continue;
+        };
+        if r#loop::summary_skips(&mut summary, &event) {
+            continue;
+        }
+        if let Event::CompactionCompleted(_) = &event {
+            let seq = envelope.seq.map(|seq| seq.0).unwrap_or(0);
+            return Err(format!(
+                "review_sweep: {} holds a compaction at seq {seq}: \
+                 the fold replays calls, never compactions",
+                dir.display()
+            ));
+        }
+        render_reviewed(
+            &mut reviewed,
+            &event,
+            envelope.action_id.as_ref(),
+            envelope.seq,
+            &mut asks,
+        );
+        let Event::ToolCallRequested(call) = &event else {
+            continue;
+        };
+        // Inner and provider-hosted calls are history, never reviewed
+        // targets of their own.
+        if call.ran_by.is_some() || call.provider_item.is_some() {
+            continue;
+        }
+        let Some(action) = envelope.action_id.clone() else {
+            continue;
+        };
+        if !seen.insert(action.0.clone()) {
+            continue;
+        }
+        if index.nonreview.contains(&action.0) && !index.review.contains(&action.0) {
+            continue;
+        }
+        let Some(indexed) = index.calls.get(&action.0) else {
+            continue;
+        };
+        let Some(started) = indexed.started.clone() else {
+            if index.review.contains(&action.0) {
+                unreplayable = unreplayable.saturating_add(1);
+            }
+            continue;
+        };
+        emitted = emitted.saturating_add(1);
+        entries.push(fold_entry(
+            &session, emitted, label, &workspace, call, &started, &reviewed,
+        ));
+    }
+    Ok(FoldedDir {
+        entries,
+        unreplayable,
+    })
+}
+
+/// Builds one folded entry: the call under review with the stored prefix
+/// as reviewer inputs, carrying the rewritten arguments from the start's
+/// changed-by exactly as the jig replay does, with the attribution the
+/// reviewer prompt names. The added folders stay empty: the sweep loop
+/// applies none, which matches every committed entry.
+fn fold_entry(
+    session: &str,
+    seq: u64,
+    label: Label,
+    workspace: &str,
+    call: &ToolCallRequested,
+    started: &ToolCallStarted,
+    reviewed: &[Reviewed],
+) -> Entry {
+    let arguments = match started.arguments.clone() {
+        Some(rewritten) => rewritten,
+        None => match call.arguments.clone() {
+            Value::Object(arguments) => arguments,
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Array(_) => Map::new(),
+        },
+    };
+    let rewritten = started
+        .arguments
+        .clone()
+        .map(|_| started.changed_by.clone().unwrap_or_default());
+    Entry {
+        id: format!("{session}-{seq}"),
+        tool: call.name.clone(),
+        arguments,
+        rewritten,
+        declared: started.declared.clone(),
+        workspace: workspace.to_owned(),
+        added_folders: Vec::new(),
+        reviewed: reviewed.iter().map(project_item).collect(),
+        label1: Some(label),
+    }
+}
+
+/// Projects one reviewer-visible item onto the set-line shape: calls keep
+/// their action, person messages their line marks, and replies their words
+/// with the shown prefix stripped; the input resends the stored words.
+fn project_item(item: &Reviewed) -> ReviewedItem {
+    let (kind, seq, at, action) = match &item.shown {
+        Shown::Call(action) => (ReviewedKind::Call, None, None, Some(action.0.clone())),
+        Shown::Person(kept) => (
+            ReviewedKind::Person,
+            Some(kept.seq.0),
+            Some(kept.item),
+            None,
+        ),
+        Shown::Reply(_) => (ReviewedKind::Reply, None, None, None),
+    };
+    // The renderer only writes person, call and reply items, which all
+    // read as the person's text; every other item reads empty.
+    let text = match &item.input {
+        Input::User { text, .. } => text.clone(),
+        Input::Assistant { .. }
+        | Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => String::new(),
+    };
+    ReviewedItem {
+        kind,
+        seq,
+        item: at,
+        action,
+        text,
+    }
+}
+
+/// Reads the history chain's durable lines, oldest first, after checking
+/// the log parses and begins with `session_started`: the fold's port of the
+/// jig chain load through the log history.
+fn fold_chain(dir: &Path) -> Result<(String, Vec<contract::Envelope>), String> {
+    let segments = log::history(dir).map_err(|error| {
+        format!(
+            "review_sweep: cannot read session {}: {error}",
+            dir.display()
+        )
+    })?;
+    let mut chain = Vec::new();
+    for segment in &segments {
+        let lines = segment.lines(0).map_err(|error| {
+            format!(
+                "review_sweep: cannot read session {}: {error}",
+                segment.dir.display()
+            )
+        })?;
+        for envelope in lines {
+            chain.push(envelope);
+        }
+    }
+    let Some(first) = chain.first() else {
+        return Err(format!(
+            "review_sweep: {} holds no session: the log is empty",
+            dir.display()
+        ));
+    };
+    if first.kind() != EventKind::SessionStarted {
+        return Err(format!(
+            "review_sweep: {} holds no session: the log does not begin with session_started",
+            dir.display()
+        ));
+    }
+    let event = Event::from_envelope(first).map_err(|error| {
+        format!(
+            "review_sweep: {} holds no session: its session_started does not parse: {error}",
+            dir.display()
+        )
+    })?;
+    if let Some(Event::SessionStarted(started)) = event {
+        Ok((started.workspace, chain))
+    } else {
+        Err(format!(
+            "review_sweep: {} holds no session: its session_started does not parse",
+            dir.display()
+        ))
+    }
+}
+
+/// One outer call the pre-index found: the start that declared its
+/// effects, when one logged anywhere in the chain. The request itself is
+/// read off the chain line the fold emits, so the index keeps only the
+/// declaration the emission needs.
+struct FoldedCall {
+    /// What the call declared: its start, or its denial when the call
+    /// never started.
+    started: Option<ToolCallStarted>,
+}
+
+/// What the fold indexes before replaying: every declaration and decision
+/// attribution, so a decision logged after a call's start still excludes
+/// it and a start logged after a compaction still folds at the call's
+/// request position.
+struct FoldIndex {
+    /// Every outer call, by action id.
+    calls: HashMap<String, FoldedCall>,
+    /// The actions with recorded reviewer attribution: a review-step
+    /// `permission_requested`, a reviewer or headless `permission_resolved`,
+    /// or a review-stage `usage_recorded`.
+    review: HashSet<String>,
+    /// The actions with explicit non-review native decisions: a standing
+    /// ask, or a `permission_resolved` decided by a person, a standing rule
+    /// or grant, or any other non-reviewer decider. These calls are not
+    /// review requests, even when their starts logged.
+    nonreview: HashSet<String>,
+}
+
+/// The start a reviewed denial stands in for: the call's declared effects
+/// and rewrite, replayed where its start would have logged.
+fn started_from(call: &ReviewedCall) -> ToolCallStarted {
+    ToolCallStarted {
+        declared: call.declared.clone(),
+        always_reviewed: call.always_reviewed,
+        arguments: call.arguments.clone(),
+        changed_by: call.changed_by.clone(),
+    }
+}
+
+/// Indexes every declaration and decision attribution ahead of the fold:
+/// the fold's port of the jig index rules, so review requests, native
+/// decisions and startless judged calls classify exactly as the converter
+/// classifies them.
+fn fold_index(dir: &Path, chain: &[contract::Envelope]) -> Result<FoldIndex, String> {
+    let mut index = FoldIndex {
+        calls: HashMap::new(),
+        review: HashSet::new(),
+        nonreview: HashSet::new(),
+    };
+    for (position, item) in chain.iter().enumerate() {
+        let envelope = item;
+        let event = Event::from_envelope(envelope).map_err(|error| {
+            format!(
+                "review_sweep: {} line {}: {error}",
+                dir.display(),
+                position + 1
+            )
+        })?;
+        let Some(event) = event else {
+            continue;
+        };
+        match event {
+            Event::ToolCallRequested(call) => {
+                // Inner and provider-hosted calls are history, never
+                // reviewed targets of their own.
+                if call.ran_by.is_none()
+                    && call.provider_item.is_none()
+                    && let Some(action) = envelope.action_id.clone()
+                {
+                    index
+                        .calls
+                        .entry(action.0)
+                        .or_insert(FoldedCall { started: None });
+                }
+            }
+            Event::ToolCallStarted(started) => {
+                if let Some(action) = envelope.action_id.clone()
+                    && let Some(indexed) = index.calls.get_mut(&action.0)
+                    && indexed.started.is_none()
+                {
+                    indexed.started = Some(started);
+                }
+            }
+            Event::PermissionRequested(requested) => {
+                let Some(action) = envelope.action_id.clone() else {
+                    continue;
+                };
+                match requested.step {
+                    AskStep::Review { .. } => {
+                        index.review.insert(action.0);
+                    }
+                    AskStep::StandingAsk { .. } => {
+                        index.nonreview.insert(action.0);
+                    }
+                }
+            }
+            Event::PermissionResolved(resolved) => {
+                let Some(action) = envelope.action_id.clone() else {
+                    continue;
+                };
+                if resolved.reviewer.is_some()
+                    || matches!(
+                        resolved.decided_by,
+                        DecidedBy::Reviewer | DecidedBy::NoReviewer
+                    )
+                {
+                    index.review.insert(action.0.clone());
+                } else {
+                    // An explicit non-review native decision: a person's
+                    // allow or deny, a standing rule or grant, or any other
+                    // non-reviewer decider.
+                    index.nonreview.insert(action.0.clone());
+                }
+                // A reviewed decision that raised no request carries the
+                // call's declared effects: index it as the call's start when
+                // no start logged, so the denial replays. A line without the
+                // keys, or for an action with no indexed request, indexes
+                // nothing.
+                if let Some(call) = resolved.call
+                    && let Some(indexed) = index.calls.get_mut(&action.0)
+                    && indexed.started.is_none()
+                {
+                    indexed.started = Some(started_from(&call));
+                }
+            }
+            Event::UsageRecorded(recorded) => {
+                if let Some(use_of) = recorded.reviewer.clone()
+                    && let ReviewerUse::Stage1 { action_id } | ReviewerUse::Stage2 { action_id } =
+                        use_of
+                {
+                    index.review.insert(action_id.0);
+                }
+            }
+            // Every other kind carries no declaration or decision the
+            // index reads. Each is listed, so a new kind does not compile
+            // until it is placed.
+            Event::FiberStarted(_)
+            | Event::FiberExited(_)
+            | Event::SessionStarted(_)
+            | Event::Rewound(_)
+            | Event::Moved(_)
+            | Event::TurnStarted(_)
+            | Event::StepStarted(_)
+            | Event::TurnCompleted(_)
+            | Event::SteeringApplied(_)
+            | Event::SteeringQueue(_)
+            | Event::ShellCommand(_)
+            | Event::ShellCommandStarted(_)
+            | Event::ShellCommandDelta(_)
+            | Event::DirectoryAdded(_)
+            | Event::SessionNamed(_)
+            | Event::Clients(_)
+            | Event::SessionStatus(_)
+            | Event::ContextAdded(_)
+            | Event::AssistantMessageStarted(_)
+            | Event::AssistantMessageDelta(_)
+            | Event::AssistantMessageCompleted(_)
+            | Event::TextCompleted(_)
+            | Event::ToolCallArgumentsDelta(_)
+            | Event::ReasoningStarted(_)
+            | Event::ReasoningDelta(_)
+            | Event::ReasoningCompleted(_)
+            | Event::ToolCallDelta(_)
+            | Event::ToolCallCompleted(_)
+            | Event::InteractionRequested(_)
+            | Event::InteractionResolved(_)
+            | Event::RepositoryCodeOffered(_)
+            | Event::RepositoryCodeResolved(_)
+            | Event::QuotaNoticed(_)
+            | Event::QuotaRearmed(_)
+            | Event::RetryScheduled(_)
+            | Event::Notice(_)
+            | Event::PreambleBuilt(_)
+            | Event::ModelChanged(_)
+            | Event::OpeningMessage(_)
+            | Event::InstructionFile(_)
+            | Event::DateChanged(_)
+            | Event::SkillsChanged(_)
+            | Event::CompactionStarted(_)
+            | Event::CompactionCompleted(_)
+            | Event::SkillsResent(_)
+            | Event::ContextNudged(_)
+            | Event::ReviewerKept(_)
+            | Event::McpServerFailed(_)
+            | Event::McpServerReady(_)
+            | Event::Reloaded(_)
+            | Event::ExtensionsLoaded(_)
+            | Event::ExtensionStateSet(_)
+            | Event::ExtensionStateUnset(_)
+            | Event::ExtensionUi(_)
+            | Event::ExtensionMessage(_)
+            | Event::ExtensionLog(_)
+            | Event::ExtensionHello(_)
+            | Event::ExtensionRequest(_)
+            | Event::ExtensionExec(_)
+            | Event::JobStarted(_)
+            | Event::DelegateStarted(_)
+            | Event::JobDelta(_)
+            | Event::JobLine(_)
+            | Event::DelegateFinished(_)
+            | Event::JobCompleted(_)
+            | Event::JobsPendingNotified(_)
+            | Event::CommandAccepted(_)
+            | Event::Archived(_)
+            | Event::CommandRejected(_) => {}
+        }
+    }
+    Ok(index)
 }
 
 /// The tool a rebuilt call runs on: inert, carrying the stored declared
@@ -449,7 +1004,9 @@ impl std::fmt::Debug for Rebuilt {
 /// entry's own call item last, so the loop cuts after it and sends the
 /// whole prefix. Person items need their seq and item, call items their
 /// action; a reply's shown keeps the raw reply without its `The agent: `
-/// prefix while its input resends the stored words.
+/// prefix while its input resends the stored words. The prepared call
+/// carries the entry's rewrite attribution, so a rewritten call's prompt
+/// names the extensions exactly as the jig replay's does.
 pub(crate) fn rebuild(entry: &Entry) -> Result<Rebuilt, String> {
     let mut reviewed = Vec::with_capacity(entry.reviewed.len());
     for (position, item) in entry.reviewed.iter().enumerate() {
@@ -527,7 +1084,7 @@ pub(crate) fn rebuild(entry: &Entry) -> Result<Rebuilt, String> {
                 review_when_confined: false,
                 hosts: None,
             },
-            rewritten: None,
+            rewritten: entry.rewritten.clone(),
         },
         reviewed,
     })
@@ -551,11 +1108,23 @@ pub(crate) struct RanOutcome {
     pub(crate) verdict: Verdict,
     /// 1 when stage 1 allowed, 2 when a `check` ran stage 2.
     pub(crate) stage: u8,
+    /// Why the reviewer decided so, as the resolved line records it.
+    pub(crate) reason: Option<String>,
+    /// One record per reviewer model call, in call order.
+    pub(crate) stages: Vec<StageRecord>,
     /// The stage-1 call's tokens.
     pub(crate) s1: Tokens,
     /// The stage-2 call's tokens, or zeros when stage 1 allowed.
     pub(crate) s2: Tokens,
     /// Milliseconds the review took on the injected clock.
+    pub(crate) latency_ms: u64,
+}
+
+/// One reviewer model call the eval taped: its verbatim text plus latency.
+pub(crate) struct StageRecord {
+    /// The reply's text parts concatenated, verbatim, never re-parsed.
+    pub(crate) text: String,
+    /// Milliseconds the call took on the injected clock.
     pub(crate) latency_ms: u64,
 }
 
@@ -575,6 +1144,8 @@ pub(crate) enum Outcome {
     Ran(RanOutcome),
     /// The reviewer never judged it.
     Errored(ErrorOutcome),
+    /// The budget stopped the sweep before this entry-run drove.
+    Unrun,
 }
 
 /// Adds two token counts, saturating on overflow.
@@ -775,13 +1346,143 @@ pub(crate) struct SweepModel {
     pub(crate) thinking_levels: Vec<ThinkingLevel>,
 }
 
+/// The billed-request budget one sweep command shares: the sent count plus
+/// the cap. The example builds one per command and shares it with `sweep`
+/// and the stage tape: the tape increments the counter on call end,
+/// `sweep` refuses an entry-run that would cross the limit. The counter is
+/// a bare atomic, never held across a call.
+pub(crate) struct RequestBudget {
+    /// Reviewer requests sent through the taped provider so far.
+    pub(crate) sent: AtomicU64,
+    /// The owner's billed cap per sweep command.
+    pub(crate) limit: u64,
+}
+
+impl RequestBudget {
+    /// A fresh budget against the billed cap.
+    pub(crate) fn new() -> Self {
+        Self {
+            sent: AtomicU64::new(0),
+            limit: MAX_REVIEWER_CALLS,
+        }
+    }
+}
+
+/// Concatenates the text parts of one reply: what the reviewer stage said.
+fn reply_text(reply: &Reply) -> String {
+    let mut text = String::new();
+    for action in &reply.actions {
+        if let ReplyAction::Text(completed) = action {
+            text.push_str(&completed.text);
+        }
+    }
+    text
+}
+
+/// A provider decorator that tapes every reviewer call's reply text plus
+/// latency and counts the billed request. Owned inside `drive` and wrapped
+/// around the reviewer provider only: the session keeps the original
+/// handle, so the tape holds reviewer stages exactly. The calls lock is
+/// held only for a push on call end and a drain or count before return,
+/// never across a provider call; the budget counter is a separate atomic.
+/// It delegates `wire_tools`, `cost_lookup`, `defers` and `warms` to the
+/// inner provider untouched.
+struct Tape {
+    /// The provider the reviewer would have used unwrapped.
+    inner: Arc<dyn Provider>,
+    /// The injected clock the latencies read.
+    clock: Arc<dyn Clock>,
+    /// The shared billed-request count.
+    budget: Arc<RequestBudget>,
+    /// One record per ended call, in call order.
+    calls: Arc<Mutex<Vec<StageRecord>>>,
+}
+
+impl Tape {
+    /// Takes every taped record, in call order.
+    fn drain(&self) -> Vec<StageRecord> {
+        std::mem::take(&mut self.calls.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+/// One taped reviewer call: the inner call plus the shared tape.
+struct TapeCall {
+    /// The provider's own call, which still sends the request.
+    inner: Box<dyn ModelCall>,
+    /// The injected clock the latency reads.
+    clock: Arc<dyn Clock>,
+    /// The shared billed-request count.
+    budget: Arc<RequestBudget>,
+    /// Where the record lands on call end.
+    calls: Arc<Mutex<Vec<StageRecord>>>,
+}
+
+impl ModelCall for TapeCall {
+    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let start = self.clock.now();
+        let end = self.inner.run(sink);
+        // Both instants come from the injected clock; saturating keeps a
+        // backward wall-clock step from panicking the sweep.
+        let latency_ms = self
+            .clock
+            .now()
+            .saturating_duration_since(start)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let text = end.as_ref().map(reply_text).unwrap_or_default();
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(StageRecord { text, latency_ms });
+        self.budget.sent.fetch_add(1, Ordering::SeqCst);
+        end
+    }
+
+    fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+impl Provider for Tape {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        Box::new(TapeCall {
+            inner: self.inner.call(request),
+            clock: Arc::clone(&self.clock),
+            budget: Arc::clone(&self.budget),
+            calls: Arc::clone(&self.calls),
+        })
+    }
+
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, Value>> {
+        self.inner.wire_tools(tools)
+    }
+
+    fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
+        self.inner.cost_lookup()
+    }
+
+    fn defers(&self) -> bool {
+        self.inner.defers()
+    }
+
+    fn warms(&self, request: &ModelRequest) -> bool {
+        self.inner.warms(request)
+    }
+}
+
 /// Drives `entry` through `Loop::review` on the injected `provider` with
-/// the resolved reviewer `model`, timing it on the injected `clock`.
+/// the resolved reviewer `model`, timing it on the injected `clock` and
+/// counting its reviewer requests against `budget`.
 pub(crate) fn drive(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
     model: &SweepModel,
+    budget: &Arc<RequestBudget>,
 ) -> Outcome {
     drive_with(
         entry,
@@ -798,23 +1499,26 @@ pub(crate) fn drive(
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: u64::MAX,
         }),
+        budget,
     )
 }
 
 /// Drives `entry` through `Loop::review` on the injected `provider` with
-/// the given reviewer setup, timing it on the injected `clock`. A loop
-/// that cannot start, a review the provider fails, and a usage fold that
-/// cannot read are error outcomes, never verdicts. A denied reviewer
-/// failure is one too: the dropped inbox leaves the escalation unanswered,
-/// so the denial resolves by cancel and the untouched generic arm below
-/// reports it as an error — excluded from both denominators and counted
-/// in `errors`. The seam exists so tests can install a failing reviewer;
-/// `drive` always installs its metadata reviewer as `Ok`.
+/// the given reviewer setup, timing it on the injected `clock` and
+/// counting its reviewer requests against `budget`. A loop that cannot
+/// start, a review the provider fails, and a usage fold that cannot read
+/// are error outcomes, never verdicts. A denied reviewer failure is one
+/// too: the dropped inbox leaves the escalation unanswered, so the denial
+/// resolves by cancel and the untouched generic arm below reports it as an
+/// error — excluded from both denominators and counted in `errors`. The
+/// seam exists so tests can install a failing reviewer; `drive` always
+/// installs its metadata reviewer as `Ok`.
 pub(crate) fn drive_with(
     entry: &Entry,
     provider: &Arc<dyn Provider>,
     clock: &Arc<dyn Clock>,
     reviewer: Result<Reviewer, Failure>,
+    budget: &Arc<RequestBudget>,
 ) -> Outcome {
     let errored = |reason: String| {
         Outcome::Errored(ErrorOutcome {
@@ -833,7 +1537,9 @@ pub(crate) fn drive_with(
         Arc::clone(clock),
     ) {
         Ok(log) => log,
-        Err(error) => return errored(format!("review_sweep: cannot start its loop: {error}")),
+        Err(error) => {
+            return errored(format!("review_sweep: cannot start its loop: {error}"));
+        }
     };
     let scratch = log.dir().to_path_buf();
     let session_log = scratch.join("events.jsonl").display().to_string();
@@ -863,11 +1569,34 @@ pub(crate) fn drive_with(
             rules: Arc::new(NoRules),
         },
     };
+    // The tape wraps the reviewer provider only: the session provider
+    // above keeps the original handle, so the tape holds reviewer stages
+    // exactly. A reviewer that never set up still tapes nothing: its path
+    // makes no model call.
+    let inner = match &reviewer {
+        Ok(review) => Arc::clone(&review.provider),
+        Err(_) => Arc::clone(provider),
+    };
+    let tape = Arc::new(Tape {
+        inner,
+        clock: Arc::clone(clock),
+        budget: Arc::clone(budget),
+        calls: Arc::new(Mutex::new(Vec::new())),
+    });
+    let tapped = reviewer.map(|review| Reviewer {
+        provider: tape.clone(),
+        model: review.model,
+        thinking_levels: review.thinking_levels,
+        cache_lifetime: review.cache_lifetime,
+        context_window: review.context_window,
+    });
     let mut looped = match Loop::start(session, None) {
         Ok(looped) => looped,
-        Err(error) => return errored(format!("review_sweep: cannot start its loop: {error}")),
+        Err(error) => {
+            return errored(format!("review_sweep: cannot start its loop: {error}"));
+        }
     }
-    .reviewer(reviewer, BlockLimits::default())
+    .reviewer(tapped, BlockLimits::default())
     .reviewer_notes(String::new());
     // No person answers an escalation: dropping the sender closes the
     // inbox, so an escalated call denies as gone instead of waiting.
@@ -922,10 +1651,13 @@ pub(crate) fn drive_with(
         Ok(fold) => fold,
         Err(error) => return errored(error),
     };
+    let stages = tape.drain();
     Outcome::Ran(RanOutcome {
         label1: entry.label1,
         verdict,
         stage: u8::from(stage2) + 1,
+        reason,
+        stages,
         s1,
         s2,
         latency_ms,
@@ -1020,7 +1752,11 @@ pub(crate) fn score(model: &str, outcomes: &[Outcome]) -> ModelReport {
     let mut latencies = Vec::new();
     for outcome in outcomes {
         let Outcome::Ran(ran_at) = outcome else {
-            report.errors = report.errors.saturating_add(1);
+            // An error never judged, so it counts apart; an unrun never
+            // drove, so it counts nowhere.
+            if matches!(outcome, Outcome::Errored(_)) {
+                report.errors = report.errors.saturating_add(1);
+            }
             continue;
         };
         report.runs = report.runs.saturating_add(1);
@@ -1128,19 +1864,53 @@ pub(crate) struct EntryTally {
 
 /// Drives each entry `runs` times in turn through `drive_entry`, so one
 /// entry's repetitions go out back to back and later runs can reuse the
-/// prompt cache. Returns the per-entry tallies beside every outcome in
-/// drive order, for the entry table and the pooled model row.
+/// prompt cache. With `live` unset the sweep drives nothing and returns
+/// empty, so the no-network proof holds at the core level. Before each
+/// entry-run the sweep checks the shared budget: when the worst case for
+/// one more run would cross the cap it stops, marks every remaining
+/// entry-run unrun, and reports truncated. Returns the per-entry tallies
+/// beside every outcome in drive order, for the entry table and the pooled
+/// model row.
 pub(crate) fn sweep(
     entries: &[Entry],
     runs: u32,
+    live: bool,
+    budget: &Arc<RequestBudget>,
     drive_entry: impl Fn(&Entry) -> Outcome,
-) -> (Vec<EntryTally>, Vec<Outcome>) {
+) -> Result<(Vec<EntryTally>, Vec<Outcome>, bool), String> {
+    if !live {
+        return Ok((Vec::new(), Vec::new(), false));
+    }
     let mut tallies = Vec::with_capacity(entries.len());
     let mut outcomes = Vec::new();
-    for entry in entries {
+    for (at, entry) in entries.iter().enumerate() {
         let mut allows = 0u64;
         let mut blocks = 0u64;
-        for _ in 0..runs {
+        let mut driven = 0u32;
+        while driven < runs {
+            if budget.sent.load(Ordering::SeqCst).saturating_add(4) > budget.limit {
+                for _ in driven..runs {
+                    outcomes.push(Outcome::Unrun);
+                }
+                tallies.push(EntryTally {
+                    id: entry.id.clone(),
+                    label: entry.label1,
+                    allows,
+                    blocks,
+                });
+                for rest in entries.iter().skip(at + 1) {
+                    for _ in 0..runs {
+                        outcomes.push(Outcome::Unrun);
+                    }
+                    tallies.push(EntryTally {
+                        id: rest.id.clone(),
+                        label: rest.label1,
+                        allows: 0,
+                        blocks: 0,
+                    });
+                }
+                return Ok((tallies, outcomes, true));
+            }
             let outcome = drive_entry(entry);
             match &outcome {
                 Outcome::Ran(ran_at) => match ran_at.verdict {
@@ -1151,9 +1921,12 @@ pub(crate) fn sweep(
                         blocks = blocks.saturating_add(1);
                     }
                 },
-                Outcome::Errored(_) => {}
+                // An error casts no vote here; the model row counts it. A
+                // driver never reports unrun: only this stop marks it.
+                Outcome::Errored(_) | Outcome::Unrun => {}
             }
             outcomes.push(outcome);
+            driven = driven.saturating_add(1);
         }
         tallies.push(EntryTally {
             id: entry.id.clone(),
@@ -1162,7 +1935,7 @@ pub(crate) fn sweep(
             blocks,
         });
     }
-    (tallies, outcomes)
+    Ok((tallies, outcomes, false))
 }
 
 /// Renders the per-entry table: one `id label verdict count/runs` line per
@@ -1184,4 +1957,257 @@ pub(crate) fn render_entry_table(tallies: &[EntryTally], runs: u32) -> String {
         table.push_str(&format!("{} {label} {side} {count}/{runs}\n", tally.id));
     }
     table
+}
+
+/// One run-table row's source tag beside its entry: the tag distinguishes
+/// twin rows sharing an id, one per input form.
+pub(crate) struct Sourced<'a> {
+    /// Where the entry came from: `set` or `dir`.
+    pub(crate) src: &'static str,
+    /// The entry the row reports.
+    pub(crate) entry: &'a Entry,
+}
+
+/// One verdict cell: what the reviewer judged, or the miss when it never
+/// drove or never judged.
+fn run_cell(outcome: Option<&Outcome>) -> &'static str {
+    match outcome {
+        Some(Outcome::Ran(ran_at)) => match ran_at.verdict {
+            Verdict::Allow => "allow",
+            Verdict::Block => "block",
+        },
+        Some(Outcome::Errored(_)) => "error",
+        Some(Outcome::Unrun) | None => "unrun",
+    }
+}
+
+/// Renders text on one line: newlines become spaces, cut at `max`
+/// characters.
+fn one_line(text: &str, max: usize) -> String {
+    text.chars()
+        .map(|cell| {
+            if cell == '\n' || cell == '\r' {
+                ' '
+            } else {
+                cell
+            }
+        })
+        .take(max)
+        .collect()
+}
+
+/// Renders the pasteable per-run table: one space-separated row per
+/// slow-path call, with the source tag distinguishing twin rows, the
+/// expected verdict, one verdict cell per run, and the token and latency
+/// totals. Entry token totals sum both stages over runs; latency is the
+/// per-entry upper-middle, mirroring the model row.
+pub(crate) fn render_run_table(rows: &[Sourced], outcomes: &[Outcome], runs: u32) -> String {
+    let mut table = String::from("src id expected");
+    for run in 1..=runs {
+        table.push_str(&format!(" r{run}"));
+    }
+    table.push_str(" tok_in tok_out lat_p50\n");
+    let mut driven = outcomes.iter();
+    for row in rows {
+        let expected = match row.entry.label1 {
+            Some(Label::Pass) => "pass",
+            Some(Label::Block) => "block",
+            None => "unlabelled",
+        };
+        let mut cells = String::new();
+        let mut tok_in = 0u64;
+        let mut tok_out = 0u64;
+        let mut latencies = Vec::new();
+        for _ in 0..runs {
+            let outcome = driven.next();
+            cells.push(' ');
+            cells.push_str(run_cell(outcome));
+            if let Some(Outcome::Ran(ran_at)) = outcome {
+                tok_in = tok_in
+                    .saturating_add(ran_at.s1.input)
+                    .saturating_add(ran_at.s1.cache_read)
+                    .saturating_add(ran_at.s1.cache_write.values().sum::<u64>())
+                    .saturating_add(ran_at.s2.input)
+                    .saturating_add(ran_at.s2.cache_read)
+                    .saturating_add(ran_at.s2.cache_write.values().sum::<u64>());
+                tok_out = tok_out
+                    .saturating_add(ran_at.s1.output)
+                    .saturating_add(ran_at.s2.output);
+                latencies.push(ran_at.latency_ms);
+            }
+        }
+        latencies.sort_unstable();
+        let latency = latencies
+            .get(latencies.len() / 2)
+            .map_or_else(|| "n/a".to_owned(), |p50| p50.to_string());
+        table.push_str(&format!(
+            "{} {} {expected}{cells} {tok_in} {tok_out} {latency}\n",
+            row.src, row.entry.id
+        ));
+    }
+    table
+}
+
+/// Renders the free-text detail beside the run table: one line per run
+/// with its verdict, deciding stage, reason, per-stage tokens, latency
+/// and the recorded stage texts. Reasons and texts render single-lined,
+/// cut at 160 characters, so the diagnosis keeps its words while the table
+/// stays greppable.
+pub(crate) fn render_run_detail(rows: &[Sourced], outcomes: &[Outcome], runs: u32) -> String {
+    let mut detail = String::new();
+    let mut driven = outcomes.iter();
+    for row in rows {
+        for run in 1..=runs {
+            match driven.next() {
+                Some(Outcome::Ran(ran_at)) => {
+                    let verdict = match ran_at.verdict {
+                        Verdict::Allow => "allow",
+                        Verdict::Block => "block",
+                    };
+                    let texts = ran_at
+                        .stages
+                        .iter()
+                        .map(|stage| {
+                            format!("{} [{}ms]", one_line(&stage.text, 160), stage.latency_ms)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    detail.push_str(&format!(
+                        "{} {} r{run} {verdict} stage{} reason={} s1={}/{} s2={}/{} lat={}ms {}\n",
+                        row.src,
+                        row.entry.id,
+                        ran_at.stage,
+                        one_line(ran_at.reason.as_deref().unwrap_or("-"), 160),
+                        ran_at.s1.input,
+                        ran_at.s1.output,
+                        ran_at.s2.input,
+                        ran_at.s2.output,
+                        ran_at.latency_ms,
+                        texts
+                    ));
+                }
+                Some(Outcome::Errored(_)) => {
+                    detail.push_str(&format!("{} {} r{run} error\n", row.src, row.entry.id));
+                }
+                Some(Outcome::Unrun) | None => {
+                    detail.push_str(&format!("{} {} r{run} unrun\n", row.src, row.entry.id));
+                }
+            }
+        }
+    }
+    detail
+}
+
+/// Runs a credential `command` source with `timeout`: kills the child and
+/// reports a timeout when it overruns, so a hung helper cannot hang the
+/// sweep.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "person-run credential runner: bounds a hung helper on the wall clock; tests never run it"
+)]
+pub(crate) fn run_command(
+    command: &mut Command,
+    timeout: Duration,
+    clock: &Arc<dyn Clock>,
+) -> io::Result<std::process::Output> {
+    command.stdin(Stdio::null()).stderr(Stdio::null());
+    let mut child = command.spawn()?;
+    let start = clock.now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if clock.now().saturating_duration_since(start) >= timeout {
+            child.kill()?;
+            child.wait()?;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "review_sweep: the credential command timed out",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Builds the reviewer provider and its resolved model metadata for one
+/// `--models` entry through the public `routing::reviewer::{reference,
+/// model, choose}` seam. The `--models` entry rides `reviewer.model`, so
+/// `reference` returns it before reading the session; the session model
+/// only feeds the fallback that never runs. Resolution failures name
+/// `reviewer.model`.
+pub(crate) fn reviewer_provider(
+    home: &Path,
+    workspace: &Path,
+    bare: &str,
+    clock: &Arc<dyn Clock>,
+) -> Result<(Arc<dyn contract::provider::Provider>, SweepModel), String> {
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: config::ProjectKey::new("review-sweep").map_err(|error| error.to_string())?,
+        overrides: vec![format!("reviewer.model={bare}")],
+    })
+    .map_err(|error| error.to_string())?;
+    let (mut providers, _notices) =
+        extensions::Providers::load(home).map_err(|error| error.to_string())?;
+    // The session's extensions load exactly like a session start, so a
+    // subscription credential's signing headers ride the sweep's requests
+    // (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    let loaded = extensions::SessionExtensions::load(
+        home,
+        &config,
+        Arc::clone(clock),
+        Arc::new(tools::PathLocks::new()),
+        None,
+    );
+    let run = |command: &mut Command, timeout: Duration| run_command(command, timeout, clock);
+    let lookup = cli::placeholder_lookup(home, &providers, clock.as_ref());
+    routing::lua_providers::add_lua(&loaded, &mut providers, &config, &run, &lookup)
+        .map_err(|error| format!("review_sweep: reviewer setup: {}", error.message))?;
+    // The session is the candidate itself: `reviewer.model` is set, so the
+    // lookup below returns before reading it.
+    let session = providers
+        .resolve(bare)
+        .map_err(|error| format!("review_sweep: reviewer.model {bare}: {error}"))?;
+    let here = routing::connect::Here {
+        workspace: workspace.to_path_buf(),
+        clock: Arc::clone(clock),
+        cache_diagnostics: false,
+        databricks_request_tags: None,
+    };
+    let mut lookup =
+        |data: &config::ProviderData| -> Result<(String, routing::lua_providers::Access), Failure> {
+            let label = config.credentials().credential_label(data);
+            let lua = providers.lua(&data.name);
+            let (key, signer) =
+                routing::lua_providers::session_credential(lua, data, &label, || {
+                    let clock = Arc::clone(clock);
+                    config
+                        .credentials()
+                        .credential_with(data, &label, &|command, timeout| {
+                            run_command(command, timeout, &clock)
+                        })
+                        .map(|read| read.secret)
+                        .map_err(|error| Failure {
+                            code: error.code(),
+                            message: error.to_string(),
+                            retry_after_ms: None,
+                            provider: None,
+                        })
+                })?;
+            Ok((
+                label,
+                routing::lua_providers::Access::new(lua, (key, signer)),
+            ))
+        };
+    let chosen = routing::reviewer::choose(&providers, &config, &session, &here, &mut lookup, None)
+        .map_err(|error| format!("review_sweep: reviewer.model {bare}: {}", error.message))?
+        .ok_or_else(|| format!("review_sweep: reviewer.model {bare} names no reviewer"))?;
+    let model = SweepModel {
+        reference: chosen.model.reference(),
+        cost: chosen.model.model.cost.clone(),
+        subscription: chosen.model.model.subscription,
+        thinking_levels: chosen.model.model.thinking_levels.clone(),
+    };
+    Ok((chosen.provider, model))
 }

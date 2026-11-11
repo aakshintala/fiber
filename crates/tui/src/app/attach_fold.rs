@@ -6,6 +6,7 @@
 
 use contract::ErrorCode;
 use contract::HubEventKind;
+use contract::commands::HistoryArgs;
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandResult};
 use contract::{Envelope, Seq, SessionId};
@@ -66,7 +67,7 @@ impl App {
     /// unfollowed parent still asks once an ancestor is held. The pass
     /// counts the lines above a filled display, so the open holds only
     /// the filled run plus each seam crossing.
-    pub(crate) fn tail_next(&mut self) -> Option<Value> {
+    pub(crate) fn tail_next(&mut self) -> Option<HistoryArgs> {
         if self.preview.is_none() {
             self.fold_preview();
         }
@@ -143,12 +144,15 @@ impl App {
     }
 
     /// Installs the newest candidate built while reading the open's
-    /// tail, without folding it again. An empty log installs nothing
-    /// and shows no history. The screen follows, the overlay shows the
-    /// preview, and the screen freezes for the raise. The tail stays
-    /// behind as the post-frame count's cursor: older own-segment
-    /// windows and ancestors read through it without refolding the
-    /// preview.
+    /// tail, without folding it again. A completed tail swaps the
+    /// candidate into the screen, retains it as the post-frame count's
+    /// cursor, and floors the count at the candidate's oldest folded
+    /// line; an empty log installs nothing and shows no history. An
+    /// ended tail installs nothing: the previous transcript stays, the
+    /// candidate and cursor drop, and the overlay still shows for the
+    /// raise with no busy, leaving the indicator to the live session
+    /// (`docs/tui.md`, "History and paging"). Either way the screen
+    /// freezes for the raise.
     pub(crate) fn install_tail(&mut self) {
         if self.preview.is_none() {
             self.fold_preview();
@@ -163,6 +167,16 @@ impl App {
             self.overlay = Overlay::Reading(tail);
             return;
         };
+        if tail.ended() {
+            drop(preview);
+            self.overlay = Overlay::Shown {
+                session,
+                busy: None,
+                held: false,
+            };
+            self.attached_screen_mut().set_frozen(true);
+            return;
+        }
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
         // The candidate's oldest folded line bounds the count: lines at
@@ -194,7 +208,7 @@ impl App {
     /// The args of the post-frame count's next read: none once the walk
     /// reached the chain root or ended, or when no count runs. Never
     /// folds: the count folds once at its end, above the preview.
-    pub(crate) fn tail_count_next(&self) -> Option<Value> {
+    pub(crate) fn tail_count_next(&self) -> Option<HistoryArgs> {
         let tail = self.count.as_ref()?;
         if tail.chain_done() {
             return None;
@@ -229,11 +243,16 @@ impl App {
     /// the line following it as its trailer and carries its runs above
     /// the installed preview. The preview itself never refolds: the
     /// trailer closes the count fold so the ancestor run carries
-    /// instead of staying open behind it.
+    /// instead of staying open behind it. An ended count folds nothing
+    /// and keeps the installed preview (`docs/tui.md`, "History and
+    /// paging").
     pub(crate) fn finish_count(&mut self) {
         let Some(tail) = self.count.take() else {
             return;
         };
+        if tail.ended() {
+            return;
+        }
         if !matches!(&self.overlay, Overlay::Shown { .. }) {
             self.count = Some(tail);
             return;
@@ -610,6 +629,8 @@ impl App {
                     HubEventKind::HubHello
                     | HubEventKind::Attention
                     | HubEventKind::DeviceChanged
+                    | HubEventKind::SessionDeleted
+                    | HubEventKind::SessionArchived
                     | HubEventKind::CommandAccepted
                     | HubEventKind::CommandRejected
                     | HubEventKind::Unknown(_) => {}

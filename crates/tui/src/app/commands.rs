@@ -6,13 +6,18 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::ErrorCode;
-use contract::SessionId;
+use contract::commands::hub::HubCommand;
+use contract::commands::{
+    AddDirectoryArgs, ChangeWorkspaceArgs, CloseArgs, Command, Compact, ContentArgs, ImportArgs,
+    Name, RunCommand, SandboxArgs,
+};
 use contract::events::CommandAccepted;
-use serde_json::json;
+use contract::{CommandId, SessionId};
 
-use super::{App, Effect, Kind, Link, Phase, Surface, mint, session_command};
+use super::{App, Effect, Kind, Link, Phase, Sent, Surface, hub_line, session_line};
 use crate::editor::{OpenFile, Target};
-use crate::import_report::ImportSource;
+use crate::ext::KeyOutcome;
+use crate::import_report::parse_import;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
 use crate::keys::{Edit, Key};
@@ -27,13 +32,11 @@ const NO_SESSION: &str = "No session on screen.";
 pub(crate) use crate::completion_rows::{Completions, Rows};
 
 /// The draft's content as a prompt's `content` argument: text runs and
-/// image parts in order, each run one text part. `SentPart` serializes as
-/// the wire part, `type` with the part's fields, so the content converts
-/// directly. Every part serializes, so the fallback never runs.
-pub(super) fn content_arg(draft: &Draft) -> serde_json::Value {
-    let content =
-        serde_json::to_value(draft.content()).unwrap_or(serde_json::Value::Array(Vec::new()));
-    json!({ "content": content })
+/// image parts in order, each run one text part.
+pub(super) fn content_arg(draft: &Draft) -> ContentArgs {
+    ContentArgs {
+        content: draft.content(),
+    }
 }
 
 /// One built-in command: adding one is one row plus its handler, which
@@ -395,12 +398,20 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
 }
 
 fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
-    let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("compact", args).0)
+    let instructions = (!rest.is_empty()).then(|| rest.to_owned());
+    Some(
+        app.send_command(Command::Compact(Compact { instructions }))
+            .0,
+    )
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
-    Some(app.send_command("name", Some(json!({ "text": rest }))).0)
+    Some(
+        app.send_command(Command::Name(Name {
+            text: rest.to_owned(),
+        }))
+        .0,
+    )
 }
 
 pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -413,7 +424,7 @@ pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
             app.push_notice(ErrorCode::from_name(&code), text);
         }
     }
-    Some(app.send_command("reload", None).0)
+    Some(app.send_command(Command::Reload).0)
 }
 
 /// `/sandbox on|off`: sends the session sandbox switch, `on` or `off`
@@ -431,24 +442,28 @@ fn run_sandbox(app: &mut App, rest: &str) -> Option<Effect> {
         return Some(Effect::None);
     };
     Some(
-        app.send_command("sandbox", Some(json!({ "enabled": enabled })))
+        app.send_command(Command::Sandbox(SandboxArgs { enabled }))
             .0,
     )
 }
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
-    // A bare `/import` imports both sources; anything else goes out as
-    // `source`, and the session refuses what it does not take. The
-    // source rides beside the pending entry under the command's id, so
-    // the accepted answer's report names it; a bare import reports the
-    // generic title.
+    // A bare `/import` imports both sources; a named source imports
+    // that one; anything else is refused locally naming the two, with
+    // the draft kept and nothing sent — the same outcome as the
+    // session's refusal, without a round trip. The source rides beside
+    // the pending entry under the command's id, so the accepted
+    // answer's report names it; a bare import reports the generic
+    // title.
     let rest = rest.trim();
-    let args = (!rest.is_empty()).then(|| json!({"source": rest}));
-    // The entry carries the import's source, so the accepted answer's
-    // report names it; an unknown source stays a plain command, and
-    // its accept opens no report.
-    let kind = ImportSource::parse(rest).map_or(Kind::Command, Kind::Import);
-    let (effect, _) = app.send_kind(kind, "import", args);
+    let Some(source) = parse_import(rest) else {
+        app.push_notice(
+            ErrorCode::InvalidArguments,
+            "`source` must be `claude-code` or `codex`.".to_owned(),
+        );
+        return Some(Effect::None);
+    };
+    let (effect, _) = app.send_kind(Kind::Import(source), Command::Import(ImportArgs { source }));
     Some(effect)
 }
 
@@ -552,7 +567,9 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let (effect, id) = self.send_command("change_workspace", Some(json!({"path": rest})));
+        let (effect, id) = self.send_command(Command::ChangeWorkspace(ChangeWorkspaceArgs {
+            path: rest.to_owned(),
+        }));
         if let Some(id) = id {
             self.outbox
                 .wait(&id, super::outbox::Waiting::ChangeWorkspace(session));
@@ -651,8 +668,10 @@ fn run_add_dir(app: &mut App, rest: &str) -> Option<Effect> {
         return Some(Effect::None);
     }
     Some(
-        app.send_command("add_directory", Some(json!({ "path": path })))
-            .0,
+        app.send_command(Command::AddDirectory(AddDirectoryArgs {
+            path: path.to_owned(),
+        }))
+        .0,
     )
 }
 
@@ -812,6 +831,8 @@ impl App {
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -839,6 +860,26 @@ impl App {
         self.completion.generation
     }
 
+    /// Runs the TUI winner for `name` with `rest`: a handled command
+    /// clears the draft and sends nothing; anything else is consumed
+    /// silently with the draft preserved — the failure already has its
+    /// notice, and a conflict's merge notice stands. A TUI name never
+    /// reaches the driver command path.
+    fn run_tui_command(&mut self, name: &str, rest: &str) -> Effect {
+        let ctx = self.command_ctx();
+        let outcome = self.handle.get().map(|renderer| {
+            let outcome = renderer.run_tui_command(&ctx, name, rest.trim());
+            for (code, text) in renderer.take_pending() {
+                self.push_notice(ErrorCode::from_name(&code), text);
+            }
+            outcome
+        });
+        if outcome == Some(KeyOutcome::Handled) {
+            self.draft.clear();
+        }
+        Effect::None
+    }
+
     /// Runs the draft when its first word is an extension command or a
     /// built-in command; `None` when it is neither, and the draft goes out
     /// as typed. A draft holding an image is never a command: Enter sends
@@ -851,6 +892,19 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
+        if self.completion.tui_conflicts.contains(name) {
+            // A conflicted name runs nowhere: consumed, nothing sent,
+            // no second notice, draft preserved.
+            return Some(Effect::None);
+        }
+        if self
+            .completion
+            .tui_commands
+            .iter()
+            .any(|command| command.name == name)
+        {
+            return Some(self.run_tui_command(name, rest));
+        }
         let extension = self
             .completion
             .extensions
@@ -867,12 +921,14 @@ impl App {
             });
         if let Some(extension) = extension {
             let rest = rest.trim();
-            let args = if rest.is_empty() {
-                Some(json!({"name": extension}))
-            } else {
-                Some(json!({"name": extension, "text": rest}))
-            };
-            return Some(self.send_command("command", args).0);
+            let text = (!rest.is_empty()).then(|| rest.to_owned());
+            return Some(
+                self.send_command(Command::Command(RunCommand {
+                    name: (*extension).clone(),
+                    text,
+                }))
+                .0,
+            );
         }
         if !slash::is_built_in(name) {
             return None;
@@ -933,9 +989,15 @@ impl App {
             self.outbox.settled(&asked);
         }
         self.offer = crate::offer::Offer::default();
-        self.completion.slash_rows = slash::rows(&[]);
+        self.completion.session_answer.clear();
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        // The session rows go with the session; the TUI rows refresh for
+        // home, which holds every loaded winner with no half gate.
+        self.refresh_tui_commands();
+        if self.handle.get().is_none() {
+            self.merge_slash_rows();
+        }
         self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
@@ -957,27 +1019,18 @@ impl App {
     /// Sends `command` to the attached session, returning the minted
     /// command id beside the effect for callers recording per-command
     /// state. A rejection returns the draft.
-    fn send_command(
-        &mut self,
-        command: &str,
-        args: Option<serde_json::Value>,
-    ) -> (Effect, Option<String>) {
-        self.send_kind(Kind::Command, command, args)
+    fn send_command(&mut self, command: Command) -> (Effect, Option<String>) {
+        self.send_kind(Kind::Command, command)
     }
 
     /// Sends `command` of `kind` to the attached session, returning the
     /// minted command id beside the effect. A rejection returns the draft.
-    fn send_kind(
-        &mut self,
-        kind: Kind,
-        command: &str,
-        args: Option<serde_json::Value>,
-    ) -> (Effect, Option<String>) {
+    fn send_kind(&mut self, kind: Kind, command: Command) -> (Effect, Option<String>) {
         let Some((session, _)) = self.command_session() else {
             return (Effect::None, None);
         };
-        let id = mint();
-        let line = session_command(&id, command, &session, args).to_string();
+        let id = support::mint("c_");
+        let line = session_line(&contract::CommandId(id.clone()), &session, command);
         let draft = std::mem::take(&mut self.draft);
         self.outbox.insert(id.clone(), kind, draft);
         (Effect::Send(vec![line]), Some(id))
@@ -989,9 +1042,12 @@ impl App {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let id = mint();
-        let lines =
-            vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
+        let id = support::mint("c_");
+        let lines = vec![session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::Close(CloseArgs { now: true }),
+        )];
         // Home has a fresh draft: a rejected `close` gives only its notice.
         self.outbox.insert(id, Kind::Command, Draft::default());
         self.go_home();
@@ -1031,9 +1087,11 @@ impl App {
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`, `extensions_loaded`, and `turn_started`; its answer,
     /// and no older one, fills the `/` list.
-    /// Until it answers, the list holds the built-ins only.
+    /// Until it answers, the list holds the built-ins and the TUI
+    /// commands only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let line = self.completion.ask_commands(session);
+        self.merge_slash_rows();
         if let Some(id) = &self.completion.commands_id {
             self.outbox.wait(id, super::outbox::Waiting::Commands);
         }
@@ -1041,9 +1099,12 @@ impl App {
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
-    /// sent replaces the session's rows of the `/` list.
+    /// sent replaces the session's rows of the `/` list, re-resolved
+    /// against the TUI commands.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        self.completion.commands_answered(accepted);
+        if self.completion.commands_answered(accepted) {
+            self.merge_slash_rows();
+        }
     }
 
     /// Whether the draft starts with an unknown slash command: its first
@@ -1079,6 +1140,11 @@ impl App {
             .iter()
             .any(|row| row.name == name || row.aliases.iter().any(|alias| alias == name))
         {
+            return false;
+        }
+        // A conflicted name has no row: without this `on_enter` refuses
+        // it as unknown before `built_in` consumes it.
+        if self.completion.tui_conflicts.contains(name) {
             return false;
         }
         self.push_notice(
@@ -1127,7 +1193,7 @@ impl App {
         if self.steering.is_selected() {
             return self.amend();
         }
-        let id = mint();
+        let id = support::mint("c_");
         let args = content_arg(&self.draft);
         let shell = (!has_image).then(|| shell::parse(&text)).flatten();
         let (kind, line) = match (&self.phase, shell) {
@@ -1145,23 +1211,48 @@ impl App {
                 if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
                     return self.open_model_picker(crate::model_picker::Mode::Choose);
                 }
-                let mut args = self.start_args();
+                let Some(mut start) = self.start_args() else {
+                    // Without a workspace the hub would refuse the
+                    // missing key as `invalid_arguments`: keep the
+                    // draft, as the link-down path does.
+                    return Effect::None;
+                };
                 // A session-only choice on home rides this `start`.
-                self.with_start_model(&mut args);
-                self.panel_state.note_start(&args);
-                let line = json!({"id": id, "command": "start", "args": args});
-                (Kind::Start, line)
+                self.with_start_model(&mut start);
+                self.panel_state
+                    .note_start(&serde_json::to_value(&start).unwrap_or(serde_json::Value::Null));
+                let id = CommandId(id);
+                let sent = Sent {
+                    line: hub_line(&id, HubCommand::Start(start)),
+                    id: id.clone(),
+                };
+                self.phase = Phase::Pending {
+                    command_id: sent.id.0.clone(),
+                };
+                let draft = std::mem::take(&mut self.draft);
+                return match self.outbox.send(
+                    sent.id.0.clone(),
+                    Kind::Start,
+                    draft,
+                    sent.line.clone(),
+                ) {
+                    Some(_) => Effect::SendTracked(vec![sent]),
+                    None => Effect::None,
+                };
             }
             (Phase::Attached { session, .. }, Some((command, send))) => {
                 (Kind::Shell, shell::command(&id, session, command, send))
             }
             (Phase::Attached { session, busy }, None) => {
                 let (kind, command) = if *busy {
-                    (Kind::Steer, "steer")
+                    (Kind::Steer, Command::Steer(args))
                 } else {
-                    (Kind::Prompt, "prompt")
+                    (Kind::Prompt, Command::Prompt(args))
                 };
-                (kind, session_command(&id, command, session, Some(args)))
+                (
+                    kind,
+                    session_line(&contract::CommandId(id.clone()), session, command),
+                )
             }
         };
         if kind == Kind::Start {
@@ -1170,7 +1261,6 @@ impl App {
             };
         }
         let draft = std::mem::take(&mut self.draft);
-        let line = line.to_string();
         // A `!!` run has no line on the session stream: its row starts
         // here, where the terminal sends it, and its answer ends it.
         let show_only = match (&self.phase, shell) {
@@ -1198,9 +1288,12 @@ impl App {
     /// after its `subscribe` so the session counts this terminal before
     /// the prompt. A rejection returns the draft to an empty box.
     pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
-        let id = mint();
-        let args = content_arg(&draft);
-        let line = session_command(&id, "prompt", session, Some(args)).to_string();
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            session,
+            Command::Prompt(content_arg(&draft)),
+        );
         self.outbox.insert(id, Kind::Prompt, draft);
         line
     }
@@ -1231,8 +1324,8 @@ impl App {
 
     /// One `cancel` of `session`'s turn, settled by its answer.
     fn send_cancel(&mut self, session: &SessionId) -> Effect {
-        let id = mint();
-        let line = session_command(&id, "cancel", session, None).to_string();
+        let id = support::mint("c_");
+        let line = session_line(&contract::CommandId(id.clone()), session, Command::Cancel);
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }

@@ -80,16 +80,14 @@ impl Setup {
                 ]
             }),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         support::write_json(
             &self.home().join("config.json"),
             &json!({"model": "fake/m", "reviewer": {"model": "fake/r"}}),
@@ -613,7 +611,7 @@ fn diagnostic_file(home: &Path, name: &str) -> Vec<Value> {
 
 #[test]
 fn one_shot_mcp_login_logs_with_cli_process_and_no_session() {
-    // docs/state.md, "Diagnostic logs": one line per POST and per GET the MCP login sends.
+    // `docs/state.md`, "What each part holds": one line per POST and per GET the MCP login sends.
     let setup = Setup::new();
     let empty = setup.root.path().join("empty");
     fs::create_dir_all(&empty).unwrap();

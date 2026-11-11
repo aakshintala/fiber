@@ -817,7 +817,7 @@ fn extensions_loaded_in_the_log_carries_each_replaces() {
     assert_eq!(extensions[1]["replaces"], json!(["model"]));
     // The complete ordered kinds of the log: `clients` and
     // `session_status` are ephemeral, so they never reach the file
-    // (docs/testing.md, "Event streams"). No turn runs, so no preamble
+    // (`docs/testing.md`, "Event streams"). No turn runs, so no preamble
     // is built and no opening message is written.
     assert_eq!(
         log.iter()
@@ -1446,7 +1446,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     // `clients` is set aside: written when the connection attaches, with
     // no position against the session's other lines (`docs/testing.md`,
     // "Event streams"); one attach writes exactly one.
-    // Only the durable lines stay pinned in order (`docs/events.md:116`):
+    // Only the durable lines stay pinned in order (`docs/events.md`, "Durable and ephemeral"):
     // `session_started` first, `fiber_started` after it, `fiber_exited`
     // last (`docs/events.md`, `session_started`, `fiber_started`,
     // `extensions_loaded` and `fiber_exited` sections). `notice` and

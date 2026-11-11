@@ -2,11 +2,13 @@
 //! each part's segment session (`docs/tui.md`, "Images").
 
 use contract::ErrorCode;
+use contract::commands::hub::{HubCommand, ReadFile};
+use contract::{CommandId, SessionId};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::{App, Effect, Target, Waiting, mint};
+use super::{App, Effect, Sent, Target, Waiting, hub_line};
 use crate::event_loop::kitty_writer;
 use crate::image;
 
@@ -107,22 +109,26 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let command_id = mint();
-        let line = json!({
-            "id": command_id,
-            "command": "read_file",
-            "args": {"session": session.0, "path": path},
-        })
-        .to_string();
+        let command_id = CommandId(support::mint("c_"));
+        let sent = Sent {
+            line: hub_line(
+                &command_id,
+                HubCommand::ReadFile(ReadFile {
+                    session: session.clone(),
+                    path: path.clone(),
+                }),
+            ),
+            id: command_id.clone(),
+        };
         self.outbox.wait(
-            &command_id,
+            &command_id.0,
             Waiting::ImageFetch {
                 id,
                 session: session.0.clone(),
                 path,
             },
         );
-        Effect::Send(vec![line])
+        Effect::SendTracked(vec![sent])
     }
 
     /// Answers our `read_file` for a viewer open: queues the view for
@@ -452,14 +458,21 @@ impl App {
             if retained.contains(&fetch.id) {
                 continue;
             }
-            let command_id = mint();
-            let line = serde_json::json!({
-                "id": command_id.clone(),
-                "command": "read_file",
-                "args": {"session": session, "path": path},
-            })
-            .to_string();
-            self.images.out.display.push(line);
+            let command_id = CommandId(support::mint("c_"));
+            let sent = Sent {
+                line: hub_line(
+                    &command_id,
+                    HubCommand::ReadFile(ReadFile {
+                        session: SessionId(session.clone()),
+                        path: path.clone(),
+                    }),
+                ),
+                id: command_id.clone(),
+            };
+            // The display queue drains through the fold: the id rides
+            // paired, so a failed write settles by the carried id.
+            self.outbox.note_hub_sent(&sent.id, &sent.line);
+            self.images.out.display.push(sent.line);
             // The key's earlier ask, if any tag of it lives, must not
             // answer the new record.
             self.outbox.settle_where(|waiting| {
@@ -470,7 +483,7 @@ impl App {
                 )
             });
             self.outbox.wait(
-                &command_id,
+                &command_id.0,
                 Waiting::ImageDisplay {
                     session: session.clone(),
                     path: path.clone(),
@@ -574,13 +587,21 @@ impl App {
             if self.screen.pages().image_failed(&part.session, &part.path) {
                 continue;
             }
-            let command_id = mint();
-            let line = json!({
-                "id": command_id,
-                "command": "read_file",
-                "args": {"session": part.session.0, "path": part.path},
-            })
-            .to_string();
+            let command_id = CommandId(support::mint("c_"));
+            let sent = Sent {
+                line: hub_line(
+                    &command_id,
+                    HubCommand::ReadFile(ReadFile {
+                        session: part.session.clone(),
+                        path: part.path.clone(),
+                    }),
+                ),
+                id: command_id.clone(),
+            };
+            // The display queue drains through the fold: the id rides
+            // paired, so a failed write settles by the carried id.
+            self.outbox.note_hub_sent(&sent.id, &sent.line);
+            self.images.out.display.push(sent.line);
             self.outbox.settle_where(|waiting| {
                 matches!(
                     waiting,
@@ -589,7 +610,7 @@ impl App {
                 )
             });
             self.outbox.wait(
-                &command_id,
+                &command_id.0,
                 Waiting::ImageDisplay {
                     session: key.0.clone(),
                     path: key.1.clone(),
@@ -605,7 +626,6 @@ impl App {
                     height: part.height,
                 },
             );
-            self.images.out.display.push(line);
         }
     }
 

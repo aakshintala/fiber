@@ -262,6 +262,7 @@ pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
         | EventKind::ShellCommandDelta
         | EventKind::DirectoryAdded
         | EventKind::SessionNamed
+        | EventKind::Archived
         | EventKind::Clients
         | EventKind::SessionStatus
         | EventKind::ContextAdded

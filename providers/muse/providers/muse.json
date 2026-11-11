@@ -7,6 +7,47 @@
       "base_url": "https://api.meta.ai/v1",
       "context_window": 1048576,
       "cost": {
+        "cache_read": 0.004,
+        "input": 0.1,
+        "output": 0.5,
+        "tiers": [
+          {
+            "cache_read": 0.012,
+            "cache_write": 0,
+            "input": 0.3,
+            "input_tokens_above": 200000,
+            "output": 1.5
+          }
+        ]
+      },
+      "extra_body": {
+        "include": [
+          "reasoning.encrypted_content",
+          "web_search_call.results"
+        ]
+      },
+      "id": "muse-ember-1.0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 524288,
+      "name": "Muse Ember",
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "web_search": "web_search"
+    },
+    {
+      "base_url": "https://api.meta.ai/v1",
+      "context_window": 1048576,
+      "cost": {
         "cache_read": 0.15,
         "input": 1.25,
         "output": 4.25
@@ -128,6 +169,38 @@
       ],
       "max_output_tokens": 131072,
       "name": "Muse Spark 1.3 Contributor",
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "web_search": "web_search"
+    },
+    {
+      "base_url": "https://api.meta.ai/v1",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.2,
+        "input": 4,
+        "output": 20
+      },
+      "extra_body": {
+        "include": [
+          "reasoning.encrypted_content",
+          "web_search_call.results"
+        ]
+      },
+      "id": "muse-wonder-1.0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Muse Wonder",
       "protocol": "openai-responses",
       "thinking_levels": [
         "minimal",

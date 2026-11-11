@@ -87,16 +87,14 @@ fn install_models(setup: &Setup, models: &Value, configured: &str) {
             "models": models,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": configured}),
@@ -362,7 +360,7 @@ fn a_model_sent_between_turns_applies_at_the_next_turn_boundary() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -482,7 +480,7 @@ fn reasoning_stays_with_the_model_that_produced_it() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -574,7 +572,7 @@ fn an_unknown_model_is_rejected_and_changes_nothing() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -640,7 +638,7 @@ fn an_unsupported_thinking_level_is_rejected() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -712,7 +710,7 @@ fn a_resume_restores_the_switched_model_and_level() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -769,7 +767,7 @@ fn a_resume_restores_the_switched_model_and_level() {
     }));
     // The resumed session replays the first session's durable lines to the
     // new subscriber before its own events.
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         second
             .iter()
@@ -830,7 +828,7 @@ fn a_resume_restores_the_switched_model_and_level() {
     drop(again);
     let (status, stderr) = resumed.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         second
             .iter()
@@ -1052,7 +1050,7 @@ fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
         ],
     ]
     .concat();
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -1151,16 +1149,14 @@ fn install_extension(setup: &Setup, short: &str, data: &Value, init: Option<&str
     if let Some(init) = init {
         fs::write(source.join(format!("providers/{provider}.lua")), init).unwrap();
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Provider `other` with `om` on `openai-responses` at the fake server,
@@ -1226,7 +1222,7 @@ fn a_switch_to_an_unloaded_lua_provider_sends_its_token() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -1345,7 +1341,7 @@ fn a_command_source_runs_once_across_switches() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -1433,7 +1429,7 @@ fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -1737,7 +1733,7 @@ fn the_file_a_switch_read_is_denied_after_its_link_moves() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -1815,16 +1811,14 @@ fn install_labeled_provider(setup: &Setup, server: &ProviderServer) {
                         "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     for label in ["work", "home"] {
         config::store_credential(
             &setup.home(),
@@ -1933,7 +1927,7 @@ fn a_credential_sent_between_turns_switches_the_label() {
     );
     // The command writes no configuration.
     assert_config_unchanged(&setup, &configs);
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -2054,7 +2048,7 @@ fn a_credential_naming_no_label_is_rejected_and_changes_nothing() {
         Some(fakes::fingerprint("Bearer work-key").as_str())
     );
     assert_config_unchanged(&setup, &configs);
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -2184,7 +2178,7 @@ fn a_credential_switch_changes_no_other_running_session() {
         requests[3].header("authorization"),
         Some(fakes::fingerprint("Bearer work-key").as_str())
     );
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         stream
             .iter()
@@ -2228,7 +2222,7 @@ fn a_credential_switch_changes_no_other_running_session() {
             "fiber_exited",
         ]
     );
-    // docs/events.md, "clients": one line for this full connection attaching.
+    // `docs/events.md`, "`clients`": one line for this full connection attaching.
     assert_eq!(
         peer_stream
             .iter()

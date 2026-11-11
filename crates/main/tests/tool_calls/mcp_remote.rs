@@ -99,16 +99,14 @@ impl Setup {
                 "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         write(
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
@@ -135,16 +133,14 @@ impl Setup {
                 ]
             }),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         write(
             &self.home().join("config.json"),
             &json!({"model": "fake/m", "reviewer": {"model": "fake/r"}}),
@@ -869,7 +865,7 @@ fn a_debug_ask_writes_one_mcp_line_per_request() {
         .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "mcp")
         .collect();
     // Every fake request, handshake included, writes exactly one line
-    // (docs/state.md, "Diagnostic logs": one line per POST the transport
+    // (`docs/state.md`, "What each part holds": one line per POST the transport
     // sends, and one per GET or DELETE it sends).
     assert_eq!(lines.len(), requests.len(), "{lines:?}");
     for line in &lines {

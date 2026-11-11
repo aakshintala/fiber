@@ -717,6 +717,20 @@ fn variant_actions_name_their_variants() {
 }
 
 #[test]
+fn focus_project_names_its_variants_next_and_prev() {
+    let (_, notices) = keyset(&[("focus_project", json!("shift+down"))]);
+    assert_eq!(
+        notices,
+        ["keys.focus_project: takes keys in twos (next, prev); focus_project keeps its default."]
+    );
+    let (_, notices) = keyset(&[("focus_project", json!(["shift+down", "shift+down"]))]);
+    assert_eq!(
+        notices,
+        ["keys.focus_project: shift+down is both next and prev; focus_project keeps its default."]
+    );
+}
+
+#[test]
 fn a_mixed_list_gives_one_notice_and_keeps_the_default() {
     let (keys, notices) = keyset(&[("send", json!(["a", 5]))]);
     assert_eq!(

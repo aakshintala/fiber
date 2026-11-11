@@ -14,15 +14,17 @@
 
 use std::path::PathBuf;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::super::super::{App, Effect, Kind, NoticeLine, Phase, mint};
+use super::super::super::{App, Effect, Kind, NoticeLine, Phase, Sent, hub_line};
 use super::Prompt;
 use crate::configure::ConfigureError;
 use crate::home::HooksChoice;
 use crate::install_worker::{HooksInstall, HooksJob, HooksQuery};
 use crate::keys::Key;
+use contract::CommandId;
 use contract::ErrorCode;
+use contract::commands::hub::{HubCommand, Start};
 
 /// The refusal that opens the offer: the hub's gate for declared
 /// blocking hooks with no `hooks` extension to run them. Any other
@@ -65,7 +67,7 @@ pub(in crate::app::home) struct State {
     message: String,
     /// The refused start's args, read before settlement: the retry
     /// resends them unchanged under a fresh command id.
-    args: Value,
+    args: Start,
 }
 
 impl State {
@@ -180,28 +182,18 @@ impl App {
         let Some(line) = self.outbox.start_line(id) else {
             return false;
         };
-        let args = serde_json::from_str::<Value>(&line)
+        // The refused start's args, recovered as the typed `start`
+        // they went out as: anything else settles as today, with no
+        // offer.
+        let Some(args) = serde_json::from_str::<Value>(&line)
             .ok()
             .and_then(|line| line.get("args").cloned())
-            .unwrap_or(Value::Null);
-        if !args.is_object() {
+            .and_then(|args| serde_json::from_value::<Start>(args).ok())
+        else {
             return false;
-        }
-        let workspace = args
-            .get("workspace")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let overrides = args
-            .get("overrides")
-            .and_then(Value::as_array)
-            .map(|overrides| {
-                overrides
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        };
+        let workspace = args.workspace.clone();
+        let overrides = args.overrides.clone().unwrap_or_default();
         self.hooks_ticket = self.hooks_ticket.wrapping_add(1);
         let ticket = self.hooks_ticket;
         self.hooks_job = Some(HooksJob::Query(HooksQuery {
@@ -409,8 +401,11 @@ impl App {
                 let Some(state) = self.take_hooks_offer() else {
                     return Vec::new();
                 };
-                let id = mint();
-                let line = json!({"id": id, "command": "start", "args": state.args}).to_string();
+                let id = CommandId(support::mint("c_"));
+                let sent = Sent {
+                    line: hub_line(&id, HubCommand::Start(state.args)),
+                    id: id.clone(),
+                };
                 let draft = self
                     .outbox
                     .fail(&state.refused_id)
@@ -418,13 +413,21 @@ impl App {
                     .unwrap_or_default();
                 // The retry is actually sent now: the clear's close
                 // follows only this new start's answer.
-                if !self.retry_clear_start(&state.refused_id, id.clone()) {
+                if !self.retry_clear_start(&state.refused_id, sent.id.0.clone()) {
                     self.phase = Phase::Pending {
-                        command_id: id.clone(),
+                        command_id: sent.id.0.clone(),
                     };
                 }
-                match self.outbox.send(id, Kind::Start, draft, line) {
-                    Some(line) => vec![line],
+                match self
+                    .outbox
+                    .send(sent.id.0.clone(), Kind::Start, draft, sent.line.clone())
+                {
+                    // The retry cruises the fold with its id paired,
+                    // like every resent start.
+                    Some(_) => {
+                        self.outbox.note_hub_sent(&sent.id, &sent.line);
+                        vec![sent.line]
+                    }
                     None => Vec::new(),
                 }
             }
@@ -510,11 +513,14 @@ impl App {
             for ch in text.chars() {
                 self.on_key(crate::keys::Key::Char(ch), now);
             }
-            if !matches!(self.on_key(crate::keys::Key::Enter, now), Effect::Send(_)) {
+            if !matches!(
+                self.on_key(crate::keys::Key::Enter, now),
+                Effect::Send(_) | Effect::SendTracked(_)
+            ) {
                 return None;
             }
         } else if !self.outbox.waiting_any(&crate::app::Waiting::ClearStart)
-            && !matches!(self.clear(), Effect::Send(_))
+            && !matches!(self.clear(), Effect::Send(_) | Effect::SendTracked(_))
         {
             return None;
         }

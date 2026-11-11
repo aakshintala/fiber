@@ -3,9 +3,10 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,7 +15,7 @@ use base64::Engine as _;
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
 use contract::events::EventKind;
-use contract::keeper::{Exit, FromKeeper, Spawn, Stream, ToKeeper};
+use contract::keeper::{Exit, FromKeeper, KeptJob, Spawn, Stream, ToKeeper};
 use jobs::keeper::{Step, Supervisor};
 use log::Log;
 use rustix::process::Signal;
@@ -55,6 +56,7 @@ enum Sink {
 struct Adoption {
     output: PathBuf,
     errors: Option<PathBuf>,
+    lines: bool,
 }
 struct State {
     sink: Sink,
@@ -82,7 +84,7 @@ impl Wake for Process {
     }
 }
 // The socket belongs to this writer. Unlink before Log's field drop clears
-// the label and releases the session lock (docs/state.md, "What each part holds").
+// the label and releases the session lock (`docs/state.md`, "What each part holds").
 struct HeldLog {
     socket: PathBuf,
     log: Log,
@@ -92,6 +94,40 @@ impl Drop for HeldLog {
     fn drop(&mut self) {
         std::fs::remove_file(&self.socket).unwrap_or(());
     }
+}
+
+/// The socket the keeper accepts resuming sessions on while it holds the log.
+struct Listening {
+    stop: Arc<AtomicBool>,
+    socket: PathBuf,
+}
+
+/// A candidate that asked for the handover and awaits the serialized decision.
+struct Candidate {
+    ticket: u64,
+    stream: UnixStream,
+}
+
+/// Test-only pause and notification points, each with the race it forces.
+#[cfg(test)]
+#[derive(Default)]
+struct Hooks {
+    /// Runs just before a recovery opens the log, so a test decides which
+    /// of two recoveries reaches the lock first (the lock-loss race).
+    before_open: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs once a recovery holds the log and accepts candidates.
+    held: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs after a candidate registered and before it contends for the log,
+    /// so a test lands the last job's exit in that window.
+    registered: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs once a candidate holds the log, before it decides, so a test
+    /// reads what had happened by then.
+    acquired: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs immediately before a handover switches each job's sink from its
+    /// files to the session, so a test lands a write in that window.
+    before_switch: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs as a bound watcher ends, with its generation.
+    watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
 }
 
 struct Runtime {
@@ -104,6 +140,15 @@ struct Runtime {
     processes: Mutex<BTreeMap<String, Arc<Process>>>,
     logged: Mutex<HashSet<String>>,
     done: mpsc::Sender<io::Result<()>>,
+    listening: Mutex<Option<Listening>>,
+    candidate: Mutex<Option<Candidate>>,
+    tickets: AtomicU64,
+    /// The current takeover's generation: a bound watcher acts only while it
+    /// still holds this value, and a handover moves it on.
+    bound: AtomicU64,
+    watcher: Mutex<Option<Arc<support::clock::Parker>>>,
+    #[cfg(test)]
+    hooks: Hooks,
 }
 // A session may die with starts queued or replies unread. Losing its
 // control transport must not bypass the lifeline's crash/shutdown decision.
@@ -119,6 +164,34 @@ fn disconnected(error: &io::Error) -> bool {
 }
 
 impl Runtime {
+    fn new(
+        home: PathBuf,
+        id: SessionId,
+        clock: Arc<dyn Clock>,
+        out: UnixStream,
+        done: mpsc::Sender<io::Result<()>>,
+        #[cfg(test)] hooks: Hooks,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            home,
+            id,
+            clock,
+            out: Mutex::new(out),
+            log: Mutex::new(None),
+            supervisor: Mutex::new(Supervisor::new()),
+            processes: Mutex::new(BTreeMap::new()),
+            logged: Mutex::new(HashSet::new()),
+            done,
+            listening: Mutex::new(None),
+            candidate: Mutex::new(None),
+            tickets: AtomicU64::new(0),
+            bound: AtomicU64::new(0),
+            watcher: Mutex::new(None),
+            #[cfg(test)]
+            hooks,
+        })
+    }
+
     fn send(&self, line: FromKeeper) -> io::Result<()> {
         let mut bytes = serde_json::to_vec(&line)?;
         bytes.push(b'\n');
@@ -128,13 +201,16 @@ impl Runtime {
         }
     }
 
-    fn decide(&self, choose: impl FnOnce(&mut Supervisor) -> Vec<Step>) -> io::Result<()> {
+    fn decide(
+        self: &Arc<Self>,
+        choose: impl FnOnce(&mut Supervisor) -> Vec<Step>,
+    ) -> io::Result<()> {
         let mut log = lock(&self.log);
         let steps = choose(&mut lock(&self.supervisor));
         self.apply(&mut log, steps)
     }
 
-    fn apply(&self, log: &mut Option<HeldLog>, steps: Vec<Step>) -> io::Result<()> {
+    fn apply(self: &Arc<Self>, log: &mut Option<HeldLog>, steps: Vec<Step>) -> io::Result<()> {
         for step in steps {
             match step {
                 Step::Stop { id } => {
@@ -150,6 +226,10 @@ impl Runtime {
                     let sessions = dir
                         .parent()
                         .ok_or_else(|| io::Error::other("session has no parent"))?;
+                    #[cfg(test)]
+                    if let Some(pause) = &self.hooks.before_open {
+                        pause();
+                    }
                     match Log::open_as(
                         sessions,
                         self.id.clone(),
@@ -171,16 +251,16 @@ impl Runtime {
                                 .collect();
                             let (socket, listener) = doors::bind(&self.home, &dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
-                            *log = Some(HeldLog { socket, log: held });
-                            thread::spawn(move || {
-                                for accepted in listener.incoming() {
-                                    match accepted {
-                                        Ok(stream) => drop(stream),
-                                        Err(_) => break,
-                                    }
-                                }
+                            *log = Some(HeldLog {
+                                socket: socket.clone(),
+                                log: held,
                             });
+                            self.listen(socket, listener);
                             self.files()?;
+                            #[cfg(test)]
+                            if let Some(held) = &self.hooks.held {
+                                held();
+                            }
                         }
                         Err(log::Error::Held { .. }) => {
                             self.discard();
@@ -235,7 +315,20 @@ impl Runtime {
                 }
                 Step::Exit => {
                     self.discard();
-                    *log = None;
+                    self.release(log);
+                    // A candidate still waiting for its answer learns the
+                    // keeper holds nothing: the log is already released.
+                    if let Some(candidate) = lock(&self.candidate).take() {
+                        let mut stream = &candidate.stream;
+                        match write_frame(
+                            &mut stream,
+                            &FromKeeper::Handover {
+                                running: Vec::new(),
+                            },
+                        ) {
+                            Ok(()) | Err(_) => {}
+                        }
+                    }
                     match self.done.send(Ok(())) {
                         Ok(()) | Err(_) => {}
                     }
@@ -404,13 +497,18 @@ impl Runtime {
                 };
                 drop(state);
                 // Reader completion precedes exit, and the log mutex precedes sup.
+                // The frame goes out under the log mutex: a handover that
+                // swaps the connection decides which one carries the exit,
+                // and the ending is then written by exactly one side.
+                let mut log = lock(&runtime.log);
                 match runtime.send(FromKeeper::Exit {
                     id: spec.id.clone(),
                     exit: exit.clone(),
                 }) {
                     Ok(()) | Err(_) => {}
                 }
-                runtime.decide(|sup| sup.exited(&spec.id, exit))
+                let steps = lock(&runtime.supervisor).exited(&spec.id, exit);
+                runtime.apply(&mut log, steps)
             });
             if let Err(error) = result {
                 match runtime.done.send(Err(error)) {
@@ -523,25 +621,301 @@ impl Runtime {
 
     /// Parks until the post-crash bound, then stops every held job. After
     /// each return the clock is re-read and the bound decides only when it
-    /// has passed, so an early wake re-parks instead of firing.
-    fn bound_watch(self: &Arc<Self>, bound_at: Instant) {
-        let parker = Arc::new(support::clock::Parker::new());
+    /// has passed, so an early wake re-parks instead of firing. The watcher
+    /// belongs to one takeover generation: a handover moves the generation
+    /// on and wakes it, and it then ends without acting, so an old crash's
+    /// bound never expires jobs a later takeover holds.
+    fn bound_watch(
+        self: &Arc<Self>,
+        generation: u64,
+        bound_at: Instant,
+        parker: &Arc<support::clock::Parker>,
+    ) {
         let wake: Arc<dyn contract::clock::Wake> = parker.clone();
         self.clock.subscribe(Arc::downgrade(&wake));
         loop {
             let seen = parker.generation();
+            if self.bound.load(Ordering::Acquire) != generation {
+                break;
+            }
             if self.clock.now() >= bound_at {
-                match self.decide(Supervisor::bound_elapsed) {
+                let mut log = lock(&self.log);
+                // The log mutex orders this against a handover's move.
+                if self.bound.load(Ordering::Acquire) == generation {
+                    let steps = lock(&self.supervisor).bound_elapsed();
+                    match self.apply(&mut log, steps) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                break;
+            }
+            parker.park(&*self.clock, Some(bound_at), seen);
+        }
+        #[cfg(test)]
+        if let Some(done) = &self.hooks.watcher_done {
+            done(generation);
+        }
+    }
+
+    /// Starts the bound watcher for a takeover that holds the log.
+    fn watch_bound(self: &Arc<Self>, crash_at: Instant) {
+        let log = lock(&self.log);
+        if log.is_none() {
+            return;
+        }
+        // Moved under the log mutex, as a handover moves it.
+        let generation = self.bound.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let parker = Arc::new(support::clock::Parker::new());
+        *lock(&self.watcher) = Some(Arc::clone(&parker));
+        drop(log);
+        let bound_at = crash_at + keeper_bound();
+        let watcher = Arc::clone(self);
+        thread::spawn(move || watcher.bound_watch(generation, bound_at, &parker));
+    }
+
+    /// Output of a job whose session is gone waits in memory until the log
+    /// is held and its files can take it.
+    fn hold_output(&self) {
+        for process in lock(&self.processes).values() {
+            let mut state = lock(&process.state);
+            if matches!(state.sink, Sink::Control) {
+                state.sink = Sink::Hold(Vec::new());
+            }
+        }
+    }
+
+    /// The session behind a control connection is gone: hold what the jobs
+    /// write, take the log back and watch the bound.
+    fn crashed(self: &Arc<Self>) -> io::Result<()> {
+        self.hold_output();
+        self.takeover()
+    }
+
+    fn takeover(self: &Arc<Self>) -> io::Result<()> {
+        let crash_at = self.clock.now();
+        self.decide(Supervisor::lifeline_eof)?;
+        // The crash left jobs behind: watch the bound from the crash instant.
+        self.watch_bound(crash_at);
+        Ok(())
+    }
+
+    /// Accepts resuming sessions on the keeper's socket until released.
+    fn listen(self: &Arc<Self>, socket: PathBuf, listener: UnixListener) {
+        let stop = Arc::new(AtomicBool::new(false));
+        *lock(&self.listening) = Some(Listening {
+            stop: Arc::clone(&stop),
+            socket,
+        });
+        let runtime = Arc::clone(self);
+        thread::spawn(move || {
+            for accepted in listener.incoming() {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let Ok(stream) = accepted else { break };
+                // One thread per candidate: a stalled one holds up nothing.
+                let runtime = Arc::clone(&runtime);
+                thread::spawn(move || runtime.candidate(stream));
+            }
+        });
+    }
+
+    /// Stops accepting, unlinks the socket and releases the log, in that
+    /// order, while still owning it: the socket never outlives the lock.
+    fn release(&self, log: &mut Option<HeldLog>) {
+        if let Some(listening) = lock(&self.listening).take() {
+            listening.stop.store(true, Ordering::Release);
+            // `accept` only returns for a connection: make one, so the
+            // acceptor ends and drops its listener.
+            match UnixStream::connect(&listening.socket) {
+                Ok(_) | Err(_) => {}
+            }
+        }
+        *log = None;
+    }
+
+    /// One connection on the keeper's socket: it may identify the session
+    /// and ask for the handover, within one deadline, and does nothing else.
+    fn candidate(self: &Arc<Self>, stream: UnixStream) {
+        let Ok(reader) = stream.try_clone() else {
+            return;
+        };
+        let mut reader = BufReader::new(reader);
+        let expiry =
+            crate::keeper::Expiry::start(&self.clock, &stream, crate::keeper::KEEPER_START);
+        let asked = (|| -> io::Result<bool> {
+            let Some(ToKeeper::Identify(asked)) = crate::keeper::read_request(&mut reader)? else {
+                return Ok(false);
+            };
+            if asked != self.id {
+                return Ok(false);
+            }
+            write_frame(
+                &mut &stream,
+                &FromKeeper::Identity {
+                    session_id: self.id.clone(),
+                },
+            )?;
+            Ok(matches!(
+                crate::keeper::read_request(&mut reader)?,
+                Some(ToKeeper::Handover(true))
+            ))
+        })();
+        let expired = expiry.finish();
+        if matches!(asked, Ok(true)) && !expired {
+            self.hand_over(stream, reader);
+        }
+    }
+
+    /// The decision, serialized with every append and exit: either this
+    /// candidate takes the log and the jobs, or the last job's exit won and
+    /// has already answered it with none.
+    fn hand_over(self: &Arc<Self>, stream: UnixStream, mut reader: BufReader<UnixStream>) {
+        let ticket = self.tickets.fetch_add(1, Ordering::AcqRel);
+        {
+            let mut candidate = lock(&self.candidate);
+            let Ok(reply) = stream.try_clone() else {
+                return;
+            };
+            if candidate.is_some() {
+                return;
+            }
+            *candidate = Some(Candidate {
+                ticket,
+                stream: reply,
+            });
+        }
+        #[cfg(test)]
+        if let Some(registered) = &self.hooks.registered {
+            registered();
+        }
+        let kept = {
+            let mut log = lock(&self.log);
+            #[cfg(test)]
+            if let Some(acquired) = &self.hooks.acquired {
+                acquired();
+            }
+            {
+                let mut candidate = lock(&self.candidate);
+                if candidate.as_ref().map(|waiting| waiting.ticket) != Some(ticket) {
+                    return;
+                }
+                candidate.take();
+            }
+            let mut writer = &stream;
+            if log.is_none() {
+                // The keeper released everything before this candidate asked.
+                match write_frame(
+                    &mut writer,
+                    &FromKeeper::Handover {
+                        running: Vec::new(),
+                    },
+                ) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
             }
-            parker.park(&*self.clock, Some(bound_at), seen);
+            let Some(jobs) = lock(&self.supervisor).hand_over() else {
+                return;
+            };
+            let Ok(kept) = self.snapshot(&jobs) else {
+                return;
+            };
+            // The crash's bound ends with the crash: move its generation on
+            // and wake the watcher.
+            self.bound.fetch_add(1, Ordering::AcqRel);
+            if let Some(parker) = lock(&self.watcher).take() {
+                parker.bump();
+            }
+            self.release(&mut log);
+            let Ok(reply) = stream.try_clone() else {
+                return;
+            };
+            *lock(&self.out) = reply;
+            match write_frame(
+                &mut writer,
+                &FromKeeper::Handover {
+                    running: kept.clone(),
+                },
+            ) {
+                Ok(()) | Err(_) => {}
+            }
+            kept
+        };
+        // Until the session says it is ready, the jobs keep writing their
+        // files. A session that goes away first is a crash again.
+        let ready = matches!(
+            crate::keeper::read_request(&mut reader),
+            Ok(Some(ToKeeper::Adopted(true)))
+        );
+        let result = if ready {
+            // No runtime or job lock is held here: the handover's log was
+            // released above, and the switch takes the locks itself.
+            #[cfg(test)]
+            if let Some(pause) = &self.hooks.before_switch {
+                pause();
+            }
+            self.switch(&kept);
+            self.send(FromKeeper::AdoptDone(true))
+                .and_then(|()| self.control_from(reader))
+        } else {
+            Ok(())
+        };
+        match result.and_then(|()| self.crashed()) {
+            Ok(()) => {}
+            Err(error) => match self.done.send(Err(error)) {
+                Ok(()) | Err(_) => {}
+            },
+        }
+    }
+
+    /// The jobs to hand over, with the files each one keeps writing.
+    fn snapshot(&self, jobs: &[(String, contract::JobId)]) -> io::Result<Vec<KeptJob>> {
+        let processes = lock(&self.processes);
+        jobs.iter()
+            .map(|(id, job_id)| {
+                let process = processes
+                    .get(id)
+                    .ok_or_else(|| io::Error::other("an adopted job has no process"))?;
+                let state = lock(&process.state);
+                let adoption = state
+                    .adoption
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("an adopted job has no files"))?;
+                Ok(KeptJob {
+                    id: id.clone(),
+                    job_id: job_id.clone(),
+                    output_path: adoption.output.clone(),
+                    errors_path: adoption.errors.clone(),
+                    tty: process.input.is_some(),
+                    lines: adoption.lines,
+                })
+            })
+            .collect()
+    }
+
+    /// Each job's reader takes the same state lock for every write, so
+    /// every byte read before this is in the file and every one after goes
+    /// out as a frame.
+    fn switch(&self, kept: &[KeptJob]) {
+        let processes = lock(&self.processes);
+        for job in kept {
+            if let Some(process) = processes.get(&job.id) {
+                let mut state = lock(&process.state);
+                if matches!(state.sink, Sink::Files { .. }) {
+                    state.sink = Sink::Control;
+                }
+            }
         }
     }
 
     fn control(self: &Arc<Self>, control: UnixStream) -> io::Result<()> {
-        let mut reader = BufReader::new(control);
+        self.control_from(BufReader::new(control))
+    }
+
+    /// Serves a session's control connection until it ends. The reader may
+    /// already hold bytes read ahead of the handshake.
+    fn control_from(self: &Arc<Self>, mut reader: BufReader<UnixStream>) -> io::Result<()> {
         let mut chunk = Vec::new();
         loop {
             chunk.clear();
@@ -583,6 +957,7 @@ impl Runtime {
                     job_id,
                     output_path,
                     errors_path,
+                    lines,
                 } => {
                     let _log = lock(&self.log);
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
@@ -591,6 +966,7 @@ impl Runtime {
                         lock(&process.state).adoption = Some(Adoption {
                             output: output_path,
                             errors: errors_path,
+                            lines,
                         });
                     }
                 }
@@ -602,6 +978,11 @@ impl Runtime {
                     self.decide(Supervisor::shutdown_requested)?;
                 }
                 ToKeeper::Shutdown(false) => return Err(io::Error::other("shutdown must be true")),
+                // Only a candidate on the keeper's socket may negotiate; the
+                // session's own control connection never does.
+                ToKeeper::Identify(_) | ToKeeper::Handover(_) | ToKeeper::Adopted(_) => {
+                    return Err(io::Error::other("handshake frame on the session's control"));
+                }
             }
         }
         Ok(())
@@ -624,22 +1005,31 @@ pub(crate) fn serve(
     home: PathBuf,
     id: SessionId,
     clock: Arc<dyn Clock>,
-    mut lifeline: impl Read,
+    lifeline: impl Read,
     control: UnixStream,
 ) -> io::Result<()> {
     let (done, result) = mpsc::channel();
-    let runtime = Arc::new(Runtime {
+    let runtime = Runtime::new(
         home,
         id,
         clock,
-        out: Mutex::new(control.try_clone()?),
-        log: Mutex::new(None),
-        supervisor: Mutex::new(Supervisor::new()),
-        processes: Mutex::new(BTreeMap::new()),
-        logged: Mutex::new(HashSet::new()),
+        control.try_clone()?,
         done,
-    });
-    let reader = Arc::clone(&runtime);
+        #[cfg(test)]
+        Hooks::default(),
+    );
+    drive(&runtime, lifeline, control, &result)
+}
+
+/// Serves the session's control connection until its lifeline ends, takes
+/// the crash's decision, then waits for the keeper's ending.
+fn drive(
+    runtime: &Arc<Runtime>,
+    mut lifeline: impl Read,
+    control: UnixStream,
+    result: &mpsc::Receiver<io::Result<()>>,
+) -> io::Result<()> {
+    let reader = Arc::clone(runtime);
     let control = thread::spawn(move || reader.control(control));
     let mut bytes = [0; 64];
     loop {
@@ -650,26 +1040,20 @@ pub(crate) fn serve(
             Err(error) => return Err(error),
         }
     }
-    for process in lock(&runtime.processes).values() {
-        let mut state = lock(&process.state);
-        if matches!(state.sink, Sink::Control) {
-            state.sink = Sink::Hold(Vec::new());
-        }
-    }
+    runtime.hold_output();
     control
         .join()
         .map_err(|_| io::Error::other("keeper control reader panicked"))??;
-    let crash_at = runtime.clock.now();
-    runtime.decide(Supervisor::lifeline_eof)?;
-    if lock(&runtime.log).is_some() {
-        // The crash left jobs behind: watch the bound from the crash instant.
-        let bound_at = crash_at + keeper_bound();
-        let watcher = Arc::clone(&runtime);
-        thread::spawn(move || watcher.bound_watch(bound_at));
-    }
+    runtime.takeover()?;
     result
         .recv()
         .map_err(|_| io::Error::other("keeper ending lost"))?
+}
+
+fn write_frame(writer: &mut impl Write, line: &FromKeeper) -> io::Result<()> {
+    let mut bytes = serde_json::to_vec(line)?;
+    bytes.push(b'\n');
+    writer.write_all(&bytes)
 }
 
 pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {

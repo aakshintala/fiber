@@ -18,9 +18,9 @@ use super::testkit::{
     DELEGATE_A, SESSION, ack_all, commands, complete, home, job_started, live, mark_tty, open,
     opened, opened_item, session_accepted, session_line, start_delegate, start_job, subscribes,
 };
-use crate::home::Level;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
+use contract::commands::SubscribeLevel;
 
 const DELEGATE_B: &str = "s_eeeeeeeeeeeeeeee";
 
@@ -643,7 +643,7 @@ fn a_summary_held_then_a_full_refused_shows_the_message() {
     );
     assert_eq!(
         app.subscribed_level(&SessionId(DELEGATE_A.to_owned())),
-        Some(Level::Summary)
+        Some(SubscribeLevel::Summary)
     );
 }
 
@@ -812,13 +812,14 @@ fn enter_sends_exactly_one_steer_naming_the_delegate() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -845,13 +846,14 @@ fn a_rejected_steer_shows_its_notice_and_puts_the_draft_back() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -876,13 +878,14 @@ fn a_slash_close_in_the_view_closes_the_parent_and_the_view() {
     app.draft.set("/close");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1115,7 +1118,7 @@ fn a_closed_completed_job_shows_its_protected_paths_warning_when_opened() {
     open(&mut app, "j_2");
     app.set_size(120, 32);
     let (rows, _) = rendered(&app, 120, 32);
-    // `docs/events.md:699-701`: the adopted report's warning line renders
+    // `docs/events.md`, "`tool_call_completed`": the adopted report's warning line renders
     // under the open job's output, including after the job has completed.
     assert!(
         rows.iter().any(|row| row.contains("Protected path .fiber")),
@@ -1226,13 +1229,14 @@ fn a_resumed_job_opens_from_its_row_again() {
     start_delegate(&mut app, "j_1", DELEGATE_A);
     let resumed = match app.open_serial(serial) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1269,13 +1273,14 @@ fn an_open_view_runs_and_steers_again_after_its_job_restarts() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1433,13 +1438,14 @@ fn an_accepted_delegate_steer_closes_its_pending_entry() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1542,13 +1548,14 @@ fn clicking_a_delegate_row_opens_that_delegate() {
         .unwrap_or_else(|| panic!("a serial"));
     let out = match app.on_click(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial))) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1661,13 +1668,14 @@ fn a_click_on_a_completed_job_serial_opens_and_subscribes() {
         .unwrap_or_else(|| panic!("a serial"));
     let out = match app.on_click(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial))) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1696,13 +1704,14 @@ fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
     app.focus = Some(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial)));
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1729,13 +1738,14 @@ fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
 fn open_serial_of(app: &mut App, serial: u64) -> Vec<Value> {
     match app.open_serial(serial) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None => Vec::new(),
         Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -1890,8 +1900,8 @@ fn take_wake_prefers_the_earlier_retry_over_the_status_tick() {
 #[test]
 fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
     use super::super::Kind;
-    use crate::import_report::ImportSource;
     use crate::input::Draft;
+    use contract::commands::ImportSource;
 
     let mut app = home();
     opened(&mut app);
@@ -1899,7 +1909,7 @@ fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
     opened_item(&mut app, "j_1");
     app.outbox.insert(
         "c_1".to_owned(),
-        Kind::Import(ImportSource::Codex),
+        Kind::Import(Some(ImportSource::Codex)),
         Draft::default(),
     );
     let accepted = other_line(
@@ -1928,7 +1938,7 @@ fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
     // notice and opens no second report.
     app.outbox.insert(
         "c_2".to_owned(),
-        Kind::Import(ImportSource::Codex),
+        Kind::Import(Some(ImportSource::Codex)),
         Draft::default(),
     );
     let malformed = other_line(DELEGATE_A, "command_accepted", json!({"command_id": "c_2"}));
@@ -2609,13 +2619,14 @@ fn steer_answer_reaches_its_handler() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)

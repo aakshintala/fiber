@@ -368,7 +368,7 @@ impl contract::extension::HostDelegate for Delegates {
     /// `loaded` is held alone: `retain` releases it before
     /// `retain_extensions`, and `start` reads it after `start_extension`
     /// returns, so no code takes the registry's start gate while holding
-    /// it (`docs/architecture.md`, "Lock order").
+    /// it.
     fn start(
         &self,
         extension: &str,
@@ -520,7 +520,7 @@ fn unknown_model(argument: &str) -> String {
 /// object without one, a non-string `credential`, or a non-role argument.
 /// A repository's role names no credential: its winning source is the
 /// repository layer, and its `credential` is ignored, so it reads as
-/// `None` too (`docs/configuration.md`, `roles."<name>"`).
+/// `None` too (`docs/configuration.md`, "Keys").
 fn role_credential(config: &config::Config, name: &str) -> Option<String> {
     let key = format!("roles.{}", config::path::display(&[name.to_owned()]));
     let (value, source) = config.get(&key, None)?;
@@ -854,7 +854,7 @@ fn worktree_creator(home: &Path) -> jobs::CreateWorktree {
     )
 }
 
-fn worktree_finisher(home: &Path, clock: &Arc<dyn Clock>) -> jobs::FinishWorktree {
+pub(crate) fn worktree_finisher(home: &Path, clock: &Arc<dyn Clock>) -> jobs::FinishWorktree {
     let home = home.to_owned();
     let clock = Arc::clone(clock);
     Arc::new(move |end| {

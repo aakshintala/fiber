@@ -66,16 +66,14 @@ impl Setup {
                     "thinking_levels": ["low", "high"], "thinking_default": "low"}]
             }),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         write(
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
@@ -835,10 +833,11 @@ Sessions:
   fiber [--model <model>] [-c <key>=<value>]...                                                                   Open the terminal
   ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   resume [<id>] [--credential <label>]                                                                            Open a session in the terminal, or home at the session list
-  continue [--hub <name>]                                                                                           Open the most recent session in this project
-  sessions [--all] [--json]                                                                                       List sessions: id, state, name, what it waits on, spend
+  continue [--hub <name>]                                                                                         Open the most recent session in this project
+  sessions [--all] [--archived] [--json]                                                                          List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                                                                         Search the logs of past and running sessions for the text
   sessions delete [--hub <name>] [--cascade] [--yes] <id>                                                         Delete a session, and with --cascade the sessions that continue it
+  sessions archive [--hub <name>] <id>                                                                            Archive a session: it leaves the list and the home rail
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
   sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
@@ -2815,18 +2814,16 @@ fn a_slash_prompt_runs_a_prompt_template() {
 fn slash_init_sends_the_first_party_template() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+    );
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
-        ),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     setup.provider(&server);
     let installed =
         fs::read_to_string(setup.home().join("extensions/init/prompts/init/SKILL.md")).unwrap();
@@ -2847,18 +2844,16 @@ fn slash_init_sends_the_first_party_template() {
 fn a_personal_init_template_overrides_the_first_party_one() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+    );
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
-        ),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     setup.provider(&server);
     let dir = setup.home().join("skills/init");
     fs::create_dir_all(&dir).unwrap();
@@ -2891,7 +2886,7 @@ fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
     // One notice per code, per pass: a home with 25 skills each shadowed
     // by the same name in the person's `~/.agents/skills` raises exactly
     // one `skill_shadowed` notice listing all 25 (`#3679`, "The rule";
-    // `docs/errors.md`, "Notices": one notice per code, count and items;
+    // `docs/tui.md`, "Notices": one notice per code, count and items;
     // `docs/system-prompt.md`, "Skills": one `skill_shadowed` notice per
     // pass). The notice lands at the opening flush, after
     // `opening_message` and before `turn_started`.
@@ -2934,16 +2929,14 @@ fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
 /// Installs the fixture extension and points its provider at `server`,
 /// with `fixture/m1` as the configured model.
 fn fixture(setup: &Setup, server: &ProviderServer) {
-    extensions::plan(
+    let request = extensions::Request::Path(fakes::lua_fixture());
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(fakes::lua_fixture()),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     // The installed manifest declares the fixture provider at the test
     // server's URL, so the session admits its models.
     let dir = setup
@@ -3241,16 +3234,14 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "plain",
@@ -3502,16 +3493,14 @@ fn inline_extension(
     if let Some(data) = data {
         write(&source.join("providers").join(format!("{name}.json")), data);
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write(
         &setup.home().join("config.json"),
         &json!({"model": format!("{name}/m1")}),
@@ -3754,16 +3743,14 @@ fn provider_with(
         &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"},
                 "models": models}),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write(&setup.home().join("config.json"), global);
 }
 
@@ -4018,16 +4005,14 @@ fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>
     }
     write(&source.join("extension.json"), &manifest);
     write(&source.join("providers/syn.json"), &data);
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Every `model` the fake server was asked for, in request order.

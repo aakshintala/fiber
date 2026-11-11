@@ -1,6 +1,6 @@
 //! Binary-level tests that bare `fiber --model`/`-c` open the terminal
 //! and ride each hub `start` in `overrides`, while any subcommand keeps
-//! them a usage error (`docs/invocation.md`, "Sessions").
+//! them a usage error (`docs/invocation.md`, "Commands and flags").
 
 #![allow(
     clippy::unwrap_used,
@@ -36,16 +36,14 @@ fn provider_without_model(setup: &support::Setup, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config.json"),
         &json!({"hub": {"idle_exit_ms": 200}, "retry": {

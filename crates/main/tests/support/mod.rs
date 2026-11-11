@@ -2669,8 +2669,7 @@ pub(crate) fn wait_for_path_gone(deadline: Deadline, path: &Path, what: &str) {
 
 /// Waits under `deadline` until `dir`'s session lock is free: a probe
 /// `try_hold` succeeds, and the probe guard drops at once. A session
-/// unlinks its socket and releases its lock at exit (`docs/state.md`,
-/// "Sockets"), and `fiber_exited` only proves the exit, so a test that
+/// unlinks its socket and releases its lock at exit (`docs/state.md`, "What each part holds"), and `fiber_exited` only proves the exit, so a test that
 /// deletes or resumes next waits here first. Expiry fails naming `what`.
 #[track_caller]
 pub(crate) fn wait_for_lock_released(deadline: Deadline, dir: &Path, what: &str) {

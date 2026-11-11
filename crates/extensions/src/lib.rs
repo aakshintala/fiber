@@ -123,7 +123,7 @@ pub use package::{Package, PackageOptions};
 pub use prepare::{Observe, platform};
 pub use providers::{
     Model, Providers, START_ONLY, StartedRefresh, Unconfigured, UnconfiguredModel,
-    leave_out_invalid, refresh_lists,
+    leave_out_invalid, leave_out_omitted, refresh_lists,
 };
 pub use providers::{closest_refs, distance, roles_line};
 pub use release::fetch_nightly_tag;
@@ -141,7 +141,9 @@ pub use repository::{
 pub use resolve::{VersionKey, minimum};
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
-pub use tui_vm::{KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiVm};
+pub use tui_vm::{
+    CommandRejection, KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiCommand, TuiVm,
+};
 pub use update::release_triple;
 pub use update::{StagedUpdate, Target, stage_update, stage_update_observed};
 

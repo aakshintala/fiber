@@ -38,6 +38,16 @@ fn ts_line(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Li
     })
 }
 
+/// One `turn_started` of `session` carrying turn `turn`: only a start
+/// with an id counts (`docs/tui.md`, "The panel", Session: turns).
+fn turn_started_line(session: &str, turn: &str) -> Line {
+    let mut line = ts_line(session, "turn_started", 0, serde_json::json!({"input": []}));
+    if let Line::Session(envelope) = &mut line {
+        envelope.turn_id = Some(contract::TurnId(turn.to_owned()));
+    }
+    line
+}
+
 /// An `extension_ui` widget's lines.
 fn widget(extension: &str, widget: &str, lines: &[&str]) -> Line {
     session_line(
@@ -337,23 +347,42 @@ fn model_changed_updates_model_and_thinking() {
     assert_eq!(panel.thinking(), Some("high"));
 }
 
-/// Turns count completions, not starts: a started turn leaves the count
-/// at zero, each completed turn adds one (`docs/tui.md`, "The panel",
-/// Session: output speed and turns).
+/// Turns count started turns with an id: a running id-carrying start
+/// reads 1, ending it keeps 1, a second start reads 2, and id-less
+/// starts and lone completions count nothing (`docs/tui.md`, "The
+/// panel", Session: turns; `docs/events.md`, `session_status`).
 #[test]
-fn turns_count_turn_completed() {
+fn turns_count_started_turns() {
     let mut app = attached();
     assert_eq!(app.panel_state().turns(), 0);
+    // A start without an id is a turn of others' messages before any
+    // driver prompt: it counts nothing.
     app.on_line(session_line(
         SESSION,
         "turn_started",
         serde_json::json!({"input": []}),
     ));
     assert_eq!(app.panel_state().turns(), 0);
-    let completed = session_line(SESSION, "turn_completed", serde_json::json!({}));
-    app.on_line(completed.clone());
-    app.on_line(completed);
+    // The first turn starts and has not ended: it already reads 1.
+    app.on_line(turn_started_line(SESSION, "t_1"));
+    assert_eq!(app.panel_state().turns(), 1);
+    // Ending it keeps 1; the second start reads 2.
+    app.on_line(session_line(
+        SESSION,
+        "turn_completed",
+        serde_json::json!({}),
+    ));
+    assert_eq!(app.panel_state().turns(), 1);
+    app.on_line(turn_started_line(SESSION, "t_2"));
     assert_eq!(app.panel_state().turns(), 2);
+    // A lone completion with no start counts nothing.
+    let mut fresh = attached();
+    fresh.on_line(session_line(
+        SESSION,
+        "turn_completed",
+        serde_json::json!({}),
+    ));
+    assert_eq!(fresh.panel_state().turns(), 0);
 }
 
 #[test]
@@ -800,13 +829,20 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
@@ -998,7 +1034,7 @@ fn the_acknowledgement_sends_the_branch_query_once() {
     // The turn asks `commands` again: answer with no rows so the
     // acknowledgement sends only its branch query.
     let asked = app.on_line(session_line(SESSION, "turn_started", json!({"input": []})));
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(asked.len(), 1);
     let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
     assert_eq!(asked["command"], "commands");
@@ -1465,9 +1501,9 @@ fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
     let mut app = panel_app();
     big_widget(&mut app);
     let down = mouse(MouseKind::WheelDown, 140, 20);
-    // Sixty widget lines after the sixteen Session rows and the blank
-    // row: 80 content rows over a 39-row viewport, so the end sits at
-    // 41 (the two new card rows moved it from 39).
+    // Sixty widget lines after the fifteen Session rows and the blank
+    // row: 79 content rows over a 39-row viewport, so the end sits at
+    // 40 (the two new card rows moved it from 38).
     for expected in [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36] {
         app.on_wheel(&down);
         assert_eq!(app.panel_state().scroll(), expected);
@@ -1475,11 +1511,11 @@ fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
     app.on_wheel(&down);
     assert_eq!(app.panel_state().scroll(), 39);
     app.on_wheel(&down);
-    assert_eq!(app.panel_state().scroll(), 41);
+    assert_eq!(app.panel_state().scroll(), 40);
     app.on_wheel(&down);
-    assert_eq!(app.panel_state().scroll(), 41);
+    assert_eq!(app.panel_state().scroll(), 40);
     let up = mouse(MouseKind::WheelUp, 140, 20);
-    for expected in [38, 35, 32, 29, 26, 23, 20, 17, 14, 11, 8, 5, 2] {
+    for expected in [37, 34, 31, 28, 25, 22, 19, 16, 13, 10, 7, 4, 1] {
         app.on_wheel(&up);
         assert_eq!(app.panel_state().scroll(), expected);
     }
@@ -1556,24 +1592,24 @@ fn wheel_up_after_growth_moves_on_the_first_wheel() {
     }
     assert_eq!(app.panel_state().scroll(), 24);
     app.set_size(160, 60);
-    // The stored 24 draws clamped to 21: the sixteen Session rows moved
-    // the taller viewport's end from 19 (the drawn text sits two rows
+    // The stored 24 draws clamped to 20: the fifteen Session rows moved
+    // the taller viewport's end from 18 (the drawn text sits two rows
     // further in, so it still reads the same lines).
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 02"
     );
-    // Clamped 21 moves to 18, so the display moves, not stuck at 21
+    // Clamped 20 moves to 17, so the display moves, not stuck at 20
     // (24 - 3 = 21 would stick).
     app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 18);
+    assert_eq!(app.panel_state().scroll(), 17);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   plan \u{b7} tasks"
     );
-    // Down moves to the new end at 21.
+    // Down moves to the new end at 20.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 21);
+    assert_eq!(app.panel_state().scroll(), 20);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 02"
@@ -1600,23 +1636,23 @@ fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
         "extension_ui",
         serde_json::json!({"extension": "plan", "widget": "tasks", "lines": lines}),
     ));
-    // Fifty lines draw 53 rows after the Session card's sixteen and
-    // the blank row, so the stored 39 draws clamped to 31.
+    // Fifty lines draw 52 rows after the Session card's fifteen and
+    // the blank row, so the stored 39 draws clamped to 30.
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 12"
     );
-    // Clamped 31 - 3 = 28, so the display moves, not stuck at 31
+    // Clamped 30 - 3 = 27, so the display moves, not stuck at 30
     // (39 - 3 = 36 would stick).
     app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 28);
+    assert_eq!(app.panel_state().scroll(), 27);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 09"
     );
-    // Down returns toward the shrunk end: 28 + 3 = 31.
+    // Down returns toward the shrunk end: 27 + 3 = 30.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 31);
+    assert_eq!(app.panel_state().scroll(), 30);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 12"
@@ -1710,6 +1746,13 @@ fn the_quota_spot_opens_the_view_and_fetches() {
             .iter()
             .map(|line| serde_json::from_str::<Value>(line).unwrap_or_default())
             .collect::<Vec<_>>(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str::<Value>(line).unwrap_or_default()
+            })
+            .collect::<Vec<_>>(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1718,7 +1761,7 @@ fn the_quota_spot_opens_the_view_and_fetches() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("no fetch line"),
@@ -2260,7 +2303,9 @@ fn delegate_fold_thinking_marker_follows_the_delegate_stream() {
     // The first text delta latches it shut for the call.
     app.on_line(ts_line(DELEGATE, "assistant_message_delta", 0, json!({})));
     assert!(!app.panel_state().delegate_thinking_now_for(&session));
-    // A settled turn ends the call; a new call starts unlit.
+    // A settled turn ends the call; a new call starts unlit. The
+    // delegate's own id-carrying start is what the settled turn counts.
+    app.on_line(turn_started_line(DELEGATE, "t_1"));
     app.on_line(ts_line(DELEGATE, "turn_completed", 0, json!({})));
     app.on_line(ts_line(DELEGATE, "reasoning_delta", 0, json!({})));
     assert!(!app.panel_state().delegate_thinking_now_for(&session));
@@ -2283,6 +2328,8 @@ fn delegate_fold_turns_and_speed_use_the_delegate_span() {
     app.on_line(delegate_usage(DELEGATE, 500, 3000));
     assert_eq!(app.panel_state().delegate_turns_for(&session), 0);
     assert_eq!(app.panel_state().delegate_speed_for(&session), Some(250));
+    // The delegate's own id-carrying start is what the settled turn counts.
+    app.on_line(turn_started_line(DELEGATE, "t_1"));
     app.on_line(ts_line(DELEGATE, "turn_completed", 0, json!({})));
     assert_eq!(app.panel_state().delegate_turns_for(&session), 1);
     // The parent's own span never sets the delegate's speed.

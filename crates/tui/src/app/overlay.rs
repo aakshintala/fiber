@@ -3,15 +3,16 @@
 //! the pass folds into, swapped in at its end (`docs/tui.md`, "History
 //! and paging").
 
+use contract::commands::HistoryArgs;
 use contract::events::EventKind;
 use contract::{Envelope, Seq, SessionId};
-use serde_json::{Value, json};
 
 use super::{App, history_args};
 use crate::window::Pages;
 
 /// What the screen holds while an open is in flight: nothing once the
-/// open ends or fails, the preview while its raise is out, the preview
+/// open ends or fails, the previous transcript while an ended read's
+/// raise is out, the preview while its raise is out, the preview
 /// with the pass folding into a second `Pages`, and the preview alone
 /// when the pass ended abnormally, skipping the replay up to `last`.
 #[derive(Debug, Default)]
@@ -19,7 +20,9 @@ pub(super) enum Overlay {
     /// No open holds the screen.
     #[default]
     None,
-    /// The raise is in flight and the screen holds the preview.
+    /// The raise is in flight and the screen holds the shown pages:
+    /// the preview after a completed read, the previous transcript
+    /// after an ended one.
     Shown {
         session: SessionId,
         busy: Option<bool>,
@@ -217,14 +220,18 @@ impl Tail {
     /// first held line, or the parent the held run continues from when
     /// it reached its segment's first line. Past the seam every window
     /// names its segment: the held run spans the crossing.
-    pub(super) fn next_args(&self) -> Value {
+    pub(super) fn next_args(&self) -> HistoryArgs {
         match self.lines.first().and_then(|line| line.seq) {
             Some(first) => {
                 // The tip stays on the attached segment: the walk only
                 // ever prepends the named parent, so the newest line's
                 // session is the serving one.
                 let Some(newest) = self.lines.last() else {
-                    return json!({});
+                    return HistoryArgs {
+                        session_id: None,
+                        from_seq: None,
+                        to_seq: None,
+                    };
                 };
                 if first == Seq(0)
                     && let Some(forked) = self.forked_from().filter(|_| !self.crossed)
@@ -233,20 +240,28 @@ impl Tail {
                         &newest.session_id,
                         &forked.session_id,
                         None,
-                        Some(forked.seq.0),
+                        Some(forked.seq),
                     );
                 }
                 let Some(oldest) = self.lines.first() else {
-                    return json!({});
+                    return HistoryArgs {
+                        session_id: None,
+                        from_seq: None,
+                        to_seq: None,
+                    };
                 };
                 history_args(
                     &newest.session_id,
                     &oldest.session_id,
                     None,
-                    Some(first.0.saturating_sub(1)),
+                    Some(contract::Seq(first.0.saturating_sub(1))),
                 )
             }
-            None => json!({}),
+            None => HistoryArgs {
+                session_id: None,
+                from_seq: None,
+                to_seq: None,
+            },
         }
     }
 
@@ -294,9 +309,9 @@ impl Tail {
         self.ended = true;
     }
 
-    /// Whether the read ended. Tests only: production reads it through
-    /// `chain_done`.
-    #[cfg(test)]
+    /// Whether the read ended: failed, abandoned, or lost. The install
+    /// skips an ended tail's swap and the count finish drops an ended
+    /// count's fold, so the previous transcript stays.
     pub(super) fn ended(&self) -> bool {
         self.ended
     }

@@ -159,7 +159,7 @@ fn hooks_remote_waits_for_a_worker_link_and_uses_only_the_hub() {
         let (args, answer, expected) = match operation {
             "blocking_hooks" => (
                 json!({"operation":operation,"workspace":"/remote/ws","overrides":hooks_overrides()}),
-                // Canned hub answer in sorted wire order (`docs/invocation.md:1160`).
+                // Canned hub answer in sorted wire order (`docs/invocation.md`, "What the hub speaks").
                 json!({"names":["a","z"]}),
                 vec!["a".to_owned(), "z".to_owned()],
             ),
@@ -426,12 +426,22 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         hub.call(
             "login_targets",
             json!({}),
-            json!({"targets":[{"name":"a","kind":"browser"}]}),
+            json!({"targets":[{"name":"a","kind":"browser"},{"name":"b","kind":"key","label":"work"}]}),
             |r| r.login_targets()
         )
-        .unwrap()[0]
-            .kind,
-        LoginKind::Browser
+        .unwrap(),
+        [
+            crate::configure::LoginTarget {
+                name: "a".into(),
+                kind: LoginKind::Browser,
+                label: None,
+            },
+            crate::configure::LoginTarget {
+                name: "b".into(),
+                kind: LoginKind::Key,
+                label: Some("work".into()),
+            },
+        ]
     );
     for label in [None, Some("work")] {
         let mut args = json!({"name":"a","key":"secret"});
@@ -2247,7 +2257,7 @@ fn workspace_fetch_and_store_preserve_text_version_and_stale() {
     });
     let line = deadline.recv_or_fail(&hub.lines, "inflight workspace read");
     assert_eq!(line["command"], "read_workspace_file");
-    // Canned hub answer in sorted wire order (`docs/invocation.md:1160`).
+    // Canned hub answer in sorted wire order (`docs/invocation.md`, "What the hub speaks").
     assert_eq!(
         line["args"],
         json!({"path":"src/a.rs","workspace":"/remote/ws"})

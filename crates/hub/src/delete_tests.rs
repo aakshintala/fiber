@@ -15,9 +15,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -28,6 +28,7 @@ use serde_json::json;
 use super::*;
 use crate::connection::{Accept, serve_counted};
 use crate::fake::{FakeStarter, status};
+use crate::feed::{Closer, Feed};
 use crate::recent::{self, RecentRow};
 use crate::testkit::{args, id};
 
@@ -169,6 +170,7 @@ fn delete_removes_the_directory_and_is_accepted_with_no_result() {
         name: "n".to_owned(),
         how: crate::Left::Exited,
         status: None,
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let rows = fs::read(temp.dir.join("recent.jsonl")).unwrap();
@@ -183,6 +185,41 @@ fn delete_removes_the_directory_and_is_accepted_with_no_result() {
         "another session stays"
     );
     assert_eq!(fs::read(worktree.join("file")).unwrap(), b"kept");
+    assert_eq!(fs::read(temp.dir.join("recent.jsonl")).unwrap(), rows);
+}
+
+#[test]
+fn delete_removes_an_archived_session_and_keeps_its_row() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    // The archived marker and row change nothing about deletion.
+    fs::write(
+        dir.join("events.jsonl"),
+        format!(
+            "{}{{\"kind\":\"archived\",\"seq\":1,\"session_id\":\"{}\"}}\n",
+            fs::read_to_string(dir.join("events.jsonl")).unwrap(),
+            id(1),
+        ),
+    )
+    .unwrap();
+    let row = RecentRow {
+        session_id: SessionId(id(1)),
+        ts: 1,
+        project: "-p".to_owned(),
+        workspace: "/w".to_owned(),
+        name: "n".to_owned(),
+        how: crate::Left::Exited,
+        status: None,
+        archived: true,
+    };
+    recent::append(&temp.dir, &row).unwrap();
+    let rows = fs::read(temp.dir.join("recent.jsonl")).unwrap();
+    let hub = temp.hub();
+    let line = json!({"id": "1", "command": "delete", "args": {"session": id(1)}});
+    let answer = over_the_wire(&hub, &line.to_string());
+    assert_eq!(answer["kind"], "command_accepted");
+    assert!(!dir.exists(), "the log is gone with its archive marker");
+    // The derived row stays: listings skip the missing directory.
     assert_eq!(fs::read(temp.dir.join("recent.jsonl")).unwrap(), rows);
 }
 
@@ -729,6 +766,7 @@ fn a_dry_run_keeps_the_feed_entry() {
         name: "n".to_owned(),
         how: crate::Left::Crashed,
         status: Some(serde_json::from_value(status("n", "/w", "idle", None)).unwrap()),
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let hub = temp.hub();
@@ -1136,6 +1174,7 @@ fn a_crashed_feed_entry_is_dropped_by_delete() {
         name: "n".to_owned(),
         how: crate::Left::Crashed,
         status: Some(serde_json::from_value(status("n", "/w", "idle", None)).unwrap()),
+        archived: false,
     };
     recent::append(&temp.dir, &row).unwrap();
     let hub = temp.hub();
@@ -1148,4 +1187,162 @@ fn a_crashed_feed_entry_is_dropped_by_delete() {
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::StaleRequest);
     hub.feed.stop();
+}
+
+/// A feed subscriber's far end: lines read under [`DEADLINE`]. The
+/// feed is never started here: subscribing queues the snapshot, which
+/// is empty with no entry, so the first line read is the broadcast.
+struct Sub {
+    read: BufReader<UnixStream>,
+}
+
+impl Sub {
+    fn new(feed: &Arc<Feed>) -> Self {
+        let (a, b) = UnixStream::pair().unwrap();
+        b.set_read_timeout(Some(DEADLINE)).unwrap();
+        let closer = Closer {
+            stream: a.try_clone().unwrap(),
+            web: None,
+        };
+        feed.subscribe(Arc::new(Mutex::new(a)), closer).unwrap();
+        Self {
+            read: BufReader::new(b),
+        }
+    }
+
+    /// The next line as JSON: it must arrive before the deadline.
+    fn line(&mut self, what: &str) -> Value {
+        let mut text = String::new();
+        self.read
+            .read_line(&mut text)
+            .unwrap_or_else(|_| panic!("never received {what}"));
+        serde_json::from_str(&text).unwrap_or_else(|_| panic!("not a line: {text:?}"))
+    }
+
+    /// The next line within `within`, or `None` on timeout: a refusal
+    /// must enqueue nothing.
+    fn try_line(&mut self, within: Duration) -> Option<Value> {
+        self.read.get_mut().set_read_timeout(Some(within)).unwrap();
+        let mut text = String::new();
+        let outcome = self.read.read_line(&mut text);
+        self.read
+            .get_mut()
+            .set_read_timeout(Some(DEADLINE))
+            .unwrap();
+        match outcome {
+            Ok(_) if text.is_empty() => None,
+            Ok(_) => serde_json::from_str(&text).ok(),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                None
+            }
+            Err(error) => panic!("reading the subscriber: {error}"),
+        }
+    }
+}
+
+#[test]
+fn a_held_delete_notifies_nothing_then_the_real_delete_notifies() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    let hub = temp.hub();
+    let mut sub = Sub::new(&hub.feed);
+    let _lock = hold(&dir);
+    let refused = refused(&hub, json!({"session": id(1)}));
+    assert_eq!(refused.code(), ErrorCode::SessionHeld);
+    // A refusal enqueues nothing: the bounded receive must time out.
+    // The subscriber proves live below, when the real delete notifies
+    // it: a dead listener would time out there too.
+    assert!(sub.try_line(Duration::from_secs(2)).is_none());
+    drop(_lock);
+    assert_eq!(delete(&hub, &args(json!({"session": id(1)}))), Ok(None));
+    let line = sub.line("the delete's session_deleted");
+    assert_eq!(line["kind"], "session_deleted", "{line}");
+    assert_eq!(line["payload"]["session_id"], id(1), "{line}");
+    assert_eq!(line["payload"]["project"], "-p", "{line}");
+}
+
+#[test]
+fn two_clients_see_the_delete_line() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    let hub = temp.hub();
+    let mut first = Sub::new(&hub.feed);
+    let mut second = Sub::new(&hub.feed);
+    assert_eq!(delete(&hub, &args(json!({"session": id(1)}))), Ok(None));
+    for sub in [&mut first, &mut second] {
+        let line = sub.line("the delete's session_deleted");
+        assert_eq!(line["kind"], "session_deleted", "{line}");
+        assert_eq!(line["payload"]["session_id"], id(1), "{line}");
+        assert_eq!(line["payload"]["project"], "-p", "{line}");
+    }
+}
+
+#[test]
+fn two_clients_see_each_cascade_line_with_its_own_project() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    append_moved(&root, 1, 3);
+    temp.session("-q", 3, Some(1));
+    let hub = temp.hub();
+    let mut first = Sub::new(&hub.feed);
+    let mut second = Sub::new(&hub.feed);
+    assert_eq!(
+        delete(
+            &hub,
+            &args(json!({"session": id(1), "cascade": true, "expect": [id(1), id(3)]}))
+        ),
+        Ok(None)
+    );
+    // (`docs/invocation.md`, "What the hub speaks"): with `cascade` the
+    // lines arrive in removal order, each dependent before the session
+    // it continues, each id with its own project: a shared project here
+    // would keep the rows.
+    for sub in [&mut first, &mut second] {
+        let moved = sub.line("the cascade's line for the child");
+        assert_eq!(moved["kind"], "session_deleted", "{moved}");
+        assert_eq!(moved["payload"]["session_id"], id(3), "{moved}");
+        assert_eq!(moved["payload"]["project"], "-q", "{moved}");
+        let parent = sub.line("the cascade's line for the parent");
+        assert_eq!(parent["kind"], "session_deleted", "{parent}");
+        assert_eq!(parent["payload"]["session_id"], id(1), "{parent}");
+        assert_eq!(parent["payload"]["project"], "-p", "{parent}");
+    }
+}
+
+#[test]
+fn a_cascade_delete_notifies_removed_sessions_before_an_io_failure() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    append_moved(&root, 1, 3);
+    let moved = temp.session("-q", 3, Some(1));
+    // A directory whose entries cannot be unlinked: the lock still
+    // opens unheld, so the removal loop starts, removes the child
+    // first, then fails on the parent.
+    let perms = fs::metadata(&root).unwrap().permissions();
+    fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o500)).unwrap();
+    let hub = temp.hub();
+    let mut sub = Sub::new(&hub.feed);
+    let failed = refused(
+        &hub,
+        json!({"session": id(1), "cascade": true, "expect": [id(1), id(3)]}),
+    );
+    fs::set_permissions(&root, perms).unwrap();
+    assert_eq!(failed.code(), ErrorCode::IoFailed);
+    assert!(failed.message().contains(&id(1)), "{}", failed.message());
+    // (`docs/invocation.md`, "What the hub speaks"): every removed
+    // session is told as it is removed. The child went first with its own
+    // project, while the failed parent's directory stays:
+    // notify-per-removal, not after the loop.
+    let line = sub.line("the cascade's line for the removed child");
+    assert_eq!(line["kind"], "session_deleted", "{line}");
+    assert_eq!(line["payload"]["session_id"], id(3), "{line}");
+    assert_eq!(line["payload"]["project"], "-q", "{line}");
+    assert!(!moved.exists(), "the removed child is gone");
+    assert!(
+        root.join("events.jsonl").is_file(),
+        "the failed parent stays"
+    );
 }

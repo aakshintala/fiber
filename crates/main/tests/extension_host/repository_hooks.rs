@@ -72,16 +72,14 @@ impl Setup {
                 "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }).to_string(),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         write(
             &self.home().join("config.json"),
             json!({"model": "fake/m"}).to_string(),
@@ -89,18 +87,16 @@ impl Setup {
     }
 
     fn install_hooks(&self) {
-        extensions::plan(
+        let request = extensions::Request::Path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks"),
+        );
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks"),
-            ),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     fn git_init(&self) {
@@ -450,7 +446,7 @@ fn break_copy_source(setup: &Setup, rel: &str) {
     // Remove the finished pinned copy and its ready marker, keeping the
     // approval record: the next start must rebuild from the source.
     // The fixture declares exactly one hook, so exactly one approval file
-    // holds its hash (`docs/extensions.md`, "Pinning": approving copies
+    // holds its hash (`docs/extensions.md`, "Code a repository ships": approving copies
     // those files into Fiber home).
     let approvals: Vec<String> = fs::read_dir(setup.home().join("projects"))
         .unwrap()

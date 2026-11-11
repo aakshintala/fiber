@@ -350,3 +350,171 @@ fn shutdown_discards_unconfirmed_exits() {
     );
     assert_eq!(sup.lifeline_eof(), vec![Step::Exit]);
 }
+
+fn holding() -> Supervisor {
+    let mut sup = mixed();
+    let _ = sup.lifeline_eof();
+    sup
+}
+
+fn holding_job() -> Supervisor {
+    let mut sup = Supervisor::new();
+    sup.started("job".into());
+    assert!(sup.adopt("job", JobId("j_one".into())));
+    assert_eq!(sup.lifeline_eof(), vec![Step::HoldLog]);
+    sup
+}
+
+#[test]
+fn handover_lists_the_held_jobs_and_leaves_the_calls() {
+    let mut sup = holding();
+    // `docs/tools.md`, "The keeper": the jobs still running are the resumed
+    // session's again.
+    assert_eq!(
+        sup.hand_over(),
+        Some(vec![("job".to_owned(), JobId("j_one".into()))])
+    );
+    // A second request finds the phase already moved on.
+    assert_eq!(sup.hand_over(), None);
+}
+
+#[test]
+fn handover_is_refused_outside_holding() {
+    assert_eq!(
+        mixed().hand_over(),
+        None,
+        "a live session still owns the log"
+    );
+    let mut shutdown = mixed();
+    let _ = shutdown.shutdown_requested();
+    assert_eq!(shutdown.hand_over(), None);
+    let mut gone = Supervisor::new();
+    let _ = gone.lifeline_eof();
+    assert_eq!(gone.hand_over(), None);
+    let mut lost = holding();
+    let _ = lost.lock_lost();
+    assert_eq!(lost.hand_over(), None);
+}
+
+#[test]
+fn handover_after_the_bound_expired_a_job_is_refused() {
+    let mut sup = holding();
+    let _ = sup.bound_elapsed();
+    // The keeper that is stopping the job writes its keeper_timeout.
+    assert_eq!(sup.hand_over(), None);
+    let steps = sup.exited("job", signal_end());
+    assert!(steps.contains(&Step::WriteKeeperTimeout {
+        job_id: JobId("j_one".into()),
+        exit: signal_end(),
+    }));
+}
+
+#[test]
+fn bound_does_nothing_once_handed_over() {
+    let mut sup = holding();
+    assert!(sup.hand_over().is_some());
+    assert!(sup.bound_elapsed().is_empty());
+    // The marker never landed, so the ending is the session's.
+    assert!(sup.exited("job", signal_end()).is_empty());
+}
+
+#[test]
+fn a_handed_over_ending_waits_for_confirmation_then_exits() {
+    let mut sup = holding();
+    assert!(sup.hand_over().is_some());
+    // The session delivers the ending; the keeper writes nothing and stays.
+    assert!(sup.exited("job", end()).is_empty());
+    // A confirmation for another call changes nothing.
+    assert!(sup.confirmed("call").is_empty());
+    assert_eq!(sup.confirmed("job"), vec![Step::Exit]);
+    // Nothing is left to confirm twice.
+    assert!(sup.confirmed("job").is_empty());
+}
+
+#[test]
+fn confirming_a_job_still_running_keeps_it_handed_over() {
+    let mut sup = holding();
+    assert!(sup.hand_over().is_some());
+    assert!(sup.confirmed("job").is_empty());
+    assert!(sup.exited("job", end()).is_empty());
+    assert_eq!(sup.confirmed("job"), vec![Step::Exit]);
+}
+
+#[test]
+fn the_keeper_exits_only_after_the_last_handed_over_ending_is_confirmed() {
+    let mut sup = Supervisor::new();
+    sup.started("first".into());
+    sup.started("second".into());
+    assert!(sup.adopt("first", JobId("j_first".into())));
+    assert!(sup.adopt("second", JobId("j_second".into())));
+    let _ = sup.lifeline_eof();
+    assert_eq!(sup.hand_over().map(|jobs| jobs.len()), Some(2));
+    assert!(sup.exited("first", end()).is_empty());
+    assert!(sup.confirmed("first").is_empty());
+    assert!(sup.exited("second", end()).is_empty());
+    assert_eq!(sup.confirmed("second"), vec![Step::Exit]);
+}
+
+#[test]
+fn a_second_lifeline_eof_after_handover_holds_the_log_again() {
+    let mut sup = holding_job();
+    assert!(sup.hand_over().is_some());
+    // An ending the session delivered but never confirmed is written unless
+    // the session's durable line is already there.
+    assert!(sup.exited("job", signal_end()).is_empty());
+    assert_eq!(
+        sup.lifeline_eof(),
+        vec![
+            Step::HoldLog,
+            Step::WriteJobCompleted {
+                id: "job".into(),
+                job_id: JobId("j_one".into()),
+                exit: signal_end(),
+                unless_logged: true,
+            },
+            Step::Exit,
+        ]
+    );
+    // And the bound applies to the new takeover only.
+    let mut again = holding_job();
+    assert!(again.hand_over().is_some());
+    assert_eq!(again.lifeline_eof(), vec![Step::HoldLog]);
+    assert_eq!(again.bound_elapsed(), vec![Step::Stop { id: "job".into() }]);
+}
+
+#[test]
+fn a_second_lifeline_eof_after_handover_may_hand_over_again() {
+    let mut sup = holding_job();
+    assert!(sup.hand_over().is_some());
+    assert_eq!(sup.lifeline_eof(), vec![Step::HoldLog]);
+    assert_eq!(
+        sup.hand_over(),
+        Some(vec![("job".to_owned(), JobId("j_one".into()))])
+    );
+}
+
+#[test]
+fn losing_the_lock_after_handover_stops_only_tool_calls() {
+    let mut sup = Supervisor::new();
+    sup.started("call".into());
+    sup.started("job".into());
+    sup.started("done".into());
+    assert!(sup.adopt("job", JobId("j_one".into())));
+    assert!(sup.adopt("done", JobId("j_done".into())));
+    let _ = sup.lifeline_eof();
+    assert!(sup.hand_over().is_some());
+    assert!(sup.exited("done", end()).is_empty());
+    let _ = sup.lifeline_eof();
+    // `docs/tools.md`, "The keeper": the keeper that loses the
+    // lock stops its tool calls, writes nothing and exits; adopted jobs get
+    // no stop and no completion from it.
+    let steps = sup.lock_lost();
+    assert!(
+        steps
+            .iter()
+            .all(|step| matches!(step, Step::Stop { .. } | Step::Exit))
+    );
+    assert!(!steps.contains(&Step::Stop { id: "job".into() }));
+    assert!(!steps.contains(&Step::Stop { id: "done".into() }));
+    assert_eq!(steps.last(), Some(&Step::Exit));
+}

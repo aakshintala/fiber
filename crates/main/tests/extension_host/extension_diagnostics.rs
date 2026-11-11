@@ -1,5 +1,4 @@
-//! Lua provider HTTP and hook chains at the binary level (`docs/state.md`,
-//! "Diagnostic logs"): the built `fiber` runs `ask` and `session` with a
+//! Lua provider HTTP and hook chains at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` runs `ask` and `session` with a
 //! Lua provider as the session model. At debug each eligible Lua request
 //! writes one `http_request` line without its URL, and each non-tool
 //! hook dispatch writes one `op_timing` line; otherwise both stay silent.
@@ -78,16 +77,14 @@ fn install_test_provider(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "test",
@@ -124,16 +121,14 @@ fn install_late_provider(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     config::store_credential(
         &setup.home(),
         "late",
@@ -709,16 +704,14 @@ fn install_hook_http(setup: &Setup, server_url: &str) {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A hook's `host.http` call writes one `extension` line with the
@@ -748,7 +741,7 @@ fn debug_ask_records_a_hook_http_call_as_extension() {
         .iter()
         .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "extension")
         .collect();
-    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    // `docs/state.md`, "What each part holds": any other host.http call records one line with purpose extension.
     assert_eq!(hooks.len(), 1, "one hook call writes one line: {lines:?}");
     let line = hooks[0];
     let data = &line["data"];

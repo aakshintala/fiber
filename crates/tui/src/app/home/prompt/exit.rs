@@ -2,15 +2,16 @@
 //! and the resume lines (`docs/tui.md`, "Quit", "On exit"). This module
 //! is a child of home's question module, whose closes it owns.
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::super::super::{App, Effect, Phase, mint, session_command};
+use super::super::super::{App, Effect, Phase, Sent, session_line};
 use super::{Ask, Prompt};
-use crate::home::{Level, QuitChoice, Spot, State};
+use crate::home::{QuitChoice, Spot, State};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use contract::ErrorCode;
-use contract::SessionId;
+use contract::commands::{CloseArgs, Command, SubscribeLevel};
+use contract::{CommandId, SessionId};
 
 impl App {
     /// Quits, asking first while sessions work: with no session working
@@ -167,15 +168,16 @@ impl App {
             self.home
                 .questions
                 .asks
-                .insert(close.clone(), Ask::Stop(session));
-            self.outbox.wait(&close, super::super::super::Waiting::Stop);
+                .insert(close.0.clone(), Ask::Stop(session));
+            self.outbox
+                .wait(&close.0, super::super::super::Waiting::Stop);
         }
         self.close_prompt();
         self.clear_rail_focus();
         if self.session() == Some(&id) {
             self.go_home();
         }
-        Effect::Send(lines)
+        Effect::SendTracked(lines)
     }
 
     /// The live top-level sessions on this hub closing asks about, in
@@ -254,6 +256,8 @@ impl App {
             | Key::CtrlC
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -305,10 +309,10 @@ impl App {
         }
         let (lines, pairs) = self.close_lines(&working);
         for (session, id) in pairs {
-            self.home.questions.closing.push((session, id.clone()));
-            self.outbox.wait(&id, super::super::super::Waiting::Close);
+            self.home.questions.closing.push((session, id.0.clone()));
+            self.outbox.wait(&id.0, super::super::super::Waiting::Close);
         }
-        Effect::Exit(lines)
+        Effect::ExitTracked(lines)
     }
 
     /// Enter in the close-all question: `close` with `now` each counted
@@ -334,15 +338,15 @@ impl App {
             self.home
                 .questions
                 .asks
-                .insert(id.clone(), Ask::Stop(session));
-            self.outbox.wait(&id, super::super::super::Waiting::Stop);
+                .insert(id.0.clone(), Ask::Stop(session));
+            self.outbox.wait(&id.0, super::super::super::Waiting::Stop);
         }
         self.close_prompt();
         self.draft.clear();
         if self.session().is_some() {
             self.go_home();
         }
-        Effect::Send(lines)
+        Effect::SendTracked(lines)
     }
 
     /// The lines closing `sessions`: a `summary` subscribe first where
@@ -354,17 +358,18 @@ impl App {
     pub(super) fn close_lines(
         &mut self,
         sessions: &[SessionId],
-    ) -> (Vec<String>, Vec<(SessionId, String)>) {
+    ) -> (Vec<Sent>, Vec<(SessionId, CommandId)>) {
         let mut lines = Vec::new();
         let mut pairs = Vec::new();
         for session in sessions {
             if self.subscribed_level(session).is_none() {
-                lines.push(self.subscribe(session, Level::Summary));
+                lines.push(self.subscribe_sent(session, SubscribeLevel::Summary));
             }
-            let id = mint();
-            lines.push(
-                session_command(&id, "close", session, Some(json!({"now": true}))).to_string(),
-            );
+            let id = CommandId(support::mint("c_"));
+            lines.push(Sent {
+                line: session_line(&id, session, Command::Close(CloseArgs { now: true })),
+                id: id.clone(),
+            });
             pairs.push((session.clone(), id));
         }
         (lines, pairs)
@@ -373,15 +378,52 @@ impl App {
     /// Drops from `closing` every session whose `close` line was not
     /// written: a close never sent keeps its resume line on exit. A
     /// command stop that never went out ends in its stop uncertainty.
+    /// A fold-cruising hub line settles by the id noted when it was
+    /// built; a session line parses its id as before.
     pub(crate) fn home_unsent(&mut self, unsent: &[String]) {
         let ids: Vec<String> = unsent
             .iter()
             .filter_map(|line| {
-                serde_json::from_str::<Value>(line)
-                    .ok()
-                    .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+                self.outbox.hub_id(line).map(|id| id.0).or_else(|| {
+                    serde_json::from_str::<Value>(line)
+                        .ok()
+                        .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+                })
             })
             .collect();
+        self.home_unsent_ids(&ids);
+    }
+
+    /// Test entry point: parks a close id for `session`, as the quit
+    /// question's closes do.
+    #[cfg(test)]
+    pub(crate) fn park_closing(&mut self, session: SessionId, id: String) {
+        self.home.questions.closing.push((session, id));
+    }
+
+    /// Test entry point: the sessions with a parked close.
+    #[cfg(test)]
+    pub(crate) fn closing_sessions(&self) -> Vec<String> {
+        self.home
+            .questions
+            .closing
+            .iter()
+            .map(|(session, _)| session.0.clone())
+            .collect()
+    }
+
+    /// Drops from `closing` every session whose tracked `close` was not
+    /// written, by carried id: the same settlement as the untracked
+    /// path, never parsed.
+    pub(crate) fn home_unsent_tracked(&mut self, unsent: &[Sent]) {
+        let ids: Vec<String> = unsent.iter().map(|sent| sent.id.0.clone()).collect();
+        self.home_unsent_ids(&ids);
+    }
+
+    /// Settles the ids of unwritten closes and command stops: a close
+    /// never sent keeps its resume line on exit, and a command stop
+    /// never sent ends its uncertainty.
+    fn home_unsent_ids(&mut self, ids: &[String]) {
         // The running command's stop tags are read before the loop below
         // settles the unsent closes' tags.
         let stops = self.delete_waiting_close_ids().unwrap_or_default();
@@ -396,7 +438,7 @@ impl App {
         for id in dropped {
             self.outbox.settled(&id);
         }
-        self.delete_command_unsent(&ids, &stops);
+        self.delete_command_unsent(ids, &stops);
     }
 
     /// The sessions working now, in list order, the attached one last

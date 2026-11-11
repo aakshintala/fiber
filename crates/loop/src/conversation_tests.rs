@@ -911,6 +911,8 @@ fn a_settled_pair_behind_a_suspended_batch_holds_notice_and_final_text() {
                     prefix: "atlas".into(),
                 },
             },
+            arguments: None,
+            changed_by: None,
         }),
         action: ActionId("a_1".into()),
         batch: Vec::new(),
@@ -1047,6 +1049,8 @@ fn an_owned_settled_pair_behind_a_suspended_batch_still_logs_its_finish() {
                     prefix: "atlas".into(),
                 },
             },
+            arguments: None,
+            changed_by: None,
         }),
         action: ActionId("a_1".into()),
         batch: Vec::new(),
@@ -2056,6 +2060,8 @@ mod window {
                     prefix: "run".into(),
                 },
             },
+            arguments: None,
+            changed_by: None,
         })
     }
 
@@ -4282,6 +4288,8 @@ fn the_suspended_batch_excludes_inner_requests() {
                 prefix: "".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     });
     lines.push(line("permission_requested", &permission, Some("a_outer")));
     for line in &mut lines {

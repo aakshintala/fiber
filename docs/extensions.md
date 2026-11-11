@@ -699,7 +699,7 @@ tools or hooks.
 
 A provider may have five pieces of Lua:
 
-- `models()`, which receives `{ key, placeholders }` (`docs/model-routing.md`, "Model discovery") and discovers its models
+- `models()`, which receives `{ key, placeholders }` (`docs/model-routing.md`, "Model discovery") and discovers its models; an entry it deliberately leaves out keeps its place in the list and carries `omit_reason` with the provider's reason
 - `quota()`, which receives `{ label, credential, key, token, headers }`,
   where `key` is the label's key (absent when the provider's token comes
   from `credential()`), and `token` and `headers` are what `credential()`
@@ -1563,6 +1563,8 @@ spans carry `click` ids, and `run` receives `{ session_id = "…", click =
 `run` does below. Enter on a click target that has focus in navigate mode
 calls `on_click` as a click does (`docs/tui.md`, "Input and focus").
 
+`on_key`, `on_click`, `fiber.key`'s `run` and `fiber.command`'s `run` make no host call: the terminal needs each answer before the next input. A host call from one raises a Lua error.
+
 `fiber.on_focus({ timeout, run })` runs `run` when the session on screen
 changes, with `{ session_id = "…" }`, or no `session_id` key on home. It
 runs as an event handler does and may make host calls. Its return value is
@@ -1573,7 +1575,9 @@ A TUI extension adds a slash command with `fiber.command(name, {
 description, timeout, run })` in `tui/init.lua`, and `run` runs in the
 terminal's VM. It receives `{ session_id = "…", args = "…" }`: the session
 on screen, with no `session_id` key on home, and the text after the name,
-`""` when there is none. Its return value is ignored. The terminal shows one
+`""` when there is none. Only a `true`, `false` or `nil` return is ignored;
+any other value is a wrong-shape failure. `run` makes no host
+call, as the key handler's does not. The terminal shows one
 `/` list, and a name registered twice, by either half of any extensions,
 follows the rule above: neither gets it, a `notice` names both, and the
 configuration rename applies. A TUI command never takes a built-in
@@ -1841,7 +1845,7 @@ new package adds one. `fiber extension install openrouter` means
 `github.com/aakshintala/fiber/providers/openrouter`. Today the provider short
 names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
 `databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `claude`,
-`cursor-agent`, `hooks`, `init`, `memory` and `export` are short names for
+`cursor-agent`, `hooks`, `init`, `memory`, `export` and `codemode` are short names for
 `github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
 the name it registers (`docs/delegates.md`, "Harness extensions").
 `azure`, `claude` and `cursor-agent` are not built yet: see #224, #545 and

@@ -7,11 +7,17 @@ use super::commands_testkit::{
     type_text,
 };
 use crate::app::{App, Effect};
+use crate::ext::{
+    Decision, Input as RendererInput, KeyOutcome, RawSpan, Renderer, SessionCtx, SessionVersion,
+    TuiCommand,
+};
 use crate::keys::Key;
 use crate::link::Line;
 use contract::ErrorCode;
 use serde_json::{Value, json};
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 #[test]
 fn first_run_enter_without_model_opens_login_and_preserves_the_draft() {
@@ -31,6 +37,7 @@ fn first_run_enter_login(model: Option<String>) {
     *seam.targets.lock().unwrap() = Ok(vec![crate::configure::LoginTarget {
         name: "acme".to_owned(),
         kind: crate::configure::LoginKind::Key,
+        label: None,
     }]);
     let mut app = connected();
     app.set_configure(seam.clone());
@@ -183,7 +190,7 @@ fn compact_sends_its_instructions() {
     let lines = sent(enter(&mut app, "/compact"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "compact");
-    assert_eq!(lines[0].get("args"), None);
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -309,7 +316,7 @@ fn import_sends_import_without_args_when_bare() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "import");
     assert_eq!(lines[0]["session_id"], SESSION);
-    assert_eq!(lines[0].get("args"), None);
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -799,7 +806,7 @@ fn report_keys_keep_the_held_conversation_position() {
     // The replayed start asks `commands` again; answering with no rows
     // leaves the held row to the anchor below.
     let asked = app.on_line(held);
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(asked.len(), 1);
     let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
     assert_eq!(asked["command"], "commands");
@@ -842,16 +849,25 @@ fn report_keys_keep_the_held_conversation_position() {
 
 #[test]
 fn a_rejected_import_keeps_the_existing_notice_path() {
+    // An unknown source is refused locally with the hub's message:
+    // nothing goes out, the draft stays, and one notice shows.
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));
-    let id = lines[0]["id"].clone();
-    let rejected = session_line(
-        "command_rejected",
-        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
-    );
-    assert!(app.on_line(rejected).is_empty());
+    assert!(lines.is_empty());
+    assert!(app.outbox.pending.is_empty());
     assert_eq!(app.draft(), "/import vim");
-    assert_eq!(app.notice(), Some("No."));
+    assert_eq!(
+        app.notice(),
+        Some("`source` must be `claude-code` or `codex`.")
+    );
+    assert!(
+        notice_with(
+            &app,
+            ErrorCode::InvalidArguments,
+            "`source` must be `claude-code` or `codex`."
+        ),
+        "the refusal carries the hub's code and message"
+    );
 }
 
 #[test]
@@ -2292,21 +2308,17 @@ fn a_rejected_named_import_returns_its_draft_with_the_notice() {
 }
 
 #[test]
-fn an_accepted_unknown_source_import_settles_without_a_report() {
+fn an_unknown_import_source_sends_no_line_and_holds_no_entry() {
+    // No string source can be dispatched after the retype, so unknown
+    // input is refused before anything is sent: no line, no outbox
+    // entry, no report, and the draft stays for a retry.
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));
-    let id = lines[0]["id"].clone();
-    assert_eq!(lines[0]["args"], json!({"source": "vim"}));
-    // An unknown source stays a plain command: its accept closes the
-    // entry with no report and no notice.
-    let accepted = session_line(
-        "command_accepted",
-        json!({"command_id": id, "result": import_result()}),
-    );
-    assert!(app.on_line(accepted).is_empty());
-    assert!(app.import_report().is_none());
-    assert!(app.notices().is_empty());
+    assert!(lines.is_empty());
     assert!(app.outbox.pending.is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(app.draft(), "/import vim");
+    assert_eq!(app.notices().len(), 1);
 }
 
 /// A refused prompt keeps the draft and the working loop: the refusal
@@ -2361,4 +2373,281 @@ fn a_malformed_accept_leaves_a_non_import_entry_pending() {
             .pending
             .contains_key(id.as_str().unwrap_or_default())
     );
+}
+
+/// A home app with the link down: Enter holds the start for `hub_hello`.
+fn unlinked() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
+}
+
+#[test]
+fn a_failed_hello_flush_settles_the_start_by_its_carried_id() {
+    let mut app = unlinked();
+    type_text(&mut app, "hi");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.outbox.held.len(), 1);
+    let carried = app.outbox.held[0].id.0.clone();
+    // Tamper with the held line's JSON id: the failure must settle by
+    // the carried id, never by parsing the tampered line.
+    let tampered = app.outbox.held[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, app.outbox.held[0].line);
+    app.outbox.held[0].line = tampered.clone();
+    // Hello flushes the held start; failing the flush settles the
+    // carried start: the draft is back, the phase is starting, and no
+    // entry waits on either id.
+    let flushed: Vec<String> = app.on_line(hub_line("hub_hello", json!({})));
+    assert!(flushed.contains(&tampered));
+    app.write_failed(&flushed);
+    assert!(app.outbox.pending.is_empty());
+    assert!(app.outbox.waiting("c_tampered").is_none());
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, crate::app::Phase::Starting));
+}
+
+#[test]
+fn a_failed_tracked_start_settles_by_its_carried_id() {
+    let mut app = connected();
+    type_text(&mut app, "hi");
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the start");
+    };
+    assert_eq!(sents.len(), 1);
+    let carried = sents[0].id.0.clone();
+    // Tamper with the start's JSON id: the failure must settle by the
+    // carried id, never by parsing the tampered line.
+    let tampered = sents[0].line.replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, sents[0].line);
+    let sent = crate::app::Sent {
+        id: contract::CommandId(carried),
+        line: tampered,
+    };
+    app.write_failed_tracked(std::slice::from_ref(&sent));
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, crate::app::Phase::Starting));
+}
+
+/// A renderer recording TUI command runs as `(name, session, args)`:
+/// the adapter's dispatch as the terminal sees it.
+#[derive(Debug)]
+struct CommandRecording {
+    served: Vec<TuiCommand>,
+    runs: RefCell<Vec<(String, Option<String>, String)>>,
+    handled: Cell<bool>,
+}
+
+impl CommandRecording {
+    fn serving(served: Vec<TuiCommand>, handled: bool) -> Self {
+        Self {
+            served,
+            runs: RefCell::new(Vec::new()),
+            handled: Cell::new(handled),
+        }
+    }
+
+    fn runs(&self) -> Vec<(String, Option<String>, String)> {
+        self.runs.borrow().clone()
+    }
+}
+
+/// A TUI command row for `name` from `extension`.
+fn tui_cmd(name: &str, extension: &str) -> TuiCommand {
+    TuiCommand {
+        name: name.to_owned(),
+        description: format!("Runs {name}."),
+        extension: extension.to_owned(),
+    }
+}
+
+impl Renderer for CommandRecording {
+    fn name(&self) -> &str {
+        "command-recording"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, _ctx: &SessionCtx) -> Vec<TuiCommand> {
+        self.served.clone()
+    }
+
+    fn run_tui_command(&self, ctx: &SessionCtx, name: &str, args: &str) -> KeyOutcome {
+        self.runs.borrow_mut().push((
+            name.to_owned(),
+            ctx.session_id.clone().map(|id| id.0.clone()),
+            args.to_owned(),
+        ));
+        if self.handled.get() {
+            KeyOutcome::Handled
+        } else {
+            KeyOutcome::NotHandled
+        }
+    }
+}
+
+/// Whether any notice carries `code`.
+fn has_code(app: &App, code: ErrorCode) -> bool {
+    app.notices().iter().any(
+        |notice| matches!(notice, crate::app::NoticeLine::Notice { code: found, .. } if *found == code),
+    )
+}
+
+#[test]
+fn command_tui_winner_runs_with_session_and_args_and_clears_draft() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    let effect = enter(&mut app, "/ledger-diff fast");
+    // A handled TUI command runs no built-in and no driver command for that stroke.
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "");
+    // `docs/extensions.md`, "Commands and screens": `run` receives the session on screen and the text after the name.
+    assert_eq!(
+        recording.runs(),
+        vec![(
+            "ledger-diff".to_owned(),
+            Some(SESSION.to_owned()),
+            "fast".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn command_tui_winner_on_home_runs_without_session() {
+    let mut app = connected();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    let effect = enter(&mut app, "/ledger-diff fast");
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "");
+    // `docs/extensions.md`, "Commands and screens": with no `session_id` key on home.
+    assert_eq!(
+        recording.runs(),
+        vec![("ledger-diff".to_owned(), None, "fast".to_owned())]
+    );
+}
+
+#[test]
+fn command_shadowed_skill_row_runs_the_tui_command() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("review", "acme")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    answer_rows(
+        &mut app,
+        json!([{"name": "review", "description": "Reviews.", "tag": "skill"}]),
+    );
+    // One row per name (`docs/extensions.md`, "Commands and screens"): typed Enter runs the TUI command, never the driver path.
+    let effect = enter(&mut app, "/review now");
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "");
+    assert_eq!(
+        recording.runs(),
+        vec![(
+            "review".to_owned(),
+            Some(SESSION.to_owned()),
+            "now".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn command_conflicted_name_is_consumed_with_draft_intact() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("deploy", "other")],
+        true,
+    ));
+    app.install_renderer(recording.clone());
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    let effect = enter(&mut app, "/deploy now");
+    // A conflicted name runs nowhere: consumed, nothing sent, no second notice, draft preserved.
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "/deploy now");
+    assert!(recording.runs().is_empty());
+    assert!(!has_code(&app, ErrorCode::UnknownCommand));
+}
+
+#[test]
+fn command_conflicted_name_through_on_enter_keeps_draft_without_refusal() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(CommandRecording::serving(
+        vec![tui_cmd("deploy", "other")],
+        true,
+    )));
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    type_text(&mut app, "/deploy now");
+    assert_eq!(app.on_enter(), Effect::None);
+    assert_eq!(app.draft(), "/deploy now");
+    assert!(!has_code(&app, ErrorCode::UnknownCommand));
+}
+
+#[test]
+fn command_unknown_name_is_still_refused() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        true,
+    )));
+    answer_commands(&mut app, &[]);
+    let effect = enter(&mut app, "/nope now");
+    assert!(sent(effect).is_empty());
+    // An unrecognised `/name` is refused: the terminal keeps the text and shows its notice.
+    assert_eq!(app.draft(), "/nope now");
+    assert!(has_code(&app, ErrorCode::UnknownCommand));
+}
+
+#[test]
+fn command_tui_run_not_handled_keeps_draft() {
+    let mut app = attached();
+    let recording = Rc::new(CommandRecording::serving(
+        vec![tui_cmd("ledger-diff", "acme")],
+        false,
+    ));
+    app.install_renderer(recording.clone());
+    let effect = enter(&mut app, "/ledger-diff fast");
+    // The run happened, but nothing handled it: consumed silently with the draft preserved.
+    assert!(sent(effect).is_empty());
+    assert_eq!(app.draft(), "/ledger-diff fast");
+    assert_eq!(recording.runs().len(), 1);
 }

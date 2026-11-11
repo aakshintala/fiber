@@ -77,7 +77,12 @@ fn routed_feed_installs_the_stream_and_bypasses_line_credits() {
         Input::Connected(..)
     ));
     let pending = router
-        .send("configure", serde_json::json!({"operation":"settings"}))
+        .send(contract::commands::hub::HubCommand::Configure(
+            contract::commands::hub::Configure {
+                operation: "settings".into(),
+                arguments: serde_json::Map::new(),
+            },
+        ))
         .unwrap();
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -102,7 +107,9 @@ fn routed_feed_installs_the_stream_and_bypasses_line_credits() {
         Input::Disconnected
     ));
     assert!(matches!(
-        router.send("configure", serde_json::json!({})),
+        router.send(contract::commands::hub::HubCommand::Status(
+            contract::commands::hub::NoArgs {},
+        )),
         Err(crate::remote::AskError::Detached)
     ));
 }

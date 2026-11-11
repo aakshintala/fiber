@@ -1,5 +1,4 @@
-//! Part 10 wiring at the binary level (`docs/state.md`, "Diagnostic
-//! logs"): the built `fiber` times a background start as `jobs.start`
+//! Part 10 wiring at the binary level (`docs/state.md`, "What each part holds"): the built `fiber` times a background start as `jobs.start`
 //! through the shell's timing clone and the registry installs. At `debug`
 //! an `ask` whose model starts a background shell writes one `jobs.start`,
 //! and one whose model spawns a delegate writes one per spawn, on new and

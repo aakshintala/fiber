@@ -582,6 +582,7 @@ fn refolding_leaves_session_state_alone() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -590,7 +591,7 @@ fn refolding_leaves_session_state_alone() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -1555,6 +1556,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1563,7 +1565,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("expected a sent line"),
@@ -6788,4 +6790,28 @@ fn a_reload_merge_renumbers_a_carried_run_past_a_dropped_row() {
     running.sort_unstable();
     assert_eq!(running, vec![0, 1]);
     assert_eq!(fold.shells.len(), 2);
+}
+
+/// `shown` keeps one row text per shown line: replacement metadata
+/// travels with the cells, and a page not loaded lends plain rows.
+#[test]
+fn click_shown_keeps_row_texts_aligned_with_lines() {
+    let lines = session(6, false);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let shown = app.shown(0, 20);
+    assert_eq!(shown.texts.len(), shown.lines.len());
+    // Turn rows carry built-in metadata with no click ranges.
+    assert!(shown.texts.iter().all(|text| text.clicks.is_empty()));
+    // A page not loaded draws one blank line with plain metadata.
+    app.jump(0);
+    let Some((session, range)) = app.needs().first().cloned() else {
+        return;
+    };
+    app.load_failed(&session, &range, "gone");
+    let shown = app.shown(0, 1);
+    assert_eq!(shown.texts.len(), shown.lines.len());
+    let text = shown.texts.first().expect("one shown line");
+    assert_eq!(text.clicks, Vec::new());
+    assert!(!text.decoration);
 }

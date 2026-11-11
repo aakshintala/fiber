@@ -101,6 +101,8 @@ pub(crate) fn standing_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 

@@ -40,7 +40,11 @@ fn claude_person(person: &Path) {
     }
 }
 
-fn import(seam: &Seam, person: &Path, source: Option<&str>) -> Result<Option<Value>, Failure> {
+fn import(
+    seam: &Seam,
+    person: &Path,
+    source: Option<config::ImportSource>,
+) -> Result<Option<Value>, Failure> {
     seam.import(person, source, fakes::clock::FakeClock::new())
 }
 
@@ -65,14 +69,10 @@ fn seam_import_runs_the_shared_import_into_the_seam_home() {
     assert!(home.join("import-claude-code.json").is_file());
     assert!(home.join("skills/review/SKILL.md").is_file());
     // A named source imports that source only.
-    let result = import(&seam, &person, Some("claude-code"))
+    let result = import(&seam, &person, Some(config::ImportSource::ClaudeCode))
         .unwrap()
         .unwrap();
     assert_eq!(result["imported"]["skills"], json!(["review"]));
-    // An unknown source is refused naming the two sources.
-    let error = import(&seam, &person, Some("vim")).unwrap_err();
-    assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert!(error.message.contains("claude-code") && error.message.contains("codex"));
 }
 
 /// The pending operation answers from the seam's own home: on the
@@ -92,6 +92,32 @@ fn import_pending_reads_the_seam_homes_receipts() {
     assert_eq!(
         result(&seam, "import_pending", json!({})),
         json!({"pending": false})
+    );
+}
+
+#[test]
+fn login_targets_carries_the_label_only_while_signed_in() {
+    // The wire carries `label` only when `Some`: an unsigned row omits
+    // it, and a stored credential marks with the default label.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    install(&home);
+    assert_eq!(
+        result(&seam, "login_targets", json!({})),
+        json!({"targets": [{"name": "acme", "kind": "key"}]})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name": "acme", "key": "sk-test"})
+        ),
+        json!({"path": "credentials/acme/default", "replaced": false})
+    );
+    assert_eq!(
+        result(&seam, "login_targets", json!({})),
+        json!({"targets": [{"name": "acme", "kind": "key", "label": "default"}]})
     );
 }
 
@@ -153,7 +179,7 @@ fn blocking_hooks_wire_keeps_absence_override_precedence_and_config_errors() {
         let workspace = dirs.workspace("one");
         let home = dirs.home();
         let seam = Seam::new(home.clone());
-        // Empty with no blockers (`docs/invocation.md:1160`).
+        // Empty with no blockers (`docs/invocation.md`, "What the hub speaks").
         assert_eq!(
             result(&seam, "blocking_hooks", json!({"workspace":workspace})),
             json!({"names":[]})
@@ -164,7 +190,7 @@ fn blocking_hooks_wire_keeps_absence_override_precedence_and_config_errors() {
             format!("{key}.a={{\"on_failure\":\"blocking\"}}"),
             format!("{key}.z.on_failure=non-blocking"),
         ];
-        // The lone surviving blocker is named (`docs/invocation.md:1160`).
+        // The lone surviving blocker is named (`docs/invocation.md`, "What the hub speaks").
         assert_eq!(
             result(
                 &seam,

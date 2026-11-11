@@ -26,6 +26,10 @@ use crate::configure::{
     ToolGroup, ToolSwitches, WriteScope,
 };
 use contract::clock::Clock;
+use contract::commands::hub::{
+    Configure as HubConfigure, HubCommand, ReadConfig, ReadWorkspaceFile, SearchFiles, WriteConfig,
+    WriteWorkspaceFile,
+};
 use contract::{ErrorCode, Secret};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -80,17 +84,22 @@ impl Remote {
     fn call<T>(
         &self,
         operation: &str,
-        mut args: Value,
+        args: Value,
         caller: Caller<'_>,
         decode: impl FnOnce(&Value) -> Option<T>,
     ) -> Result<T, ConfigureError> {
-        let Some(args) = args.as_object_mut() else {
+        let Some(args) = args.as_object() else {
             return Err(decode::io_error(operation));
         };
-        drop(args.insert("operation".into(), json!(operation)));
         let line = self
             .router
-            .ask("configure", Value::Object(std::mem::take(args)), caller)
+            .ask(
+                HubCommand::Configure(HubConfigure {
+                    operation: operation.into(),
+                    arguments: args.clone(),
+                }),
+                caller,
+            )
             .map_err(ask_error)?;
         decode(&decode::result(&line, operation)?).ok_or_else(|| decode::io_error(operation))
     }
@@ -128,8 +137,10 @@ impl Remote {
         let line = self
             .router
             .ask(
-                "configure",
-                json!({"operation":"global_file"}),
+                HubCommand::Configure(HubConfigure {
+                    operation: "global_file".into(),
+                    arguments: Map::new(),
+                }),
                 Caller::Worker(cancel),
             )
             .map_err(ask_error)?;
@@ -201,8 +212,13 @@ impl Remote {
         let line = self
             .router
             .ask(
-                "configure",
-                json!({"operation":"models","workspace":workspace,"refresh":word}),
+                HubCommand::Configure(HubConfigure {
+                    operation: "models".into(),
+                    arguments: Map::from_iter([
+                        ("workspace".into(), json!(workspace)),
+                        ("refresh".into(), json!(word)),
+                    ]),
+                }),
                 Caller::Worker(&Cancel::default()),
             )
             .map_err(ask_error)?;
@@ -222,16 +238,12 @@ impl Remote {
         fresh: bool,
         generation: u64,
     ) -> Result<(), AskError> {
-        let mut args = Map::from_iter([
-            ("workspace".into(), json!(workspace)),
-            ("text".into(), json!(text)),
-        ]);
-        if fresh {
-            drop(args.insert("fresh".into(), json!(true)));
-        }
         self.router.ask_into(
-            "search_files",
-            Value::Object(args),
+            HubCommand::SearchFiles(SearchFiles {
+                workspace: workspace.display().to_string(),
+                text: text.into(),
+                fresh: fresh.then_some(true),
+            }),
             Box::new(move |line| {
                 let result = match decode::result(line, "search_files") {
                     Err(error) if error.code == ErrorCode::StaleRequest => return None,
@@ -288,8 +300,10 @@ impl Remote {
         let line = self
             .router
             .ask(
-                "read_config",
-                json!({"workspace":workspace,"path":file}),
+                HubCommand::ReadConfig(ReadConfig {
+                    workspace: workspace.display().to_string(),
+                    path: file.display().to_string(),
+                }),
                 Caller::Loop,
             )
             .map_err(ask_error)?;
@@ -307,8 +321,10 @@ impl Remote {
         let line = self
             .router
             .ask(
-                "read_workspace_file",
-                json!({"workspace": workspace, "path": file}),
+                HubCommand::ReadWorkspaceFile(ReadWorkspaceFile {
+                    workspace: workspace.display().to_string(),
+                    path: file.display().to_string(),
+                }),
                 Caller::Loop,
             )
             .map_err(ask_error)?;
@@ -329,8 +345,12 @@ impl Remote {
         let line = self
             .router
             .ask(
-                "write_workspace_file",
-                json!({"workspace": workspace, "path": file, "text": text, "version": version}),
+                HubCommand::WriteWorkspaceFile(WriteWorkspaceFile {
+                    workspace: workspace.display().to_string(),
+                    path: file.display().to_string(),
+                    text: text.into(),
+                    version: version.into(),
+                }),
                 Caller::Loop,
             )
             .map_err(ask_error)?;
@@ -374,8 +394,12 @@ impl Remote {
         let line = self
             .router
             .ask(
-                "write_config",
-                json!({"workspace":workspace,"path":file,"text":text,"version":version}),
+                HubCommand::WriteConfig(WriteConfig {
+                    workspace: workspace.display().to_string(),
+                    path: file.display().to_string(),
+                    text: text.into(),
+                    version: version.into(),
+                }),
                 Caller::Loop,
             )
             .map_err(ask_error)?;
@@ -401,7 +425,10 @@ impl Remote {
         let _lend = self.router.lend();
         let pending: Pending = self
             .router
-            .send("configure", json!({"operation":"global_file"}))
+            .send(HubCommand::Configure(HubConfigure {
+                operation: "global_file".into(),
+                arguments: Map::new(),
+            }))
             .map_err(ask_error)?;
         let epoch = pending.epoch();
         let line = pending.wait().map_err(ask_error)?;
@@ -966,7 +993,7 @@ impl RemoteCopy {
         version: String,
     ) -> std::io::Result<Self> {
         use std::os::unix::fs::DirBuilderExt;
-        let dir = dir_parent.join(format!("fiber-{}", crate::app::mint()));
+        let dir = dir_parent.join(format!("fiber-{}", support::mint("c_")));
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let temp = dir.join(
             hub.file_name()

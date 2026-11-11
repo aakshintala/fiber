@@ -2,9 +2,10 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    HomeScreen, Left, Level, ListLine, Row, Sessions, State, Subs, delete_line, dependents,
-    from_status, glyph, line, line_with, opening, quit_count, recent_rows,
+    HomeScreen, Left, ListLine, Row, Sessions, State, Subs, delete_line, dependents, from_status,
+    glyph, line, line_with, opening, quit_count, recent_rows,
 };
+use contract::commands::SubscribeLevel;
 use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
@@ -32,6 +33,7 @@ pub(crate) fn home_test_rows(screen: &HomeScreen) -> Vec<(u64, String)> {
             ListLine::Exited {
                 key, glyph, name, ..
             } => Some((*key, format!("{glyph}  {name}"))),
+            ListLine::ArchivedHead { .. } => None,
             ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => None,
         })
         .collect()
@@ -449,6 +451,26 @@ fn a_left_for_an_unknown_session_changes_nothing() {
     )));
     sessions.left(&SessionId("s_bbbbbbbbbbbbbbbb".to_owned()), Left::Exited);
     assert_eq!(shown(&sessions), ["✓  fix the parser"]);
+}
+
+#[test]
+fn a_left_for_an_archived_row_keeps_the_project_s_other_archived_rows() {
+    let mut sessions = Sessions::default();
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![
+            recent_row("s_a", "a", "exited", None),
+            recent_row("s_b", "b", "exited", None),
+        ]))
+        .0,
+    );
+    sessions.note_archived_total(PROJECT, 2);
+    sessions.left(&SessionId("s_a".to_owned()), Left::Exited);
+    // Only the leaving id drops out of the archived map: dropping the
+    // cleanup's `!` keeps just empty rows and fails the assertions below.
+    assert!(!sessions.is_archived(&SessionId("s_a".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_b".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
 }
 
 #[test]
@@ -906,23 +928,29 @@ fn accept_holds_the_level_for_its_session_only() {
     let other = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     assert_eq!(subs.accepted_level(&session()), None);
     assert!(!subs.full(&session()));
-    subs.accept(session(), Level::Summary);
-    assert_eq!(subs.accepted_level(&session()), Some(Level::Summary));
+    subs.accept(session(), SubscribeLevel::Summary);
+    assert_eq!(
+        subs.accepted_level(&session()),
+        Some(SubscribeLevel::Summary)
+    );
     assert!(!subs.full(&session()));
-    subs.accept(session(), Level::Full);
-    assert_eq!(subs.accepted_level(&session()), Some(Level::Full));
+    subs.accept(session(), SubscribeLevel::Full);
+    assert_eq!(subs.accepted_level(&session()), Some(SubscribeLevel::Full));
     assert!(subs.full(&session()));
     assert_eq!(subs.accepted_level(&other), None);
     assert!(!subs.full(&other));
-    subs.accept(session(), Level::Summary);
+    subs.accept(session(), SubscribeLevel::Summary);
     assert!(!subs.full(&session()));
 }
 
 #[test]
 fn opening_from_each_level() {
-    assert_eq!(opening(None).to_vec(), vec![Level::Summary]);
-    assert_eq!(opening(Some(Level::Summary)).to_vec(), vec![]);
-    assert_eq!(opening(Some(Level::Full)).to_vec(), vec![Level::Summary]);
+    assert_eq!(opening(None).to_vec(), vec![SubscribeLevel::Summary]);
+    assert_eq!(opening(Some(SubscribeLevel::Summary)).to_vec(), vec![]);
+    assert_eq!(
+        opening(Some(SubscribeLevel::Full)).to_vec(),
+        vec![SubscribeLevel::Summary]
+    );
 }
 
 #[test]
@@ -1101,7 +1129,7 @@ fn ids(sessions: &Sessions) -> Vec<&str> {
 fn recent_rows_returns_the_answer_total_when_it_is_an_integer() {
     let (rows, total) = recent_rows(&json!({"sessions": [], "total": 7}));
     assert!(rows.is_empty());
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(total, Some(7));
 }
 
@@ -1120,7 +1148,7 @@ fn recent_rows_leaves_the_total_empty_without_an_integer() {
     }
     // Sessions may be missing while the total is present: the rows are
     // empty and the total still parses.
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(recent_rows(&json!({"total": 7})), (Vec::new(), Some(7)));
 }
 
@@ -1132,7 +1160,7 @@ fn a_scoped_page_appends_without_touching_other_projects_rows() {
         true,
     );
     let (rows, total) = recent_rows(&json!({"sessions": [project_row("s_p", OTHER)], "total": 4}));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(total, Some(4));
     sessions.scoped(rows);
     sessions.note_total(OTHER, total.unwrap_or(0));
@@ -1141,9 +1169,9 @@ fn a_scoped_page_appends_without_touching_other_projects_rows() {
     let mut got = ids(&sessions);
     got.sort_unstable();
     assert_eq!(got, ["s_p", "s_u"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), Some(4));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(PROJECT), None);
     let sections = sessions.sections(Some(PROJECT));
     // `docs/tui.md`, "The session list" and `docs/tui.md`, "The session list" (order) and `docs/tui.md`, "The session list" (counts).
@@ -1198,9 +1226,9 @@ fn out_of_order_scoped_pages_keep_both_projects_rows() {
     let mut got = ids(&sessions);
     got.sort_unstable();
     assert_eq!(got, ["s_o1", "s_o2", "s_p1"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(PROJECT), Some(2));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), Some(3));
 }
 
@@ -1232,7 +1260,7 @@ fn scoped_folds_leave_the_unscoped_cursor_and_paging_alone() {
         sessions.last_recent().map(|row| row.id.0.as_str()),
         Some("s_c")
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), Some(9));
     sessions.recent(Vec::new(), false);
     assert!(!sessions.more());
@@ -1278,9 +1306,9 @@ fn totals_drop_together_while_rows_and_paging_stay() {
     sessions.note_total(OTHER, 2);
     sessions.mark_dirty(PROJECT);
     sessions.drop_all_totals();
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(PROJECT), None);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list".
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list".
     assert_eq!(sessions.total_for(OTHER), None);
     assert!(!sessions.is_dirty(PROJECT));
     // `docs/tui.md`, "The session list" and `docs/tui.md`, "The session list" (order) and `docs/tui.md`, "The session list" (counts).
@@ -1321,4 +1349,141 @@ fn status_left_and_remove_leave_every_stored_total_untouched() {
     // total held for the next scoped answer.
     sessions.remove(&SessionId("s_a".into()));
     assert_eq!(sessions.total_for(PROJECT), Some(5));
+}
+
+#[test]
+fn archived_scoped_reconciles_an_exited_row_into_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+        true,
+    );
+    let key = sessions
+        .row(&SessionId("s_a".to_owned()))
+        .unwrap_or_else(|| panic!("the exited row"))
+        .key;
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+    );
+    sessions.note_archived_total(PROJECT, 1);
+    // `docs/tui.md`, "The session list" (an archived session is on
+    // neither the exited rows nor the rail): the exited row leaves the
+    // exited list with its key and folds into the archived map, so the
+    // held count has a row to show in the fold. Skipping the duplicate
+    // keeps it under exited with no row in the fold and fails this.
+    assert!(sessions.all().iter().all(|row| row.id.0 != "s_a"));
+    let archived = sessions
+        .row(&SessionId("s_a".to_owned()))
+        .unwrap_or_else(|| panic!("the reconciled archived row"));
+    assert_eq!(archived.key, key);
+    assert!(sessions.is_archived(&SessionId("s_a".to_owned())));
+    assert!(sessions.cards().iter().all(|row| row.id.0 != "s_a"));
+    let sections = sessions.sections(Some(PROJECT));
+    assert!(sections[0].exited.is_empty());
+    assert_eq!(sections[0].archived.len(), 1);
+    assert_eq!(sections[0].archived_total, Some(1));
+    // A second archived page listing the same id again adds nothing.
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+    );
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
+fn archived_scoped_keeps_a_live_feed_row_out_of_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_live", PROJECT, 0));
+    // A stale archived answer naming the live id archives nothing: the
+    // live row stays on the feed and the rail, with no archived row.
+    // Moving it would fail the live assertions below.
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_live", "live", "exited", None)])).0,
+    );
+    assert!(!sessions.is_archived(&SessionId("s_live".to_owned())));
+    assert!(
+        sessions
+            .feed_row(&SessionId("s_live".to_owned()))
+            .is_some_and(|row| row.left.is_none())
+    );
+    assert!(sessions.cards().iter().any(|row| row.id.0 == "s_live"));
+}
+
+#[test]
+fn archived_scoped_reconciles_a_feed_exited_row_into_the_archived_map() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_f", PROJECT, 0));
+    sessions.left(&SessionId("s_f".into()), Left::Exited);
+    let key = sessions
+        .row(&SessionId("s_f".to_owned()))
+        .unwrap_or_else(|| panic!("the feed exited row"))
+        .key;
+    sessions.archived_scoped(
+        PROJECT,
+        recent_rows(&result(vec![recent_row("s_f", "f", "exited", None)])).0,
+    );
+    // `docs/tui.md`, "The session list" (an archived session is on
+    // neither the exited rows nor the rail): the feed exited row leaves
+    // the feed with its key and folds into the archived map.
+    assert!(sessions.all().iter().all(|row| row.id.0 != "s_f"));
+    let archived = sessions
+        .row(&SessionId("s_f".to_owned()))
+        .unwrap_or_else(|| panic!("the reconciled archived row"))
+        .key;
+    assert_eq!(archived, key);
+    assert!(sessions.is_archived(&SessionId("s_f".to_owned())));
+}
+
+#[test]
+fn remove_keeps_other_projects_archived_rows_and_drops_empty_maps() {
+    let mut sessions = Sessions::default();
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    let (second, _) = recent_rows(&json!({"sessions": [project_row("s_p2", PROJECT)]}));
+    let (other, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.archived_scoped(PROJECT, first);
+    sessions.archived_scoped(PROJECT, second);
+    sessions.archived_scoped(OTHER, other);
+    sessions.note_archived_total(PROJECT, 2);
+    sessions.note_archived_total(OTHER, 1);
+    // Removing one of two archived rows keeps the other and the other
+    // project: `==` would keep only the removed id and fail the
+    // assertions below.
+    sessions.remove(&SessionId("s_p1".to_owned()));
+    assert!(!sessions.is_archived(&SessionId("s_p1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_p2".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+    assert_eq!(sessions.archived_loaded(OTHER), 1);
+    // Removing the other project's last archived row drops its empty
+    // map but keeps this project's row: keeping only empty maps would
+    // drop `s_p2` and fail the last assertion.
+    sessions.remove(&SessionId("s_o1".to_owned()));
+    assert!(!sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_p2".to_owned())));
+    assert_eq!(sessions.archived_loaded(OTHER), 0);
+    assert_eq!(sessions.archived_loaded(PROJECT), 1);
+}
+
+#[test]
+fn status_unarchiving_cleans_only_the_emptied_archived_map() {
+    let mut sessions = Sessions::default();
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    let (other, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.archived_scoped(PROJECT, first);
+    sessions.archived_scoped(OTHER, other);
+    // A live status for one archived id unarchives it: its project map
+    // empties and drops, while the other project's row stays. Keeping
+    // only empty maps would drop `s_o1` and fail the last assertion.
+    sessions.status(section_row("s_p1", PROJECT, 0));
+    assert!(!sessions.is_archived(&SessionId("s_p1".to_owned())));
+    assert!(sessions.is_archived(&SessionId("s_o1".to_owned())));
+    assert_eq!(sessions.archived_loaded(PROJECT), 0);
+    assert_eq!(sessions.archived_loaded(OTHER), 1);
+    assert!(
+        sessions
+            .feed_row(&SessionId("s_p1".to_owned()))
+            .is_some_and(|row| row.left.is_none())
+    );
 }

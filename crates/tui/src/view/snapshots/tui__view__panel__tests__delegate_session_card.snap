@@ -10,7 +10,6 @@ expression: "super::super::text(&draw_targets(&app).0)"
    two/model               medium
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│        1.5k
    compacts at 3.2k 37% of window
-   then a summary, fresh context
    tokens in / out         14 / 5
    cache hits                 28%
    cache resets in            42m

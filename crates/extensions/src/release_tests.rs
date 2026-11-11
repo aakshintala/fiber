@@ -104,6 +104,22 @@ fn a_release_file_is_under_its_version() {
     }
 }
 
+/// What `layout` accepts as an unknown member's short directory name: the
+/// characters the short names this binary knows use, so `-` holds and
+/// nothing else outside alphanumerics does, and an empty name never counts
+/// (the only input distinguishing the emptiness check from `all`, which is
+/// vacuous there; unreachable through the filesystem, where directory names
+/// are never empty).
+#[test]
+fn short_names_may_hold_a_dash_but_never_stand_empty() {
+    for short in ["futuristic", "my-ext", "a-b", "0"] {
+        assert!(super::is_valid_short(short), "{short:?}");
+    }
+    for short in ["", ".hidden", "a..b", "a/b", "a\\b", "..", "a.b", "a b"] {
+        assert!(!super::is_valid_short(short), "{short:?}");
+    }
+}
+
 /// A Fiber home whose `docs/` holds `old`, and staged docs holding `new`.
 struct Docs {
     held: fakes::TempDir,

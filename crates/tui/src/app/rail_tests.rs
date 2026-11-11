@@ -434,10 +434,21 @@ fn press(app: &mut App, key: Key) -> Effect {
 
 /// The lines an effect sends, parsed; none for any other effect.
 fn sent(effect: Effect) -> Vec<Value> {
-    if let Effect::Send(lines) = effect {
-        commands(lines)
-    } else {
-        Vec::new()
+    match effect {
+        Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
     }
 }
 
@@ -2298,7 +2309,10 @@ fn esc_on_a_working_turn_clears_focus_without_an_interrupt() {
 fn with_focus_unset_arrows_enter_and_esc_reach_the_box() {
     let mut app = opened(&[A, B], A);
     let recall = stroke_press(&mut app, plain(Code::Up));
-    assert!(matches!(recall, Effect::Send(_)), "{recall:?}");
+    assert!(
+        matches!(recall, Effect::Send(_) | Effect::SendTracked(_)),
+        "{recall:?}"
+    );
     assert_eq!(rail_focus(&app), None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), None);
@@ -4021,8 +4035,7 @@ fn focus_cross(app: &mut App, session: &str) {
 fn the_walk_reaches_an_unreadable_cards_cross() {
     // The walk visits the card and its ✕. The doc leaves the stop order
     // open, so the test asserts the visited stops as a set
-    // (`docs/testing.md`, "A test asserts an order or a count only where
-    // a doc promises it"; `docs/tui.md`, "The rail" draws each card with
+    // (`docs/testing.md`, "What a test asserts"; `docs/tui.md`, "The rail" draws each card with
     // its ✕).
     let mut app = cannot_attach();
     stroke_press(&mut app, plain(Code::Left));

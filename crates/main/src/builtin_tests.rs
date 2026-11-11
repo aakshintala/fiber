@@ -1419,12 +1419,23 @@ fn driver_shell_has_no_foreground_default() {
     );
     let cancel = fakes::CancelToken::new();
     let run_cancel = cancel.clone();
+    // A recording emitter for this call only: `Quiet` drops every event,
+    // so a missed stop below could name only the wait. `fakes::EventLog`
+    // records every event unfiltered, in arrival order. It is created
+    // before the driver thread spawns, so its registration precedes the
+    // emitter's start (`docs/testing.md`, "Waits and timeouts"). The
+    // record is read only in the failure path; a passing run drops it
+    // unread. The other `Quiet` call sites in this file stay as they are.
+    let recorded = Arc::new(fakes::EventLog::default());
     let (done, finished) = std::sync::mpsc::channel();
     let driver_thread = match std::thread::Builder::new()
         .name("fiber-driver-no-timeout".to_owned())
-        .spawn(move || {
-            let output = driver.run(&arguments, &run_cancel, &Quiet);
-            done.send(output).unwrap_or(());
+        .spawn({
+            let recorded = Arc::clone(&recorded);
+            move || {
+                let output = driver.run(&arguments, &run_cancel, recorded.as_ref());
+                done.send(output).unwrap_or(());
+            }
         }) {
         Ok(handle) => handle.thread().id(),
         Err(err) => panic!("could not start a thread for the driver call: {err}"),
@@ -1435,7 +1446,7 @@ fn driver_shell_has_no_foreground_default() {
     let (parked_tx, parked_rx) = std::sync::mpsc::channel();
     // One wait for one park signal: the observer receives on this wait's
     // behalf, so observer and receive share the one deadline made here
-    // (docs/testing.md, "Waits and timeouts").
+    // (`docs/testing.md`, "Waits and timeouts").
     let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     std::thread::Builder::new()
         .name("fiber-driver-parked".to_owned())
@@ -1483,8 +1494,37 @@ fn driver_shell_has_no_foreground_default() {
         "the driver call returned after a clock advance with no deadline"
     );
     cancel.cancel();
-    let output =
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "the driver call");
+    // The stop keeps its own bound and still fails through `recv_or_fail`.
+    // On a miss the recorded driver events join the panic in arrival order
+    // with their count and last entry, so the failure names the stalled
+    // step instead of only the wait.
+    let stop = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let output = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        stop.recv_or_fail(&finished, "the driver call")
+    })) {
+        Ok(output) => output,
+        Err(payload) => {
+            let seen = recorded.events();
+            let summary = format!(
+                "{count} driver events seen, last: {last}\nevents in order:\n{events}",
+                count = seen.len(),
+                last = seen
+                    .last()
+                    .map(|event| format!("{} {event:?}", event.kind()))
+                    .unwrap_or_else(|| "none".to_owned()),
+                events = if seen.is_empty() {
+                    "none".to_owned()
+                } else {
+                    seen.iter()
+                        .map(|event| format!("{} {event:?}", event.kind()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            );
+            let message = payload.downcast_ref::<String>().unwrap().clone();
+            panic!("{message}\n{summary}");
+        }
+    };
     let text = match output.content.first() {
         Some(contract::shapes::ContentPart::Text { text }) => text.clone(),
         _ => String::new(),

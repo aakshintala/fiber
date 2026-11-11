@@ -127,13 +127,20 @@ fn opened(app: &mut App) {
                     serde_json::from_str(line).unwrap_or_else(|error| panic!("{line}: {error}"))
                 })
                 .collect(),
+            crate::app::Effect::SendTracked(sents) => sents
+                .iter()
+                .map(|sent| {
+                    let line = &sent.line;
+                    serde_json::from_str(line).unwrap_or_else(|error| panic!("{line}: {error}"))
+                })
+                .collect(),
             crate::app::Effect::None
             | crate::app::Effect::Quit
             | crate::app::Effect::ListFiles
             | crate::app::Effect::FindPause { .. }
             | crate::app::Effect::Search { .. }
             | crate::app::Effect::Editor { .. }
-            | crate::app::Effect::Exit(_)
+            | crate::app::Effect::ExitTracked(_)
             | crate::app::Effect::Copy(_)
             | crate::app::Effect::OpenLink(_)
             | crate::app::Effect::OpenFile(_)
@@ -473,7 +480,7 @@ fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
     let frame = all_delegates_frame(&app, List::default());
     assert_eq!(frame.title, "Delegates");
     assert_eq!(frame.command, "/delegates");
-    // Two rows per delegate (docs/tui.md, "The panel"): four delegates
+    // Two rows per delegate (`docs/tui.md`, "The panel"): four delegates
     // draw eight data rows, then the blank and hint footer rows.
     assert_eq!(frame.rows.len(), 10);
     assert!(frame.rows[8].is_empty());
@@ -481,8 +488,7 @@ fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
         frame.rows[9],
         [("a row opens that item's view".to_owned(), None, Ink::Muted)]
     );
-    // Row data starts at once: no heading and no count (docs/tui.md,
-    // "Swapped views"), and the empty text never draws as a row.
+    // Row data starts at once: no heading and no count (`docs/tui.md`, "Swapped views"), and the empty text never draws as a row.
     assert!(frame.rows[0][0].0.contains("task j_1"));
     assert!(frame.below.is_empty());
     for cells in &frame.rows {
@@ -498,8 +504,7 @@ fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
             .flatten()
             .all(|(_, _, ink)| *ink != Ink::Heading)
     );
-    // Running first, then finished, each in start order (docs/tui.md,
-    // "Swapped views"): the plain job never lists. The running row
+    // Running first, then finished, each in start order (`docs/tui.md`, "Swapped views"): the plain job never lists. The running row
     // carries its elapsed suffix; the finished rows are exact.
     let firsts: Vec<&str> = frame
         .rows
@@ -521,8 +526,7 @@ fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
             .flatten()
             .all(|(cell, _, _)| !cell.contains("task j_9"))
     );
-    // Every delegate fills two rows with one serial (docs/tui.md, "The
-    // panel").
+    // Every delegate fills two rows with one serial (`docs/tui.md`, "The panel").
     let running = app
         .serial_of_job(&contract::JobId("j_1".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
@@ -558,8 +562,7 @@ fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
 
 #[test]
 fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
-    // Figures run under the injected clock (docs/testing.md, "Values
-    // that change every run").
+    // Figures run under the injected clock (`docs/testing.md`, "Values that change every run").
     let clock = fakes::clock::FakeClock::new();
     let mut app = home();
     opened(&mut app);

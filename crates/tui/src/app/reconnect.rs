@@ -11,11 +11,12 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::SessionId;
+use contract::{CommandId, SessionId};
 use serde_json::Value;
 
-use super::{App, Link, Phase, Waiting};
-use crate::home::Level;
+use super::{App, Link, Phase, Sent, Waiting, hub_line};
+use contract::commands::SubscribeLevel;
+use contract::commands::hub::{HubCommand, SessionsArgs};
 
 /// The delay after the first failure; each later one doubles it.
 const FIRST: Duration = Duration::from_millis(500);
@@ -140,7 +141,7 @@ impl App {
         let mut subscribed: Vec<SessionId> = Vec::new();
         for (session, line) in self.outbox.reconnect_lines() {
             if attached.as_ref() != Some(&session) && !subscribed.contains(&session) {
-                lines.push(self.subscribe(&session, Level::Summary));
+                lines.push(self.subscribe(&session, SubscribeLevel::Summary));
                 subscribed.push(session);
             }
             lines.push(line);
@@ -153,15 +154,25 @@ impl App {
     /// and after `feed`: `home_outgoing` already sent `feed` and `recent`
     /// on this `on_line` tail, so this runs after it. Nothing on the first
     /// connection.
-    pub(super) fn sessions_outgoing(&mut self) -> Vec<String> {
+    pub(super) fn sessions_outgoing(&mut self) -> Vec<Sent> {
         if !self.reconnect.sessions_due {
             return Vec::new();
         }
         self.reconnect.sessions_due = false;
-        let id = super::mint();
-        self.outbox.wait(&id, super::outbox::Waiting::Sessions);
+        let id = CommandId(support::mint("c_"));
+        self.outbox.wait(&id.0, super::outbox::Waiting::Sessions);
         self.reconnect.fresh.clear();
-        vec![serde_json::json!({"id": id, "command": "sessions"}).to_string()]
+        vec![Sent {
+            line: hub_line(
+                &id,
+                HubCommand::Sessions(SessionsArgs {
+                    project: None,
+                    active: None,
+                    archived: None,
+                }),
+            ),
+            id,
+        }]
     }
 
     /// A `session_status` folded into the rows: after `sessions` was sent,

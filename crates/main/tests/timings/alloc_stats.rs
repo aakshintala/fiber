@@ -1,5 +1,5 @@
 //! The `alloc-stats` build's per-operation allocation fields at the binary
-//! level (`docs/state.md`, "Diagnostic logs"): the built `fiber` runs
+//! level (`docs/state.md`, "What each part holds"): the built `fiber` runs
 //! `ask` against the fake provider server with the read tool. At
 //! `diagnostics.level: debug` the same-thread `tool.run` `op_timing` line
 //! carries numeric `alloc_bytes`, `allocs` and `live_delta_bytes` beside
@@ -46,16 +46,14 @@ fn run_from(output: std::process::Output) -> Run {
 impl Setup {
     /// Installs the extension in `source`.
     fn alloc_stats_install(&self, source: PathBuf) {
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
@@ -192,8 +190,8 @@ fn ops(setup: &Setup, op: &str) -> Vec<Value> {
 }
 
 /// At `debug` a qualifying `tool.run` line of a run whose model reads
-/// the note carries the `alloc-stats` fields (`docs/state.md:306` names
-/// the `op_timing` fields, `docs/state.md:345-355` scopes `tool.run` to
+/// the note carries the `alloc-stats` fields (`docs/state.md`, "What each part holds" names
+/// the `op_timing` fields, `docs/state.md`, "What each part holds" scopes `tool.run` to
 /// one entered execution): numeric `alloc_bytes`, `allocs` and
 /// `live_delta_bytes` beside `op`, `ms` and `tool`.
 #[test]
@@ -211,7 +209,7 @@ fn a_debug_tool_run_line_carries_alloc_fields() {
     assert_eq!(line["data"]["op"], "tool.run", "{line}");
     assert!(line["data"]["ms"].as_u64().is_some(), "{line}");
     assert_eq!(line["data"]["tool"], "read", "{line}");
-    // `docs/state.md:306`: in an `alloc-stats` build a same-thread timer
+    // `docs/state.md`, "What each part holds": in an `alloc-stats` build a same-thread timer
     // also carries these three fields; otherwise they are absent, never zero.
     assert!(
         line["data"]["alloc_bytes"].as_u64().is_some(),

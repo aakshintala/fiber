@@ -1,5 +1,5 @@
 //! Binary-level tests of `rewind` (`docs/events.md`, "Rewind" and
-//! `docs/invocation.md`, "`rewind` starts a new session process"): the
+//! `docs/invocation.md`, "What each command does"): the
 //! built `fiber` runs `hub serve` in its own process group with its own
 //! `FIBER_HOME`, holding an ordinary provider whose base URL is the fake
 //! server. A rewind closes the old session with `rewound`, the hub starts
@@ -1184,7 +1184,7 @@ fn named_lines(log: &[Value]) -> Vec<&Value> {
 }
 
 /// The `name` cell `fiber sessions --json` prints for `id`
-/// (`docs/invocation.md`, "`sessions [--all]`"): the session's latest
+/// (`docs/invocation.md`, "Commands and flags"): the session's latest
 /// name, live from the hub.
 fn listed_name(setup: &Setup, id: &str) -> String {
     let command = setup.fiber(&["sessions", "--json", "--all"]);

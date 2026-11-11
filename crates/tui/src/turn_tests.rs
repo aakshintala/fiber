@@ -342,7 +342,7 @@ fn a_restored_protected_path_draws_its_warning_under_the_call() {
         .iter()
         .position(|line| line.contains(warning))
         .unwrap_or_else(|| panic!("the warning draws: {lines:?}"));
-    // `docs/events.md:697-701`: the terminal folds one warning row beneath
+    // `docs/events.md`, "`tool_call_completed`": the terminal folds one warning row beneath
     // the call.
     assert!(
         lines[at].starts_with("    "),

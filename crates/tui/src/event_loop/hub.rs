@@ -18,10 +18,11 @@ use contract::{Envelope, Seq, SessionId};
 
 use super::batch::{HUB_BATCH, batch, batchable, ready};
 use crate::Input;
-use crate::app::{App, history_args, mint, session_command};
+use crate::app::{App, Sent, history_args, session_line};
 use crate::link::{self, Credits, Line};
 use crate::retry::Retry;
 use crate::tick::TickThread;
+use contract::commands::Command;
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
 /// "Driver commands").
@@ -257,7 +258,7 @@ impl Connection {
         let mut from = range.start().0;
         while from <= range.end().0 {
             let to = from.saturating_add(HISTORY_LINES - 1).min(range.end().0);
-            let id = mint();
+            let id = support::mint("c_");
             // An ancestor window rides the serving session's chain read:
             // the command stays routed to the serving session, and the
             // args name the ancestor segment. Own windows carry no
@@ -269,8 +270,16 @@ impl Connection {
                 .paging_session()
                 .cloned()
                 .unwrap_or_else(|| session.clone());
-            let args = history_args(&top, session, Some(from), Some(to));
-            let command = session_command(&id, "history", &top, Some(args)).to_string();
+            let command = session_line(
+                &contract::CommandId(id.clone()),
+                &top,
+                Command::History(history_args(
+                    &top,
+                    session,
+                    Some(contract::Seq(from)),
+                    Some(contract::Seq(to)),
+                )),
+            );
             let written = self
                 .hub
                 .as_ref()
@@ -348,8 +357,12 @@ impl Connection {
             let Some(args) = args else {
                 return Ok(());
             };
-            let id = mint();
-            let command = session_command(&id, "history", session, Some(args)).to_string();
+            let id = support::mint("c_");
+            let command = session_line(
+                &contract::CommandId(id.clone()),
+                session,
+                Command::History(args),
+            );
             let written = self
                 .hub
                 .as_ref()
@@ -549,6 +562,24 @@ impl Connection {
                 return Some(lines.get(at..).unwrap_or_default().to_vec());
             }
             app.outbox.wrote(line);
+        }
+        None
+    }
+
+    /// Writes tracked hub lines to the hub, settling a failed write by
+    /// each carried id. A failed write hangs up and returns the lines
+    /// not sent for the loop to route as an input. With no hub, every
+    /// line is unsent: a tracked line is never silently dropped.
+    pub(super) fn send_tracked(&mut self, lines: &[Sent], app: &mut App) -> Option<Vec<Sent>> {
+        for (at, sent) in lines.iter().enumerate() {
+            let Some(hub) = &mut self.hub else {
+                return Some(lines.get(at..).unwrap_or_default().to_vec());
+            };
+            if link::write_line(hub, &sent.line).is_err() {
+                self.hang_up();
+                return Some(lines.get(at..).unwrap_or_default().to_vec());
+            }
+            app.outbox.wrote(&sent.line);
         }
         None
     }

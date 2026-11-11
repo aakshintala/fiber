@@ -18,6 +18,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/testing.md", "xtask"),
     (".github/workflows/ci.yml", "xtask"),
     ("crates/tui/assets/logo-mask.bin", "xtask"),
+    ("providers/models-corrections.toml", "xtask"),
     ("crates/tools/tests/pages/mdn-anchor.md", "tools"),
     ("crates/tools/tests/pages/mdn-code.md", "tools"),
     ("crates/tools/tests/pages/mdn-table.md", "tools"),
@@ -62,6 +63,19 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/codex/tests/quota-two-windows.json", "main"),
     ("crates/picture/tests/fixtures/cmyk.jpg", "main"),
     ("crates/provider/tests/support/probes.rs", "main"),
+    ("crates/loop/tests/support/review.rs", "main"),
+    (
+        "crates/loop/tests/fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl",
+        "main",
+    ),
+    (
+        "crates/loop/tests/fixtures/reviewer_consent/field-1-typed-restart-and-run/events.jsonl",
+        "main",
+    ),
+    (
+        "crates/loop/tests/fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl",
+        "main",
+    ),
     ("extensions/hooks/extension.json", "extensions"),
     ("extensions/hooks/init.lua", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),

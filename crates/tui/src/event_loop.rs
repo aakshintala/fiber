@@ -27,7 +27,7 @@ use ratatui::backend::Backend;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
 
-use crate::app::{App, Effect};
+use crate::app::{App, Effect, Sent};
 use crate::catalogue;
 use crate::graphics::logo;
 use crate::home::Launch;
@@ -413,7 +413,7 @@ pub(crate) fn run_with(
 
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
 /// in the iterator's order, as the session's signal handling takes it
-/// (`docs/invocation.md`, "Three signals, one path"): co-pending
+/// (`docs/invocation.md`, "Shutdown"): co-pending
 /// signals have no bound order, and no test pins one. Left blocked on
 /// quit; it ends with the process.
 fn spawn_signal(mut signals: Signals, tx: Sender<Input>) {
@@ -665,6 +665,14 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Sends tracked lines during an input route, before that input's
+    /// settlement: a failure settles by each carried id.
+    fn send_tracked_inner(&mut self, lines: &[Sent]) {
+        if let Some(unsent) = self.hub.send_tracked(lines, &mut self.app) {
+            self.app.write_failed_tracked_inner(&unsent);
+        }
+    }
+
     /// Dispatches parsed events without settling; the input boundary owns the layout pass.
     fn handle_events_inner(&mut self, events: Vec<Event>) -> Option<i32> {
         self.app.set_now(
@@ -743,12 +751,13 @@ impl<B: Backend> Loop<B> {
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.send_inner(&lines),
+                Effect::SendTracked(lines) => self.send_tracked_inner(&lines),
                 Effect::Quit => return Some(0),
-                Effect::Exit(lines) => {
-                    // The quit question's closes go out, then the
-                    // terminal quits: a close never written keeps
-                    // its resume line.
-                    self.send_inner(&lines);
+                Effect::ExitTracked(lines) => {
+                    // The quit question's tracked closes go out, then
+                    // the terminal quits, failure or not: a close never
+                    // written keeps its resume line.
+                    self.send_tracked_inner(&lines);
                     return Some(0);
                 }
                 Effect::ListFiles => self.list_files(),
@@ -1125,8 +1134,9 @@ impl<B: Backend> Loop<B> {
         }
         // The attached-session history has landed in the drawn frame:
         // the tail read completed and installed its preview before this
-        // draw. A frame before that install leaves the guard open;
-        // run_with discards it if no such frame arrives.
+        // draw, or it ended and kept the previous transcript. A frame
+        // before that install leaves the guard open; run_with discards
+        // it if no such frame arrives.
         if attached_history {
             // The completed draw ends the draw span and writes all five
             // retained spans, before the parent frame line.
@@ -1628,13 +1638,17 @@ impl<B: Backend> Loop<B> {
         // empty preview. The install holds its own guard: it installs
         // the newest candidate without another fold (`docs/tui.md`,
         // "History and paging"); when no answer folded one, it folds
-        // the leftover candidate first, under the same guard.
+        // the leftover candidate first, under the same guard. An ended
+        // read installs nothing: the previous transcript stays, with a
+        // notice when the read was rejected (`docs/tui.md`,
+        // "History and paging").
         let install = self.timing.tail_install();
         self.app.install_tail();
         drop(install);
         // The install the attempt reached ends the tail span and opens
-        // the prepare span: reopened and rejected-history installs count,
-        // as the read completed through them.
+        // the prepare span: a completed read installs its preview, an
+        // ended one keeps the previous transcript, and the pass opens
+        // from the shown overlay either way.
         self.timing.stop_attach_tail();
         self.timing.start_attach_prepare();
         true
@@ -1668,7 +1682,8 @@ impl<B: Backend> Loop<B> {
         }
         // The completed count's fold always runs: the count still runs
         // here (only a lost connection drops it, and that returns
-        // above).
+        // above). An ended count folds nothing: the installed preview
+        // stays (`docs/tui.md`, "History and paging").
         self.app.finish_count();
     }
 

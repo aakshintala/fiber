@@ -102,17 +102,14 @@ fn personal(setup: &Setup, name: &str, version: &str, init: &str) {
         &json!({"name": name, "version": version, "fiber": "0.1.0", "api": 1}),
     );
     fs::write(source.join("init.lua"), init).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .map(|_| ())
-    .unwrap();
+        None,
+    );
 }
 
 fn of<'a>(lines: &'a [Value], kind: &str) -> Vec<&'a Value> {

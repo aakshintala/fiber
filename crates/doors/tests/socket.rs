@@ -604,9 +604,9 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                     .iter()
                     .map(|v| v.as_u64().unwrap())
                     .collect();
-                // `docs/invocation.md:462` promises at most 64 lines per page.
+                // `docs/invocation.md`, "What each command does" promises at most 64 lines per page.
                 assert!(lines.len() <= 64, "at most 64 lines a page: {page}");
-                // `docs/invocation.md:462` promises at most 64 KiB per page.
+                // `docs/invocation.md`, "What each command does" promises at most 64 KiB per page.
                 assert!(chunk.len() <= 65536, "at most 64 KiB a page: {page}");
                 assert_eq!(lines.len(), chunk.split_inclusive('\n').count());
                 let page_size = result["size"].as_u64().unwrap();
@@ -623,7 +623,7 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                 }
                 assert!(pages < 10, "paged past the end of the file");
             }
-            // A 200-line file at `docs/invocation.md:462`'s 64-line bound needs more
+            // A 200-line file at `docs/invocation.md`, "What each command does"'s 64-line bound needs more
             // than one page; any paging of it walks the same concatenation.
             assert!(pages >= 2, "a 200-line file pages: {pages}");
             assert_eq!(text, big);
@@ -648,7 +648,7 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                 .map(|v| v.as_u64().unwrap())
                 .collect();
             assert_eq!(cut0_lines.len(), cut0_text.split_inclusive('\n').count());
-            // `docs/invocation.md:462` promises at most 64 KiB per page.
+            // `docs/invocation.md`, "What each command does" promises at most 64 KiB per page.
             assert!(
                 cut0_text.len() <= 65536,
                 "the cut stays within 64 KiB: {}",
@@ -657,7 +657,7 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
             let edge = cut0["payload"]["result"]["next"]
                 .as_u64()
                 .expect("the long line continues on a next page");
-            // `docs/invocation.md:462`: a longer line cuts at a character boundary
+            // `docs/invocation.md`, "What each command does": a longer line cuts at a character boundary
             // within 64 KiB and continues on the next page.
             assert!(
                 edge <= 65536,

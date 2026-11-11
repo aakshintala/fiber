@@ -11,15 +11,15 @@ use std::time::Instant;
 use contract::commands::RewindArgs;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{CommandId, Envelope, ErrorCode, Seq};
-use serde_json::Value;
 
 use super::Rewind;
 use super::view::{EnterAction, Vis};
-use crate::app::{App, Effect, Waiting, history_args, mint, session_command};
-use crate::home::Level;
+use crate::app::{App, Effect, Waiting, history_args, session_line};
 use crate::keys::Key;
 use crate::link::history_answer;
 use crate::swapped::Spot;
+use contract::commands::Command;
+use contract::commands::SubscribeLevel;
 
 /// A `rewind` request waiting for its answer. The outbox `RewindSend`
 /// tag is the sole record of its command id.
@@ -140,16 +140,15 @@ impl App {
         self.outbox.forget(&Waiting::RewindHistory);
         self.outbox.forget(&Waiting::RewindSend);
         self.rewind = Rewind::open(session.clone());
-        let id = mint();
-        let line = session_command(
-            &id,
-            "history",
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
             &session,
-            Some(history_args(&session, &session, None, None)),
+            Command::History(history_args(&session, &session, None, None)),
         );
         self.outbox.wait(&id, Waiting::RewindHistory);
         self.rewind.fold.begin_wait(self.motion().now_instant());
-        Effect::Send(vec![line.to_string()])
+        Effect::Send(vec![line])
     }
 
     /// Folds a `command_accepted` into the open rewind view when it
@@ -184,11 +183,15 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Vec::new();
         };
-        let id = mint();
-        let line = session_command(&id, "history", &session, Some(args));
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &session,
+            Command::History(args),
+        );
         self.outbox.wait(&id, Waiting::RewindHistory);
         self.rewind.fold.begin_wait(self.motion().now_instant());
-        vec![line.to_string()]
+        vec![line]
     }
 
     /// A `command_rejected` for a pending request settles it with the
@@ -350,7 +353,10 @@ impl App {
         let new = new_session_id.clone();
         // A new attachment asks the new session's commands, as a clear
         // `start` accept does for its session.
-        let lines = vec![self.subscribe(&new, Level::Full), self.ask_commands(&new)];
+        let lines = vec![
+            self.subscribe(&new, SubscribeLevel::Full),
+            self.ask_commands(&new),
+        ];
         self.attach(new);
         self.close_session_view();
         self.outbox.settled(&accepted.command_id.0);
@@ -369,15 +375,14 @@ impl App {
         let Some(serving) = self.session().cloned() else {
             return Effect::None;
         };
-        let id = mint();
-        let line = session_command(
-            &id,
-            "rewind",
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
             &serving,
-            Some(serde_json::json!({"at_end": true})),
+            Command::Rewind(RewindArgs::AtEnd),
         );
         self.outbox.wait(&id, Waiting::Fork);
-        Effect::Send(vec![line.to_string()])
+        Effect::Send(vec![line])
     }
 
     /// The ruled `/fork` refusal for an end-of-log point that is not a
@@ -593,17 +598,20 @@ impl App {
         } else {
             Some(session)
         };
-        let args = serde_json::to_value(RewindArgs::Rewind {
+        let args = RewindArgs::Rewind {
             from_session_id: from,
             seq: Some(Seq(seq)),
             summarise: self.rewind.send.summarise(),
-        })
-        .unwrap_or(Value::Null);
-        let id = mint();
-        let line = session_command(&id, "rewind", &serving, Some(args));
+        };
+        let id = support::mint("c_");
+        let line = session_line(
+            &contract::CommandId(id.clone()),
+            &serving,
+            Command::Rewind(args),
+        );
         self.outbox.wait(&id, Waiting::RewindSend);
         self.rewind.send.begin();
-        Effect::Send(vec![line.to_string()])
+        Effect::Send(vec![line])
     }
 
     /// Sends a fresh `rewind` for the chosen point with the summary

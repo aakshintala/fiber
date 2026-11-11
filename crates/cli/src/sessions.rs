@@ -8,7 +8,7 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use contract::commands::hub::{Delete, HubCommand, HubCommandLine};
+use contract::commands::hub::{Archive, Delete, HubCommand, HubCommandLine};
 use contract::shapes::Failure;
 use contract::{CommandId, ErrorCode, HubEventKind, HubLine, SessionId};
 use serde_json::{Map, Value};
@@ -26,8 +26,72 @@ const DELETE_PROMPT: &str = "delete? [y/N]";
 pub(crate) const DELETE_NOBODY: &str =
     "`fiber sessions delete` has no terminal to ask on. Pass `--yes` to delete without asking.";
 
+/// The `id` of the command `archive` sends.
+const ARCHIVE_ID: &str = "c_archive";
+
 /// The `id` of the one command `delete` sends.
 const DELETE_ID: &str = "c_delete";
+
+/// `fiber sessions archive [--hub <name>] <id>`: with a hub the id
+/// resolves on that hub and archives through it; without one it resolves
+/// in the current directory. Archives nothing running or held: the hub
+/// answers those refusals with their codes. Prints the id once the hub
+/// accepts, and never touches stdin.
+pub fn archive(
+    selector: &str,
+    hub: Option<&str>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> i32 {
+    with_dirs(|home, workspace| {
+        archive_to(selector, hub, &mut io::stdout(), home, workspace, connect)
+    })
+}
+
+/// Resolves `selector` and sends one `archive`, printing the id once the
+/// hub accepts. With `hub` the id resolves on that hub, as `resume --hub`
+/// does, never reading this machine's directory or logs; without one it
+/// resolves in the current directory's project. Hub refusals keep their
+/// codes. Nothing is asked and no stdin is touched.
+fn archive_to(
+    selector: &str,
+    hub: Option<&str>,
+    out: &mut dyn Write,
+    home: &Path,
+    workspace: &Path,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<(), CliError> {
+    let id = match hub {
+        Some(name) => resolve_listed(selector, name, connect)?,
+        None => {
+            let (sessions, _) = project_of(home, workspace)?;
+            let project = worktree::project(workspace);
+            log::resolve(&sessions, selector, &|started| {
+                worktree::project(Path::new(started)) == project
+            })?
+        }
+    };
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    archive_value(&mut BufReader::new(stream), ARCHIVE_ID, &id)?;
+    print_ids(out, &[id])
+}
+
+/// Sends `archive` for `id` and reads until its answer, skipping every
+/// other line. An end before the answer is `io_failed`; a rejection is a
+/// failure with its code and message.
+fn archive_value(
+    read: &mut BufReader<UnixStream>,
+    command_id: &str,
+    id: &SessionId,
+) -> Result<(), CliError> {
+    request_value(
+        read,
+        command_id,
+        HubCommand::Archive(Archive {
+            session: id.clone(),
+        }),
+    )
+    .map(drop)
+}
 
 /// `fiber sessions export <id> [<path>]` in the current directory: resolves
 /// the session, copies it, and prints the export directory's path.
@@ -413,6 +477,8 @@ fn matched(
         | HubEventKind::Attention
         | HubEventKind::DeviceChanged
         | HubEventKind::SessionLeft
+        | HubEventKind::SessionDeleted
+        | HubEventKind::SessionArchived
         | HubEventKind::StreamClosed
         | HubEventKind::StreamReopened
         | HubEventKind::Unknown(_) => None,

@@ -220,6 +220,20 @@ pub enum KeyOutcome {
     NotHandled,
 }
 
+/// One TUI extension slash command for the `/` list: the command, its
+/// description, and the extension that registered it, which the merge
+/// shows as the row's tag (`docs/extensions.md`, "Commands and
+/// screens").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiCommand {
+    /// The command name as registered, spelling kept.
+    pub name: String,
+    /// The one-line description, empty when undeclared.
+    pub description: String,
+    /// The extension that registered it.
+    pub extension: String,
+}
+
 /// One extension's drawing of a slot: whether it fills a slot name, and
 /// the lines for one input. The terminal calls it on its own thread, and
 /// the renderer makes no host call.
@@ -306,6 +320,26 @@ pub trait Renderer: std::fmt::Debug {
     /// handled the stroke. `person_bound` deactivates the binding for
     /// this stroke, as above. The default binds no key.
     fn run_key(&self, _ctx: &SessionCtx, _key: &str, _person_bound: bool) -> KeyOutcome {
+        KeyOutcome::NotHandled
+    }
+    /// Whether the winning `on_click` handler for `slot` handled the
+    /// click with id `id` (`docs/tui.md`, "Input and focus"). The
+    /// default draws no click target.
+    fn on_click(&self, _ctx: &SessionCtx, _slot: &str, _id: &str) -> KeyOutcome {
+        KeyOutcome::NotHandled
+    }
+    /// The eligible slash commands for the `/` list, in final-name
+    /// order (`docs/extensions.md`, "Commands and screens"). The
+    /// default registers no command.
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
+    fn tui_commands(&self, _ctx: &SessionCtx) -> Vec<TuiCommand> {
+        Vec::new()
+    }
+    /// Whether the winning command for `name` handled its `args`: a
+    /// handled command runs nothing built in and no driver command for
+    /// the stroke. The default registers no command.
+    fn run_tui_command(&self, _ctx: &SessionCtx, _name: &str, _args: &str) -> KeyOutcome {
         KeyOutcome::NotHandled
     }
 }

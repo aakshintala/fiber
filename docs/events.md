@@ -70,7 +70,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends six lines of its own, only on a connection to the hub and
+The hub sends eight lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -89,6 +89,14 @@ is about the hub or names its session in the payload:
 - `session_left`, on the feed when a session's process ends: `payload` holds
   `session_id` (string) and `how`, `exited` or `crashed`, a closed set
   (`docs/invocation.md`, "The hub").
+- `session_deleted`, on the feed when a session is deleted: `payload` holds
+  `session_id` (string) and `project` (string), the project's key, the name
+  of its `projects/<key>/` directory. It carries no `seq`, and a new
+  subscriber learns nothing about the deleted session.
+- `session_archived`, on the feed when a session is archived: `payload`
+  holds `session_id` (string) and `project` (string), as for
+  `session_deleted`. It carries no `seq`, and a new subscriber learns
+  nothing about the archived session.
 - `stream_closed`, when a running session closes the connection the hub relays
   for a client, as it does when it cannot read its log to serve it: `payload`
   holds `session_id` (string). It carries no `seq`, and comes after every line
@@ -541,7 +549,7 @@ subscribes, at either level, is sent the latest.
 | `started` | integer | yes | when the session started, as `ts` |
 | `calls` | integer | yes | tool calls the session has made so far |
 | `repeats` | integer | no | how many tool calls in a row, ending with the latest, had the same name and the same arguments; absent when it is 1 |
-| `turns` | integer | no | turns the session has run so far, counted as the usage view counts them (`docs/tui.md`); a client draws no turn count when it is absent |
+| `turns` | integer | no | turns the session has started so far, the running one included; the usage view and the side panel show it (`docs/tui.md`); a client draws no turn count when it is absent |
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
@@ -763,7 +771,7 @@ Resume replays the same lines from the same field, so what the person saw
 never depends on who rewrote the text (`docs/sandbox.md`, "Protected paths").
 
 A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
-`tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
+`tool_call_started` for rewritten arguments, on `permission_requested` for the arguments under review, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
 rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
 for a changed final message, on `job_completed` for a changed completion notice,
 and on a `turn_started` message and `steering_applied` for
@@ -791,6 +799,8 @@ Durable. The envelope's `action_id` is the tool call.
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
 | `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
+| `arguments` | object | no | the arguments under review, when a `before_tool` hook rewrote them |
+| `changed_by` | `changed_by` | no | with `arguments` |
 
 #### `permission_resolved`
 
@@ -936,7 +946,7 @@ none.
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
 | `warming` | boolean | no | `true` on a cache-warming refresh (`docs/prompt-cache.md`, "Warming while idle"); absent on every other call |
-| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
+| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, the one-word `allow` or `check` request; `stage_2`, the reasoning pass on a call answered `check` (`docs/permissions.md`, "How it runs"); or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
 
 #### `quota_noticed`
 
@@ -1223,6 +1233,7 @@ Durable.
 | `servers` | object | yes | `kept`, `restarted`, `started` and `stopped`, each an array of server names |
 | `extensions` | array of strings | yes | the extensions reloaded |
 | `failed` | array | no | each server that failed: `server`, `reason` and `error`, as on `mcp_server_failed` |
+| `extension_failures` | array | no | one entry per failing registration: `provider`, optional `extension` (present exactly when the mirrored notice names one) and `error`; the old list stands |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
 follows it. The next model request misses the prompt cache. A reload that

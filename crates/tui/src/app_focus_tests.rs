@@ -1532,8 +1532,9 @@ fn whole_turn_zero(lines: &[Line], envelopes: &[contract::Envelope]) -> String {
         Effect::Copy(text) => text,
         Effect::None
         | Effect::Send(_)
+        | Effect::SendTracked(_)
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }
@@ -1968,7 +1969,7 @@ fn turn_end_clears_switch_pending_notices() {
 fn one_frames_queued_notices_group_by_code() {
     // Two queued `io_failed` notices in one frame batch stack one
     // grouped row: the count and the first item up front, every item
-    // listed (`docs/errors.md`, "Notices": one per code).
+    // listed (`docs/tui.md`, "Notices": one per code).
     let mut app = groups(1, 80, 24);
     app.screen
         .pages()
@@ -2029,4 +2030,280 @@ fn loaded_history_clears_its_loading_notice() {
     // with the pending turn.
     let _ = app.on_key(Key::Char('y'), now());
     assert!(app.notices().is_empty(), "{:?}", app.notices());
+}
+
+/// A canned click renderer for focus tests: records the calls its
+/// handler sees and answers with its outcome.
+#[derive(Debug, Default)]
+struct FocusClicked {
+    calls: std::cell::RefCell<Vec<(Option<String>, String, String)>>,
+    handled: std::cell::Cell<bool>,
+}
+
+impl crate::ext::Renderer for FocusClicked {
+    fn name(&self) -> &str {
+        "focus-clicked"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        _input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        crate::ext::Decision::Draw {
+            extension: "focus-clicked".into(),
+            lines: Vec::new(),
+        }
+    }
+
+    fn on_click(
+        &self,
+        ctx: &crate::ext::SessionCtx,
+        slot: &str,
+        id: &str,
+    ) -> crate::ext::KeyOutcome {
+        self.calls.borrow_mut().push((
+            ctx.session_id.clone().map(|id| id.0),
+            slot.to_owned(),
+            id.to_owned(),
+        ));
+        if self.handled.get() {
+            crate::ext::KeyOutcome::Handled
+        } else {
+            crate::ext::KeyOutcome::NotHandled
+        }
+    }
+}
+
+/// An attached app with `clicked` installed, its stops holding one
+/// extension target, and the click key the app's own cache interned.
+fn clicked_focus(clicked: &std::rc::Rc<FocusClicked>) -> (App, crate::mouse::TargetId) {
+    let mut app = attached(60, 24);
+    app.install_renderer(clicked.clone());
+    let key = app.screen.pages().ext.cache.intern_click(
+        &contract::SessionId(SESSION.to_owned()),
+        "focus-clicked",
+        "notice",
+        "badge",
+    );
+    let id = TargetId::Extension(key);
+    app.stops = vec![Hit {
+        id,
+        rect: Rect::new(0, 0, 4, 1),
+    }];
+    (app, id)
+}
+
+#[test]
+fn click_enter_on_an_extension_stop_calls_its_handler() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    clicked.handled.set(true);
+    let (mut app, id) = clicked_focus(&clicked);
+    assert_eq!(app.open_focused(id), Effect::None);
+    // The route resolves at the stop's own painted cell and carries
+    // the session; a handled click settles with nothing built in.
+    assert_eq!(
+        clicked.calls.borrow().clone(),
+        vec![(
+            Some(SESSION.to_owned()),
+            "notice".to_owned(),
+            "badge".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn click_enter_on_an_unhandled_extension_stop_keeps_the_input_box() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    let (mut app, id) = clicked_focus(&clicked);
+    assert_eq!(app.open_focused(id), Effect::None);
+    assert_eq!(clicked.calls.borrow().len(), 1);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn click_enter_on_a_declined_extension_stop_runs_its_fallback() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    let (mut app, id) = clicked_focus(&clicked);
+    // A find-count stop under the extension's cell: the declined Enter
+    // resumes it, as a declined click does.
+    app.stops.push(Hit {
+        id: TargetId::FindCount,
+        rect: Rect::new(0, 0, 4, 1),
+    });
+    assert_eq!(app.open_focused(id), Effect::None);
+    assert_eq!(clicked.calls.borrow().len(), 1);
+    assert!(app.results_open(), "the fallback opened the results");
+}
+
+#[test]
+fn click_enter_on_a_multi_rect_stop_uses_its_topmost_leftmost_cell() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    let (mut app, id) = clicked_focus(&clicked);
+    // One key painted in three cells: neither the first nor the last
+    // pushed cell is the topmost-leftmost one. Only the topmost-leftmost
+    // cell sits over a fallback, so a declined Enter opens the results
+    // only when the route resolves there.
+    app.stops = vec![
+        Hit {
+            id,
+            rect: Rect::new(5, 0, 1, 1),
+        },
+        Hit {
+            id,
+            rect: Rect::new(0, 0, 1, 1),
+        },
+        Hit {
+            id,
+            rect: Rect::new(0, 1, 1, 1),
+        },
+        Hit {
+            id: TargetId::FindCount,
+            rect: Rect::new(0, 0, 1, 1),
+        },
+    ];
+    assert_eq!(app.open_focused(id), Effect::None);
+    assert_eq!(clicked.calls.borrow().len(), 1);
+    assert!(app.results_open(), "the topmost-leftmost fallback opened");
+}
+
+#[test]
+fn click_enter_on_a_released_extension_key_clicks_nothing() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    clicked.handled.set(true);
+    let (mut app, _) = clicked_focus(&clicked);
+    // The stops no longer paint the key: no route, no handler call.
+    app.stops = Vec::new();
+    let stale = app.screen.pages().ext.cache.intern_click(
+        &contract::SessionId(SESSION.to_owned()),
+        "focus-clicked",
+        "notice",
+        "other",
+    );
+    assert_eq!(app.open_focused(TargetId::Extension(stale)), Effect::None);
+    assert!(clicked.calls.borrow().is_empty());
+}
+
+#[test]
+fn click_extension_item_text_reads_the_painted_stop() {
+    let clicked = std::rc::Rc::new(FocusClicked::default());
+    let (mut app, id) = clicked_focus(&clicked);
+    let TargetId::Extension(key) = id else {
+        panic!("an extension stop");
+    };
+    {
+        let cache = &app.screen.pages().ext.cache;
+        cache.paint_click(key, 3, crate::rows::Join::Break, "hello ".to_owned());
+        cache.paint_click(key, 4, crate::rows::Join::Wrap, "world".to_owned());
+    }
+    assert_eq!(app.item_text(id).as_deref(), Some("helloworld"));
+    // A released key, and a stop with no text, read as nothing.
+    let missing = app.screen.pages().ext.cache.intern_click(
+        &contract::SessionId(SESSION.to_owned()),
+        "focus-clicked",
+        "notice",
+        "missing",
+    );
+    assert_eq!(app.item_text(TargetId::Extension(missing)), None);
+    app.screen.pages().ext.cache.begin_click_frame();
+    assert_eq!(app.item_text(id), None);
+}
+
+/// A decorated stop wrapped over two drawn rows, its tail cut by the
+/// row's width: `y` copies the key's painted fragments joined by the
+/// selection rules, `Ctrl+G` edits that same text, a key with no
+/// painted text gives nothing, and neither copy calls the renderer
+/// again.
+#[test]
+fn click_drawn_text_selection_rules() {
+    use crate::ext::RawSpan;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+
+    let mut app = groups(1, 60, 24);
+    let tail = "e".repeat(90);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["ledger_row"],
+        SlotScript::Replace(vec![
+            vec![
+                RawSpan {
+                    text: "go".to_owned(),
+                    bold: true,
+                    click: Some("badge".to_owned()),
+                    ..RawSpan::default()
+                },
+                RawSpan {
+                    text: " on".to_owned(),
+                    ..RawSpan::default()
+                },
+            ],
+            vec![RawSpan {
+                text: tail.clone(),
+                click: Some("badge".to_owned()),
+                ..RawSpan::default()
+            }],
+        ]),
+    ));
+    app.install_renderer(fake.clone());
+    frame(&mut app);
+    key(&mut app, Key::CtrlO);
+    // BackTab lands on the newest item's row; step down to the
+    // extension's rows, which the ledger draws after the built-ins.
+    key(&mut app, Key::BackTab);
+    for _ in 0..16 {
+        if matches!(app.focused(), Some(TargetId::Extension(_))) {
+            break;
+        }
+        key(&mut app, Key::Down);
+    }
+    let Some(TargetId::Extension(focused)) = app.focused() else {
+        panic!(
+            "an extension stop, focused={:?} stops={:?}",
+            app.focused(),
+            app.stops.iter().map(|stop| stop.id).collect::<Vec<_>>()
+        );
+    };
+    let calls_before = fake.calls.borrow().len();
+    // The walk's frames rendered through the fake, so holding steady
+    // below means something.
+    assert!(calls_before > 0, "the frames rendered");
+    let Effect::Copy(text) = app.on_key(Key::Char('y'), now()) else {
+        panic!("y copies the focused stop");
+    };
+    // The key's fragments only: the unclicked span stays out, the
+    // line break in the text is a newline (a row wrapping onto the
+    // next would join with none), the tail cuts at the row's drawn
+    // width.
+    assert_eq!(text, format!("go\n{}", &tail[..49]));
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::Editor {
+            target: crate::editor::Target::Item,
+            text: text.clone(),
+        }
+    );
+    // The same key read at its other stop agrees; a key with no
+    // painted text gives nothing.
+    assert_eq!(
+        app.item_text(TargetId::Extension(focused)).as_deref(),
+        Some(text.as_str())
+    );
+    let missing = app.screen.pages().ext.cache.intern_click(
+        &contract::SessionId(SESSION.to_owned()),
+        "fake",
+        "ledger_row",
+        "missing",
+    );
+    assert_eq!(app.item_text(TargetId::Extension(missing)), None);
+    assert_eq!(
+        fake.calls.borrow().len(),
+        calls_before,
+        "both copies read the ledger, never the renderer"
+    );
 }

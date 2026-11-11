@@ -63,16 +63,14 @@ impl Setup {
                 "models": [model]
             }),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         write_json(
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
@@ -524,19 +522,19 @@ const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 18] = [
 
 /// The verbatim count rule the multiset calls cite
 /// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
 
 /// The combined citation the `job_delta` exclusion carries: the narrow
 /// exception (`docs/testing.md`, "Event streams") and the ephemeral-progress
-/// definition it names (`docs/events.md:1333`).
-const IGNORE_JOB_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; docs/events.md:1333: Ephemeral. Progress for clients, paced as `tool_call_delta` is.";
+/// definition it names (`docs/events.md`, "`job_delta`").
+const IGNORE_JOB_DELTA_DOC: &str = r#"docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; `docs/events.md`, "`job_delta`": Ephemeral. Progress for clients, paced as `tool_call_delta` is."#;
 
 /// Verbatim lifecycle sources for the session-boundary assertions below.
 const SESSION_FIRST_DOC: &str =
-    "docs/events.md:339: Durable. The first line of every session's log.";
-const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+    r#"`docs/events.md`, "`session_started`": Durable. The first line of every session's log."#;
+const PROCESS_START_DOC: &str = r#"`docs/events.md`, "`fiber_started`": Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line."#;
 const PROCESS_END_DOC: &str =
-    "docs/events.md:296: Durable. The last line a process writes for a session.";
+    r#"`docs/events.md`, "`fiber_exited`": Durable. The last line a process writes for a session."#;
 
 #[track_caller]
 fn assert_session_edges(setup: &Setup, id: &str) {
@@ -1584,16 +1582,14 @@ fn install_lua(setup: &Setup, short: &str, init: &str) {
         &json!({"name": format!("fiber.test/{short}"), "version": "v2.0.0", "fiber": "0.1.0", "api": 1}),
     );
     fs::write(source.join("init.lua"), init).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Writes a skill under the workspace's `.agents/skills/<name>/`.

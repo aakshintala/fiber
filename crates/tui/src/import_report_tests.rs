@@ -12,7 +12,9 @@ use ratatui::style::{Modifier, Style};
 use contract::events::EventKind;
 use contract::events::{ImportedNames, LeftBehindEntry};
 
-use super::{ImportReport, ImportSource, PREFER, title_for};
+use contract::commands::ImportSource;
+
+use super::{ImportReport, PREFER, parse_import, title_for};
 
 use crate::app::commands::commands_testkit::{attached, enter, now, painted, sent, session_line};
 use crate::app::{App, Effect};
@@ -362,7 +364,7 @@ fn the_open_report_over_a_session_hides_the_conversation_targets() {
     // The start asks `commands` again; answering with no rows keeps the
     // conversation line the failing turn draws below.
     let asked = app.on_line(started);
-    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    // `docs/tui.md`, "Slash commands": one `commands` request per `turn_started` (`docs/testing.md`, "Event streams").
     assert_eq!(asked.len(), 1);
     let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
     assert_eq!(asked["command"], "commands");
@@ -726,16 +728,16 @@ fn text_of(row: &Row) -> String {
 
 #[test]
 fn import_source_parses_the_named_sources() {
-    assert_eq!(ImportSource::parse(""), Some(ImportSource::Both));
+    // A bare `/import` covers both sources, so it parses to no typed
+    // source; a named source parses to its contract variant; anything
+    // else parses to nothing and is refused before anything is sent.
+    assert_eq!(parse_import(""), Some(None));
     assert_eq!(
-        ImportSource::parse("claude-code"),
-        Some(ImportSource::ClaudeCode)
+        parse_import("claude-code"),
+        Some(Some(ImportSource::ClaudeCode))
     );
-    assert_eq!(ImportSource::parse("codex"), Some(ImportSource::Codex));
+    assert_eq!(parse_import("codex"), Some(Some(ImportSource::Codex)));
     for arg in ["vim", "Codex", "both", "codex "] {
-        assert_eq!(ImportSource::parse(arg), None, "{arg}");
+        assert_eq!(parse_import(arg), None, "{arg}");
     }
-    assert_eq!(ImportSource::ClaudeCode.arg(), Some("claude-code"));
-    assert_eq!(ImportSource::Codex.arg(), Some("codex"));
-    assert_eq!(ImportSource::Both.arg(), None);
 }

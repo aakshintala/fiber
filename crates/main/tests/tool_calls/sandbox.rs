@@ -674,8 +674,8 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         started["payload"]["confined"], true,
         "the change runs confined"
     );
-    // `docs/sandbox.md:64-73` promises restore and report of each changed
-    // protected path; `docs/events.md:683` defines restored paths as
+    // `docs/sandbox.md`, "Protected paths" promises restore and report of each changed
+    // protected path; `docs/events.md`, "`tool_call_completed`" defines restored paths as
     // workspace-relative. Both worktrees' `.fiber/` paths must remain distinct.
     let restored: std::collections::BTreeSet<&str> =
         completed["payload"]["details"]["protected_paths"]["restored"]
@@ -700,14 +700,14 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
                 .join("")
         })
         .unwrap_or_default();
-    // `docs/events.md:697-701` promises the completion report's warning
+    // `docs/events.md`, "`tool_call_completed`" promises the completion report's warning
     // line reaches the model through result text; the exact wording is not
     // specified by that contract.
     assert!(
         text.contains(".fiber"),
         "the result names the change: {text}"
     );
-    // `docs/sandbox.md:102-106` promises this warning wording and its
+    // `docs/sandbox.md`, "Protected paths" promises this warning wording and its
     // headless stderr destination.
     assert!(
         run.stderr.contains(
@@ -716,7 +716,7 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         "headless warns on stderr: {}",
         run.stderr
     );
-    // `docs/sandbox.md:64-73` promises each changed protected path is
+    // `docs/sandbox.md`, "Protected paths" promises each changed protected path is
     // restored to its recorded contents after the confined call.
     assert_eq!(
         fs::read(fiber.join("note.txt")).unwrap(),
@@ -728,7 +728,7 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         fs::read(linked.join(".fiber/note.txt")).unwrap(),
         b"linked original\n"
     );
-    // `docs/sandbox.md:102-106` promises the warning wording and its
+    // `docs/sandbox.md`, "Protected paths" promises the warning wording and its
     // headless stderr destination for each changed path.
     assert!(
         run.stderr
@@ -1237,7 +1237,7 @@ fn sandbox_lines(text: &str) -> Vec<serde_json::Value> {
 /// set aside by the shared helper, and pacing `job_delta` lines are
 /// ignored (`docs/testing.md`, "Event streams"). The streamed delta
 /// kinds carry chunking- and pacing-dependent counts no doc promises
-/// (`docs/tools.md`, "Progress"; `docs/events.md`, "Ephemeral"), so
+/// (`docs/tools.md`, "Progress"; `docs/events.md`, "Durable and ephemeral"), so
 /// they are excluded the same way: the boundary events keep exact counts.
 #[cfg(target_os = "linux")]
 fn sandbox_call_counts(lines: &[serde_json::Value], expected: &[&str]) {
@@ -1278,19 +1278,17 @@ fn sandbox_child_provider(setup: &Setup, server: &fakes::ProviderServer) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
-/// docs/permissions.md, "The destructive-command guard": push stays
+/// `docs/permissions.md`, "The destructive-command guard": push stays
 /// reviewed even when the sandbox could run it on the confined fast path.
 #[cfg(target_os = "linux")]
 #[test]
@@ -1389,7 +1387,7 @@ fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
     assert!(run.stdout.contains("confined-ok"));
 }
 
-/// docs/sandbox.md, "What it cannot do": a linked-worktree delegate can
+/// `docs/sandbox.md`, "What it cannot do": a linked-worktree delegate can
 /// commit and create local branches. All refs and logs remain writable so
 /// a moved branch can be recovered, without granting the shared config.
 #[cfg(target_os = "linux")]
@@ -1533,7 +1531,7 @@ fn a_confined_worktree_delegate_commits_branches_and_recovers_a_reflog() {
     );
 }
 
-/// docs/delegates.md, "Permissions": each launch inherits effective
+/// `docs/delegates.md`, "Worktrees": each launch inherits effective
 /// settings, including a refresh during the parent session. The global
 /// enabled=false cannot explain a confined child: only the parent has -c.
 #[cfg(target_os = "linux")]

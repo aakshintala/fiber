@@ -882,13 +882,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The watcher starts before `run`, and is the only reader from the
     // first frame to end of file.
-    let frames = watch(
-        &pair.main,
-        vec![
-            b"refused" as &[u8],
-            b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter" as &[u8],
-        ],
-    );
+    // The resized foot hint's pen, selected by the same depth production
+    // paints with: the dark page is the panel tint, the terminal default
+    // without colour (`docs/tui.md`, "Themes").
+    let foot_marker: &'static [u8] = match crate::look::depth(&|name| std::env::var(name).ok()) {
+        crate::look::Depth::NoColour => b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter",
+        crate::look::Depth::Ansi256 => b"\x1b[10;1H\x1b[1m\x1b[39;48;5;233mEnter",
+        crate::look::Depth::True => b"\x1b[10;1H\x1b[1m\x1b[39;48;2;12;12;17mEnter",
+    };
+    let frames = watch(&pair.main, vec![b"refused" as &[u8], foot_marker]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -932,7 +934,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     let wait = Deadline::after(DEADLINE);
     let foot = watched(&frames, "the foot hint on row 10", &wait);
     assert!(
-        foot.ends_with(b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter"),
+        foot.ends_with(foot_marker),
         "the foot starts with its cursor move, bold and first word: {foot:?}"
     );
     pair.main
@@ -2208,9 +2210,9 @@ fn opening_a_row_by_key_calls_on_attach() {
     let mut reader = reader;
     let mut hello_lines: Vec<serde_json::Value> = Vec::new();
     while !(hello_lines.iter().any(|line| line["command"] == "feed")
-        && hello_lines
-            .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+        && hello_lines.iter().any(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        }))
     {
         let (next, line) = command(reader, "a hello command");
         reader = next;
@@ -2223,7 +2225,8 @@ fn opening_a_row_by_key_calls_on_attach() {
     assert!(
         hello_lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {hello_lines:?}"
     );
     let status = contract::Envelope {
@@ -2259,9 +2262,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             break line;
         }
     };
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -2272,7 +2275,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             Input::Bytes(b"\x1b[<0;1;7m".to_vec()),
         ],
     );
-    let (reader, subscribe) = command(reader, "the subscribe command");
+    // The archived scoped ask rides beside the scoped one ahead of the
+    // open; `command_past_reads` steps past both `recent` lines.
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
@@ -2334,9 +2339,9 @@ fn an_exit_sends_its_lines_then_quits() {
     let mut reader = reader;
     let mut hello_lines: Vec<serde_json::Value> = Vec::new();
     while !(hello_lines.iter().any(|line| line["command"] == "feed")
-        && hello_lines
-            .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+        && hello_lines.iter().any(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        }))
     {
         let (next, line) = command(reader, "a hello command");
         reader = next;
@@ -2349,7 +2354,8 @@ fn an_exit_sends_its_lines_then_quits() {
     assert!(
         hello_lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {hello_lines:?}"
     );
     // The introducing status queues its project's scoped ask; no doc
@@ -2361,13 +2367,15 @@ fn an_exit_sends_its_lines_then_quits() {
             break line;
         }
     };
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
-    let (reader, subscribe) = command(reader, "the subscribe");
+    // The archived scoped ask rides beside the scoped one; `command_past_reads`
+    // steps past both `recent` lines.
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
@@ -2415,7 +2423,7 @@ const RESTORE: &[u8] =
 
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
-/// watched pty chunks. The pty is 160 columns wide so the whole foot
+/// watched pty chunks. The pty is 200 columns wide so the whole foot
 /// hint shows, naming the rebound key.
 #[track_caller]
 fn spawn_run_with_launch(
@@ -2423,7 +2431,7 @@ fn spawn_run_with_launch(
     markers: Vec<&'static [u8]>,
     started: super::Launch,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    spawn_run_with_launch_at_height(hub, markers, started, 160, 12)
+    spawn_run_with_launch_at_height(hub, markers, started, 200, 12)
 }
 
 /// Runs the terminal at a height that leaves its home rows visible.
@@ -2613,7 +2621,8 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     assert!(
         lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {lines:?}"
     );
     // One scoped ask for the newly seen project.
@@ -3455,8 +3464,7 @@ fn with_a_model_home_opens_as_before() {
 }
 
 /// A signal quits the loop with 128 plus its number, closing nothing
-/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`,
-/// "Exit codes").
+/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`, "Lifecycle").
 #[test]
 fn a_signal_quits_with_128_plus_its_number() {
     use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -3593,7 +3601,7 @@ fn attached_frame_waits_for_a_completed_tail_read() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435 ends the scope only at the installed-history draw.
+    // `docs/state.md`, "What each part holds" ends the scope only at the installed-history draw.
     assert!(!path.exists(), "no completed tail read means no line");
 }
 
@@ -3625,7 +3633,7 @@ fn attached_frame_waits_for_an_attached_session() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435 ends the scope at a draw holding attached-session history.
+    // `docs/state.md`, "What each part holds" ends the scope at a draw holding attached-session history.
     assert!(!path.exists(), "a home frame writes no attached-frame line");
 }
 
@@ -3658,7 +3666,7 @@ fn attached_frame_is_discarded_without_a_stream() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:432-435: an attach with no stream writes no line.
+    // `docs/state.md`, "What each part holds": an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
 }
 

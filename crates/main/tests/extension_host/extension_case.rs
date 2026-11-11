@@ -307,16 +307,14 @@ fn setup_named(name: &str, lua: &str) -> Setup {
             }
         }
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     setup
 }
 
@@ -853,16 +851,14 @@ end } })"#,
         r#"fiber.provider("openrouter", { cost = { timeout = 5000, run = function() return 0.25 end } })"#,
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(competitor);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(competitor),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     let mut good = json!({
         "call": {"provider": "openrouter", "function": "cost", "arg": {
             "generation_id": "gen-abc", "base_url": server.url(), "key": "secret"
@@ -1084,7 +1080,7 @@ fn a_command_case_runs_the_extension_command_with_no_turn() {
     );
     // The whole ordered stream a command case observes: no turn runs, so
     // nothing falls between `extensions_loaded` and `fiber_exited`
-    // (docs/extensions.md:753-759; order pinned per docs/testing.md:110-16).
+    // (`docs/extensions.md`, "Session cases"; order pinned per `docs/testing.md`, "Event streams").
     let value = command_session(
         json!({"name": "greet", "text": "hi"}),
         json!({"kind": "extension_ui"}),

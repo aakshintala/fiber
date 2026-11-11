@@ -4,14 +4,16 @@
 
 use std::path::PathBuf;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
-use super::super::{App, Effect, Waiting, mint};
+use super::super::{App, Effect, Sent, Waiting, hub_line};
 use super::typed::{Resolved, Typed};
 use super::{Home, typed};
 use crate::home::PickerScreen;
 use crate::keys::Key;
 use crate::remote::Chip;
+use contract::CommandId;
+use contract::commands::hub::{Directories, HubCommand};
 
 /// Whether the home chips' configuration is read: owed until one
 /// read answers, failed until a new workspace or link owes it again.
@@ -278,6 +280,8 @@ impl App {
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -349,9 +353,13 @@ impl App {
             .due(|dir| out.iter().any(|asked| asked == dir))
             .into_iter()
             .map(|dir| {
-                let id = mint();
-                outbox.wait(&id, Waiting::Directories(dir.clone()));
-                directories_line(&id, &dir)
+                let id = contract::CommandId(support::mint("c_"));
+                outbox.wait(&id.0, Waiting::Directories(dir.clone()));
+                let sent = directories_line(&id, &dir);
+                // The picker's ask cruises the fold: its id rides
+                // paired, so a failed write settles by the carried id.
+                outbox.note_hub_sent(&sent.id, &sent.line);
+                sent.line
             })
             .collect()
     }
@@ -699,10 +707,18 @@ fn non_empty(path: PathBuf) -> Option<PathBuf> {
     (!path.as_os_str().is_empty()).then_some(path)
 }
 
-/// A `directories` line for `dir` under `id`: no `session_id`, as a
-/// session's commands carry.
-fn directories_line(id: &str, dir: &str) -> String {
-    json!({"id": id, "command": "directories", "args": {"path": dir}}).to_string()
+/// A `directories` line for `dir` with its command id carried
+/// alongside: no `session_id`, as a session's commands carry.
+fn directories_line(id: &CommandId, dir: &str) -> Sent {
+    Sent {
+        line: hub_line(
+            id,
+            HubCommand::Directories(Directories {
+                path: dir.to_owned(),
+            }),
+        ),
+        id: id.clone(),
+    }
 }
 
 /// The picker's rows: the launch directory and nine row workspaces.

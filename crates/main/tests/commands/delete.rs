@@ -628,7 +628,7 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
         ],
         &[],
         None,
-        "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails",
+        r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#,
     );
     // Each turn opens its one step before the assistant message
     // (`docs/loop.md`, "One step": step 1 writes `step_started`, step 4
@@ -833,16 +833,14 @@ fn cascading_delete_waits_for_live_parent_exit_not_delegate_feed_row() {
                 "models": [{"id": "m", "protocol": "openai-responses",
                     "base_url": format!("{}/v1", server.url()), "context_window": 100000}]}),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &setup.home(),
-            &extensions::Request::Path(source),
+            setup.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
     write_json(
         &setup.home().join("config.json"),

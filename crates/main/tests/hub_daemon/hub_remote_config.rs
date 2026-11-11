@@ -161,16 +161,14 @@ fn provider(setup: &Setup) {
         &source.join("providers/acme.json"),
         &json!({"name":"acme","models":[{"id":"m","protocol":"openai-responses","base_url":"http://x/v1","context_window":1000}]}),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 fn configure(client: &mut Ws, setup: &Setup, args: Value) -> Value {
@@ -404,7 +402,7 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
         format!("{hook_key}.z.on_failure=non-blocking"),
     ];
     let query = json!({"operation":"blocking_hooks","workspace":workspace,"overrides":overrides});
-    // Sorted names per the blocking_hooks contract (`docs/invocation.md:1160`).
+    // Sorted names per the blocking_hooks contract (`docs/invocation.md`, "What the hub speaks").
     assert_eq!(
         accepted(configure(&mut client, &setup, query.clone())),
         json!({"names":["a","only_override"]})
@@ -424,7 +422,7 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
             .is_file()
     );
     assert!(!client_home.join("extensions").exists());
-    // Empty once the hooks package is installed (`docs/invocation.md:1160`).
+    // Empty once the hooks package is installed (`docs/invocation.md`, "What the hub speaks").
     assert_eq!(
         accepted(configure(&mut client, &setup, query)),
         json!({"names":[]})

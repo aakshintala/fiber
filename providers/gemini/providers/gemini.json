@@ -125,30 +125,6 @@
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "cost": {
-        "cache_read": 0.025,
-        "input": 0.25,
-        "output": 1.5
-      },
-      "id": "gemini-3.1-flash-lite-preview",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 65536,
-      "name": "Gemini 3.1 Flash Lite Preview",
-      "protocol": "google-generative-ai",
-      "thinking_levels": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "web_search": "google_search"
-    },
-    {
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
       "context_window": 131072,
       "cost": {
         "input": 0.75,

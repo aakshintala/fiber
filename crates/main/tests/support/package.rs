@@ -9,7 +9,9 @@ use std::sync::{
 };
 
 use fakes::{ProviderServer, Response};
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use super::{Setup, write_json};
 
 /// Copies the first-party package `providers/<name>` to `to` with every
 /// base URL's origin `origin` replaced by `url`, and returns `to`.
@@ -87,6 +89,81 @@ pub(crate) fn opencode_quota() -> Vec<u8> {
         .expect("the quota case holds one body")
         .as_bytes()
         .to_vec()
+}
+
+/// Renders header pairs as a Lua table literal, such as
+/// `{ ["chatgpt-account-id"] = "acc" }`.
+fn lua_headers(pairs: &[(&str, &str)]) -> String {
+    let mut table = "{".to_owned();
+    for (name, value) in pairs {
+        table.push_str(&format!(" [{name:?}] = {value:?},"));
+    }
+    table.push('}');
+    table
+}
+
+/// Installs the Lua extension `test-ext` with a `test` provider whose
+/// models, credential, quota and sign functions each answer from the fake
+/// server: models serve `m1`, credential returns the subscription token
+/// plus `credential_headers`, sign returns `sign_headers`, and quota
+/// reports no windows. A static data file lists `m1` so the registry
+/// resolves without running Lua, and a stored `default` label stands in
+/// for the key the unsigned path reads.
+pub(crate) fn install_test_provider_with_headers(
+    setup: &Setup,
+    server_url: &str,
+    credential_headers: &[(&str, &str)],
+    sign_headers: &[(&str, &str)],
+) {
+    let source = setup.root.path().join("luasrc");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "test-ext", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"test": [format!("{server_url}/v1")]}}),
+    );
+    fs::create_dir_all(source.join("providers")).unwrap();
+    let credential_headers = lua_headers(credential_headers);
+    let sign_headers = lua_headers(sign_headers);
+    fs::write(
+        source.join("providers/test.lua"),
+        format!(
+            "fiber.provider(\"test\", {{\n\
+               models = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ url = \"{server_url}/lua-models\" }})\n\
+                 return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{server_url}/v1\", context_window = 100000 }}}}\n\
+               end }},\n\
+               credential = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ method = \"POST\", url = \"{server_url}/lua-token\" }})\n\
+                 return {{ token = \"tok-pin-test\", expires_at = 1893456000, headers = {credential_headers} }}\n\
+               end }},\n\
+               quota = {{ timeout = 60000, run = function(q)\n\
+                 return {{ windows = {{}} }}\n\
+               end }},\n\
+               sign = {{ timeout = 60000, run = function(request) return {sign_headers} end }},\n\
+             }})\n"
+        ),
+    )
+    .unwrap();
+    write_json(
+        &source.join("providers/test.json"),
+        &json!({"name": "test", "models": [{"id": "m1", "protocol": "openai-responses",
+                "base_url": format!("{server_url}/v1"), "context_window": 100000}]}),
+    );
+    let request = extensions::Request::Path(source);
+    super::install_with_retry(
+        &setup.home(),
+        setup.deadline.start_wait(),
+        &request,
+        "0.1.0",
+        None,
+    );
+    config::store_credential(
+        &setup.home(),
+        "test",
+        "default",
+        &config::Secret::new("k-test".into()),
+    )
+    .unwrap();
 }
 
 /// A fake opencode-go server answering by path, for the `ask` tests: the

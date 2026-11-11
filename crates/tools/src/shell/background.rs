@@ -452,9 +452,11 @@ fn hand_off(
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .map(|()| errors.as_path());
+        // The keeper carries the monitor intent itself: a stderr file that
+        // could not be created leaves `errors_path` empty, not the lines.
         if hosted
             .host
-            .adopt(&hosted.id, &job_id, &path, errors_path)
+            .adopt(&hosted.id, &job_id, &path, errors_path, feed.is_some())
             .is_err()
         {
             hosted.host.stop(&hosted.id);
@@ -852,14 +854,15 @@ pub(super) fn to_completed_reported(
     // `assemble` consumes the end.
     let moved_limit = match (finished.stop, limit) {
         (Some(StopKind::Timeout), Some(limit)) if !limit.monitor && !finished.indeterminate => {
-            Some(limit.ms)
+            Some((limit.ms, limit.has_pipe))
         }
         _ => None,
     };
     let mut output = assemble(limit, finished, None, None);
-    if let Some(ms) = moved_limit {
+    if let Some((ms, has_pipe)) = moved_limit {
         output.error = Some(Failure::from(&ToolError::from(ShellError::TimedOutMoved {
             ms,
+            has_pipe,
         })));
     }
     output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
@@ -891,7 +894,7 @@ pub(super) fn to_completed_reported(
 }
 
 /// The last [`TAIL_BYTES`] of the file, read from there, decoded lossily.
-fn output_tail(path: &Path) -> Option<String> {
+pub(super) fn output_tail(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let window = u64::try_from(TAIL_BYTES).unwrap_or(u64::MAX);

@@ -29,18 +29,16 @@ const EXPORT_NAME: &str = "github.com/aakshintala/fiber/extensions/export";
 impl Setup {
     /// Installs the real `export` package from the repository.
     fn install_export(&self) {
-        extensions::plan(
+        let request = extensions::Request::Path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/export"),
+        );
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/export"),
-            ),
+            self.deadline.start_wait(),
+            &request,
             "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 }
 
@@ -178,9 +176,9 @@ fn export_is_listed_with_no_vm_and_writes_the_transcript_to_the_default_path() {
     session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
     let written = fs::read_to_string(session.setup.workspace().join(format!("{id}.md"))).unwrap();
-    // docs/testing.md:74-75: the test asserts the file left behind. Its order
+    // `docs/testing.md`, "Levels": the test asserts the file left behind. Its order
     // is the log's: `history` answers durable lines in `seq` order
-    // (docs/events.md:1367), and the extension renders each page in order.
+    // (`docs/events.md`, "`command_accepted`"), and the extension renders each page in order.
     assert_eq!(
         written,
         format!(
@@ -268,7 +266,7 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
         }
     }
     // A setup guard, not a doc count: past seq 300 with 256-line pages
-    // (docs/invocation.md:452) the transcript spans more than one page.
+    // the transcript spans more than one page.
     assert!(highest > 300, "the log never passed seq 300");
     session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
@@ -278,7 +276,7 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
         .filter(|line| line.starts_with("> page-prompt-"))
         .collect();
     let expected: Vec<String> = asked.iter().map(|text| format!("> {text}")).collect();
-    // docs/events.md:360 and :1367: each prompt enters one `turn_started`
+    // `docs/events.md`, "`turn_started`" and (`docs/events.md`, "`command_accepted`"): each prompt enters one `turn_started`
     // `input` in arrival order, and `history` returns those lines in `seq`
     // order, so the quotes run in prompt order across pages.
     assert_eq!(
@@ -287,8 +285,8 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
     );
     // Every rendered line is a prompt quote or its one-word reply, so the
     // whole file is fixed: no rendered line may go missing or repeat.
-    // docs/testing.md:74-75: the test asserts the file left behind, built
-    // from `history` lines in `seq` order (docs/events.md:1367); each
+    // `docs/testing.md`, "Levels": the test asserts the file left behind, built
+    // from `history` lines in `seq` order (`docs/events.md`, "`command_accepted`"); each
     // prompt ran its own turn to completion, so quotes and replies pair
     // up in prompt order.
     let mut whole = format!("# Session {id}\n\n");
@@ -418,7 +416,7 @@ fn steering_and_a_failed_call_are_written() {
     let steer_at = written
         .find("> use the other file")
         .expect("the steering message is quoted");
-    // docs/events.md:389 and :1367: the steer is a durable line after the
+    // `docs/events.md`, "`turn_started`" and (`docs/events.md`, "`command_accepted`"): the steer is a durable line after the
     // prompt's `turn_started`, and `history` returns lines in `seq` order.
     assert!(prompt_at < steer_at);
     assert!(
@@ -429,9 +427,9 @@ fn steering_and_a_failed_call_are_written() {
         .lines()
         .filter(|line| line.starts_with("- `read` {"))
         .collect();
-    // docs/testing.md:74-75 and docs/events.md:116: the file mirrors the
+    // `docs/testing.md`, "Levels" and `docs/events.md`, "Durable and ephemeral": the file mirrors the
     // log's durable lines. Each requested call ends in one
-    // `tool_call_completed`, failed or not (docs/events.md:629-635), and
+    // `tool_call_completed`, failed or not (`docs/events.md`, "`text_completed`"), and
     // the test drove exactly two `read` calls to turn completion, so two
     // `- `read`` lines appear.
     assert_eq!(reads.len(), 2, "{written}");

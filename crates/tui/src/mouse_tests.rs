@@ -1,6 +1,7 @@
 //! Tests for hit-testing and the pointer.
 
-use super::{Pointer, Target, TargetId, hit};
+use super::{ClickRoute, Pointer, Target, TargetId, click_route, hit};
+use crate::ext::cache::{Cache, ClickKey};
 use crate::keys::{Button, Mouse, MouseKind};
 use ratatui::layout::Rect;
 
@@ -166,6 +167,175 @@ fn a_drag_within_the_press_cell_still_clicks() {
     assert_eq!(
         pointer.on_mouse(&at(MouseKind::Release, 2, 3), &targets, true),
         Some(TargetId::Badge)
+    );
+}
+
+/// An interned click key for `id` in session `s`, extension `a`,
+/// slot `notice`.
+fn key(cache: &Cache, id: &str) -> ClickKey {
+    cache.intern_click(&contract::SessionId("s".into()), "a", "notice", id)
+}
+
+/// A line target over the row, an extension target on its first four
+/// cells, and a link target over its middle, drawn in that order.
+fn clicked() -> (Cache, [Target; 3]) {
+    let cache = Cache::default();
+    let badge = key(&cache, "badge");
+    (
+        cache,
+        [
+            Target {
+                id: TargetId::Line(crate::app::Target::Group(1)),
+                rect: Rect::new(0, 3, 10, 1),
+            },
+            Target {
+                id: TargetId::Link {
+                    row: 3,
+                    col: 2,
+                    url: 7,
+                },
+                rect: Rect::new(2, 3, 4, 1),
+            },
+            // The extension paints over the link, so its target sits
+            // after the row's other targets, as `paint_clicks` requires.
+            Target {
+                id: TargetId::Extension(badge),
+                rect: Rect::new(0, 3, 4, 1),
+            },
+        ],
+    )
+}
+
+#[test]
+fn click_route_pairs_the_extension_hit_with_what_lies_under_it() {
+    let (cache, targets) = clicked();
+    let badge = key(&cache, "badge");
+    // At the range's start and inside it, clear of the link: the
+    // paired target resolves, with the topmost built-in hit under it.
+    for col in [0, 1] {
+        assert_eq!(
+            click_route(&targets, badge, col, 3),
+            Some(ClickRoute {
+                id: badge,
+                fallback: Some(TargetId::Line(crate::app::Target::Group(1))),
+            }),
+            "col {col}"
+        );
+    }
+    // Over the link's cells the link lies under the extension, up to
+    // and including the range's last cell.
+    for col in [2, 3] {
+        assert_eq!(
+            click_route(&targets, badge, col, 3)
+                .expect("a route")
+                .fallback,
+            Some(TargetId::Link {
+                row: 3,
+                col: 2,
+                url: 7,
+            }),
+            "col {col}"
+        );
+    }
+}
+
+#[test]
+fn click_route_rejects_what_the_frame_never_drew() {
+    let (cache, targets) = clicked();
+    let badge = key(&cache, "badge");
+    // Past the range's end, on another row, and with a key the frame
+    // never drew: no route, so a stale pair never dispatches.
+    assert_eq!(click_route(&targets, badge, 4, 3), None);
+    assert_eq!(click_route(&targets, badge, 0, 4), None);
+    assert_eq!(click_route(&targets, key(&cache, "other"), 0, 3), None);
+    assert_eq!(click_route(&[], badge, 0, 3), None);
+}
+
+#[test]
+fn click_route_skips_turns_and_prefers_the_topmost_extension() {
+    let cache = Cache::default();
+    let lower = key(&cache, "lower");
+    let upper = key(&cache, "upper");
+    let targets = [
+        Target {
+            id: TargetId::Extension(lower),
+            rect: Rect::new(0, 3, 6, 1),
+        },
+        Target {
+            id: TargetId::Turn(7),
+            rect: Rect::new(0, 3, 6, 1),
+        },
+        Target {
+            id: TargetId::Extension(upper),
+            rect: Rect::new(0, 3, 6, 1),
+        },
+    ];
+    // Press and release pair on the topmost extension target; a turn
+    // is a focus stop, never a click fallback.
+    let mut pointer = Pointer::default();
+    pointer.on_mouse(&at(LEFT, 1, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 1, 3), &targets, true),
+        Some(TargetId::Extension(upper))
+    );
+    assert_eq!(
+        click_route(&targets, upper, 1, 3)
+            .expect("a route")
+            .fallback,
+        None
+    );
+    assert_eq!(
+        click_route(&targets, lower, 1, 3)
+            .expect("a route")
+            .fallback,
+        None
+    );
+}
+
+#[test]
+fn click_route_candidates() {
+    let (cache, targets) = clicked();
+    let badge = key(&cache, "badge");
+    // The saved candidate follows the release cell: clear of the link
+    // the group line lies under the range, over the link the link does.
+    // A press and release on its own cells still pairs: the link covers
+    // the range's far cells, so the pair stays clear of it.
+    let mut pointer = Pointer::default();
+    pointer.on_mouse(&at(LEFT, 0, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 1, 3), &targets, true),
+        Some(TargetId::Extension(badge))
+    );
+    assert_eq!(
+        click_route(&targets, badge, 1, 3)
+            .expect("a route")
+            .fallback,
+        Some(TargetId::Line(crate::app::Target::Group(1))),
+        "the saved candidate under a clear release"
+    );
+    pointer.on_mouse(&at(LEFT, 2, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 2, 3), &targets, true),
+        Some(TargetId::Extension(badge))
+    );
+    assert_eq!(
+        click_route(&targets, badge, 2, 3)
+            .expect("a route")
+            .fallback,
+        Some(TargetId::Link {
+            row: 3,
+            col: 2,
+            url: 7,
+        }),
+        "the saved candidate under a link-covered release"
+    );
+    // A drag off the press disarms the pair, as on any target: the
+    // release proves it doesn't click, not routing it.
+    pointer.on_mouse(&at(LEFT, 0, 3), &targets, true);
+    pointer.on_mouse(&at(MouseKind::Drag(Button::Left), 9, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 1, 3), &targets, true),
+        None
     );
 }
 

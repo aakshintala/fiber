@@ -109,7 +109,7 @@ fn configure_fx(setup: &Setup, dir: &Path) {
 
 /// The verbatim count rule the multiset calls cite
 /// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+const COUNT_DOC: &str = r#"`docs/testing.md`, "Event streams": - the event kinds as a set with counts, so a duplicated or missing event fails"#;
 
 /// A big fixture tool: its 42,000-byte description alone passes 10% of the
 /// 100,000-token `provider_with_deferral` window (`docs/tools.md`, "Size

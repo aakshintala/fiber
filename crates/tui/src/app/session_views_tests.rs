@@ -1019,7 +1019,7 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
+    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1273,7 +1273,7 @@ fn a_panel_file_rank_past_the_end_opens_the_list_sending_only_the_numstat_comman
     let Effect::Send(lines) = effect else {
         panic!("a rank past the end sends only the numstat query, got {effect:?}");
     };
-    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
+    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1305,7 +1305,7 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
+    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1595,7 +1595,7 @@ fn all_delegates_list_draws_every_delegate_with_no_heading() {
     assert!(!shown.contains("Running delegates"));
     assert!(!shown.contains("Nothing running."));
     // Row data starts at once: the first frame row holds the first
-    // delegate (docs/tui.md, "Swapped views").
+    // delegate (`docs/tui.md`, "Swapped views").
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.title, "Delegates");
     assert_eq!(frame.command, "/delegates");
@@ -1614,7 +1614,7 @@ fn down_twice_then_enter_opens_the_next_delegate_and_closes_the_list() {
     start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
     start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
     open_all_delegates(&mut app);
-    // Two rows per delegate (docs/tui.md, "The panel"): rows 0-1 hold
+    // Two rows per delegate (`docs/tui.md`, "The panel"): rows 0-1 hold
     // the first delegate, so two Downs reach the second.
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
@@ -1638,14 +1638,14 @@ fn four_delegates_scroll_to_a_later_one_and_open_it() {
     start_delegate(&mut app, "j_3", "s_ffffffffffffffff");
     start_delegate(&mut app, "j_4", "s_0000000000000000");
     open_all_delegates(&mut app);
-    // Two rows per delegate (docs/tui.md, "The panel"): seven Downs
+    // Two rows per delegate (`docs/tui.md`, "The panel"): seven Downs
     // reach the fourth delegate's second row.
     for _ in 0..7 {
         assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     }
     assert_eq!(selected(&app), 7);
     // The fourth delegate's rows start below the first window: the list
-    // scrolled to keep them shown (docs/tui.md, "Swapped views").
+    // scrolled to keep them shown (`docs/tui.md`, "Swapped views").
     let frame = app.session_view_screen(80).expect("the view is open");
     assert!(frame.list.top() > 0);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -2576,7 +2576,7 @@ fn open_figures(app: &mut App, width: u16, height: u16) -> String {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md, "Swapped views", run when the view opens.
+    assert_eq!(lines.len(), 1, "one numstat command"); // `docs/tui.md`, "Swapped views", run when the view opens.
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     request["id"].as_str().unwrap_or_default().to_owned()

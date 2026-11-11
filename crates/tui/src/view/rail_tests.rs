@@ -191,7 +191,7 @@ fn hold_total(app: &mut App, total: usize) {
         .unwrap_or_else(|| panic!("a feed"));
     let recent = start
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("an unscoped recent"));
     assert!(app.on_line(accepted(feed, json!({}))).is_empty());
@@ -206,7 +206,7 @@ fn hold_total(app: &mut App, total: usize) {
         "the session-left trigger asks for a scoped total"
     );
     for line in &fanout {
-        // `docs/invocation.md:1102` (scoped `recent` for the project).
+        // `docs/invocation.md`, "What the hub speaks" (scoped `recent` for the project).
         assert_eq!(line["command"], "recent");
         let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
         assert!(

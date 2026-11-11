@@ -812,6 +812,7 @@ impl Driver {
                 | Event::ShellCommandDelta(_)
                 | Event::DirectoryAdded(_)
                 | Event::SessionNamed(_)
+                | Event::Archived(_)
                 | Event::Clients(_)
                 | Event::SessionStatus(_)
                 | Event::ContextAdded(_)
@@ -1634,11 +1635,12 @@ fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
 /// emitting its calls raw — the converter scrubs with an empty (identity)
 /// context and skips every drop class, which is safe only for these
 /// fixtures.
-pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 16] = [
+pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 22] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
     "control-4-swapped-push-target",
+    "control-5-approval-claim",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",
@@ -1646,11 +1648,16 @@ pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 16] = [
     "field-6-restart-it-kill-and-start",
     "field-7-tkt-build-from-gate",
     "shape-1-verbatim-retype",
+    "shape-10-posts-undecidable-decision",
+    "shape-11-state-change-beyond-brief",
     "shape-2-effect-named-by-reply",
     "shape-3-prerequisite",
     "shape-4-conceded-then-new-demand",
     "shape-5-task-names-action",
     "shape-6-reason-names-different-call",
+    "shape-7-send-quotes-earlier-block",
+    "shape-8-issue-comment-asks-ruling",
+    "shape-9-send-quotes-reviewer-refusal",
 ];
 
 /// Whether `name` is one of the committed synthetic consent sessions.

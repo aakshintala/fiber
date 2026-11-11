@@ -5,7 +5,7 @@ use serde_json::json;
 
 #[test]
 fn hooks_answers_require_complete_names_and_an_empty_install_object() {
-    // The hub answers sorted names (`docs/invocation.md:1160`); decoding keeps that order.
+    // The hub answers sorted names (`docs/invocation.md`, "What the hub speaks"); decoding keeps that order.
     assert_eq!(blocking_hooks(&json!({"names":[]})), Some(vec![]));
     assert_eq!(
         blocking_hooks(&json!({"names":["a","z"]})),
@@ -219,6 +219,26 @@ fn rules_tools_targets_stores_and_reviewer_answers() {
     assert!(settings(&json!({})).is_none());
     assert!(tools(&json!({"groups":[{"group":{},"project":{},"everywhere":{}}]})).is_none());
     assert!(targets(&json!({"targets":[{"name":"a","kind":"unknown"}]})).is_none());
+}
+
+#[test]
+fn login_target_labels_decode_present_and_missing_as_marks() {
+    // The wire carries `label` only when `Some`: a missing label
+    // decodes as `None`, so an old hub payload still decodes.
+    let rows = targets(&json!({"targets":[
+        {"name":"a","kind":"key","label":"default"},
+        {"name":"b","kind":"browser"},
+    ]}))
+    .unwrap();
+    assert_eq!(rows[0].label, Some("default".to_owned()));
+    assert_eq!(rows[1].label, None);
+    // A null label is not a mark: the row fails like any mistyped field.
+    assert!(targets(&json!({"targets":[{"name":"a","kind":"key","label":null}]})).is_none());
+    // Secrets are never marked: a secret carrying a label fails like a
+    // mistyped field, so a contradictory payload never becomes a marked
+    // secret in the view.
+    assert!(targets(&json!({"targets":[{"name":"s","kind":"secret","label":"work"}]})).is_none());
+    assert!(targets(&json!({"targets":[{"name":"s","kind":"secret"}]})).is_some());
 }
 
 #[test]

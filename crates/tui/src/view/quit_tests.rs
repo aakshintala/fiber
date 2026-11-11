@@ -237,16 +237,19 @@ fn a_click_on_a_choice_does_what_its_key_does() {
 /// sessions and args agree.
 fn stripped(effect: &Effect) -> Effect {
     match effect {
-        Effect::Exit(lines) => Effect::Exit(
-            lines
+        Effect::ExitTracked(sents) => Effect::ExitTracked(
+            sents
                 .iter()
-                .map(|line| {
+                .map(|sent| {
                     let mut line: serde_json::Value =
-                        serde_json::from_str(line).unwrap_or_default();
+                        serde_json::from_str(&sent.line).unwrap_or_default();
                     if let Some(object) = line.as_object_mut() {
                         object.remove("id");
                     }
-                    line.to_string()
+                    crate::app::Sent {
+                        id: contract::CommandId(String::new()),
+                        line: line.to_string(),
+                    }
                 })
                 .collect(),
         ),
@@ -260,6 +263,22 @@ fn stripped(effect: &Effect) -> Effect {
                         object.remove("id");
                     }
                     line.to_string()
+                })
+                .collect(),
+        ),
+        Effect::SendTracked(sents) => Effect::SendTracked(
+            sents
+                .iter()
+                .map(|sent| {
+                    let mut line: serde_json::Value =
+                        serde_json::from_str(&sent.line).unwrap_or_default();
+                    if let Some(object) = line.as_object_mut() {
+                        object.remove("id");
+                    }
+                    crate::app::Sent {
+                        id: contract::CommandId(String::new()),
+                        line: line.to_string(),
+                    }
                 })
                 .collect(),
         ),
@@ -383,7 +402,7 @@ fn ask_close_all(app: &mut App) {
     }
     assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
     assert!(app.quit_open());
-    // docs/tui.md, "Quit": "2 sessions, 2 working, 0 open elsewhere"
+    // `docs/tui.md`, "Quit": "2 sessions, 2 working, 0 open elsewhere"
     // dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 0)));
 }
@@ -426,7 +445,7 @@ fn the_close_all_count_line_names_all_three_numbers() {
     app.on_line(live("s_bbbbbbbbbbbbbbbb", 0));
     app.on_line(live("s_cccccccccccccccc", 0));
     ask_close_all_three(&mut app);
-    // docs/tui.md, "Quit": "3 sessions, 3 working, 0 open elsewhere"
+    // `docs/tui.md`, "Quit": "3 sessions, 3 working, 0 open elsewhere"
     // dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((3, 3, 0)));
     let area = Rect::new(0, 0, 80, 24);
@@ -460,10 +479,11 @@ fn a_click_on_close_all_does_what_enter_does() {
     let by_click = app.on_click(TargetId::Home(Spot::Quit(QuitChoice::CloseAll)));
     // Command ids mint at random: the effects agree past them.
     assert_eq!(stripped(&by_key), stripped(&by_click));
-    let Effect::Send(lines) = by_click else {
+    let Effect::SendTracked(sents) = by_click else {
         panic!("the confirm click closes all");
     };
-    // docs/tui.md, "Quit": "Enter sends each live top-level session
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
+    // `docs/tui.md`, "Quit": "Enter sends each live top-level session
     // `close` with `now`"; the subscribes the connection needs first
     // are not pinned.
     let mut closes: Vec<String> = Vec::new();
@@ -508,7 +528,7 @@ fn the_bar_stays_on_enter_in_close_all() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     draw(&app, area, &mut buf, &mut Vec::new());
-    // Exactly one barred row: Enter's (docs/tui.md, "Quit": "with
+    // Exactly one barred row: Enter's (`docs/tui.md`, "Quit": "with
     // Enter's focused").
     let barred = (0..24)
         .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::theme::Role::Accent.color()))
