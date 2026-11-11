@@ -729,13 +729,17 @@ fn compat_flags_and_extra_fields_come_from_model_data_only() {
 
 /// A `compat.max_tokens` endpoint sends the output limit as `max_tokens`
 /// with no `max_completion_tokens`: the Databricks open-weight route
-/// rejects the latter with a 400. The endpoint below carries no flag, the
-/// shape `entry_for` builds for those services before the fix, so the
-/// limit lands in the rejected field.
+/// rejects the latter with a 400. The endpoint below carries the flag, the
+/// shape `entry_for` builds for those services once the catalog row's
+/// `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`.
 #[test]
 fn a_max_tokens_endpoint_sends_the_limit_as_max_tokens() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut endpoint = endpoint(&server);
+    endpoint.compat = Compat {
+        max_tokens: true,
+        ..Compat::default()
+    };
     endpoint.max_output_tokens = Some(4096);
     let req = request();
     send(endpoint, &req);

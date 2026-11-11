@@ -6,7 +6,9 @@
 -- `claude-` name, is `anthropic-messages` at the Claude URL with
 -- `compat.bearer`; one holding the Responses API is `openai-responses`;
 -- the rest are `openai-completions`, the only protocol that writes
--- `reasoning_effort`. A service ending `-image`, or matching an
+-- `reasoning_effort`. A service whose catalog row's `provider_type` is
+-- neither `OPENAI` nor `GEMINI_ENTERPRISE` takes `compat.max_tokens`, since
+-- those open-weight routes reject `max_completion_tokens`. A service ending `-image`, or matching an
 -- `image_generation` row, is left out, as is one with no window: a model
 -- without one is left out with `model_invalid` (docs/model-routing.md,
 -- "What a provider extension declares"). A kept service whose bare name no
@@ -385,6 +387,17 @@ local function entry_for(service, catalog, image_keys, thinking)
   end
   if gemini then
     entry.compat = { gemini = true }
+  end
+  -- Open-weight chat services reject `max_completion_tokens` with a 400,
+  -- so a row whose `provider_type` is neither `OPENAI` nor
+  -- `GEMINI_ENTERPRISE` takes `compat.max_tokens`, set on the entry built
+  -- above, never replacing its table. The flag is inert on the other
+  -- protocols, which never read it.
+  if type(row) == "table" and type(row.provider_type) == "string"
+    and row.provider_type ~= "OPENAI" and row.provider_type ~= "GEMINI_ENTERPRISE"
+  then
+    entry.compat = entry.compat or {}
+    entry.compat.max_tokens = true
   end
   local vision = type(row) == "table"
     and type(row.capabilities) == "table"
