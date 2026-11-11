@@ -345,16 +345,14 @@ fn a_debug_resume_records_extension_and_attached_frame() {
         ),
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(extension);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(extension),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 
     let mut run = Run::spawn(
         &setup,

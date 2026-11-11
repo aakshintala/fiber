@@ -936,7 +936,7 @@ none.
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
 | `warming` | boolean | no | `true` on a cache-warming refresh (`docs/prompt-cache.md`, "Warming while idle"); absent on every other call |
-| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
+| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, the one-word `allow` or `check` request; `stage_2`, the reasoning pass on a call answered `check` (`docs/permissions.md`, "How it runs"); or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
 
 #### `quota_noticed`
 
