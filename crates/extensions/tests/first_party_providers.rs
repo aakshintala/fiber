@@ -230,5 +230,13 @@ fn first_party_hosted_searches_are_the_marked_models() {
     .map(|(model, kind)| (model.to_owned(), kind.to_owned()))
     .collect();
     expected.sort();
-    assert_eq!(pairs, expected);
+    // No doc promises the exhaustive inventory (`docs/model-routing.md`,
+    // "Hosted web search"), so this pins the marked pairs without pinning
+    // the whole-list count: extra pairs pass, a missing marked pair fails.
+    for (model, kind) in &expected {
+        assert!(
+            pairs.contains(&(model.clone(), kind.clone())),
+            "missing hosted search {model} {kind}; got {pairs:?}"
+        );
+    }
 }

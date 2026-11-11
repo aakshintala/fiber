@@ -99,7 +99,15 @@ fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
         "muse-wonder-1.0",
     ] {
         let model = muse.models.iter().find(|m| m.id == id).unwrap();
-        assert_eq!(model.thinking_levels, levels, "{id}");
+        // The doc promises the set, not the order (`docs/model-routing.md`,
+        // "Thinking"), so this pins the set without pinning the order.
+        assert_eq!(model.thinking_levels.len(), levels.len(), "{id}");
+        for level in &levels {
+            assert!(
+                model.thinking_levels.contains(level),
+                "{id} lacks {level:?}"
+            );
+        }
         assert_eq!(model.thinking_default, None, "{id}");
     }
     let opencode = config::read_providers(&package("opencode")).unwrap();
