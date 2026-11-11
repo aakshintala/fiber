@@ -15,8 +15,9 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Chrome, Frame, GUTTER, Ink, Inline, List, Span, Spot, rows_height, tinted};
+use crate::swapped::{Chrome, Frame, GUTTER, Ink, Inline, List, Span, Spot, rows_height};
 use crate::text;
+use crate::theme::Role;
 
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
@@ -813,19 +814,21 @@ impl Settings {
         vec![("/ ".to_owned(), Ink::Muted.style()), (query, Style::new())]
     }
 
-    /// The tab bar: the open tab bold on the `surface` tint, the rest
-    /// plain. A bar wider than the frame drops tabs from the left, never
-    /// the open one.
+    /// The tab bar: the open tab bold in `background` on an `accent`
+    /// fill, the rest dim. A bar wider than the frame drops tabs from
+    /// the left, never the open one.
     fn tab_bar(&self, width: usize) -> Vec<Span> {
-        let open = Style::new().add_modifier(Modifier::BOLD);
         let spans: Vec<(SettingsTab, Span)> = SettingsTab::ALL
             .into_iter()
             .map(|tab| {
                 let name = format!(" {} ", tab_name(tab));
                 let style = if tab == self.tab {
-                    tinted(open)
-                } else {
                     Style::new()
+                        .fg(Role::Background.color())
+                        .bg(Role::Accent.color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().add_modifier(Modifier::DIM)
                 };
                 (tab, (name, style))
             })
@@ -1852,6 +1855,10 @@ impl Settings {
                     })
                     .collect(),
                 list: *list,
+                // The focused row's mark draws in `accent`, bold.
+                gutter_mark: Style::new()
+                    .fg(Role::Accent.color())
+                    .add_modifier(Modifier::BOLD),
                 below: self.said.clone(),
                 field: None,
                 footer: "↑↓ move · Enter choose · Esc back".to_owned(),
@@ -1885,6 +1892,7 @@ impl Settings {
                     &layout,
                     width,
                     editing.is_some_and(|(line, _)| line == at),
+                    layout.focus == Some(at),
                 ),
             })
             .collect();
@@ -1911,6 +1919,10 @@ impl Settings {
             command: "/settings".to_owned(),
             rows,
             list,
+            // The focused row's mark draws in `accent`, bold.
+            gutter_mark: Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
             below: layout.below,
             field: None,
             footer: plain,
@@ -1922,22 +1934,43 @@ impl Settings {
         }
     }
 
+    /// Whether a boolean row is set on: `[x] On` reads in `added`,
+    /// `[ ] Off` dim.
+    fn boolean_on(row: &SettingRow) -> Option<bool> {
+        if !matches!(row.control, SettingControl::Boolean) {
+            return None;
+        }
+        if let Shown::Value(text) = &row.value {
+            return Some(text == "true");
+        }
+        None
+    }
+
     /// One row's cells: the label, the value, then the layer it comes from
-    /// when that is not global. A row being edited keeps its label only;
-    /// the field draws over its value.
+    /// when that is not global. The focused row's label is bold in
+    /// `accent`; its value is bold in `info`, an unset value dim, a
+    /// layer tag in `attention`, `[x] On` in `added`, `[ ] Off` dim,
+    /// and a screen row's value in `secondary`. A row being edited keeps
+    /// its label only; the field draws over its value.
     fn cells(
         &self,
         item: Item,
         layout: &Layout,
         width: usize,
         editing: bool,
+        focused: bool,
     ) -> Vec<(String, Option<Spot>, Ink)> {
         let label = text::cut(&self.label_of(item), layout.label_col, "…");
         let pad = layout
             .label_col
             .saturating_sub(text::width(&label))
             .saturating_add(GAP);
-        let mut cells = vec![(format!("{label}{}", " ".repeat(pad)), None, Ink::Plain)];
+        let label_ink = if focused {
+            Ink::Bold(Role::Accent)
+        } else {
+            Ink::Plain
+        };
+        let mut cells = vec![(format!("{label}{}", " ".repeat(pad)), None, label_ink)];
         if editing {
             return cells;
         }
@@ -1951,6 +1984,25 @@ impl Settings {
             Item::Key(at) => self
                 .row(at)
                 .map_or_else(|| (String::new(), None), shown_value),
+        };
+        let value_ink = match item {
+            Item::Screen(_) => Ink::Role(Role::Secondary),
+            Item::Key(at) => {
+                let row = self.row(at);
+                let unset = row.is_some_and(|row| matches!(row.value, Shown::Unset));
+                match (unset, row.and_then(Self::boolean_on)) {
+                    (true, _) => Ink::Muted,
+                    (false, Some(true)) => Ink::Role(Role::Added),
+                    (false, Some(false)) => Ink::Muted,
+                    (false, None) => {
+                        if focused {
+                            Ink::Bold(Role::Info)
+                        } else {
+                            Ink::Role(Role::Info)
+                        }
+                    }
+                }
+            }
         };
         // A search annotates each result with its own tab, dim at the
         // right: the value is cut short of the annotation, keeping the
@@ -1971,10 +2023,14 @@ impl Settings {
             .max(1);
         let shown = text::cut(&value, room, "…");
         let mut used = GUTTER + layout.label_col + GAP + text::width(&shown);
-        cells.push((shown, None, Ink::Plain));
+        cells.push((shown, None, value_ink));
         if let Some(tag) = tag {
             used = used.saturating_add(GAP + text::width(&tag));
-            cells.push((format!("{}{tag}", " ".repeat(GAP)), None, Ink::Muted));
+            cells.push((
+                format!("{}{tag}", " ".repeat(GAP)),
+                None,
+                Ink::Role(Role::Attention),
+            ));
         }
         if let Some(name) = annotation {
             let gap = width.saturating_sub(used + text::width(&name));
@@ -2062,6 +2118,10 @@ impl Settings {
             command: "/settings".to_owned(),
             rows,
             list,
+            // The focused row's mark draws in `accent`, bold.
+            gutter_mark: Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
             below,
             field: None,
             footer: plain,

@@ -572,7 +572,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 }
 
 #[test]
-fn the_open_tab_is_bold_on_the_surface_tint_and_the_footer_keys_are_bold() {
+fn the_open_tab_is_bold_on_an_accent_fill() {
     use crate::theme::Role;
     let fake = Fake::new(rows());
     let settings = tab(&fake, SettingsTab::Models);
@@ -595,14 +595,17 @@ fn the_open_tab_is_bold_on_the_surface_tint_and_the_footer_keys_are_bold() {
         let x = u16::try_from(joined[..byte].chars().count()).unwrap();
         buf[(x, y)].clone()
     };
+    // The open tab is bold in `background` on an `accent` fill.
     let open = cell_at("Models", bar);
     assert!(open.modifier.contains(Modifier::BOLD));
-    assert_eq!(open.bg, Role::Surface.color());
-    // The other tabs are plain: neither bold nor tinted.
+    assert_eq!(open.fg, Role::Background.color());
+    assert_eq!(open.bg, Role::Accent.color());
+    // The other tabs are dim, with no accent fill and no bold.
     for name in ["Appearance", "Notifications", "Permissions", "Advanced"] {
         let cell = cell_at(name, bar);
+        assert!(cell.modifier.contains(Modifier::DIM), "{name}");
         assert!(!cell.modifier.contains(Modifier::BOLD), "{name}");
-        assert_ne!(cell.bg, Role::Surface.color(), "{name}");
+        assert_ne!(cell.bg, Role::Accent.color(), "{name}");
     }
     // The footer keys are bold and the words between them are dim.
     let last = 23u16;
@@ -613,6 +616,129 @@ fn the_open_tab_is_bold_on_the_surface_tint_and_the_footer_keys_are_bold() {
         );
     }
     assert!(cell_at("change", last).modifier.contains(Modifier::DIM));
+}
+
+/// The Models tab paints each cell by meaning: the focused label bold
+/// in `accent`, the focused value bold in `info`, other values plain
+/// in `info`, "Default" dim, the screen row's value in `secondary`,
+/// and the gutter mark bold in `accent`.
+#[test]
+fn a_models_tab_pins_each_cell_style_by_meaning() {
+    use crate::theme::Role;
+    use ratatui::style::Color;
+    let fake = Fake::new(rows());
+    let settings = tab(&fake, SettingsTab::Models);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let row_of = |label: &str| {
+        (0..24u16)
+            .find(|y| {
+                text_of(&buf, 80, 24)
+                    .lines()
+                    .nth(usize::from(*y))
+                    .is_some_and(|l| l.contains(label))
+            })
+            .unwrap_or_else(|| panic!("no row with {label}"))
+    };
+    let cell_at = |x: u16, y: u16| buf[(x, y)].clone();
+    // The focused row carries the gutter mark, bold in `accent`.
+    let focused = row_of("› Default model");
+    assert_eq!(cell_at(0, focused).symbol(), "›");
+    assert_eq!(cell_at(0, focused).fg, Role::Accent.color());
+    assert!(
+        cell_at(0, focused).modifier.contains(Modifier::BOLD),
+        "gutter mark not bold"
+    );
+    // Its label is bold in `accent`; other labels are plain.
+    let label = cell_at(2, focused);
+    assert_eq!(label.fg, Role::Accent.color());
+    assert!(label.modifier.contains(Modifier::BOLD), "label not bold");
+    let plain_row = row_of("Model list refresh");
+    let plain_label = cell_at(2, plain_row);
+    assert_eq!(plain_label.fg, Color::Reset, "unfocused label tinted");
+    assert!(
+        !plain_label.modifier.contains(Modifier::BOLD),
+        "unfocused label bold"
+    );
+    // Its value is bold in `info`; other values are plain `info`.
+    let line_of = |y: u16| {
+        let line: String = (0..80u16).map(|x| buf[(x, y)].symbol()).collect();
+        line
+    };
+    let at_in = |y: u16, text: &str| {
+        u16::try_from(line_of(y).find(text).unwrap_or_else(|| panic!("no {text}"))).unwrap()
+    };
+    let value = cell_at(at_in(focused, "a/b"), focused);
+    assert_eq!(value.fg, Role::Info.color());
+    assert!(value.modifier.contains(Modifier::BOLD), "value not bold");
+    let plain_value = cell_at(at_in(plain_row, "24h"), plain_row);
+    assert_eq!(plain_value.fg, Role::Info.color());
+    assert!(
+        !plain_value.modifier.contains(Modifier::BOLD),
+        "unfocused value bold"
+    );
+    // An unset value reads dim.
+    let default_row = row_of("Thinking level");
+    let default = cell_at(at_in(default_row, "Default"), default_row);
+    assert_eq!(default.fg, Role::Muted.color());
+    assert!(default.modifier.contains(Modifier::DIM), "Default not dim");
+    assert!(!default.modifier.contains(Modifier::BOLD), "Default bold");
+    // A screen row's value is in `secondary`.
+    let screen_row = row_of("Credentials");
+    let screen_value = cell_at(at_in(screen_row, "Open"), screen_row);
+    assert_eq!(screen_value.fg, Role::Secondary.color());
+}
+
+/// A layer tag reads in `attention`, `[x] On` in `added`, and `[ ]
+/// Off` dim, whatever the focus.
+#[test]
+fn a_layer_tag_and_a_boolean_keep_their_roles() {
+    use crate::theme::Role;
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "sandbox.enabled");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let row_of = |label: &str| {
+        (0..24u16)
+            .find(|y| {
+                text_of(&buf, 80, 24)
+                    .lines()
+                    .nth(usize::from(*y))
+                    .is_some_and(|l| l.contains(label))
+            })
+            .unwrap_or_else(|| panic!("no row with {label}"))
+    };
+    let row = row_of("› Sandbox");
+    let line: String = (0..80u16).map(|x| buf[(x, row)].symbol()).collect();
+    let on_at = u16::try_from(line.find("[x] On").unwrap()).unwrap();
+    let on = buf[(on_at, row)].clone();
+    assert_eq!(on.fg, Role::Added.color());
+    let tag_at = u16::try_from(line.find("repository").unwrap()).unwrap();
+    let tag = buf[(tag_at, row)].clone();
+    assert_eq!(tag.fg, Role::Attention.color());
+    // `[ ] Off` stays dim on its own row.
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "tui.attention.bell");
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let row = (0..24u16)
+        .find(|y| {
+            text_of(&buf, 80, 24)
+                .lines()
+                .nth(usize::from(*y))
+                .is_some_and(|l| l.contains("› Terminal bell"))
+        })
+        .unwrap();
+    let line: String = (0..80u16).map(|x| buf[(x, row)].symbol()).collect();
+    let off_at = u16::try_from(line.find("[ ] Off").unwrap()).unwrap();
+    let off = buf[(off_at, row)].clone();
+    assert!(off.modifier.contains(Modifier::DIM), "[ ] Off not dim");
+    assert!(!off.modifier.contains(Modifier::BOLD), "[ ] Off bold");
 }
 
 #[test]
@@ -2843,7 +2969,8 @@ fn a_value_is_cut_to_the_room_left_after_the_label_and_the_layer_tag() {
     // The gutter and the gap twice, the label column and the tag
     // "project" and its gap leave 13 columns of the 26 past the label.
     let width = layout.label_col + 26;
-    let cells = settings.cells(item, &layout, width, false);
+    // `at` focused this row above.
+    let cells = settings.cells(item, &layout, width, false, true);
     assert_eq!(cells[1].0.chars().count(), 13, "{cells:?}");
     assert!(cells[1].0.ends_with('…'), "{cells:?}");
     assert_eq!(cells[2].0, "  project");

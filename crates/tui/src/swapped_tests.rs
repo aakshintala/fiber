@@ -277,6 +277,7 @@ fn frame(rows: usize) -> Frame {
             .map(|at| vec![(format!("row {at}"), None, Ink::Plain)])
             .collect(),
         list: List::default(),
+        gutter_mark: Style::default(),
         below: vec!["below".to_owned()],
         field: None,
         footer: "keys".to_owned(),
@@ -336,6 +337,7 @@ fn top_row(title: &str, command: &'static str, width: u16) -> Buffer {
         command: command.to_owned(),
         rows: Vec::new(),
         list: List::default(),
+        gutter_mark: Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),
@@ -454,6 +456,7 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
             ],
         ],
         list: List::default(),
+        gutter_mark: Style::default(),
         below: Vec::new(),
         field: None,
         footer: "keys".to_owned(),
@@ -497,6 +500,7 @@ fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
             vec![("tail".to_owned(), None, Ink::Muted)],
         ],
         list: List::default(),
+        gutter_mark: Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),
@@ -528,6 +532,33 @@ fn the_footer_and_the_lines_below_draw_dim() {
     }
     // A row stays as its ink draws it.
     assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
+}
+
+/// The gutter mark draws with the frame's `gutter_mark` style; a
+/// frame that leaves the default draws it plain.
+#[test]
+fn the_gutter_mark_draws_with_the_frames_style() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(5);
+    shown.list = List::gutter();
+    shown.list.select(1, 5, rows_height(&shown, 6));
+    shown.gutter_mark = Style::new()
+        .fg(Role::Accent.color())
+        .add_modifier(Modifier::BOLD);
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 2), "› row 1");
+    assert_eq!(buf[(0, 2)].fg, Role::Accent.color());
+    assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD));
+    // The default frame keeps the mark plain.
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(5);
+    shown.list = List::gutter();
+    shown.list.select(1, 5, rows_height(&shown, 6));
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 2), "› row 1");
+    assert_eq!(buf[(0, 2)].fg, Color::Reset);
+    assert!(!buf[(0, 2)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -796,6 +827,7 @@ fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Fr
             .map(|row| vec![((*row).to_owned(), None, Ink::Plain)])
             .collect(),
         list: List::gutter(),
+        gutter_mark: Style::default(),
         below: below.iter().map(|line| (*line).to_owned()).collect(),
         field: field.map(|(text, caret)| (text.to_owned(), caret)),
         footer: "move".to_owned(),

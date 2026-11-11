@@ -46,8 +46,9 @@ pub(crate) enum Spot {
 }
 
 /// How a cell draws: plain text, a provider heading, dimmed text such
-/// as a row's roles, or one role's colour. The selected row still
-/// reverses over it, so it shows on every theme and with no colour.
+/// as a row's roles, one role's colour, or one role's colour in bold.
+/// The selected row still reverses over it, so it shows on every theme
+/// and with no colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ink {
     /// Plain text.
@@ -58,6 +59,8 @@ pub(crate) enum Ink {
     Muted,
     /// One role's colour, such as a context category's.
     Role(Role),
+    /// One role's colour in bold, such as a focused row's label.
+    Bold(Role),
     /// One role's colour in reverse video, such as a diff's differing words.
     Marked(Role),
 }
@@ -72,6 +75,7 @@ impl Ink {
                 .fg(Role::Muted.color())
                 .add_modifier(Modifier::DIM),
             Ink::Role(role) => Style::new().fg(role.color()),
+            Ink::Bold(role) => Style::new().fg(role.color()).add_modifier(Modifier::BOLD),
             Ink::Marked(role) => Style::new()
                 .fg(role.color())
                 .add_modifier(Modifier::REVERSED),
@@ -391,6 +395,10 @@ pub(crate) struct Frame {
     pub(crate) joins: Vec<Join>,
     /// The selection and the first row shown.
     pub(crate) list: List,
+    /// How the gutter mark on the focused row draws. Views that mark
+    /// their focused row with "› " set this; the default draws it
+    /// plain, as before.
+    pub(crate) gutter_mark: Style,
     /// Lines below the rows: what a write said, when a key applies.
     pub(crate) below: Vec<String>,
     /// The edit field while it is open: its text and the caret's place in
@@ -754,7 +762,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         let mut x = area.x;
         if gutter {
             if at == frame.list.selected() {
-                buf.set_stringn(x, y, "› ", GUTTER, Style::default());
+                buf.set_stringn(x, y, "› ", GUTTER, frame.gutter_mark);
             }
             x = x
                 .saturating_add(crate::text::to_u16(GUTTER))

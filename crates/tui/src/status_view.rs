@@ -86,6 +86,7 @@ pub(crate) fn frame(facts: &Facts<'_>, list: List) -> Frame {
         command: "/status".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),
