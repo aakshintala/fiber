@@ -328,3 +328,5 @@ docs/model-routing.md	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/U
 crates/tui/src/view_tests.rs	fiber-4596	plan	2026-11-11T13:52:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__view_tests__read_only_bar.snap	fiber-4596	plan	2026-11-11T13:53:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__view_tests__read_only_bar_narrow.snap	fiber-4596	plan	2026-11-11T13:53:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+providers/databricks/tests	fiber-4616	plan	2026-11-11T13:53:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4616	
+crates/provider/tests/completions.rs	fiber-4616	plan	2026-11-11T13:53:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4616	
