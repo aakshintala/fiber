@@ -598,7 +598,7 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
 }
 
 #[test]
-fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_nothing() {
+fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes_nothing() {
     let setup = Setup::new();
     let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
@@ -619,21 +619,77 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
+    // The recorded worktree is gone and its repository is gone too, so
+    // the workspace cannot be made again: a `full` subscribe replays the
+    // log with the missing repository beside the fold's boundary, then
+    // the fold in order, and nothing further
+    // (`docs/invocation.md`, "Lifecycle").
     client.send(
         &json!({"id": "c_sub", "session_id": first.id, "command": "subscribe",
             "args": {"level": "full"}})
         .to_string(),
     );
+    let accept = recv_answer(&client, "c_sub", "the full subscribe");
+    assert_eq!(accept["kind"], "command_accepted", "{accept}");
+    assert_eq!(accept["payload"]["command_id"], "c_sub", "{accept}");
+    let (stored, _) = session_log(&setup, &first.id);
+    let last = u64::try_from(stored.len().saturating_sub(1)).unwrap();
+    assert_eq!(accept["payload"]["result"]["last_seq"], last, "{accept}");
+    assert_eq!(
+        accept["payload"]["result"]["workspace_gone"].as_str(),
+        Some(first.repository.as_str()),
+        "{accept}"
+    );
+    let mut fold = Vec::new();
+    for _ in 0..stored.len() {
+        fold.push(
+            client
+                .next("the fold", &fold)
+                .expect("the fold line arrives"),
+        );
+    }
+    let seqs: Vec<_> = fold
+        .iter()
+        .filter_map(|line| line["seq"].as_u64())
+        .collect();
+    assert_eq!(seqs, (0..=last).collect::<Vec<_>>(), "{fold:?}");
+    assert!(
+        fold.iter().all(|line| line["session_id"] == first.id),
+        "{fold:?}"
+    );
+    let acks: Vec<_> = fold
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["kind"].as_str(),
+                Some("command_accepted" | "command_rejected")
+            )
+        })
+        .collect();
+    assert!(
+        acks.is_empty(),
+        "no accept or reject after the ack: {acks:?}"
+    );
+    // The `prompt` refusal proves the fold completed: a command routed
+    // while the replay drains queues on its retiring entry and is
+    // passed on only at its end, so the refusal arrives strictly after
+    // the whole fold, in command order (`crates/hub/src/relay.rs`: "A
+    // command for a retiring relay queues unsent when its thread is
+    // alive, and its thread passes the queue on in read order"). The
+    // multiset below holds every line in between: anything but the
+    // refusal is a live-tail leak, with no silence wait involved.
+    // Any other command still reaches the resume guard: `prompt` is
+    // refused with the existing shape naming the repository, and the
+    // confirmed failure keeps no wrapper period.
+    send_prompt(&client, "c_prompt", &first.id, "hi");
     let stream = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
     });
     support::assert_kinds_multiset(&stream, &["command_rejected"], &[], None, COUNT_DOC);
     let rejected = stream.last().unwrap();
-    assert_eq!(rejected["payload"]["command_id"], "c_sub");
+    assert_eq!(rejected["payload"]["command_id"], "c_prompt");
     assert_eq!(rejected["payload"]["code"], "io_failed");
     let message = rejected["payload"]["message"].as_str().unwrap().to_owned();
-    // The confirmed launch-target failure takes the ruled shape: the hub
-    // names it without the starter-error wrapper's period.
     assert_eq!(
         message,
         format!(
@@ -646,10 +702,25 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
         !message.contains(first.path.to_string_lossy().as_ref()),
         "{message}"
     );
-    // Nothing created, the log untouched, no lock left.
+    // No live tail follows the completed fold: a second refused `prompt`
+    // is the controlled signal. Its gather holds every line between the
+    // two refusals, so anything but the second refusal is a live-tail
+    // leak, with no silence wait involved.
+    send_prompt(&client, "c_prompt2", &first.id, "hi again");
+    let second = until(&client, "the second prompt refusal", |line| {
+        line["kind"] == "command_rejected"
+    });
+    support::assert_kinds_multiset(&second, &["command_rejected"], &[], None, COUNT_DOC);
+    let second_rejected = second.last().unwrap();
+    assert_eq!(second_rejected["payload"]["command_id"], "c_prompt2");
+    assert_eq!(second_rejected["payload"]["code"], "io_failed");
+    // Nothing created, the log untouched, no lock left, no resume.
+    assert!(!setup.home().join("run").join(&first.id).exists());
     assert!(!first.path.exists());
     assert_eq!(fs::read(&events).unwrap(), before);
     assert!(!lock_of(&first.path).exists());
+    let log = setup.hub_log();
+    assert!(!log.contains("session_resumed"), "{log}");
     repo_guard.wait_gone();
     fs::rename(
         setup.workspace().join(".git-moved"),
@@ -665,7 +736,6 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
         .is_empty(),
         "no fiber/ branch was created"
     );
-    let log = setup.hub_log();
     assert!(!log.contains(&first.repository), "{log}");
     assert!(
         !log.contains(first.path.to_string_lossy().as_ref()),

@@ -842,7 +842,8 @@ cold-cache rule; Linux is 30, the backstop test job's bound, because the Linux g
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
 fails the step, not the job. A mirror that trickles bytes never goes silent, so
-the "Install zsh and fish" steps run `scripts/install-shells`. In `ci.yml` and
+the "Install zsh and fish" steps and the release job's "Install musl-tools
+and time" step run `scripts/install-shells`. In `ci.yml` and
 `mutants-scheduled.yml` each of them restores the `.deb` archives for zsh,
 zsh-common, fish, fish-common and xsel, with any dependencies downloaded beside
 them, from an Actions cache. The key holds the runner image (`ImageOS` and
@@ -853,7 +854,9 @@ a dpkg failure fails the step, with no fallback to the network. On a miss each
 download attempt (`apt-get update` and `apt-get install --download-only`) is
 bounded at 90 s and retried after 5 s until it succeeds, apt resuming its
 partial downloads, and the step's 5-minute bound ends the retries. After the
-install passes, a save step stores the archives. Pull requests save this cache
+install passes, a save step stores the archives. The release job keeps its own
+`musl-debs` cache for musl-tools and time, keyed by runner image, architecture
+and package list with the same hit/miss semantics. Pull requests save this cache
 as well as `main`, unlike the build cache. The `release.yml` steps restore no
 cache and always download, with the same retry. The install is not bounded,
 because killing dpkg mid-unpack leaves the dpkg lock held.

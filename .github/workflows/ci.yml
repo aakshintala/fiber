@@ -1455,15 +1455,42 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - *toolchain
-      - name: Install the musl target and C compiler
+      - name: Install the musl target
+        timeout-minutes: 5
+        run: rustup target add x86_64-unknown-linux-musl
+      # The musl archives are cached per runner image and architecture. The key
+      # names the package list: change it here and in scripts/install-shells
+      # together. ImageOS and ImageVersion are not in the `env` context, so a
+      # step builds the key.
+      - name: Key the musl and time archive cache
+        id: musl-debs-key
+        timeout-minutes: 5
+        run: echo "key=musl-debs-${ImageOS:?}-${ImageVersion:?}-${RUNNER_ARCH:?}-musl-tools-time" >> "$GITHUB_OUTPUT"
+      - name: Restore the musl and time archives
+        id: musl-debs
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/musl-debs
+          key: ${{ steps.musl-debs-key.outputs.key }}
+      - name: Install musl-tools and time
         # A mirror that stops answering must fail the step, not hold the job to its bound.
         timeout-minutes: 5
+        env:
+          MUSL_DEBS_CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
         run: |
-          rustup target add x86_64-unknown-linux-musl
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS update
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
+          # A restore that fails part way can leave files behind and report no hit.
+          if [ "$MUSL_DEBS_CACHE_HIT" != true ]; then
+            rm -rf "$RUNNER_TEMP/musl-debs"
+          fi
+          scripts/install-shells "$RUNNER_TEMP/musl-debs" musl-tools time
+      - name: Save the musl and time archives
+        if: steps.musl-debs.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/musl-debs
+          key: ${{ steps.musl-debs-key.outputs.key }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release

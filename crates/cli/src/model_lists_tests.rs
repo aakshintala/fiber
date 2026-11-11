@@ -602,6 +602,8 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
         .unwrap(),
     );
     assert!(catalogue.models.is_empty());
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert!(
         catalogue
             .notices
@@ -1067,6 +1069,8 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
     // A cached model with no context window: a `model_invalid` notice
     // from the cached admission, before the placeholder fill.
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
     config::write_model_cache(
         &setup.home(),
@@ -1092,6 +1096,8 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
         .unwrap()
     };
     let (_providers, _config, others, unconfigured) = read();
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(others.len(), 1, "{others:?}");
     assert!(others[0].message.contains("bad/m1"), "{others:?}");
     assert!(others[0].message.contains("context_window"), "{others:?}");
@@ -1434,6 +1440,8 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     setup.install_data("bare-ext", "bare", &["b1"], &json!({}));
     config::delete_credential(&setup.home(), "bare", "default").unwrap();
     // An invalid cached model stays a notice beside the listed rows.
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
     config::write_model_cache(
         &setup.home(),
@@ -1448,6 +1456,8 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     .unwrap();
     let catalogue = cached_list(&setup);
     assert_eq!(references(&catalogue), ["acme/m1"]);
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
     assert!(catalogue.notices[0].message.contains("bad/m1"));
 }
