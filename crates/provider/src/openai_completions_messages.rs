@@ -53,6 +53,12 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
             .to_owned()
     };
 
+    // An `extra_content` carrier waiting for its own-model tool call, which
+    // replays it back under `compat.gemini`. Any other input leaves it for
+    // a later own call, except a user turn, a tool result or a
+    // foreign-model call, which clear it, and the end of the conversation,
+    // which drops it: Chat Completions has no empty-text-part carrier.
+    let mut waiting: Option<Value> = None;
     let mut out: Vec<Map<String, Value>> = Vec::new();
     let mut system = None;
     if !request.system_prompt.is_empty() {
@@ -73,6 +79,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
     for (index, input) in request.conversation.iter().enumerate() {
         match input {
             Input::User { text, images } => {
+                waiting = None;
                 flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 let prepared = crate::images::prepare(
                     text,
@@ -85,6 +92,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 out.push(message(user_content(prepared)));
             }
             Input::ToolSearchResult { action_id, loaded } => {
+                waiting = None;
                 out.push(message(json!({
                     "role": "tool",
                     "tool_call_id": call_id(action_id),
@@ -103,6 +111,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 pdfs,
                 ..
             } => {
+                waiting = None;
                 let prepared = crate::images::prepare(
                     text,
                     images,
@@ -126,6 +135,15 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 m.insert("content".into(), json!(text));
                 out.push(m);
             }
+            // A bare `extra_content` carrier waits for its own-model tool
+            // call instead of merging into the message.
+            Input::Reasoning {
+                model,
+                provider_item: Some(item),
+                ..
+            } if *model == reference && is_extra_content_carrier(item) => {
+                waiting = Some(item["extra_content"].clone());
+            }
             // Reasoning goes back unchanged, only to the model that produced
             // it, and never as plain text.
             Input::Reasoning {
@@ -141,15 +159,27 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
             }
             Input::Reasoning { .. } => {}
             Input::ToolCall {
-                action_id, call, ..
+                action_id,
+                call,
+                model,
             } => {
                 flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 let mut m = take_assistant(&mut out, &[]);
-                let call = json!({
+                let mut call = json!({
                     "id": call_id(action_id),
                     "type": "function",
                     "function": {"name": call.name, "arguments": arguments_text(&call.arguments)},
                 });
+                // A waiting `extra_content` replays back on its own-model
+                // call, only under `compat.gemini`; a foreign-model call
+                // never carries it.
+                if *model != reference {
+                    waiting = None;
+                } else if endpoint.compat.gemini
+                    && let Some(extra) = waiting.take()
+                {
+                    call["extra_content"] = extra;
+                }
                 match m.get_mut("tool_calls") {
                     Some(Value::Array(calls)) => calls.push(call),
                     _ => {
@@ -188,6 +218,13 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
         }
     }
     out.into_iter().map(Value::Object).collect()
+}
+
+/// A bare `{"extra_content": ...}` carrier, waiting for the tool call it
+/// arrived on. Any wider object is a replayed field set, not this.
+fn is_extra_content_carrier(item: &Value) -> bool {
+    item.as_object()
+        .is_some_and(|map| map.len() == 1 && map.contains_key("extra_content"))
 }
 
 /// A message object from `value`, which is always one.
