@@ -229,6 +229,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `loop` | `review` | Prints the reviewer's stage inputs and compaction selection requests for a session directory, including unreplayable calls. With `--reviewer-denies DIR`, prints one unlabelled sampled-kind set line per reviewer deny at the deny's seq, each carrying the recorded verdict with its reviewed prefix ending in the entry's own call; allows, native decisions and unreplayable denies emit nothing, closed-class entries drop loudly, the first deny per action wins, and no sample cap applies. |
 | `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |
 | `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
+| `support` | `framing` | Reads one file through the wire line reader with a stalled read after a cut point, printing what the read returns and what a follow-up read finds. |
 
 `contract` has no jig: it holds types, not behaviour. A jig not in this table
 is added to it by the ticket that builds it.
