@@ -396,7 +396,7 @@ impl Theme {
             Shade::Rgb((0xb3, 0x9d, 0xdb)), // secondary
             Shade::Rgb((0x3a, 0x3a, 0x4a)), // rule
             Shade::Rgb((0x80, 0x80, 0x80)), // scroll
-            Shade::Terminal,                // background
+            Shade::Rgb((0x0c, 0x0c, 0x11)), // background
             Shade::Rgb((0x0c, 0x0c, 0x11)), // panel
             Shade::Rgb((0x1a, 0x1a, 0x22)), // surface
             Shade::Rgb((0x3a, 0x3a, 0x4a)), // surface_raised
