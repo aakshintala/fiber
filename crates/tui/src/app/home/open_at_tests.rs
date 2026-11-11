@@ -214,7 +214,7 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
     // their order or count, so take the unscoped recent by kind.
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
     // The unscoped answer fans out the project's scoped asks, one of
@@ -266,7 +266,7 @@ fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let lines = commands(app.on_line(hello()));
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
     // A newly appearing project earns one scoped ask of each kind;
@@ -318,7 +318,7 @@ fn a_home_launch_never_focuses_the_list() {
     // their order or count, so take the unscoped recent by kind.
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
     // The unscoped answer fans out the project's scoped asks, one of

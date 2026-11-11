@@ -1532,8 +1532,9 @@ fn whole_turn_zero(lines: &[Line], envelopes: &[contract::Envelope]) -> String {
         Effect::Copy(text) => text,
         Effect::None
         | Effect::Send(_)
+        | Effect::SendTracked(_)
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }

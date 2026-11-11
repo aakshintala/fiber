@@ -788,7 +788,9 @@ off, a provider with no scoped installed model shows no section and no
 count row. Each model takes two rows. The first
 is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
 "● current" bold in `accent` on the session's model, "· scoped" dim on a
-scoped model while every model shows, then its input and output prices per
+scoped model while every model shows, "· new" dim on a model its vendor lists
+that Fiber has no details for (`docs/model-routing.md`, "Which models exist,
+and what Fiber knows about them"), then its input and output prices per
 million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
 and nothing for a model whose provider data names no cost. A model priced
 by request size shows the prices of the tier the session's last call falls
@@ -2611,13 +2613,14 @@ The range line's total counts every entry the query matches: the matching built-
 A row's other names, such as `/exit`, are aliases: typing one runs the same command, and the `/` list shows them after the name on that command's row, never as rows of their own.
 
 The rest of the list is the session's answer to the `commands` driver command
-(`docs/invocation.md`, "What each command does"): its skills, prompt templates
+(`docs/invocation.md`, "What each command does") and the TUI extension commands
+(`docs/extensions.md`, "Commands and screens"): its skills, prompt templates
 and extension commands, each with the tag the answer gives. The terminal sends
 `commands` when it attaches to a session and again after each `reloaded`,
 each `extensions_loaded`, which an offer's approval writes with no `reloaded`
 (`docs/events.md`, "`extensions_loaded`"), and each `turn_started`, and
 fills the list from the answer to the latest one it sent; until that answer
-arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's command named like a built-in's name takes that row's aliases with it: they run the extension's command and show on its row. An extension's commands run
+arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a built-in or TUI command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's command named like a built-in's name takes that row's aliases with it: they run the extension's command and show on its row. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
 
@@ -2625,7 +2628,7 @@ An unrecognised `/name` is refused: the terminal keeps the text in the
 input box and shows the notice `Unknown command /<name>. Type / for the
 list.` A first word with another `/` in it, such as `/usr/bin/env`, is a
 path and is sent as a message. On home, the same rule applies against
-the built-in commands only.
+the built-in and TUI commands.
 
 `/add-dir <path>` adds a folder to the session's boundary: it sends
 `add_directory` with the path (`docs/invocation.md`, "Driver commands").
@@ -3564,8 +3567,6 @@ handler never sees their keys. The choices, their keys and the `reply` they
 send stay the terminal's, so an extension never approves a tool call
 (`docs/extensions.md`, "Host calls").
 
-**Not built yet (extension slash commands): see #2720.**
-
 A TUI extension also binds keys to its own commands or to built-in actions, and
 adds slash commands, which join the one list ("Slash commands"). A theme stays
 a file that sets colours only ("Themes").
@@ -3682,7 +3683,7 @@ it, every rebuild of the conversation would call Lua for every row. The timings
 do not carry over to Linux; the call counts do.
 
 ### Input and focus
-**Not built yet (focused-slot keys, focus, and extension slash commands): see #2720.**
+**Not built yet (focused-slot keys and focus): see #2720.**
 
 One slot has focus at a time: the input box, an open view, or the overlay on
 top. An extension's view or overlay takes focus when it opens.
@@ -3787,9 +3788,12 @@ and a timeout switches the extension off as a still one does.
   has no built-in, so it closes. A key handler that errors or returns the
   wrong shape likewise counts as not handled, falling back to the built-in
   key map with one `hook_failed` notice for each extension and key slot
-  until `/reload`; a key handler that passes its timeout switches the
-  extension off until `/reload`, with one `extension_failed` notice, as a
-  still renderer does.
+  until `/reload`; a TUI command's `run` that errors or returns the wrong
+  shape likewise counts as not handled, with one `hook_failed` notice for
+  each extension and command until `/reload` (`true`, `false` and `nil`
+  returns are ignored); a key or command handler that passes its timeout
+  switches the extension off until `/reload`, with one `extension_failed`
+  notice, as a still renderer does.
 
 Not built yet (focused-slot key handlers): see #2720.
 

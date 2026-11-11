@@ -409,6 +409,217 @@ fn the_browser_shows_the_url_and_code_through_the_login_show() {
     );
 }
 
+impl Setup {
+    /// Writes the global configuration, for the mark tests that point a
+    /// label at an environment source.
+    fn write_config(&self, value: &serde_json::Value) {
+        fs::write(self.home().join("config.json"), value.to_string()).unwrap();
+    }
+
+    /// Installs a function provider `name` whose credential reads the
+    /// `vars` environment variables in order, drawing on the `paths`
+    /// files, for the helper-level mark tests.
+    fn install_function(&self, name: &str, vars: &[&str], paths: &[&str]) {
+        install_extension(
+            &self.home(),
+            &format!("extensions/{name}"),
+            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &[(
+                name,
+                json!({
+                    "name": name,
+                    "credential_label": {
+                        "names": name,
+                        "default": "environment",
+                        "credential_env": vars,
+                        "credential_paths": paths.iter().map(|path| json!({"path": path})).collect::<Vec<_>>(),
+                    },
+                    "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "http://x/v1", "context_window": 1000}],
+                }),
+            )],
+        );
+    }
+}
+
+/// One provider's sign-in mark through the helper, loading the installed
+/// providers and configuration the way the seam's `targets` does. The
+/// environment answers only through `env`, never the real one.
+fn marked(setup: &Setup, name: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let providers = cli::providers_in(&setup.home()).unwrap();
+    let workspace = std::env::current_dir().unwrap();
+    let (_, project) = cli::project_of(&setup.home(), &workspace).unwrap();
+    let config = config::Config::load(config::Sources {
+        home: setup.home(),
+        workspace,
+        project,
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let data = providers.get(name).unwrap();
+    super::mark(config.credentials(), &providers, data, env)
+}
+
+#[test]
+fn login_targets_marks_a_stored_credential_with_its_default_label() {
+    // The default label is the mark `docs/tui.md`, "Logging in", shows
+    // beside a signed-in provider: the label a session would use.
+    let setup = Setup::new();
+    setup.install("acme");
+    Seam::new(setup.home())
+        .store_key("acme", None, contract::Secret::new("sk-a".to_owned()))
+        .unwrap();
+    let rows = Seam::new(setup.home()).login_targets().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "acme");
+    assert_eq!(rows[0].kind, LoginKind::Key);
+    assert_eq!(rows[0].label, Some("default".to_owned()));
+}
+
+#[test]
+fn the_mark_names_the_variable_an_environment_key_is_read_from() {
+    // `docs/tui.md`, "Logging in": a key read from the environment
+    // marks with the variable's name, not the default label. The
+    // environment answers through the closure, so no real variable is
+    // set or read.
+    let setup = Setup::new();
+    setup.install("acme");
+    setup.write_config(&json!({"providers": {"acme": {"credentials": {
+        "default": {"env": "ACME_KEY"},
+    }}}}));
+    assert_eq!(
+        marked(&setup, "acme", &|var| {
+            (var == "ACME_KEY").then(|| "sk-a".to_owned())
+        }),
+        Some("ACME_KEY".to_owned())
+    );
+    // An empty value proves nothing: the row stays unmarked.
+    assert_eq!(
+        marked(&setup, "acme", &|var| {
+            (var == "ACME_KEY").then(String::new)
+        }),
+        None
+    );
+    // An unset variable proves nothing either.
+    assert_eq!(marked(&setup, "acme", &|_| None), None);
+    // Whitespace still counts, as `has_credential` counts it: the mark
+    // follows the bool, never its own reading.
+    assert_eq!(
+        marked(&setup, "acme", &|var| {
+            (var == "ACME_KEY").then(|| " ".to_owned())
+        }),
+        Some("ACME_KEY".to_owned())
+    );
+}
+
+#[test]
+fn the_mark_shows_the_default_label_when_another_label_proves_the_login() {
+    // The default label reads an unset variable while a stored label
+    // proves the login. The mark still shows the default label; only
+    // the variable-name rule swaps it.
+    let setup = Setup::new();
+    setup.install("acme");
+    Seam::new(setup.home())
+        .store_key(
+            "acme",
+            Some("work"),
+            contract::Secret::new("sk-a".to_owned()),
+        )
+        .unwrap();
+    setup.write_config(&json!({"providers": {"acme": {
+        "credential": "default",
+        "credentials": {"default": {"env": "ACME_KEY"}},
+    }}}));
+    assert_eq!(
+        marked(&setup, "acme", &|_| None),
+        Some("default".to_owned())
+    );
+}
+
+#[test]
+fn the_mark_names_a_set_variable_of_a_function_provider() {
+    // A function provider's mark names a nonempty variable when one
+    // proves the login (`docs/model-routing.md`, "Credentials"): an
+    // empty value proves
+    // nothing, so the mark falls through, else nothing when no
+    // credential proves the login. The doc promises no order between
+    // two set variables, so the test never sets both.
+    let setup = Setup::new();
+    setup.install_function("acme", &["ACME_ONE", "ACME_TWO"], &[]);
+    // An empty first variable falls through to the second.
+    assert_eq!(
+        marked(&setup, "acme", &|var| match var {
+            "ACME_ONE" => Some(String::new()),
+            "ACME_TWO" => Some("sk-a".to_owned()),
+            _ => None,
+        }),
+        Some("ACME_TWO".to_owned())
+    );
+    // Nothing set and nothing stored: unsigned.
+    assert_eq!(marked(&setup, "acme", &|_| None), None);
+}
+
+#[test]
+fn the_mark_falls_back_to_the_default_label_on_paths_only_presence() {
+    // A function provider proved only by its declared paths marks with
+    // its default label: no variable proved the login.
+    let setup = Setup::new();
+    let key = setup.home().join("acme.key");
+    fs::write(&key, "sk-a").unwrap();
+    setup.install_function("acme", &["ACME_ONE"], &[key.to_str().unwrap()]);
+    assert_eq!(
+        marked(&setup, "acme", &|_| None),
+        Some("default".to_owned())
+    );
+}
+
+#[test]
+fn login_targets_leaves_unsigned_rows_unmarked() {
+    // The seam marks what `has_credential` proves and leaves the rest
+    // `None`; secrets stay unmarked. `docs/tui.md`, "Logging in",
+    // promises only the Providers/Secrets grouping, so the test checks
+    // grouping and marks, never the providers' order.
+    let setup = Setup::new();
+    setup.install("acme");
+    setup.install("beta");
+    Seam::new(setup.home())
+        .store_key("beta", None, contract::Secret::new("sk-b".to_owned()))
+        .unwrap();
+    setup.declare("acme-secrets", &["acme.api_key"]);
+    let rows = Seam::new(setup.home()).login_targets().unwrap();
+    assert_eq!(rows.len(), 3);
+    // Secrets group last.
+    assert_eq!(rows[2].name.as_str(), "acme.api_key");
+    assert_eq!(rows[2].kind, LoginKind::Secret);
+    assert_eq!(rows[2].label, None);
+    // The two providers come first in some order, with beta marked and
+    // acme unmarked.
+    let mut first: Vec<(&str, LoginKind, Option<String>)> = rows[..2]
+        .iter()
+        .map(|row| (row.name.as_str(), row.kind, row.label.clone()))
+        .collect();
+    first.sort_by(|left, right| left.0.cmp(right.0));
+    assert_eq!(
+        first,
+        [
+            ("acme", LoginKind::Key, None),
+            ("beta", LoginKind::Key, Some("default".to_owned())),
+        ]
+    );
+}
+
+#[test]
+fn login_targets_with_an_unreadable_config_is_an_error() {
+    // A configuration that fails to load fails the whole list (`docs/tui.md`,
+    // "Logging in", reads the hub's credentials): the seam never falls
+    // back to unmarked rows.
+    let setup = Setup::new();
+    setup.install("acme");
+    fs::write(setup.home().join("config.json"), "{not json").unwrap();
+    let error = Seam::new(setup.home()).login_targets().unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::ConfigInvalid);
+}
+
 #[cfg(test)]
 mod browser {
     use fakes::MUST_SUCCEED_WITHIN;

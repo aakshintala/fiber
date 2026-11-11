@@ -259,10 +259,10 @@ fn accepted(id: &str, result: serde_json::Value) -> crate::link::Line {
 
 /// Loads a prompt into the recall list and selects it without using home ↑.
 fn seed_recalled_prompt(app: &mut App, prompt: &str) {
-    let Effect::Send(lines) = app.open_search() else {
+    let Effect::SendTracked(sents) = app.open_search() else {
         panic!("opening prompt search asks for its page");
     };
-    let id: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    let id: serde_json::Value = serde_json::from_str(&sents[0].line).unwrap();
     let result = serde_json::json!({"prompts": [{"session_id": "s_previous",
         "content": [{"type": "text", "text": prompt}]}]});
     app.on_line(accepted(id["id"].as_str().unwrap(), result));
@@ -919,10 +919,10 @@ fn the_remembered_chip_survives_a_session() {
     assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     // Starting a session and leaving home keeps the remembered chip.
     type_text(&mut app, "hi");
-    let Effect::Send(lines) = app.on_key(Key::Enter, testkit::now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, testkit::now()) else {
         panic!("Enter sends the start");
     };
-    let start: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    let start: serde_json::Value = serde_json::from_str(&sents[0].line).unwrap();
     let result = serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"});
     app.on_line(accepted(start["id"].as_str().unwrap(), result));
     assert!(!app.on_home());
@@ -1191,12 +1191,12 @@ fn a_session_attached_before_a_frame_keeps_the_arrows_for_the_conversation() {
     app.on_line(testkit::hello());
     type_text(&mut app, "hi");
     drawn(&mut app);
-    let Effect::Send(lines) = app.on_key(Key::Enter, testkit::now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, testkit::now()) else {
         panic!("Enter sends the start");
     };
     assert_eq!(app.on_key(Key::BackTab, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
-    let start: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    let start: serde_json::Value = serde_json::from_str(&sents[0].line).unwrap();
     let result = serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"});
     app.on_line(accepted(start["id"].as_str().unwrap(), result));
     // No frame has drawn the session yet, so the chip focus is still

@@ -103,9 +103,10 @@ fn loop_with_viewer(
 fn click(lp: &mut Loop<TestBackend>) -> Vec<String> {
     match lp.app.on_click(TargetId::Line(Target::Image(1))) {
         Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }

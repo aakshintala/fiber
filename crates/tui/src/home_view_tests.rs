@@ -403,7 +403,9 @@ fn home_with_an_archived_session_shows_only_ordinary_rows() {
     }
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
@@ -536,12 +538,13 @@ fn opening_the_archived_fold_pages_until_every_row_is_loaded() {
     // fake hub serving two pages. Stopping after the first page leaves
     // the last row missing, failing the assertion below.
     let key = archived_head_key(&app);
-    let Effect::Send(page) = app.on_click(crate::mouse::TargetId::Home(Spot::Archived(key))) else {
+    let Effect::SendTracked(page) = app.on_click(crate::mouse::TargetId::Home(Spot::Archived(key)))
+    else {
         panic!("opening the fold pages the archived recent");
     };
     assert_eq!(page.len(), 1);
     let page: serde_json::Value =
-        serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+        serde_json::from_str(&page[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
     assert_eq!(page["args"]["project"], "-w");
     assert!(page["args"].get("archived").is_some());
@@ -593,12 +596,12 @@ fn an_archived_only_project_shows_its_section() {
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
-    let Effect::Send(delete) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(delete) = app.on_key(Key::Enter, now) else {
         panic!("Enter confirms the delete");
     };
     assert_eq!(delete.len(), 1);
     let command: serde_json::Value =
-        serde_json::from_str(&delete[0]).unwrap_or_else(|err| panic!("{err}"));
+        serde_json::from_str(&delete[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(command["command"], "delete");
     let refill = outgoings(
         app.on_line(accepted(
@@ -610,7 +613,12 @@ fn an_archived_only_project_shows_its_section() {
     );
     let first = refill
         .iter()
-        .find(|line| line.get("args").is_none())
+        // The typed line writes an empty `args` object where the raw
+        // builder leaves it out; the hub reads both the same.
+        .find(|line| {
+            line.get("args")
+                .is_none_or(|args| args == &serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("an unscoped refill: {refill:?}"))
         .to_owned();
@@ -727,7 +735,9 @@ fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
         .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     assert!(
@@ -798,7 +808,9 @@ fn home_header_counts_loaded_rows_without_a_total() {
         .collect();
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(accepted(
@@ -1679,11 +1691,11 @@ fn blocker_lines_sit_above_the_box_and_the_list_yields() {
     choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
     let start: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     app.on_line(Line::Hub(contract::HubLine {
         kind: HubEventKind::CommandRejected,
@@ -1752,11 +1764,11 @@ fn blockers_count_against_the_four_row_logo() {
     choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
     let start: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     app.on_line(Line::Hub(contract::HubLine {
         kind: HubEventKind::CommandRejected,
@@ -2027,13 +2039,16 @@ fn home_stop_flow_keeps_the_home_list_drawn() {
     focus_first_row(&mut app);
     for _ in 0..2 {
         app.on_edit(crate::keys::Edit::Delete);
-        let crate::app::Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+        let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
             panic!("Enter sends the stop");
         };
         app.on_key(Key::Down, now);
-        let lines: Vec<serde_json::Value> = sent
+        let lines: Vec<serde_json::Value> = sents
             .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
             .collect();
         let close = lines
             .iter()
@@ -2170,12 +2185,16 @@ fn home_cascade_question() {
     app.on_line(left("s_0123456789abcdef", "exited"));
     stop_first(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    let delete: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let delete: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
     app.on_line(refused(
         id,
@@ -2191,12 +2210,16 @@ fn home_cascade_question() {
 fn ask_cascade(app: &mut App, root: &str, dependents: &[String]) {
     stop_first(app);
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    let delete: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let delete: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
     let names: Vec<String> = dependents
         .iter()
@@ -2461,12 +2484,16 @@ fn the_cascade_question_names_the_added_sessions() {
     app.on_line(left("s_0123456789abcdef", "exited"));
     stop_first(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    let delete: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let delete: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
     app.on_line(refused(
         id,
@@ -2497,13 +2524,17 @@ fn enter_in_the_delete_question_sends_delete_naming_the_session() {
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
     stop_first(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    assert_eq!(lines.len(), 1);
-    let line: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let line: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "delete");
     assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
     assert!(line["args"].get("cascade").is_none(), "no cascade");
@@ -4613,4 +4644,103 @@ fn home_logo_rect_values() {
     keys.set_graphics();
     keys.open_keys();
     assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
+}
+
+#[test]
+fn home_after_forgot_drops_the_row() {
+    // Client B's home after another client's delete: one live row and
+    // one exited row, then a `session_deleted` wire line for the
+    // exited row drops it and re-asks that project's counts.
+    let mut app = home(80, 24);
+    let lines: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let feed = lines
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {lines:?}"));
+    let recent = lines
+        .iter()
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {lines:?}"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    // The live status queues one scoped ask of each kind for the new
+    // project; settle both empty so the forgot re-ask below is exactly
+    // one of each.
+    let asked: Vec<serde_json::Value> = app
+        .on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let scoped = asked
+        .iter()
+        .find(|line| line["command"] == "recent" && line["args"].get("archived").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a scoped ask: {asked:?}"));
+    let archived = asked
+        .iter()
+        .find(|line| line["command"] == "recent" && line["args"].get("archived").is_some())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an archived ask: {asked:?}"));
+    assert!(
+        app.on_line(accepted(
+            scoped,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            archived,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            recent,
+            serde_json::json!({"sessions": [recent_row("s_cccccccccccccccc", "old work", "exited")]}),
+        ))
+        .is_empty()
+    );
+    let before = screen(&app, 80, 24);
+    assert!(before.contains("old work"), "{before}");
+    let forgot = crate::link::parse_line(
+        r#"{"kind":"session_deleted","ts":0,"schema_version":1,"payload":{"session_id":"s_cccccccccccccccc","project":"-w"}}"#,
+    )
+    .unwrap_or_else(|| panic!("the forgot line parses"));
+    let sent: Vec<serde_json::Value> = app
+        .on_line(forgot)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    // (`docs/tui.md`, "The session list"): the deleted session re-asks
+    // its project's counts, with one ask of each in flight: the exited
+    // scoped page and the archived scoped page.
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    for line in &sent {
+        assert_eq!(line["command"], "recent");
+        assert_eq!(line["args"]["project"], "-w");
+        assert!(line["args"].get("before").is_none());
+    }
+    assert_eq!(
+        sent.iter()
+            .filter(|line| line["args"].get("archived").is_some())
+            .count(),
+        1,
+        "{sent:?}"
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("fix the parser"), "{frame}");
+    assert!(!frame.contains("old work"), "{frame}");
+    insta::assert_snapshot!("home_after_forgot_drops_the_row", frame);
 }

@@ -629,6 +629,8 @@ impl App {
                     HubEventKind::HubHello
                     | HubEventKind::Attention
                     | HubEventKind::DeviceChanged
+                    | HubEventKind::SessionDeleted
+                    | HubEventKind::SessionArchived
                     | HubEventKind::CommandAccepted
                     | HubEventKind::CommandRejected
                     | HubEventKind::Unknown(_) => {}

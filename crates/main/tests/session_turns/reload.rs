@@ -238,16 +238,14 @@ fn extension(setup: &Setup, init: &str) {
         &json!({"name":"demo","version":"v0.0.0","fiber":"0.0.0","api":1}),
     );
     fs::write(source.join("init.lua"), init).unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// The message of a panic `action` raises, so each expiry path below

@@ -611,6 +611,13 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -619,7 +626,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -1643,6 +1650,13 @@ fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1651,7 +1665,7 @@ fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -2249,6 +2263,7 @@ fn wheel_over_login_scrolls_the_list_not_the_conversation() {
             .map(|at| crate::configure::LoginTarget {
                 name: format!("p{at}"),
                 kind: crate::configure::LoginKind::Key,
+                label: None,
             })
             .collect());
     }
@@ -2894,6 +2909,7 @@ fn login_seam() -> Arc<Fake> {
     *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     seam
 }

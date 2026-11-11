@@ -90,7 +90,7 @@ impl Setup {
 }
 
 /// Installs the fake provider with model `fake/m` in `home`.
-fn install_provider(home: &Path, root: &Path, server: &ProviderServer) {
+fn install_provider(home: &Path, root: &Path, server: &ProviderServer, wait: support::Deadline) {
     let source = root.join("src");
     support::write_json(
         &source.join("extension.json"),
@@ -104,16 +104,8 @@ fn install_provider(home: &Path, root: &Path, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
-        home,
-        &extensions::Request::Path(source),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(home, wait, &request, "0.0.0", None);
     support::write_json(&home.join("config.json"), &json!({"model": "fake/m"}));
 }
 
@@ -219,7 +211,12 @@ fn a_repo_add_is_approved_here_and_skipped_in_a_fresh_home() {
     let fresh = setup.root.path().join("h2");
     fs::create_dir_all(&fresh).unwrap();
     let second_source = setup.root.path().join("src2");
-    install_provider(&fresh, &second_source, &provider);
+    install_provider(
+        &fresh,
+        &second_source,
+        &provider,
+        setup.deadline.start_wait(),
+    );
     let list = setup.run_as(&fresh, &workspace, &["mcp", "list"], None);
     assert_eq!(list.code, Some(0), "{list:?}");
     assert_eq!(list.stdout, "db  repository  not approved\n", "{list:?}");
