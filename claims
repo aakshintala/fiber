@@ -283,3 +283,4 @@ crates/tui/src/configure.rs,crates/tui/src/login_view.rs,crates/tui/src/login_vi
 crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-11T06:26:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/keeper_version.rs	fiber-4351	plan	2026-11-11T06:26:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/bindings_tests.rs	fiber-4599	plan	2026-11-11T06:28:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/invocation.md	fiber-4596	plan	2026-11-11T06:59:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
