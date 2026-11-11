@@ -1494,9 +1494,9 @@ fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
     let mut app = panel_app();
     big_widget(&mut app);
     let down = mouse(MouseKind::WheelDown, 140, 20);
-    // Sixty widget lines after the sixteen Session rows and the blank
-    // row: 80 content rows over a 39-row viewport, so the end sits at
-    // 41 (the two new card rows moved it from 39).
+    // Sixty widget lines after the fifteen Session rows and the blank
+    // row: 79 content rows over a 39-row viewport, so the end sits at
+    // 40 (the two new card rows moved it from 38).
     for expected in [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36] {
         app.on_wheel(&down);
         assert_eq!(app.panel_state().scroll(), expected);
@@ -1504,11 +1504,11 @@ fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
     app.on_wheel(&down);
     assert_eq!(app.panel_state().scroll(), 39);
     app.on_wheel(&down);
-    assert_eq!(app.panel_state().scroll(), 41);
+    assert_eq!(app.panel_state().scroll(), 40);
     app.on_wheel(&down);
-    assert_eq!(app.panel_state().scroll(), 41);
+    assert_eq!(app.panel_state().scroll(), 40);
     let up = mouse(MouseKind::WheelUp, 140, 20);
-    for expected in [38, 35, 32, 29, 26, 23, 20, 17, 14, 11, 8, 5, 2] {
+    for expected in [37, 34, 31, 28, 25, 22, 19, 16, 13, 10, 7, 4, 1] {
         app.on_wheel(&up);
         assert_eq!(app.panel_state().scroll(), expected);
     }
@@ -1585,24 +1585,24 @@ fn wheel_up_after_growth_moves_on_the_first_wheel() {
     }
     assert_eq!(app.panel_state().scroll(), 24);
     app.set_size(160, 60);
-    // The stored 24 draws clamped to 21: the sixteen Session rows moved
-    // the taller viewport's end from 19 (the drawn text sits two rows
+    // The stored 24 draws clamped to 20: the fifteen Session rows moved
+    // the taller viewport's end from 18 (the drawn text sits two rows
     // further in, so it still reads the same lines).
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 02"
     );
-    // Clamped 21 moves to 18, so the display moves, not stuck at 21
+    // Clamped 20 moves to 17, so the display moves, not stuck at 20
     // (24 - 3 = 21 would stick).
     app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 18);
+    assert_eq!(app.panel_state().scroll(), 17);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   plan \u{b7} tasks"
     );
-    // Down moves to the new end at 21.
+    // Down moves to the new end at 20.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 21);
+    assert_eq!(app.panel_state().scroll(), 20);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 02"
@@ -1629,23 +1629,23 @@ fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
         "extension_ui",
         serde_json::json!({"extension": "plan", "widget": "tasks", "lines": lines}),
     ));
-    // Fifty lines draw 53 rows after the Session card's sixteen and
-    // the blank row, so the stored 39 draws clamped to 31.
+    // Fifty lines draw 52 rows after the Session card's fifteen and
+    // the blank row, so the stored 39 draws clamped to 30.
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 12"
     );
-    // Clamped 31 - 3 = 28, so the display moves, not stuck at 31
+    // Clamped 30 - 3 = 27, so the display moves, not stuck at 30
     // (39 - 3 = 36 would stick).
     app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 28);
+    assert_eq!(app.panel_state().scroll(), 27);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 09"
     );
-    // Down returns toward the shrunk end: 28 + 3 = 31.
+    // Down returns toward the shrunk end: 27 + 3 = 30.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 31);
+    assert_eq!(app.panel_state().scroll(), 30);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "   line 12"

@@ -10,14 +10,15 @@ expression: fresh
 ▌ $0.00                                                                                                                                                          test/model
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                    —
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                    compacts at —                        —
-▌ beta                                                                                                                                                           tokens in / out                  1 / 2
-▌                                                                                                                                                                cache hits                          0%
-▌ $0.00                                                                                                                                                          cache resets in                      —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                    cost                             $0.00
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                    cost on subscription             $0.00
-▌ 3 ✗ CRASHED              ✕                                                                                                                                     speed, last reply                    —
-▌ gamma                                                                                                                                                          turns                                0
-▌                                                                                                                                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ 2 ✓ READY           19675d                                                                                                                                     tokens in / out                  1 / 2
+▌ beta                                                                                                                                                           cache hits                          0%
+▌                                                                                                                                                                cache resets in                      —
+▌ $0.00                                                                                                                                                          cost                             $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                    cost on subscription             $0.00
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                    speed, last reply                    —
+▌ 3 ✗ CRASHED              ✕                                                                                                                                     turns                                0
+▌ gamma                                                                                                                                                        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌
 ▌ $0.00
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄⋮                                                                                                                                ⋮

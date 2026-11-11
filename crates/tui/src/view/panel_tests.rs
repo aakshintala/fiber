@@ -1130,7 +1130,6 @@ fn session_card_full() {
             TargetId::Panel(Spot::Model),
             TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Context),
-            TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Usage),
             TargetId::Panel(Spot::Usage),
             TargetId::Panel(Spot::Usage),
@@ -1175,9 +1174,6 @@ fn session_card_shows_the_thinking_glyph_while_the_model_thinks() {
     use crate::theme::{Role, style};
     let mut app = attached(160, 40);
     app.on_line(preamble_line(Some(800)));
-    // The call runs inside the first turn, so the cleared snapshot
-    // keeps turns at 1.
-    app.on_line(started_line("t_1"));
     app.on_line(session_line(
         "assistant_message_started",
         serde_json::json!({}),
@@ -1219,6 +1215,9 @@ fn session_card_shows_the_thinking_glyph_while_the_model_thinks() {
         "assistant_message_completed",
         serde_json::json!({"outcome": "completed"}),
     ));
+    // The settled turn counts: its start carries the turn id, so the
+    // cleared snapshot keeps turns at 1 with no running-turn card.
+    app.on_line(started_line("t_1"));
     app.on_line(session_line(
         "turn_completed",
         serde_json::json!({"outcome": "completed"}),
@@ -2823,7 +2822,7 @@ fn delegate_session_card_unknown_values_show_dashes_never_the_parent() {
         .into_iter()
         .filter(|row| row.spot == Some(Spot::Context))
         .collect();
-    assert_eq!(bars.len(), 3);
+    assert_eq!(bars.len(), 2);
     assert!(
         !bars[0].line.to_string().contains("│"),
         "no handoff marker: {:?}",
@@ -2908,7 +2907,7 @@ fn delegate_session_card_zero_window_shows_dashes_never_figures() {
         .into_iter()
         .filter(|row| row.spot == Some(Spot::Context))
         .collect();
-    assert_eq!(bars.len(), 3);
+    assert_eq!(bars.len(), 2);
     assert!(
         bars[0].line.to_string().contains("—"),
         "a dim dash for the size: {:?}",

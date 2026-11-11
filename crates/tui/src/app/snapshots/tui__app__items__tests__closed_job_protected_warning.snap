@@ -16,8 +16,9 @@ expression: "rows.join(\"\\n\")"
                                                                                              cost                     —
                                                                                              cost on subscription     —
                                                                                              speed, last reply        —
-⋮                                                                                         ⋮  turns                    0
+                                                                                             turns                    0
 ⋮                                                                                         ⋮▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+⋮                                                                                         ⋮
 ⋮                                                                                         ⋮
 
 
