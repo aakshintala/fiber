@@ -800,7 +800,7 @@ fills it, and the declared variable when one exists.
   `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.
 - On Databricks, `gemini-4-argon` rejects `reasoning_effort` with a 400
-  while `gemini-3-8-flash` accepts it ([owner probe](https://github.com/aakshintala/fiber/issues/4610#issuecomment-6783297010): argon answers with no `reasoning_effort` and 400s at medium and high; flash answers with it).
+  while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes

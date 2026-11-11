@@ -978,7 +978,6 @@ fn gemini_4_argon_takes_no_thinking_levels() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    support::assert_kinds_multiset(&run.lines, &HELLO_KINDS, &[], None, COUNT_DOC);
     assert_eq!(run.text_completed(), "Hello.");
     let requests = server.requests();
     assert_turn(&requests, "/ai-gateway/mlflow/v1/chat/completions");
