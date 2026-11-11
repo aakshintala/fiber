@@ -584,6 +584,7 @@ fn footer_names_what_tab_does_next() {
     app.on_models(Ok(catalogue()));
     open(&mut app);
     let view = app.model_picker_view().expect("open");
+    // Count row contract: docs/tui.md:773-774 ("scoped · 5 of 12" under scoped_models).
     assert_eq!(view.count, "scoped · 2 of 4");
     assert!(view.footer.contains(&("Tab", "show all")));
     let text = screen(&app, 80, 24);
@@ -592,6 +593,7 @@ fn footer_names_what_tab_does_next() {
     // After Tab every model shows, so the footer offers the way back.
     assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
     let view = app.model_picker_view().expect("open");
+    // Count row contract: docs/tui.md:773-774 ("12 models" when every model shows).
     assert_eq!(view.count, "4 models");
     assert!(view.footer.contains(&("Tab", "show scoped")));
     let text = screen(&app, 80, 24);

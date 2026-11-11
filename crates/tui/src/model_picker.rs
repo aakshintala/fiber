@@ -1283,6 +1283,10 @@ impl ModelPicker {
                 let mut footer = vec![("↑↓", "move"), ("←→", "levels"), ("Enter", "choose")];
                 // The Tab entry names what Tab does next, as the count
                 // row's toggle does: hidden with no scope to show.
+                // debt: the footer is laid out at the picker's preferred
+                // content width with no narrow-width degradation;
+                // upgrade trigger: #4689 decides how the footer degrades
+                // when it does not fit.
                 if !self.scoped.is_empty() {
                     footer.push((
                         "Tab",
