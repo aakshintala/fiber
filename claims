@@ -375,3 +375,4 @@ crates/cli/src/models_tests.rs	fiber-4609	plan	2026-11-11T16:55:23Z	Amoghs-MacBo
 .github/workflows/ci.yml	fiber-4660	plan	2026-11-11T17:10:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/install-shells	fiber-4660	plan	2026-11-11T17:10:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4660	plan	2026-11-11T17:10:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/install-shells:.github/workflows/ci.yml:docs/ci.md	fiber-4660	grant	2026-11-11T17:19:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4660	
