@@ -216,6 +216,7 @@ fn fixture_for(
 /// writes numbered chunks until the test-owned stop file appears,
 /// publishing each completed chunk's number and a final count. Receipts
 /// and the stop are control files, never the job's stdout.
+#[cfg(target_os = "linux")]
 struct FloodFixture {
     bound: BoundFixture,
     stop: PathBuf,
@@ -223,6 +224,7 @@ struct FloodFixture {
     final_count: PathBuf,
 }
 
+#[cfg(target_os = "linux")]
 fn flood_fixture() -> FloodFixture {
     let mut control = None;
     let bound = fixture_for(|marker, ready, gate| {
@@ -268,6 +270,7 @@ echo $i > "{final_count}"
 }
 
 /// Reads a chunk number the producer published, if it published one.
+#[cfg(target_os = "linux")]
 fn published(path: &std::path::Path) -> Option<u64> {
     fs::read_to_string(path)
         .ok()
@@ -964,10 +967,13 @@ fn a_second_crash_leaves_one_keeper_the_log_and_the_third_resume_orphans_the_oth
     two.reap();
 }
 
+#[cfg(target_os = "linux")]
 const MIB: u64 = 1 << 20;
+#[cfg(target_os = "linux")]
 const CHUNK: usize = 1 << 20;
 /// One chunk of the flood: a mebibyte of 64-byte lines that name their chunk
 /// and their place in it.
+#[cfg(target_os = "linux")]
 fn flood_chunk(chunk: u64) -> Vec<u8> {
     let pad = "x".repeat(53);
     let mut bytes = Vec::with_capacity(CHUNK);
@@ -979,6 +985,7 @@ fn flood_chunk(chunk: u64) -> Vec<u8> {
 
 /// Reads `chunks` of the file at `path`, one mebibyte at a time, and
 /// compares each with the flood's: exact length, bytes and order.
+#[cfg(target_os = "linux")]
 fn assert_flood(path: &std::path::Path, chunks: std::ops::Range<u64>) {
     use std::io::{Read as _, Seek as _, SeekFrom};
     let mut file = fs::File::open(path).unwrap();
@@ -990,6 +997,7 @@ fn assert_flood(path: &std::path::Path, chunks: std::ops::Range<u64>) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn len_of(path: &std::path::Path) -> u64 {
     fs::metadata(path).map_or(0, |meta| meta.len())
 }
@@ -1070,6 +1078,7 @@ struct RelaySockets {
 /// What a signaled Output frame carries: parsed bytes, never empty and
 /// never dumped on failure. The wire enum tags each line with its variant,
 /// so the bytes nest inside `output`.
+#[cfg(target_os = "linux")]
 fn nonempty_output(raw: &str) {
     let value: Value = serde_json::from_str(raw).expect("an Output frame parses");
     assert!(
