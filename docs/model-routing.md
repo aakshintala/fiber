@@ -74,7 +74,10 @@ and its limits are in
 So Fiber sends `strict` on every tool, on every protocol that has strict mode,
 and decides it per tool, except on `bedrock-converse`, which sends no
 `strict`: Nova refuses the field whether it is `true` or `false` ("Bedrock
-Converse wire facts"). It sends `true` only when the tool's schema already
+Converse wire facts"), and except on a model whose data sets
+`compat.no_strict`, which sends no `strict` key at all: the Databricks
+gateway rejects `strict` even as `false` on `claude-opus-4-1` (the Databricks
+gateway example below). It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
 tools are written to fit the strict subset, except a tool whose section in
@@ -628,8 +631,10 @@ For each model:
 - its protocol and base URL, which can differ between models of one provider,
   and may name a per-account host ("A per-account host")
 - compatibility flags the native protocol reads, such as whether the vendor
-  accepts `store`, which field carries the token limit, and which thinking
-  dialect it speaks
+  accepts `store`, which field carries the token limit, which thinking
+  dialect it speaks, and whether the request leaves the `strict` key off
+  every tool (`compat.no_strict`, which `claude-opus-4-1` needs on the
+  Databricks gateway: it rejects `strict` even as `false`)
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees"), except the Databricks
@@ -660,7 +665,7 @@ changes it (`docs/configuration.md`, "When Fiber reads configuration"). The key,
 its layers and its handling of an invalid value are in `docs/configuration.md`,
 "A provider's data".
 
-A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with, overlaid by `providers/databricks/thinking-overlay.json`, which wins on a shared key over the four thinking-vendor packages' rows; an overlay row may be explicitly empty, and an empty row still wins over a vendor row; a service neither names a row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models; `bedrock` keeps its Claude models' inference profiles and the other models that answered a probe through ConverseStream, "Protocols and providers"), names a model's protocol where models.dev cannot (`bedrock`'s Claude models speak `anthropic-messages`, its others `bedrock-converse`), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). It leaves out every model models.dev marks `status = "deprecated"`, in every package. It applies `providers/models-corrections.toml` last: each entry names a package, a model and the fields it overrides, with the vendor page that says so and the models.dev pull request that fixes the same data upstream. An entry exists only while models.dev is wrong, and the run that finds models.dev agreeing with it deletes it. A rerun on an unchanged models.dev changes nothing. A scheduled workflow runs it every night and opens a pull request when a committed file changes (`docs/ci.md`); no other CI job fetches. A test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with, overlaid by `providers/databricks/thinking-overlay.json`, which wins on a shared key over the four thinking-vendor packages' rows; an overlay row may be explicitly empty, and an empty row still wins over a vendor row; a service neither names a row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps five of models.dev's `openai` models; `bedrock` keeps its Claude models' inference profiles and the other models that answered a probe through ConverseStream, "Protocols and providers"), names a model's protocol where models.dev cannot (`bedrock`'s Claude models speak `anthropic-messages`, its others `bedrock-converse`), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). It leaves out every model models.dev marks `status = "deprecated"`, in every package. It applies `providers/models-corrections.toml` last: each entry names a package, a model and the fields it overrides, with the vendor page that says so and the models.dev pull request that fixes the same data upstream. An entry exists only while models.dev is wrong, and the run that finds models.dev agreeing with it deletes it. A rerun on an unchanged models.dev changes nothing. A scheduled workflow runs it every night and opens a pull request when a committed file changes (`docs/ci.md`); no other CI job fetches. A test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 This generated list is each package's fallback. A package whose vendor has a listing endpoint also lists its models live ("Model discovery").
 
@@ -851,8 +856,13 @@ support the Responses API get `openai-responses`, and the rest get
 carries `compat.gemini` on the protocol already chosen. A service whose
 catalog row's `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`
 carries `compat.max_tokens`, so its output limit goes in `max_tokens`.
-The returned list holds one entry per service, sorted by id.
-All of that is data.
+Two Claude rows differ per model, as probed through the gateway: the
+`claude-sonnet-4-5` rows carry no `deferred_tools`, because the gateway
+rejects their deferred load; and `claude-opus-4-1` carries
+`compat.no_strict`, because the gateway rejects the `strict` key on it,
+even as `false`, so its tools are sent with no `strict` key at all. The
+returned list holds one entry per service, sorted by id. All of that is
+data.
 
 ### Model discovery
 

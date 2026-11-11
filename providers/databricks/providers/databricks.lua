@@ -303,12 +303,13 @@ local function has_api(apis, want)
   return false
 end
 
--- The Claude models whose entries defer tools: a Databricks Claude row
--- carries `deferred_tools` exactly when its model's Anthropic row does, as
--- gateway pass-through to Anthropic was probed on
--- `databricks-claude-opus-5-5`; `claude-opus-5` stays out because its
--- Anthropic row carries no such flag. A model key missing here reads as no
--- deferral, and non-Claude entries never carry the field.
+-- The Claude models whose entries defer tools: the set records what the
+-- Databricks gateway accepts per model, probed per row. A model key
+-- missing here reads as no deferral, and non-Claude entries never carry
+-- the field. `claude-opus-5` stays out because its Anthropic row carries
+-- no such flag, and the `claude-sonnet-4-5` rows stay out because the
+-- gateway rejects their deferred load. The other rows follow their
+-- `providers/anthropic` counterparts.
 local DEFERRED_CLAUDE = {
   ["claude-fable-5"] = true,
   ["claude-fable-5-1"] = true,
@@ -321,11 +322,16 @@ local DEFERRED_CLAUDE = {
   ["claude-opus-4-7"] = true,
   ["claude-opus-4-8"] = true,
   ["claude-opus-5-5"] = true,
-  ["claude-sonnet-4-5"] = true,
-  ["claude-sonnet-4-5-20250929"] = true,
   ["claude-sonnet-4-6"] = true,
   ["claude-sonnet-5"] = true,
   ["claude-sonnet-5-5"] = true,
+}
+
+-- The Claude models whose entries carry `compat.no_strict`: the Databricks
+-- gateway rejects the `strict` key on these models, even as `false`, so
+-- their tools are sent without it.
+local NO_STRICT_CLAUDE = {
+  ["claude-opus-4-1"] = true,
 }
 
 -- The entry for one model service, or nil to leave it out: kept only when
@@ -383,6 +389,9 @@ local function entry_for(service, catalog, image_keys, thinking)
     entry.compat = { bearer = true }
     if DEFERRED_CLAUDE[model_key(bare)] then
       entry.deferred_tools = true
+    end
+    if NO_STRICT_CLAUDE[model_key(bare)] then
+      entry.compat.no_strict = true
     end
   end
   if gemini then

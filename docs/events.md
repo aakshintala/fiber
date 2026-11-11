@@ -771,7 +771,7 @@ Resume replays the same lines from the same field, so what the person saw
 never depends on who rewrote the text (`docs/sandbox.md`, "Protected paths").
 
 A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
-`tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
+`tool_call_started` for rewritten arguments, on `permission_requested` for the arguments under review, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
 rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
 for a changed final message, on `job_completed` for a changed completion notice,
 and on a `turn_started` message and `steering_applied` for
@@ -799,6 +799,8 @@ Durable. The envelope's `action_id` is the tool call.
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
 | `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
+| `arguments` | object | no | the arguments under review, when a `before_tool` hook rewrote them |
+| `changed_by` | `changed_by` | no | with `arguments` |
 
 #### `permission_resolved`
 
@@ -1526,7 +1528,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`, with optional `resets_at` (integer, milliseconds since the epoch) where the provider reports a reset time), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
 | `credentials` | `provider` (string), the provider a `credential` command would switch now; `credentials`, an array of its credential labels, sorted; `credential` (string, optional), the label it uses now, absent for a scripted session or a provider the session has not used |
 | `credential` | `provider` (string), the provider the switch applies to (`docs/invocation.md`) |
-| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
+| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary`; `workspace_gone` (string), the missing workspace or repository path, present only when the hub replays the log of a session whose workspace is gone and cannot be made again (`docs/invocation.md`, "Lifecycle") |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `lines` (array of integers), the byte offset in the file where each line of `text` starts; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `offered_file` | `text` (string), the file's full UTF-8 text |

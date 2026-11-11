@@ -1947,6 +1947,12 @@ A review that offers a rule shows the remembering choices:
   " · irreversible" in `error` when the call declares itself so, and "Esc
   puts it aside" dim, right-aligned.
 - Then the tool's name bold in `info` and its main argument bold, wrapped.
+  When a `before_tool` hook rewrote the call, the row ends with " · via
+  <names>", dim, naming the extensions that took attribution; a rewrite no
+  extension took attribution for draws no mark. The summary is the arguments
+  that will run, not the ones the model sent.
+- A request raised again keeps what the person typed, and shows the
+  arguments of the latest raise.
 - Then one dim facts line: the call's declared effects joined by ", ",
   " · " and the paths it names, and
   " · " and why it asked: "asked by the <scope> rule <prefix>", "a standing
@@ -2428,7 +2434,7 @@ so it does not redraw the screen as it does in some terminal programs.
 
 The key map docks at the bottom, full width, in the overlay frame ("Look",
 "Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
-binding by area, with its other paths." and the counts ("39 actions, 27 with
+binding by area, with its other paths." and the counts ("40 actions, 28 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type
@@ -2508,10 +2514,10 @@ character. An uppercase letter means Shift and that letter, and Shift on a
 character that is not a letter is dropped. `+` alone, or after a modifier as in `ctrl++`,
 is the plus key.
 
-Six actions have ordered variants: `move_word` (left, right),
+Seven actions have ordered variants: `move_word` (left, right),
 `line_start_end` (start, end), `focus_next_prev` (next, prev),
-`search_next_prev` (next, prev), `select_steering` (up, down) and
-`rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
+`focus_project` (next, prev), `search_next_prev` (next, prev),
+`select_steering` (up, down) and `rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
 in that order, so `["ctrl+b", "ctrl+f", "alt+b", "alt+f"]` gives `move_word`
 two keys each way. A list whose length is not a multiple of the number of
 variants is invalid, and `[]` unbinds the action. A group identical to an

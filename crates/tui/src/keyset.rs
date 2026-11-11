@@ -141,7 +141,7 @@ impl Default for Keyset {
 fn takes(id: &str) -> (&'static str, &'static str) {
     match id {
         "rail_row_n" => ("nines", "1 to 9"),
-        "focus_next_prev" | "search_next_prev" => ("twos", "next, prev"),
+        "focus_next_prev" | "focus_project" | "search_next_prev" => ("twos", "next, prev"),
         "line_start_end" => ("twos", "start, end"),
         "select_steering" => ("twos", "up, down"),
         _ => ("twos", "left, right"),
@@ -156,7 +156,7 @@ fn variant_name(id: &str, slot: usize) -> String {
     }
     let names = match id {
         "line_start_end" => &["start", "end"],
-        "focus_next_prev" | "search_next_prev" => &["next", "prev"],
+        "focus_next_prev" | "focus_project" | "search_next_prev" => &["next", "prev"],
         "select_steering" => &["up", "down"],
         _ => &["left", "right"],
     };

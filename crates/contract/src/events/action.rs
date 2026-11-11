@@ -458,6 +458,12 @@ pub struct PermissionRequested {
     /// Which step raised it, with its keys.
     #[serde(flatten)]
     pub step: AskStep,
+    /// The arguments under review, when a `before_tool` hook rewrote them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Map<String, Value>>,
+    /// With `arguments`, the extensions whose hooks rewrote them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
 }
 
 /// `permission_requested` as a line carries it, before its keys are checked
@@ -473,6 +479,8 @@ struct PermissionRequestedLine {
     standing_rule: Option<StandingRule>,
     escalation: Option<Escalation>,
     rule: Option<RuleOffer>,
+    arguments: Option<Map<String, Value>>,
+    changed_by: Option<Vec<String>>,
 }
 
 impl TryFrom<PermissionRequestedLine> for PermissionRequested {
@@ -491,6 +499,8 @@ impl TryFrom<PermissionRequestedLine> for PermissionRequested {
             declared: line.declared,
             always_reviewed: line.always_reviewed,
             step,
+            arguments: line.arguments,
+            changed_by: line.changed_by,
         })
     }
 }

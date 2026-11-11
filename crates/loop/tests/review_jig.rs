@@ -554,6 +554,8 @@ fn review_step(request_id: &str) -> Event {
             escalation: None,
             rule: None,
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
@@ -1353,6 +1355,8 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
                     prefix: "run tests".into(),
                 },
             },
+            arguments: None,
+            changed_by: None,
         }),
         Some("t_1"),
         Some("a_standing"),
