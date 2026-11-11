@@ -371,3 +371,13 @@ docs/tools.md	fiber-4260	plan	2026-11-11T22:51:36Z	Amoghs-MacBook-Pro:/Users/aak
 crates/extensions/src/models_dev.rs	fiber-4635	plan	2026-11-11T22:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/src/parts_tests.rs	fiber-4635	plan	2026-11-11T22:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 providers/anthropic/providers/anthropic.json	fiber-4635	plan	2026-11-11T22:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/bedrock/providers/bedrock.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/codex/providers/codex.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/gemini/providers/gemini.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/muse/providers/muse.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/openai/providers/openai.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/opencode/providers/opencode-go.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/opencode/providers/opencode-zen.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/vertex/providers/vertex.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+providers/databricks/thinking.lua	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
+xtask/tests/models-dev.json	fiber-4635	grant	2026-11-11T23:03:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
