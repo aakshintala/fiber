@@ -258,6 +258,8 @@ fn codex_is_generated_from_the_snapshot() {
         .map(|model| model["id"].as_str().unwrap())
         .collect();
     ids.sort();
+    // `docs/model-routing.md`, "What a provider extension declares": codex
+    // keeps four of models.dev's `openai` models.
     assert_eq!(
         ids,
         ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
@@ -347,6 +349,9 @@ fn every_committed_codex_model_keeps_the_chatgpt_backend_window() {
     let file: serde_json::Value =
         serde_json::from_str(&committed("providers/codex/providers/codex.json")).unwrap();
     let models = file["models"].as_array().unwrap();
+    // `docs/model-routing.md`, "What a provider extension declares": codex
+    // keeps four of models.dev's `openai` models, so the committed file is
+    // never empty.
     assert!(!models.is_empty());
     for model in models {
         assert_eq!(
@@ -356,4 +361,28 @@ fn every_committed_codex_model_keeps_the_chatgpt_backend_window() {
             model["id"].as_str().unwrap()
         );
     }
+}
+
+#[test]
+fn a_fully_prunable_correction_is_rewritten_to_the_header() {
+    // `docs/model-routing.md`, "What a provider extension declares": the run
+    // deletes an entry once models.dev agrees with it, so a correction whose
+    // single field already matches prunes and the file returns to the header.
+    let dir = TempDir::new("xtask-models-dev-prune");
+    dir.write(
+        CORRECTIONS,
+        "[[correction]]\n\
+         package = \"anthropic\"\n\
+         model = \"claude-sonnet-5-5\"\n\
+         source = \"https://vendor.example/claude-sonnet-5-5\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         protocol = \"anthropic-messages\"\n",
+    );
+    let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
+    let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
+    assert_eq!(code, 0, "{out}");
+    let text = std::fs::read_to_string(dir.path().join(CORRECTIONS)).unwrap();
+    assert!(!text.contains("[[correction]]"), "{text}");
+    assert!(text.starts_with("# Cited corrections"), "{text}");
 }

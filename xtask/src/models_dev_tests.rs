@@ -259,6 +259,9 @@ fn deprecated_is_dropped_in_every_package() {
             &probe,
             &[("old", tool_model(json!({"status": "deprecated"})))],
         );
+        // `docs/model-routing.md`, "Which models exist, and what Fiber knows
+        // about them": a deprecated model is left out, so the fixture lists
+        // no model.
         assert_eq!(output.models, 0, "{}", package.path);
         assert_eq!(
             left_out,
@@ -277,6 +280,9 @@ fn deprecated_is_dropped_in_every_package() {
                 &[]
             },
         );
+        // `docs/model-routing.md`, "What a provider extension declares": the
+        // generator keeps each source's models that call tools and output
+        // text, so a passing fixture lists one model.
         for status in [json!({"status": "stable"}), json!({"status": null})] {
             let (output, _) = generate_one(&probe, &[("old", tool_model(status))]);
             assert_eq!(output.models, 1, "{}", package.path);
@@ -347,6 +353,9 @@ fn a_correction_overrides_derived_fields_after_the_table() {
     assert_eq!(model["max_output_tokens"], 50);
     assert_eq!(model["input"], json!(["text", "image"]));
     assert_eq!(model["cost"], json!({"input": 5, "output": 6}));
+    // `docs/model-routing.md`, "What a provider extension declares": an
+    // entry exists only while models.dev is wrong, so a differing entry
+    // survives the run.
     assert_eq!(survivors.len(), 1);
 }
 
@@ -368,6 +377,9 @@ fn a_correction_matching_derived_values_is_pruned() {
     );
     let (output, _, survivors) =
         generate_corrected(&package, &[("m", tool_model(json!({})))], &matching);
+    // `docs/model-routing.md`, "What a provider extension declares": the run
+    // deletes an entry once models.dev agrees with it, so a matching entry
+    // leaves no survivor.
     assert!(survivors.is_empty());
     let model = generated_model(&output, "m").unwrap();
     assert_eq!(model["context_window"], 1000);
@@ -394,6 +406,9 @@ fn a_correction_differing_in_one_field_is_kept() {
         &[("m", tool_model(json!({"name": "Other"})))],
         &partial,
     );
+    // `docs/model-routing.md`, "What a provider extension declares": an
+    // entry exists only while models.dev is wrong, so a differing entry
+    // survives the run.
     assert_eq!(survivors.len(), 1);
     assert_eq!(generated_model(&output, "m").unwrap()["name"], "M");
 }
@@ -546,11 +561,12 @@ fn corrections_with_wrong_types_are_rejected() {
 
 #[test]
 fn the_committed_corrections_file_parses_and_renders_to_itself() {
-    // The empty file writes the header alone, so a prune rewrite keeps
-    // the file's shape byte for byte.
+    // `docs/model-routing.md`, "What a provider extension declares": an
+    // entry exists only while models.dev is wrong, so the committed file
+    // holds whatever entries are still wrong and a render keeps its shape
+    // byte for byte, empty or not.
     let committed = include_str!("../../providers/models-corrections.toml");
     let corrections = parse_corrections("corrections", committed).unwrap();
-    assert!(corrections.is_empty());
     assert_eq!(render_corrections(&corrections), committed);
 }
 
@@ -1885,4 +1901,292 @@ fn thinking_overlay_malformed_json_names_the_file_and_location() {
         ),
         Ok(_) => panic!("malformed overlay unexpectedly succeeded"),
     };
+}
+
+#[test]
+fn fields_named_twice_is_rejected() {
+    // An inline `fields` table plus a `[correction.fields]` header names the
+    // table twice, as do two inline `fields` lines.
+    for text in [
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         fields = {name = \"x\"}\n\
+         [correction.fields]\n\
+         name = \"y\"\n",
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         fields = {name = \"x\"}\n\
+         fields = {name = \"y\"}\n",
+    ] {
+        assert_eq!(
+            parse_corrections("corrections", text).unwrap_err(),
+            "corrections: correction 1 names `fields` twice"
+        );
+    }
+}
+
+#[test]
+fn trailing_blanks_and_comments_are_skipped() {
+    // A header with trailing blanks and a comment parses, as does a key line
+    // with trailing spaces or a trailing comment.
+    let header_comment = "[[correction]]   # note\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         name = \"Fixed\"\n";
+    assert!(parse_corrections("corrections", header_comment).is_ok());
+    let trailing_spaces = "[[correction]]\n\
+         package = \"t\"   \n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         name = \"Fixed\"\n";
+    assert!(parse_corrections("corrections", trailing_spaces).is_ok());
+    let trailing_comment = "[[correction]]\n\
+         package = \"t\" # note\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         name = \"Fixed\"\n";
+    let parsed = corrections(trailing_comment);
+    assert_eq!(parsed[0].model, "m");
+}
+
+#[test]
+fn trailing_text_after_a_line_or_header_is_rejected() {
+    assert_eq!(
+        parse_corrections("corrections", "[[correction]]\npackage = \"t\" trailing").unwrap_err(),
+        "corrections: reads trailing text after the value"
+    );
+    // A valid entry ending at EOF without a final newline still parses.
+    let no_final_newline = "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         name = \"Fixed\"";
+    assert!(parse_corrections("corrections", no_final_newline).is_ok());
+    assert_eq!(
+        parse_corrections("corrections", "[[correction]] trailing\npackage = \"t\"\n").unwrap_err(),
+        "corrections: reads trailing text after the header"
+    );
+}
+
+#[test]
+fn an_empty_fields_table_is_rejected() {
+    assert_eq!(
+        parse_corrections(
+            "corrections",
+            "[[correction]]\n\
+             package = \"t\"\n\
+             model = \"m\"\n\
+             source = \"https://vendor.example/m\"\n\
+             upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+             [correction.fields]\n"
+        )
+        .unwrap_err(),
+        "corrections: correction 1 names no fields"
+    );
+}
+
+fn rendered_name(value: &str) -> String {
+    let correction = Correction {
+        package: "t".to_owned(),
+        model: "m".to_owned(),
+        fields: Map::from_iter([("name".to_owned(), Value::from(value))]),
+        source: "https://vendor.example/m".to_owned(),
+        upstream: "https://github.com/models-dev/models.dev/pull/1".to_owned(),
+    };
+    render_corrections(std::slice::from_ref(&correction))
+}
+
+#[test]
+fn toml_strings_escape_short_forms() {
+    assert!(rendered_name("Fixed").contains("name = \"Fixed\""));
+    assert!(rendered_name("a\"b").contains("name = \"a\\\"b\""));
+    assert!(rendered_name("a\\b").contains("name = \"a\\\\b\""));
+    assert!(rendered_name("a\nb").contains("name = \"a\\nb\""));
+    assert!(rendered_name("a\rb").contains("name = \"a\\rb\""));
+    assert!(rendered_name("a\tb").contains("name = \"a\\tb\""));
+    assert!(rendered_name("a\u{08}b").contains("name = \"a\\bb\""));
+    assert!(rendered_name("a\u{0C}b").contains("name = \"a\\fb\""));
+    assert!(rendered_name("a\u{0001}b").contains("name = \"a\\u0001b\""));
+    // Printable text keeps its bytes: no `\uXXXX` for ordinary letters.
+    assert_eq!(
+        rendered_name("Fixed")
+            .lines()
+            .find(|line| line.starts_with("name = "))
+            .unwrap(),
+        "name = \"Fixed\""
+    );
+}
+
+#[test]
+fn toml_values_render_with_separators() {
+    let correction = Correction {
+        package: "t".to_owned(),
+        model: "m".to_owned(),
+        fields: Map::from_iter([("context_window".to_owned(), Value::from(2000))]),
+        source: "https://vendor.example/m".to_owned(),
+        upstream: "https://github.com/models-dev/models.dev/pull/1".to_owned(),
+    };
+    assert!(
+        render_corrections(std::slice::from_ref(&correction)).contains("context_window = 2000")
+    );
+    let two = Correction {
+        fields: Map::from_iter([(
+            "input".to_owned(),
+            Value::Array(vec![Value::from("text"), Value::from("image")]),
+        )]),
+        ..correction.clone()
+    };
+    assert!(render_corrections(std::slice::from_ref(&two)).contains("[\"text\", \"image\"]"));
+    let one = Correction {
+        fields: Map::from_iter([("input".to_owned(), Value::Array(vec![Value::from("text")]))]),
+        ..correction.clone()
+    };
+    assert!(
+        render_corrections(std::slice::from_ref(&one)).contains("[\"text\"]")
+            && !render_corrections(std::slice::from_ref(&one)).contains("[, ")
+    );
+    let pair = Correction {
+        fields: Map::from_iter([(
+            "cost".to_owned(),
+            serde_json::json!({"input": 5, "output": 6}),
+        )]),
+        ..correction.clone()
+    };
+    assert!(render_corrections(std::slice::from_ref(&pair)).contains("{input = 5, output = 6}"));
+    let single = Correction {
+        fields: Map::from_iter([("cost".to_owned(), serde_json::json!({"input": 5}))]),
+        ..correction.clone()
+    };
+    let text = render_corrections(std::slice::from_ref(&single));
+    assert!(text.contains("{input = 5}") && !text.contains("{, "));
+}
+
+#[test]
+fn check_reports_wrong_shapes_by_name() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    for (field, value, want) in [
+        ("name", json!(1), "a non-string"),
+        ("input", json!("x"), "a non-string array"),
+    ] {
+        let mut entry = full_correction();
+        entry[0].fields = Map::from_iter([(field.to_owned(), value)]);
+        assert_eq!(
+            generate_corrected_err(&package, &input, &entry),
+            format!(
+                "providers/models-corrections.toml: correction for `t/m` sets `{field}` to {want}"
+            )
+        );
+    }
+}
+
+fn parsed_field_value(literal: &str) -> Value {
+    let text = format!(
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         fields = {{v = {literal}}}\n"
+    );
+    corrections(&text)[0].fields["v"].clone()
+}
+
+fn parse_field_err(literal: &str) -> String {
+    let text = format!(
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         fields = {{v = {literal}}}\n"
+    );
+    parse_corrections("corrections", &text).unwrap_err()
+}
+
+#[test]
+fn bool_words_need_non_key_tails() {
+    assert_eq!(parsed_field_value("true"), Value::Bool(true));
+    assert_eq!(parsed_field_value("false"), Value::Bool(false));
+    for literal in ["truex", "true-", "true_", "falsey", "false-"] {
+        let error = parse_field_err(literal);
+        assert!(
+            error.contains("reads an unexpected byte"),
+            "{literal}: {error}"
+        );
+    }
+    assert_eq!(
+        parse_corrections("corrections", "[[correction]]\n= \"x\"\n").unwrap_err(),
+        "corrections: reads no key"
+    );
+}
+
+#[test]
+fn escapes_parse_to_their_chars() {
+    for (literal, expected) in [
+        (r#""\"""#, "\""),
+        (r#""\\""#, "\\"),
+        (r#""\b""#, "\u{08}"),
+        (r#""\f""#, "\u{0C}"),
+        (r#""\n""#, "\n"),
+        (r#""\r""#, "\r"),
+        (r#""\t""#, "\t"),
+        (r#""\u0041""#, "A"),
+        (r#""\U00000041""#, "A"),
+    ] {
+        assert_eq!(
+            parsed_field_value(literal),
+            Value::from(expected),
+            "{literal}"
+        );
+    }
+    assert!(
+        parse_field_err(r#""\x""#).contains("reads an unknown escape"),
+        "unknown escape"
+    );
+    assert_eq!(
+        parse_corrections("corrections", "[[correction]]\npackage = 3\n").unwrap_err(),
+        "corrections: correction 1 names a non-string `package`"
+    );
+}
+
+#[test]
+fn hex_escapes_accumulate_digits() {
+    assert_eq!(parsed_field_value(r#""\u0041""#), Value::from("A"));
+    assert!(
+        parse_field_err(r#""\u00GZ""#).contains("reads a short unicode escape"),
+        "short escape"
+    );
+}
+
+#[test]
+fn literal_strings_parse_verbatim() {
+    assert_eq!(parsed_field_value("'lit'"), Value::from("lit"));
+    assert_eq!(parsed_field_value("''"), Value::from(""));
+    assert!(
+        parse_field_err("'''").contains("reads a multiline string"),
+        "multiline"
+    );
+}
+
+#[test]
+fn numbers_keep_underscores_dots_and_signs() {
+    assert_eq!(parsed_field_value("1_000"), serde_json::json!(1000));
+    assert_eq!(parsed_field_value("1.5"), serde_json::json!(1.5));
+    assert_eq!(parsed_field_value("1e+5"), serde_json::json!(100000.0));
 }
