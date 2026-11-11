@@ -6949,3 +6949,26 @@ fn set_reason_moves_only_a_session_run() {
     };
     assert_eq!(hello.reason, contract::events::CallReason::Call);
 }
+
+/// A process delegate may omit its completion callback while still
+/// starting the job; a function marker keeps completion routing enabled.
+#[test]
+fn process_delegate_bind_run_flag_controls_end_routing() {
+    use super::process::calls::{DecodedCall, decode_host};
+    use super::process::context::HostOperation;
+
+    let args = |run| {
+        vec![
+            json!({"description": "work", "prompt": "do work"}),
+            json!({"timeout": 250, "run": run}),
+        ]
+    };
+    for (run, expected) in [(false, false), (true, true)] {
+        let decoded = decode_host("host.delegate", &args(run)).expect("the call decodes");
+        let DecodedCall::Service(HostOperation::Delegate { run, timeout, .. }) = decoded else {
+            panic!("host.delegate decodes as a service call");
+        };
+        assert_eq!(run, expected);
+        assert_eq!(timeout, Duration::from_millis(250));
+    }
+}
