@@ -131,8 +131,6 @@ crates/tui/src/app/top_tests.rs	fiber-4491	plan	2026-11-11T05:29:42Z	roundhouse-
 crates/tui/src/app/reconnect_tests.rs	fiber-4491	plan	2026-11-11T05:29:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/prompt/snapshots	fiber-4491	plan	2026-11-11T05:29:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4618	plan	2026-11-11T05:41:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-11T06:26:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/hub_daemon/keeper_version.rs	fiber-4351	plan	2026-11-11T06:26:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop_tests.rs	fiber-4491	plan	2026-11-11T08:55:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/doc-citations.allow	fiber-4618	plan	2026-11-11T09:42:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/keeper_child.rs	fiber-4628	plan	2026-11-11T11:10:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
