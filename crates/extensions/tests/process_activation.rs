@@ -588,7 +588,7 @@ impl contract::extension::Drive for FakeDrive {
 /// Calls one host service, then writes its answer to the marker file.
 fn probe(id: &str, command: &str, args: Value, marker: &str) -> Vec<Value> {
     vec![
-        json!({"send": {"id": id, "command": "call", "args": {"call": command, "args": args}}}),
+        json!({"send": {"id": id, "command": "call", "args": {"call": command, "args": args, "request_id": {"$ref": "req.payload.request_id"}}}}),
         json!({"read_until": {"path": "payload.command_id", "equals": id, "append_to": "acks"}}),
         json!({"write_file": {"path": marker, "value": {"$ref": "last"}}}),
     ]
