@@ -839,6 +839,7 @@ support the Responses API get `openai-responses`, and the rest get
 carries `compat.gemini` on the protocol already chosen. A service whose
 catalog row's `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`
 carries `compat.max_tokens`, so its output limit goes in `max_tokens`.
+The returned list holds one entry per service, sorted by id.
 All of that is data.
 
 ### Model discovery
