@@ -545,6 +545,16 @@ fn corrections_with_wrong_types_are_rejected() {
 }
 
 #[test]
+fn the_committed_corrections_file_parses_and_renders_to_itself() {
+    // The empty file writes the header alone, so a prune rewrite keeps
+    // the file's shape byte for byte.
+    let committed = include_str!("../../providers/models-corrections.toml");
+    let corrections = parse_corrections("corrections", committed).unwrap();
+    assert!(corrections.is_empty());
+    assert_eq!(render_corrections(&corrections), committed);
+}
+
+#[test]
 fn corrections_parse_both_fields_forms_and_reject_stray_tables() {
     let inline = corrections(
         "[[correction]]\n\

@@ -19,8 +19,12 @@ use fakes::{Deadline, TempDir, finished};
 /// checked-in snapshot is far quicker; this only bounds a hang.
 const WITHIN: Duration = Duration::from_secs(30);
 
+/// The cited corrections file, from the repository root: the run reads
+/// it from the root and rewrites it when an entry prunes.
+const CORRECTIONS: &str = "providers/models-corrections.toml";
+
 /// Every file the generator writes, from the repository root.
-const GENERATED: [&str; 11] = [
+const GENERATED: [&str; 12] = [
     "providers/anthropic/providers/anthropic.json",
     "providers/gemini/providers/gemini.json",
     "providers/openai/providers/openai.json",
@@ -32,6 +36,7 @@ const GENERATED: [&str; 11] = [
     "providers/vertex/providers/vertex.json",
     "providers/databricks/thinking.lua",
     "xtask/tests/models-dev.json",
+    "providers/models-corrections.toml",
 ];
 
 /// Where `expected` and `actual` first differ.
@@ -147,9 +152,17 @@ fn models_dev(dir: &TempDir, args: &[&str]) -> (i32, String) {
     (output.status.code().unwrap(), text)
 }
 
+/// Stages the committed corrections file where the run reads it: the
+/// run applies it to the snapshot's models, and an unchanged file keeps
+/// its bytes, so the drift test compares them.
+fn stage_corrections(dir: &TempDir) {
+    dir.write(CORRECTIONS, &committed(CORRECTIONS));
+}
+
 /// The committed contents of every `GENERATED` file, compiled in so
 /// the drift test reads no repository file at run time: the ten
-/// first-party package rows, then the in-crate snapshot row.
+/// first-party package rows, then the in-crate snapshot row, then the
+/// corrections file.
 static COMMITTED: &[(&str, &[u8])] = &[
     (
         "providers/anthropic/providers/anthropic.json",
@@ -170,6 +183,10 @@ static COMMITTED: &[(&str, &[u8])] = &[
     (
         "providers/gemini/providers/gemini.json",
         include_bytes!("../../providers/gemini/providers/gemini.json"),
+    ),
+    (
+        "providers/models-corrections.toml",
+        include_bytes!("../../providers/models-corrections.toml"),
     ),
     (
         "providers/muse/providers/muse.json",
@@ -210,6 +227,7 @@ fn committed(path: &str) -> String {
 #[test]
 fn generated_files_match_the_committed_ones() {
     let dir = TempDir::new("xtask-models-dev-drift");
+    stage_corrections(&dir);
     let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
     let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
     assert_eq!(code, 0, "{out}");
@@ -227,6 +245,7 @@ fn generated_files_match_the_committed_ones() {
 #[test]
 fn codex_is_generated_from_the_snapshot() {
     let dir = TempDir::new("xtask-models-dev-codex");
+    stage_corrections(&dir);
     let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
     let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
     assert_eq!(code, 0, "{out}");
@@ -275,4 +294,66 @@ fn a_catalog_missing_a_source_is_an_error_writing_nothing() {
     assert!(out.contains("models.dev has no `google` provider"), "{out}");
     assert!(!dir.path().join("providers").exists());
     assert!(!dir.path().join("xtask").exists());
+}
+
+/// A corrections file whose entry names no `upstream`.
+fn corrections_missing_upstream() -> String {
+    "[[correction]]\n\
+     package = \"openai\"\n\
+     model = \"gpt-4.1\"\n\
+     source = \"https://vendor.example/gpt-4.1\"\n\
+     [correction.fields]\n\
+     name = \"Fixed\"\n"
+        .to_owned()
+}
+
+#[test]
+fn a_correction_missing_upstream_is_an_error_writing_nothing() {
+    let dir = TempDir::new("xtask-models-dev-upstream");
+    dir.write(CORRECTIONS, &corrections_missing_upstream());
+    let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
+    let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("correction 1 names no `upstream`"), "{out}");
+    assert!(!dir.path().join("providers").join("openai").exists());
+    assert!(!dir.path().join("xtask").exists());
+}
+
+#[test]
+fn a_correction_for_an_unknown_model_is_an_error_writing_nothing() {
+    let dir = TempDir::new("xtask-models-dev-stale");
+    dir.write(
+        CORRECTIONS,
+        &corrections_missing_upstream().replace(
+            "model = \"gpt-4.1\"",
+            "model = \"ghost\"\nupstream = \"https://github.com/models-dev/models.dev/pull/1\"",
+        ),
+    );
+    let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
+    let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("correction for `ghost` matches no generated model"),
+        "{out}"
+    );
+    assert!(!dir.path().join("providers").join("openai").exists());
+    assert!(!dir.path().join("xtask").exists());
+}
+
+#[test]
+fn every_committed_codex_model_keeps_the_chatgpt_backend_window() {
+    // The 272000 pin lives in the package table, never in a correction:
+    // this reads the committed file, not a fixture.
+    let file: serde_json::Value =
+        serde_json::from_str(&committed("providers/codex/providers/codex.json")).unwrap();
+    let models = file["models"].as_array().unwrap();
+    assert!(!models.is_empty());
+    for model in models {
+        assert_eq!(
+            model["context_window"].as_u64(),
+            Some(272000),
+            "codex model {} keeps the ChatGPT backend window",
+            model["id"].as_str().unwrap()
+        );
+    }
 }
