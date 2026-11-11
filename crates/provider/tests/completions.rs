@@ -2651,6 +2651,8 @@ fn tool_call_extra_content_decodes_to_a_carrier_before_its_call() {
     ]))
     .0
     .unwrap();
+    // Carrier-before-call order, call order and counts
+    // (`docs/model-routing.md`, "openai-completions facts").
     assert_eq!(
         reply.actions,
         [
@@ -2719,6 +2721,8 @@ fn tool_call_extra_content_replays_on_its_own_call() {
     .into();
     send(endpoint, &req);
     let body = sent_body(&server, 0);
+    // Per-call pairing, call order and count
+    // (`docs/model-routing.md`, "openai-completions facts").
     assert_eq!(
         body["messages"][1]["tool_calls"],
         json!([
@@ -2764,6 +2768,8 @@ fn tool_call_extra_content_is_absent_without_the_gemini_flag() {
     send(endpoint(&server), &req);
     let body = sent_body(&server, 0);
     assert!(!body.to_string().contains("extra_content"), "{body}");
+    // Single call, still exactly one entry with no `extra_content`
+    // (`docs/model-routing.md`, "openai-completions facts").
     assert_eq!(
         body["messages"][1]["tool_calls"],
         json!([
@@ -2852,6 +2858,8 @@ fn tool_call_extra_content_carrier_must_be_bare_and_own_model() {
     .into();
     send(endpoint, &req);
     let body = sent_body(&server, 0);
+    // Wider object merged, foreign carrier dropped, one bare call
+    // (`docs/model-routing.md`, "openai-completions facts").
     assert_eq!(
         body["messages"][1],
         json!({"role": "assistant", "extra_content": extra, "note": "kept",
