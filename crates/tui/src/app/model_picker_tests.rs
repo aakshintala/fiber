@@ -131,6 +131,15 @@ fn first_run_one_credential_among_logged_out_opens_no_login_overlay() {
     app.on_models(Ok(listed));
     assert!(!app.config_view_open());
     assert!(app.model_picker_open());
+    // Screen-level (`docs/testing.md`, "What a change ships with"): the
+    // bug was seen on the terminal, so the rendered frame must show the
+    // picker and not the login overlay, even with the flags above intact.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    assert!(shown.contains("Models"), "{shown:?}");
+    assert!(!shown.contains("Log in"), "{shown:?}");
 }
 
 #[test]
