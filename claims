@@ -316,3 +316,6 @@ xtask/src/select/compiled_in.rs	fiber-4633	plan	2026-11-11T11:11:42Z	roundhouse-
 xtask/src/models_dev_table/bedrock.rs	fiber-4633	plan	2026-11-11T11:11:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/delete_tests.rs	fiber-3897	plan	2026-11-11T11:27:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	4486
 crates/hub/src/archive_tests.rs	fiber-3897	plan	2026-11-11T11:27:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	4486
+crates/provider/src/openai_completions.rs	fiber-4611	plan	2026-11-11T11:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/provider/src/openai_completions_messages.rs	fiber-4611	plan	2026-11-11T11:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4611	plan	2026-11-11T11:58:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
