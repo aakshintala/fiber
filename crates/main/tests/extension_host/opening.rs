@@ -39,16 +39,14 @@ impl Setup {
                 "fiber": "0.1.0", "api": 1, "opening": opening})
             .to_string(),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// Installs `fiber.test/<short>` as a data-only extension whose
@@ -62,16 +60,14 @@ impl Setup {
             .to_string(),
         );
         write(&source.join("prompt.md"), text);
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// Writes `content` to the fixture's machine data directory.
@@ -99,16 +95,14 @@ impl Setup {
             })
             .to_string(),
         );
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
         let mut config = json!({"model": "fake/m"});
         for (key, value) in extra.as_object().into_iter().flatten() {
             config[key] = value.clone();
