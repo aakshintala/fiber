@@ -308,6 +308,8 @@ fiber.watch(kinds, { timeout, run })
 fiber.command(name, { description, timeout, run })
 ```
 
+`fiber.harness` is not built yet: see #545.
+
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
 A tool's `effects` is a table, `{ effects, paths?, reversible, hosts? }` as
@@ -1977,8 +1979,8 @@ start ("Loading, and cost when nothing is loaded").
 
 ### A fresh install
 
-A fresh install has every first-party extension: the eleven providers,
-the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`), `export` and `codemode` ("Code mode"). They arrive in the release's extensions archive, which `install.sh`
+A fresh install has every first-party extension: the ten built providers,
+the Claude Code and cursor-agent harnesses (not built yet: see #545 and #546), `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`), `export` and `codemode` ("Code mode"). They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and

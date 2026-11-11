@@ -14,6 +14,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 
 - A delegate is an agent session a session starts to do part of the work. It
   runs Fiber or another harness, such as Claude Code or cursor-agent.
+  Another harness is not built yet: see #545.
 - Every delegate is a job. It gets a receipt, an output file, a wake on
   completion, and is listed, waited for and stopped with `jobs`. A delegate
   always runs in the background; no call blocks until a delegate finishes. A
