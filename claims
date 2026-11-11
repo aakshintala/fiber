@@ -329,3 +329,4 @@ crates/tui/src/keymap.rs	fiber-4599	grant	2026-11-11T07:13:45Z	roundhouse-7010-p
 crates/tui/src/offer.rs	fiber-4599	grant	2026-11-11T07:13:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
 crates/tui/src/offer/source.rs	fiber-4599	grant	2026-11-11T07:13:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
 crates/tui/src/rebind.rs	fiber-4599	grant	2026-11-11T07:13:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4599	
+crates/main/src/configure/remote_tests.rs	fiber-4606	grant	2026-11-11T07:32:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4606	
