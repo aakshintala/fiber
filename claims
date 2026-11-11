@@ -308,3 +308,6 @@ crates/extensions/src/lua.rs	fiber-2720	plan	2026-11-11T18:42:05Z	roundhouse-701
 crates/extensions/src/lua/vm.rs	fiber-2720	plan	2026-11-11T18:42:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/models-corrections.toml	fiber-4644	plan	2026-11-11T18:44:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 research/opencode-thinking/raw	fiber-4644	plan	2026-11-11T18:44:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/journey-report.yml	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-journey-report	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
