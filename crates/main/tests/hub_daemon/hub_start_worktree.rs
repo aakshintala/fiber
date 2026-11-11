@@ -671,9 +671,14 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         acks.is_empty(),
         "no accept or reject after the ack: {acks:?}"
     );
-    // No live tail follows the fold: the bounded receive times out
-    // rather than closing.
-    assert_silent(&client);
+    // The `prompt` refusal proves the fold completed: a command routed
+    // while the replay drains queues on its retiring entry and is
+    // passed on only at its end, so the refusal arrives strictly after
+    // the whole fold, in command order (`crates/hub/src/relay.rs`: "A
+    // command for a retiring relay queues unsent when its thread is
+    // alive, and its thread passes the queue on in read order"). The
+    // multiset below holds every line in between: anything but the
+    // refusal is a live-tail leak, with no silence wait involved.
     // Any other command still reaches the resume guard: `prompt` is
     // refused with the existing shape naming the repository, and the
     // confirmed failure keeps no wrapper period.
@@ -698,6 +703,11 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         !message.contains(first.path.to_string_lossy().as_ref()),
         "{message}"
     );
+    // No live tail follows the completed fold: the bounded receive
+    // times out rather than closing. It runs only after the refusal
+    // above proved the replay drained, so the window starts at a known
+    // edge instead of an arbitrary point.
+    assert_silent(&client);
     // Nothing created, the log untouched, no lock left, no resume.
     assert!(!setup.home().join("run").join(&first.id).exists());
     assert!(!first.path.exists());

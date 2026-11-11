@@ -4295,16 +4295,20 @@ fn a_missing_log_is_not_readable_gone() {
 }
 
 #[test]
-fn an_archived_log_is_not_readable_gone() {
-    // The `archived` marker ends the log, so it is not an exited one:
-    // the guard still refuses it, nothing resumes it, and nothing
-    // unarchives it (`docs/invocation.md`, "Lifecycle").
+fn an_archived_log_is_readable_gone() {
+    // Archiving appends the `archived` marker after the exit, so an
+    // archived-final log still reads from the log: the replay emits no
+    // status, so nothing unarchives it, and the guard still refuses to
+    // resume it (`docs/invocation.md`, "Lifecycle").
     let temp = Temp::new();
     let workspace = temp.recorded();
     temp.append("fiber_exited");
     temp.append("archived");
     fs::remove_dir_all(&workspace).unwrap();
-    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+    assert_eq!(
+        super::gone_readable(&temp.dir, &sid()),
+        Some((session_dir(&temp), workspace))
+    );
 }
 
 #[test]

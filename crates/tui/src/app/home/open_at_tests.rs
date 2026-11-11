@@ -1305,6 +1305,112 @@ fn esc_with_an_open_completion_goes_home_from_read_only() {
 }
 
 #[test]
+fn a_read_only_accept_replaces_only_its_session_pass() {
+    // A stale pass for the opening session and a live one for another
+    // session: the hub accept replaces only its own, and the foreign
+    // pass survives.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    app.passes.push((
+        id("s_bbbbbbbbbbbbbbbb"),
+        crate::app::Pass::Until(contract::Seq(9)),
+    ));
+    app.passes.push((
+        id("s_aaaaaaaaaaaaaaaa"),
+        crate::app::Pass::Until(contract::Seq(99)),
+    ));
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    let mut bounds: Vec<(String, u64)> = app
+        .passes
+        .iter()
+        .map(|(held, pass)| match pass {
+            crate::app::Pass::Until(last) => (held.0.clone(), last.0),
+            crate::app::Pass::Pending => (held.0.clone(), u64::MAX),
+        })
+        .collect();
+    bounds.sort();
+    assert_eq!(
+        bounds,
+        [
+            ("s_aaaaaaaaaaaaaaaa".to_owned(), 3),
+            ("s_bbbbbbbbbbbbbbbb".to_owned(), 9),
+        ],
+        "its own pass is replaced, the foreign one survives"
+    );
+}
+
+#[test]
+fn a_session_stream_accept_for_the_retry_leaves_the_read_only_open_alone() {
+    // A session-stream accept naming the retry id is not the hub retry
+    // answer: the open stays gated with no mark and no notice.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", second))
+            .is_empty()
+    );
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(!app.on_home(), "the open stays gated");
+    assert!(app.unwritable().is_none(), "no mark without the hub path");
+    assert!(app.notice().is_none(), "no failure renders");
+}
+
+#[test]
+fn a_second_read_only_open_starts_with_no_mark() {
+    // Leaving clears the read-only mark: the next open starts with no
+    // mark, so no stale bar gates its draft before its own accept.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.on_home());
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    assert!(
+        app.unwritable().is_none(),
+        "leave cleared the mark for the next open"
+    );
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    let third = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            third,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"), "the next open marks anew");
+}
+
+#[test]
 fn a_near_miss_io_failed_refusal_renders_verbatim() {
     for (code, message) in [
         (

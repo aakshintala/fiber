@@ -923,8 +923,35 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
         acks.is_empty(),
         "no accept or reject after the ack: {acks:?}"
     );
-    // No live tail follows the fold: the bounded receive times out
-    // rather than closing.
+    // The `prompt` refusal proves the fold completed: a command routed
+    // while the replay drains queues on its retiring entry and is
+    // passed on only at its end, so the refusal arrives strictly after
+    // the whole fold, in command order (`crates/hub/src/relay.rs`: "A
+    // command for a retiring relay queues unsent when its thread is
+    // alive, and its thread passes the queue on in read order"). The
+    // gather holds every line in between: anything but the refusal is
+    // a live-tail leak, with no silence wait involved.
+    client.send(&prompt("c_prompt", child, "hi"));
+    let refused = until_hub(&client, "the prompt refusal", |line| {
+        line["kind"] == "command_rejected"
+    });
+    assert_eq!(
+        refused.len(),
+        1,
+        "no tail between the fold and the refusal: {refused:?}"
+    );
+    let rejected = refused.last().unwrap();
+    assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_prompt", "{rejected}");
+    assert_eq!(
+        rejected["payload"]["message"].as_str().unwrap(),
+        format!("Session {child} could not resume: {workspace} no longer exists"),
+        "{rejected}"
+    );
+    // No live tail follows the completed fold: the bounded receive
+    // times out rather than closing. It runs only after the refusal
+    // above proved the replay drained, so the window starts at a known
+    // edge instead of an arbitrary point.
     assert_silent(&client);
     // `history` pages the gone session's own log and its forked-from
     // parent's, as the session would.
@@ -962,22 +989,9 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
         [0, 1],
         "{answered}"
     );
-    // Any other command still reaches the resume guard: `prompt` is
-    // refused with the existing message, and nothing starts.
-    client.send(&prompt("c_prompt", child, "hi"));
-    let rejected = until_hub(&client, "the prompt refusal", |line| {
-        line["kind"] == "command_rejected"
-    });
-    let rejected = rejected.last().unwrap();
-    assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
-    assert_eq!(rejected["payload"]["command_id"], "c_prompt", "{rejected}");
-    assert_eq!(
-        rejected["payload"]["message"].as_str().unwrap(),
-        format!("Session {child} could not resume: {workspace} no longer exists"),
-        "{rejected}"
-    );
-    // No session process started: nothing bound the socket, and the hub
-    // logged no resume.
+    // The `prompt` above already proved any other command still reaches
+    // the resume guard. No session process started: nothing bound the
+    // socket, and the hub logged no resume.
     assert!(!setup.home().join("run").join(child).exists());
     let log = setup.hub_log();
     assert!(!log.contains("session_resumed"), "{log}");
@@ -1005,6 +1019,53 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
     assert!(!setup.home().join("run").join(child).exists());
     assert!(!setup.hub_log().contains("session_resumed"));
+    // An archived-final log still replays: the `full` subscribe is
+    // accepted with the missing path, and the fold follows as before
+    // with the `archived` marker last. Nothing unarchives the row.
+    client.send(&subscribe_line("c_sub2", child));
+    let acked = until_hub(&client, "the archived replay", |line| {
+        acknowledges(line, "c_sub2")
+    });
+    let accept = acked.last().unwrap();
+    assert_eq!(accept["payload"]["command_id"], "c_sub2", "{accept}");
+    let last = accept["payload"]["result"]["last_seq"]
+        .as_u64()
+        .expect("a nonempty fold has a boundary");
+    assert_eq!(last, 4, "{accept}");
+    assert_eq!(
+        accept["payload"]["result"]["workspace_gone"].as_str(),
+        Some(workspace.as_str()),
+        "{accept}"
+    );
+    let mut fold = Vec::new();
+    for _ in 0..7 {
+        fold.push(client.next("the archived fold", &fold));
+    }
+    let shape: Vec<_> = fold
+        .iter()
+        .map(|line| {
+            (
+                line["session_id"].as_str().unwrap_or("?"),
+                line["seq"].as_u64().unwrap_or(u64::MAX),
+                line["kind"].as_str().unwrap_or("?"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (parent.as_str(), 0, "session_started"),
+            (parent.as_str(), 1, "fiber_started"),
+            (child, 0, "session_started"),
+            (child, 1, "turn_started"),
+            (child, 2, "turn_completed"),
+            (child, 3, "fiber_exited"),
+            (child, 4, "archived"),
+        ],
+        "{shape:?}"
+    );
+    let log = setup.log(child);
+    assert_eq!(log.last().unwrap()["kind"], "archived", "{log:?}");
     drop(client);
     hub.lock().unwrap().take().expect("the hub ran").finish();
 }
