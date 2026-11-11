@@ -1246,6 +1246,8 @@ fn review_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             }),
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
@@ -3917,6 +3919,137 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
     let done = new_of(&history, "tool_call_completed");
     assert_eq!(done[0].payload["status"], "completed");
     assert_eq!(done[0].action_id, Some(ActionId("a_1".into())));
+}
+
+/// Hooks rewriting every call's `city` to `to`, naming the rewrite.
+struct RewriteHooks {
+    to: String,
+}
+
+impl contract::hook::Hooks for RewriteHooks {
+    fn after_tool(
+        &self,
+        _call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("city".to_owned(), serde_json::json!(self.to.clone()));
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Rewritten {
+                arguments,
+                changed_by: vec!["loop.test/rewrite".to_owned()],
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _message: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(
+        &self,
+        _start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _call: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_compaction(
+        &self,
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
+        fakes::no_note()
+    }
+
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
+}
+
+/// A suspended approval re-raised on resume carries the resume's rewrite
+/// under the same request id: the person judges what the resumed hooks
+/// produced, not the first raise.
+#[test]
+fn permission_requested_rewrite_on_a_resumed_reraise_carries_the_resume_rewrite() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let hooks = Arc::new(RewriteHooks {
+        to: "Rome".to_owned(),
+    });
+    let looped = history
+        .resume(tools_of(&[&act]))
+        .hooks(Arc::clone(&hooks) as Arc<dyn contract::hook::Hooks>);
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    history.inbox_tx.send(delivery).unwrap();
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen), "the reply was accepted");
+    let raised = new_of(&history, "permission_requested");
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].payload["request_id"], "r_9");
+    assert_eq!(raised[0].payload["arguments"], json!({"city": "Rome"}));
+    assert_eq!(
+        raised[0].payload["changed_by"],
+        json!(["loop.test/rewrite"])
+    );
+    let mut rome = serde_json::Map::new();
+    rome.insert("city".to_owned(), json!("Rome"));
+    assert_eq!(act.ran(), vec![rome]);
 }
 
 #[test]

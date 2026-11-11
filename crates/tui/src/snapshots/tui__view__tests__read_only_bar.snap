@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: shown
+---
+
+
+
+
+
+⋮
+⋮                                                 ▄▄▄▄▄▄▄▄▄
+⋮                                                  run it ▐
+                                                  ▀▀▀▀▀▀▀▀▀
+                                                 you 00:00
+
+   `/w` no longer exists. Read only.

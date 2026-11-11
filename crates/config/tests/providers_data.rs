@@ -149,6 +149,7 @@ fn the_codex_entries_declare_the_thinking_levels_their_routes_accept() {
         ("gpt-6-sol", Medium),
         ("gpt-6-astra", Low),
         ("gpt-6-luna", Medium),
+        ("gpt-6.1-terra", Low),
     ] {
         let model = codex.models.iter().find(|m| m.id == id).unwrap();
         assert_eq!(model.thinking_levels, levels, "{id}");

@@ -433,7 +433,7 @@ fn clashing_with_two_actions_prompts_twice_then_applies() {
 fn reset_applies_the_defaults_removing_the_entry() {
     let keys = person(&[("copy_focused", json!(["c"]))]);
     let mut screen = keys_screen();
-    select(&mut screen, &keys, 22);
+    select(&mut screen, &keys, 23);
     match press(&mut screen, &keys, &["r"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),
@@ -1344,7 +1344,7 @@ fn settle_clamps_a_past_the_end_selection_to_the_last_action() {
     screen.settle(&grown, shown);
     assert_eq!(screen.selected, BINDINGS.len().saturating_sub(1));
     // The window moves down to show the last action's first line.
-    assert_eq!(screen.top, 40);
+    assert_eq!(screen.top, 42);
 }
 
 /// A window of nothing shown keeps the clamped top: with no rows to

@@ -648,6 +648,81 @@ fn a_hook_rewrite_shows_in_the_ledger_row() {
     run.write(b"\x03\x03\r");
 }
 
+/// The approval card for a rewritten call draws the arguments that will
+/// run and names the extension that rewrote them (`docs/tui.md`, "An
+/// approval").
+#[test]
+fn an_approval_rewrite_shows_the_rewritten_arguments_with_the_mark() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "A\n").unwrap();
+    fs::write(setup.workspace().join("b.txt"), "B\n").unwrap();
+    setup.lua("guard", &rewrite_guard("b.txt"));
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
+            {"text": ["done"]},
+        ]}),
+    );
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "read", "prefix": "/"}),
+        ),
+    )
+    .unwrap();
+    let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &support::TRUECOLOUR);
+    run.ready();
+    let from = run.output().len();
+    run.write(b"read it\r");
+
+    // The card draws the rewritten path with the mark, never the
+    // requested path. One wait with its own deadline names the card row;
+    // the predicate checks every cell the asserts below read: the
+    // rewritten path, the requested path's absence and the mark ending
+    // the row, so a partial redraw cannot satisfy it.
+    let card = |row: &str| {
+        row.contains("read")
+            && row.contains("b.txt")
+            && !row.contains("a.txt")
+            && row.trim_end().ends_with("\u{b7} via fiber.test/guard")
+    };
+    let screen = run.wait_screen("the approval card", |screen| {
+        screen.rows.iter().any(|row| card(row))
+    });
+    let row = screen
+        // settled: the wait checked this row's path and mark.
+        .rows
+        .iter()
+        .find(|row| card(row))
+        .unwrap();
+    assert!(row.contains("b.txt"), "the rewritten path, in {row:?}");
+    assert!(!row.contains("a.txt"), "not the requested path, in {row:?}");
+    assert!(
+        row.trim_end().ends_with("\u{b7} via fiber.test/guard"),
+        "the mark, in {row:?}"
+    );
+    // Allow the call, let the turn finish, then quit. The waiting title
+    // proves the turn waits on a person before the choice goes out
+    // (`docs/testing/screens.md`, "Screens"), so Enter never follows the
+    // card's grid match alone.
+    run.wait_bytes(from, support::pty::WAITING_TITLE, "the waiting turn");
+    run.write(b"\r");
+    run.wait_screen("the reply", |screen| {
+        screen
+            .rows
+            .iter()
+            .any(|row| row.contains("\u{25a3} completed"))
+    });
+    run.turn_finished(from);
+    run.write(b"\x03\x03\r");
+}
+
 #[test]
 fn a_rewrite_into_credentials_is_refused_by_the_credential_deny() {
     let setup = Setup::new();

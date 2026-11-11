@@ -767,6 +767,20 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "read"},
+            "arguments": {"path": "b.txt"}, "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "read"},
+            "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
             json!({"request_id": "r", "effects": ["executes"],
             "reversible": false, "always_reviewed": true, "step": "review"}),
         ),
@@ -1473,6 +1487,56 @@ fn a_compaction_note_is_the_actions_or_a_hook_text_never_both() {
 }
 
 #[test]
+fn permission_requested_arguments_read_with_and_without_changed_by() {
+    let base = || {
+        json!({"request_id": "r", "effects": ["reads"], "reversible": true,
+        "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "read"}})
+    };
+    let read_request = |payload: Value| match read("permission_requested", payload).unwrap() {
+        Some(Event::PermissionRequested(requested)) => requested,
+        other => panic!("not a permission_requested: {other:?}"),
+    };
+    // Arguments with changed_by: the rewrite and who rewrote it.
+    let mut rewritten = base();
+    rewritten["arguments"] = json!({"path": "b.txt"});
+    rewritten["changed_by"] = json!(["fiber.test/guard"]);
+    let requested = read_request(rewritten.clone());
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("path".to_owned(), json!("b.txt"));
+    assert_eq!(requested.arguments, Some(arguments));
+    assert_eq!(
+        requested.changed_by,
+        Some(vec!["fiber.test/guard".to_owned()])
+    );
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        rewritten
+    );
+    // Changed_by alone: no arguments, and the key stays on the wire.
+    let mut unattributed = base();
+    unattributed["changed_by"] = json!(["fiber.test/guard"]);
+    let requested = read_request(unattributed.clone());
+    assert_eq!(requested.arguments, None);
+    assert_eq!(
+        requested.changed_by,
+        Some(vec!["fiber.test/guard".to_owned()])
+    );
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        unattributed
+    );
+    // Neither key: an old payload reads with both absent and writes back
+    // unchanged.
+    let requested = read_request(base());
+    assert_eq!(requested.arguments, None);
+    assert_eq!(requested.changed_by, None);
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        base()
+    );
+}
+
+#[test]
 fn a_permission_request_carries_only_the_keys_its_step_defines() {
     let base = || json!({"request_id": "r", "effects": [], "reversible": true});
     let rule = json!({"subject": "npm test", "prefix": "npm"});
@@ -2151,7 +2215,8 @@ fn a_subscribe_result_names_the_last_fold_line() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
         CommandResult::Subscribe {
-            last_seq: crate::Seq(41)
+            last_seq: crate::Seq(41),
+            workspace_gone: None,
         }
     );
     let Some(Event::CommandAccepted(accepted)) =
@@ -2160,6 +2225,31 @@ fn a_subscribe_result_names_the_last_fold_line() {
         panic!("not an acceptance");
     };
     assert_eq!(accepted.result, None);
+    // A result omitting the missing path reads as a live open, and a
+    // live open stays byte-identical on the wire: the path is absent,
+    // never null (`docs/invocation.md`, "Lifecycle").
+    let written = serde_json::to_value(result_of(
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    ))
+    .unwrap();
+    assert!(
+        written["result"].get("workspace_gone").is_none(),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_subscribe_result_carries_the_missing_workspace_path() {
+    // The hub names the missing workspace when it replays the log of a
+    // session whose workspace is gone (`docs/invocation.md`,
+    // "Lifecycle"); the terminal opens that accept read only.
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"last_seq": 41, "workspace_gone": "/w"}})),
+        CommandResult::Subscribe {
+            last_seq: crate::Seq(41),
+            workspace_gone: Some("/w".into()),
+        }
+    );
 }
 
 #[test]

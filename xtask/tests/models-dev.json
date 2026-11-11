@@ -9129,6 +9129,42 @@
         "name": "GPT-6.1 Sol",
         "tool_call": true
       },
+      "gpt-6.1-terra": {
+        "cost": {
+          "cache_read": 0.05,
+          "cache_write": 1.25,
+          "input": 1,
+          "output": 5,
+          "tiers": [
+            {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "input": 2,
+              "output": 7.5,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-6.1 Terra",
+        "tool_call": true
+      },
       "gpt-daybreak-blue-latest": {
         "cost": {
           "cache_read": 0.4,
