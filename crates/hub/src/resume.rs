@@ -86,10 +86,52 @@ fn exited_in(dir: &Path) -> bool {
     log::last_kind(dir).as_deref() == Some("fiber_exited")
 }
 
+/// Whether the log in `dir` ends in `fiber_exited` or in the `archived`
+/// marker archiving appends after the exit: an archived-final log is a
+/// readable-gone one too (R15). The resume guard keeps refusing to
+/// resume it, and replaying it emits no status, so nothing unarchives
+/// it.
+fn ended_in(dir: &Path) -> bool {
+    matches!(
+        log::last_kind(dir).as_deref(),
+        Some("fiber_exited" | "archived")
+    )
+}
+
 /// Whether the log in `dir` is a delegate's. A log whose first line
 /// cannot be read is not.
 fn is_delegate_in(dir: &Path) -> bool {
     recorded(dir).is_some_and(|recorded| recorded.delegate)
+}
+
+/// A session whose log ends in `fiber_exited`, or in the `archived`
+/// marker archiving appends after the exit, and whose workspace is
+/// gone and cannot be made again (`docs/invocation.md`, "Lifecycle"):
+/// its directory and the missing path. The hub serves a `full`
+/// subscribe and `history` for it from the log instead of resuming or
+/// refusing it. The missing path is the workspace for a plain folder,
+/// and the recorded repository when a recorded Fiber worktree's
+/// repository is gone too, exactly as the resume guard refuses them.
+/// A worktree whose repository still exists is made again, so `None`,
+/// as for a live log, a missing or unreadable one, a delegate's, and a
+/// log ending in anything but the exit or archived marks. Replaying an
+/// archived log emits no status, so nothing unarchives it — and the
+/// guard still refuses to resume it. The delegate branch owns
+/// delegates, and the guard owns every other command.
+pub(crate) fn gone_readable(home: &Path, session: &SessionId) -> Option<(PathBuf, PathBuf)> {
+    let (_, dir) = crate::recent::lookup_logged(home, session)?;
+    if !ended_in(&dir) {
+        return None;
+    }
+    let found = recorded(&dir)?;
+    if found.delegate {
+        return None;
+    }
+    match (found.repository, missing(&found.workspace)) {
+        (None, true) => Some((dir, found.workspace)),
+        (Some(repository), true) if missing(&repository) => Some((dir, repository)),
+        (Some(_) | None, _) => None,
+    }
 }
 
 /// Whether `session` is a finished delegate whose parent holds no open run

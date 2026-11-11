@@ -22,7 +22,7 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.claude-opus-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.claude-opus-5-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.claude-sonnet-4-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]}]}"
+          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.claude-opus-4-1\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.claude-opus-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.claude-opus-5-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.claude-sonnet-4-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]}]}"
         }
       },
       {
@@ -36,7 +36,7 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"models\":[{\"model_name\":\"claude-opus-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":200000,\"max_output\":32000}},{\"model_name\":\"claude-opus-5-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":1000000,\"max_output\":128000}},{\"model_name\":\"claude-sonnet-4-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":1000000,\"max_output\":128000}}]}"
+          "body": "{\"models\":[{\"model_name\":\"claude-opus-4-1\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":1000000,\"max_output\":128000}},{\"model_name\":\"claude-opus-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":200000,\"max_output\":32000}},{\"model_name\":\"claude-opus-5-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":1000000,\"max_output\":128000}},{\"model_name\":\"claude-sonnet-4-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":1000000,\"max_output\":128000}}]}"
         }
       },
       {
@@ -50,12 +50,19 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"endpoints\":[{\"name\":\"claude-opus-5\"},{\"name\":\"claude-opus-5-5\"},{\"name\":\"claude-sonnet-4-5\"}]}"
+          "body": "{\"endpoints\":[{\"name\":\"claude-opus-4-1\"},{\"name\":\"claude-opus-5\"},{\"name\":\"claude-opus-5-5\"},{\"name\":\"claude-sonnet-4-5\"}]}"
         }
       }
     ]
   },
   "returns": [
+    {
+      "id": "databricks-claude-opus-4-1",
+      "protocol": "anthropic-messages",
+      "compat": {
+        "no_strict": true
+      }
+    },
     {
       "id": "databricks-claude-opus-5",
       "protocol": "anthropic-messages",
@@ -69,7 +76,7 @@
     {
       "id": "databricks-claude-sonnet-4-5",
       "protocol": "anthropic-messages",
-      "deferred_tools": true
+      "deferred_tools": null
     }
   ]
 }
