@@ -53,7 +53,82 @@ fn probe(
     }
 }
 
-fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
+/// One `pgrep` execution's kill-bound for the expiry-time keeper sample:
+/// the fakes per-`pgrep` budget (2500 ms), spelled here because that const
+/// is crate-private. A sample, never a poll.
+const KEEPER_SAMPLE_WITHIN: std::time::Duration = std::time::Duration::from_millis(2_500);
+
+/// The expiry-time session-log read keeps at most this many bytes from the
+/// end of the events log: a bounded tail, never the full read.
+const SESSION_LOG_TAIL_CAP: usize = 64 * 1024;
+
+/// One line naming what one `fakes::matching` listing saw: pids mean the
+/// keeper is still pre-bind (it runs while the socket refuses), no match
+/// means the bind history is unobservable (no bind event exists in the
+/// seams). A failed listing names the `pgrep` step and claims nothing about
+/// the keeper.
+fn keeper_sample_line(listing: &std::io::Result<Vec<u32>>) -> String {
+    match listing {
+        Ok(pids) if !pids.is_empty() => {
+            format!("keeper alive (pids: {pids:?}); not yet bound")
+        }
+        Ok(_) => "keeper dead (no process under the keeper pattern); bind history unobservable"
+            .to_owned(),
+        Err(error) => format!("keeper listing failed: {error}; keeper state unknown"),
+    }
+}
+
+/// The tail of the session events log: at most `SESSION_LOG_TAIL_CAP` bytes
+/// from the end, complete lines only (a leading fragment cut by the window
+/// and a trailing fragment still being written both drop), each parsed as
+/// JSON. Missing, unreadable, non-UTF-8 or malformed input reports
+/// `unknown`: expiry evidence must never panic on the log.
+fn session_log_tail(read: &std::io::Result<Vec<u8>>) -> String {
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(_) => return "session log tail: unknown".to_owned(),
+    };
+    let start = bytes.len().saturating_sub(SESSION_LOG_TAIL_CAP);
+    let mut window = &bytes[start..];
+    if start > 0 {
+        match window.iter().position(|byte| *byte == b'\n') {
+            Some(end) => window = &window[end + 1..],
+            None => return "session log tail: (no complete lines)".to_owned(),
+        }
+    }
+    let text = match std::str::from_utf8(window) {
+        Ok(text) => text,
+        Err(_) => return "session log tail: unknown".to_owned(),
+    };
+    let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+    let mut lines = Vec::new();
+    for line in complete.lines() {
+        if serde_json::from_str::<Value>(line).is_err() {
+            return "session log tail: unknown".to_owned();
+        }
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        return "session log tail: (no complete lines)".to_owned();
+    }
+    format!("session log tail:\n{}", lines.join("\n"))
+}
+
+/// The expiry-time keeper sample: one `fakes::matching` listing under the
+/// session's keeper pattern plus one bounded tail read of the session
+/// events log, each run once on the expiry path, never in a loop. No
+/// exit-wait, no second wait, no sleep, no retry.
+fn keeper_state_at_expiry(pattern: &str, setup: &Setup, id: &str) -> String {
+    let listing = fakes::matching(pattern, KEEPER_SAMPLE_WITHIN);
+    let log = fs::read(session_dir(setup, id).join("events.jsonl"));
+    format!(
+        "{}\n{}",
+        keeper_sample_line(&listing),
+        session_log_tail(&log)
+    )
+}
+
+fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf, keeper_state: &str) -> String {
     let connect_error = last_error.unwrap_or_else(|| "no connect error was observed".to_owned());
     let socket_state = match fs::metadata(path) {
         Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
@@ -61,12 +136,17 @@ fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
         Err(error) => format!("metadata error: {error}"),
     };
     format!(
-        "last connect error: {connect_error}; socket path {}: {socket_state}",
+        "last connect error: {connect_error}; socket path {}: {socket_state}\n{keeper_state}",
         path.display()
     )
 }
 
-fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
+pub(super) fn wait_for_refuse_only_socket(
+    deadline: Deadline,
+    path: PathBuf,
+    setup: &Setup,
+    id: &str,
+) {
     let last_error = Arc::new(Mutex::new(None));
     let error_slot = Arc::clone(&last_error);
     let target = path.clone();
@@ -82,6 +162,7 @@ fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone(),
             &path,
+            &keeper_state_at_expiry(&format!("keeper --id {id}"), setup, id),
         );
         panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
     }
@@ -332,7 +413,7 @@ fn crash_after(
     // The bind comes after the killed session released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(&fixture.id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, setup, &fixture.id);
     Crashed {
         job: started["payload"]["job_id"].as_str().unwrap().to_owned(),
         output: session_dir(setup, &fixture.id)
@@ -1858,18 +1939,95 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
         &last,
     ));
     assert_eq!(last.lock().unwrap().as_deref(), Some("probe failure"));
-    let diagnostic = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    let alive =
+        "keeper alive (pids: [4242]); not yet bound\nsession log tail:\n{\"kind\":\"job_started\"}";
+    let diagnostic = timeout_diagnostic(last.into_inner().unwrap(), &path, alive);
     assert!(diagnostic.contains("socket path "), "{diagnostic}");
     assert!(diagnostic.contains(": absent"), "{diagnostic}");
     assert!(
         diagnostic.contains("last connect error: probe failure"),
         "{diagnostic}"
     );
+    assert!(diagnostic.contains("not yet bound"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("session log tail:\n{\"kind\":\"job_started\"}"),
+        "{diagnostic}"
+    );
+    let dead = "keeper dead (no process under the keeper pattern); bind history unobservable\nsession log tail: unknown";
     let last = Mutex::new(None);
-    let no_observation = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    let no_observation = timeout_diagnostic(last.into_inner().unwrap(), &path, dead);
     assert!(
         no_observation.contains("last connect error: no connect error was observed"),
         "{no_observation}"
+    );
+    assert!(
+        no_observation.contains("bind history unobservable"),
+        "{no_observation}"
+    );
+    assert!(
+        no_observation.contains("session log tail: unknown"),
+        "{no_observation}"
+    );
+    // The sample renderer maps the listing to the honest reading: pids mean
+    // still pre-bind, no match means the bind history is unobservable, and a
+    // failed listing names itself and claims nothing about the keeper.
+    assert_eq!(
+        keeper_sample_line(&Ok(vec![7])),
+        "keeper alive (pids: [7]); not yet bound"
+    );
+    assert!(
+        keeper_sample_line(&Ok(Vec::new())).contains(
+            "keeper dead (no process under the keeper pattern); bind history unobservable"
+        ),
+    );
+    let listing_failed = keeper_sample_line(&Err(std::io::Error::other("pgrep hung")));
+    assert!(
+        listing_failed.contains("keeper listing failed: pgrep hung"),
+        "{listing_failed}"
+    );
+    // The tail window keeps at most 64 KiB from the end: below the cap the
+    // whole log renders, just above it the cut leading fragment drops.
+    let line = "{\"kind\":\"job_started\"}\n";
+    assert_eq!(
+        session_log_tail(&Ok(line.repeat(3).into_bytes())),
+        format!("session log tail:\n{}", line.repeat(3).trim_end())
+    );
+    let unit = format!("{{\"seq\":0,\"pad\":\"{pad}\"}}\n", pad = "x".repeat(45));
+    assert_eq!(unit.len(), 64);
+    let at_cap = unit.repeat(SESSION_LOG_TAIL_CAP / 64);
+    assert_eq!(at_cap.len(), SESSION_LOG_TAIL_CAP);
+    let rendered = session_log_tail(&Ok(at_cap.into_bytes()));
+    assert!(rendered.contains("\"pad\":\""), "{rendered}");
+    assert_eq!(rendered.lines().count(), 1025, "{rendered}");
+    let filler = "x".repeat(SESSION_LOG_TAIL_CAP + 1);
+    let cut = format!("{filler}\n{line}");
+    let rendered = session_log_tail(&Ok(cut.into_bytes()));
+    assert_eq!(rendered, format!("session log tail:\n{}", line.trim_end()));
+    // A trailing fragment still being written drops; a malformed line, a
+    // missing log, or non-UTF-8 bytes report unknown, never panic.
+    assert_eq!(
+        session_log_tail(&Ok(b"{\"a\":1}\n{\"b\":2".to_vec())),
+        "session log tail:\n{\"a\":1}"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(b"{\"a\":1}\nnot json\n".to_vec())),
+        "session log tail: unknown"
+    );
+    assert_eq!(
+        session_log_tail(&Err(std::io::Error::from(std::io::ErrorKind::NotFound))),
+        "session log tail: unknown"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(vec![0xff, b'\n'])),
+        "session log tail: unknown"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(Vec::new())),
+        "session log tail: (no complete lines)"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(vec![b'x'; SESSION_LOG_TAIL_CAP + 1])),
+        "session log tail: (no complete lines)"
     );
 }
 
@@ -2041,7 +2199,7 @@ fn keeper_bound_holds_job_in_bound_without_resume() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, &setup, id);
     // Inside the bound, with no resume: the keeper still runs and still
     // holds its job, and no ending is written yet.
     assert!(
