@@ -231,7 +231,7 @@ impl Table {
     }
 
     /// Mints a pending request carrying the outer tool call's inner runner.
-    pub(crate) fn mint_with_inner_calls(
+    fn mint_with_inner_calls(
         &self,
         kind: RequestKind,
         extension: &str,
