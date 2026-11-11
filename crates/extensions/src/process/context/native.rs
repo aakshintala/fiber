@@ -270,6 +270,12 @@ impl NativeHostServices {
         arguments: Value,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        if callback.tool_anchor().is_none() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.tool: called outside a running tool call".to_owned(),
+            ));
+        }
         let runner = support::lock(&self.tool_runner).clone();
         let Some(runner) = runner else {
             return Err((
@@ -309,6 +315,12 @@ impl NativeHostServices {
         request: contract::model::HostModelRequest,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        if !callback.model_permitted() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.model: not available here".to_owned(),
+            ));
+        }
         let model = support::lock(&self.model).clone();
         let Some(model) = model else {
             return Err((
@@ -372,6 +384,12 @@ impl NativeHostServices {
         timeout: Duration,
         _run: bool,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        if !callback.delegate_permitted() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.delegate: not available here".to_owned(),
+            ));
+        }
         let delegate = support::lock(&self.delegate).clone();
         let Some(delegate) = delegate else {
             return Err((
