@@ -76,7 +76,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
   true` only when its schema fits the vendor's strict subset, and with
   `strict: false` otherwise, a built-in tool included (`docs/model-routing.md`,
-  "Protocols and providers").
+  "Protocols and providers"). A model whose data sets `compat.no_strict`
+  sends no `strict` key at all.
 
 ## Before a call runs
 

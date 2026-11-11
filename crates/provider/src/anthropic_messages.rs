@@ -224,29 +224,27 @@ fn wire_tools(
             if let Some(kind) = &tool.hosted {
                 return crate::wire::object(json!({"name": tool.name, "type": kind}));
             }
-            if no_strict {
-                let mut wired = crate::wire::object(json!({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.input_schema,
-                }));
-                if deferring && tool.deferred && tool.name != TOOL_SEARCH {
-                    wired.insert("defer_loading".into(), json!(true));
+            // With `no_strict`, no tool carries a `"strict"` key at all
+            // and no tool spends a strict slot.
+            let strict = if no_strict {
+                None
+            } else {
+                let fits = strict_left > 0
+                    && strict::fits(&tool.input_schema)
+                    && !complex_enum(&tool.input_schema);
+                if fits {
+                    strict_left -= 1;
                 }
-                return wired;
-            }
-            let strict = strict_left > 0
-                && strict::fits(&tool.input_schema)
-                && !complex_enum(&tool.input_schema);
-            if strict {
-                strict_left -= 1;
-            }
+                Some(fits)
+            };
             let mut wired = crate::wire::object(json!({
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.input_schema,
-                "strict": strict,
             }));
+            if let Some(strict) = strict {
+                wired.insert("strict".into(), json!(strict));
+            }
             if deferring && tool.deferred && tool.name != TOOL_SEARCH {
                 wired.insert("defer_loading".into(), json!(true));
             }
@@ -259,13 +257,22 @@ fn wire_tools(
 /// builds. Shared by the body and the digests, so both hash the same
 /// bytes.
 fn wired_tools(request: &ModelRequest, deferring: bool, no_strict: bool) -> Vec<Value> {
-    request
-        .sent_tools
-        .clone()
-        .unwrap_or_else(|| wire_tools(&request.tools, deferring, no_strict))
-        .into_iter()
-        .map(Value::Object)
-        .collect()
+    let tools = match request.sent_tools.clone() {
+        // A rewound session's first request carries its parent's logged
+        // build verbatim, which can hold `"strict"` keys the parent sent.
+        // With `no_strict` those keys still go out, so they are stripped
+        // here; every other key stays as logged.
+        Some(sent) if no_strict => sent
+            .into_iter()
+            .map(|mut tool| {
+                tool.remove("strict");
+                tool
+            })
+            .collect(),
+        Some(sent) => sent,
+        None => wire_tools(&request.tools, deferring, no_strict),
+    };
+    tools.into_iter().map(Value::Object).collect()
 }
 
 /// The system prompt as sent, with its cache breakpoint: absent when the

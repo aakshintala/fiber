@@ -74,7 +74,10 @@ and its limits are in
 So Fiber sends `strict` on every tool, on every protocol that has strict mode,
 and decides it per tool, except on `bedrock-converse`, which sends no
 `strict`: Nova refuses the field whether it is `true` or `false` ("Bedrock
-Converse wire facts"). It sends `true` only when the tool's schema already
+Converse wire facts"), and except on a model whose data sets
+`compat.no_strict`, which sends no `strict` key at all: the Databricks
+gateway rejects `strict` even as `false` on `claude-opus-4-1` (the Databricks
+gateway example below). It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
 tools are written to fit the strict subset, except a tool whose section in
