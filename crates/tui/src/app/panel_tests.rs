@@ -38,6 +38,16 @@ fn ts_line(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Li
     })
 }
 
+/// One `turn_started` of `session` carrying turn `turn`: only a start
+/// with an id counts (`docs/tui.md`, "The panel", Session: turns).
+fn turn_started_line(session: &str, turn: &str) -> Line {
+    let mut line = ts_line(session, "turn_started", 0, serde_json::json!({"input": []}));
+    if let Line::Session(envelope) = &mut line {
+        envelope.turn_id = Some(contract::TurnId(turn.to_owned()));
+    }
+    line
+}
+
 /// An `extension_ui` widget's lines.
 fn widget(extension: &str, widget: &str, lines: &[&str]) -> Line {
     session_line(
@@ -337,23 +347,42 @@ fn model_changed_updates_model_and_thinking() {
     assert_eq!(panel.thinking(), Some("high"));
 }
 
-/// Turns count completions, not starts: a started turn leaves the count
-/// at zero, each completed turn adds one (`docs/tui.md`, "The panel",
-/// Session: output speed and turns).
+/// Turns count started turns with an id: a running id-carrying start
+/// reads 1, ending it keeps 1, a second start reads 2, and id-less
+/// starts and lone completions count nothing (`docs/tui.md`, "The
+/// panel", Session: turns; `docs/events.md`, `session_status`).
 #[test]
-fn turns_count_turn_completed() {
+fn turns_count_started_turns() {
     let mut app = attached();
     assert_eq!(app.panel_state().turns(), 0);
+    // A start without an id is a turn of others' messages before any
+    // driver prompt: it counts nothing.
     app.on_line(session_line(
         SESSION,
         "turn_started",
         serde_json::json!({"input": []}),
     ));
     assert_eq!(app.panel_state().turns(), 0);
-    let completed = session_line(SESSION, "turn_completed", serde_json::json!({}));
-    app.on_line(completed.clone());
-    app.on_line(completed);
+    // The first turn starts and has not ended: it already reads 1.
+    app.on_line(turn_started_line(SESSION, "t_1"));
+    assert_eq!(app.panel_state().turns(), 1);
+    // Ending it keeps 1; the second start reads 2.
+    app.on_line(session_line(
+        SESSION,
+        "turn_completed",
+        serde_json::json!({}),
+    ));
+    assert_eq!(app.panel_state().turns(), 1);
+    app.on_line(turn_started_line(SESSION, "t_2"));
     assert_eq!(app.panel_state().turns(), 2);
+    // A lone completion with no start counts nothing.
+    let mut fresh = attached();
+    fresh.on_line(session_line(
+        SESSION,
+        "turn_completed",
+        serde_json::json!({}),
+    ));
+    assert_eq!(fresh.panel_state().turns(), 0);
 }
 
 #[test]
@@ -2260,7 +2289,9 @@ fn delegate_fold_thinking_marker_follows_the_delegate_stream() {
     // The first text delta latches it shut for the call.
     app.on_line(ts_line(DELEGATE, "assistant_message_delta", 0, json!({})));
     assert!(!app.panel_state().delegate_thinking_now_for(&session));
-    // A settled turn ends the call; a new call starts unlit.
+    // A settled turn ends the call; a new call starts unlit. The
+    // delegate's own id-carrying start is what the settled turn counts.
+    app.on_line(turn_started_line(DELEGATE, "t_1"));
     app.on_line(ts_line(DELEGATE, "turn_completed", 0, json!({})));
     app.on_line(ts_line(DELEGATE, "reasoning_delta", 0, json!({})));
     assert!(!app.panel_state().delegate_thinking_now_for(&session));
@@ -2283,6 +2314,8 @@ fn delegate_fold_turns_and_speed_use_the_delegate_span() {
     app.on_line(delegate_usage(DELEGATE, 500, 3000));
     assert_eq!(app.panel_state().delegate_turns_for(&session), 0);
     assert_eq!(app.panel_state().delegate_speed_for(&session), Some(250));
+    // The delegate's own id-carrying start is what the settled turn counts.
+    app.on_line(turn_started_line(DELEGATE, "t_1"));
     app.on_line(ts_line(DELEGATE, "turn_completed", 0, json!({})));
     assert_eq!(app.panel_state().delegate_turns_for(&session), 1);
     // The parent's own span never sets the delegate's speed.

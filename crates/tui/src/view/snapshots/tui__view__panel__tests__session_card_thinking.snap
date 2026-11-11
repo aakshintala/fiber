@@ -10,14 +10,13 @@ expression: "screen(&app, 160, 40)"
                                                                                                                                  test/model              high ∴
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
                                                                                                                                  compacts at 800              —
-                                                                                                                                 then a summary, fresh context
                                                                                                                                  tokens in / out              —
                                                                                                                                  cache hits                   —
                                                                                                                                  cache resets in              —
                                                                                                                                  cost                         —
                                                                                                                                  cost on subscription         —
                                                                                                                                  speed, last reply            —
-                                                                                                                                 turns                        0
+                                                                                                                                 turns                        1
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 

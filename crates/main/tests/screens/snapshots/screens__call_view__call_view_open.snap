@@ -11,7 +11,6 @@ expression: "snapshot_text(&setup, &grid, &[])"
  467                                                                                                                             scripted/s.json
  468                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
  469                                                                                                                             compacts at 400.0k           —
- 470                                                                                                                             then a summary, fresh context
  471                                                                                                                             tokens in / out          0 / 0
  472                                                                                                                             cache hits                   —
  473                                                                                                                             cache resets in     [duration]
