@@ -372,7 +372,12 @@ fn refused_archive_keeps_rows_with_one_notice() {
 }
 
 #[test]
-fn archive_answer_missing_result_shows_the_malformed_notice() {
+fn accepted_archive_without_a_result_archives_and_goes_home() {
+    // The hub accepts `archive` with no `result`
+    // (`crates/hub/src/archive.rs` returns `Ok(None)`, folded as
+    // `command_accepted` with no `result` per `crates/hub/src/feed.rs`):
+    // the command treats it as success, removing the row and going
+    // home. An `archived`-flag check would report "Not archived" here.
     let mut app = attached();
     let _lines = start(&mut app, &[A], &[A]);
     let out = fold_lines(&mut app, left(A, "exited"));
@@ -382,11 +387,23 @@ fn archive_answer_missing_result_shows_the_malformed_notice() {
         .as_str()
         .unwrap_or_else(|| panic!("archive id"))
         .to_owned();
-    let _out = fold_lines(&mut app, accepted(&id, json!({})));
-    assert_eq!(
-        app.notice(),
-        Some("Not archived: the hub's archive answer was invalid. Nothing was archived.")
+    let missing = Line::Hub(contract::HubLine {
+        kind: HubEventKind::CommandAccepted,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [("command_id".to_owned(), Value::String(id.clone()))]
+            .into_iter()
+            .collect(),
+    });
+    let out = fold_lines(&mut app, missing);
+    assert!(
+        out.iter().any(|line| line["command"] == "recent"),
+        "{out:?}"
     );
+    assert!(app.on_home());
+    assert_eq!(app.session(), None);
+    assert!(app.notice().is_none());
+    assert!(app.home.sessions.row(&SessionId(A.to_owned())).is_none());
     assert!(matches!(
         app.home.questions.archive_command.state,
         State::Idle

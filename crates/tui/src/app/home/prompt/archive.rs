@@ -10,7 +10,6 @@ use serde_json::{Map, Value, json};
 use super::super::super::{App, Effect, Waiting};
 use super::delete::validated_sets;
 use super::{refusal, refusal_code};
-use crate::home::title;
 use contract::ErrorCode;
 use contract::SessionId;
 
@@ -230,7 +229,7 @@ impl App {
         if accepted {
             return true;
         }
-        let display = self.archive_display(session);
+        let display = self.delete_display(session);
         let message = format!(
             "Stop refused for {display}: {}. Nothing was archived.",
             refusal(payload)
@@ -309,10 +308,12 @@ impl App {
         vec![line]
     }
 
-    /// Settles the command's one archive: accepted archives that
-    /// session, refetches its project's totals and goes home; a
-    /// refusal keeps rows with one notice and retries nothing. `None`
-    /// when the answer is not this command's archive.
+    /// Settles the command's one archive: an accepted answer archives
+    /// that session, refetches its project's totals and goes home; the
+    /// hub accepts with no `result` (`crates/hub/src/archive.rs`), so
+    /// the payload carries nothing to check. A refusal keeps rows with
+    /// one notice and retries nothing. `None` when the answer is not
+    /// this command's archive.
     fn archive_command_archive_answer(
         &mut self,
         accepted: bool,
@@ -320,28 +321,19 @@ impl App {
     ) -> Option<Vec<String>> {
         let target = self.archive_archiving_target()?;
         if accepted {
-            let archived = payload
-                .get("result")
-                .and_then(|result| result.get("archived"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if archived {
-                self.clear_prompt(&target);
-                let project = self.archive_target_project(&target);
-                self.home.sessions.remove(&target);
-                // The refill cruises the fold: each id rides paired, so
-                // a failed write settles by the carried id.
-                let lines = self
-                    .ask_recent_first(project.as_deref())
-                    .into_iter()
-                    .map(|sent| self.outbox.fold_line(sent))
-                    .collect();
-                self.archive_command_finish(false);
-                self.go_home();
-                return Some(lines);
-            }
-            self.archive_command_malformed_answer();
-            return Some(Vec::new());
+            self.clear_prompt(&target);
+            let project = self.archive_target_project(&target);
+            self.home.sessions.remove(&target);
+            // The refill cruises the fold: each id rides paired, so
+            // a failed write settles by the carried id.
+            let lines = self
+                .ask_recent_first(project.as_deref())
+                .into_iter()
+                .map(|sent| self.outbox.fold_line(sent))
+                .collect();
+            self.archive_command_finish(false);
+            self.go_home();
+            return Some(lines);
         }
         let code = refusal_code(payload);
         let message = refusal(payload);
@@ -350,16 +342,6 @@ impl App {
             .push(code, format!("Archive failed: {message}"));
         self.go_home();
         Some(Vec::new())
-    }
-
-    /// Refuses an archive answer that confirms nothing without
-    /// exposing its data.
-    fn archive_command_malformed_answer(&mut self) {
-        self.archive_command_finish(false);
-        self.notices.push(
-            ErrorCode::Malformed,
-            "Not archived: the hub's archive answer was invalid. Nothing was archived.".to_owned(),
-        );
     }
 
     /// The archiving command's target, while its archive waits.
@@ -412,27 +394,6 @@ impl App {
         home.questions.archive_command.generation = taken.generation;
     }
 
-    /// The ids of the running command's tags of one kind, in send order:
-    /// `generation_of` reads the generation off a tag of that kind, and
-    /// only the running command's generation counts.
-    fn archive_tag_ids(&self, generation_of: impl Fn(&Waiting) -> Option<u64>) -> Vec<String> {
-        let running = self.home.questions.archive_command.generation;
-        self.outbox
-            .tags()
-            .filter(|(_, tag)| generation_of(tag) == Some(running))
-            .map(|(id, _)| id.to_owned())
-            .collect()
-    }
-
-    /// The row's sanitized title, or its id without one, for notices.
-    fn archive_display(&self, id: &SessionId) -> String {
-        self.home
-            .sessions
-            .row(id)
-            .map(title)
-            .unwrap_or_else(|| id.0.clone())
-    }
-
     /// Settles a sent slash archive on reconnect, or drops a lost
     /// discovery silently. The exact ask is removed before generic row
     /// archive settlement can see it.
@@ -442,7 +403,10 @@ impl App {
             State::Archiving { .. }
         );
         if archiving {
-            for command in self.archive_tag_ids(archive_final_generation) {
+            for command in self.command_tag_ids(
+                self.home.questions.archive_command.generation,
+                archive_final_generation,
+            ) {
                 self.take_ask(&command);
             }
             self.archive_command_archive_unknown();
@@ -455,7 +419,10 @@ impl App {
         if !discovering {
             return;
         }
-        let commands = self.archive_tag_ids(archive_discovery_generation);
+        let commands = self.command_tag_ids(
+            self.home.questions.archive_command.generation,
+            archive_discovery_generation,
+        );
         self.home.questions.archive_command.state = State::Idle;
         for command in commands {
             self.outbox.settled(&command);
@@ -492,7 +459,10 @@ impl App {
             self.home.questions.archive_command.state,
             State::Archiving { .. }
         );
-        let archives = self.archive_tag_ids(archive_final_generation);
+        let archives = self.command_tag_ids(
+            self.home.questions.archive_command.generation,
+            archive_final_generation,
+        );
         if archiving && let Some(command) = archives.iter().find(|command| unsent.contains(command))
         {
             self.take_ask(command);
@@ -508,7 +478,10 @@ impl App {
     pub(in crate::app::home::prompt) fn archive_waiting_close_ids(&self) -> Option<Vec<String>> {
         let home = &self.home;
         match &home.questions.archive_command.state {
-            State::Stopping { .. } => Some(self.archive_tag_ids(archive_stop_generation)),
+            State::Stopping { .. } => Some(self.command_tag_ids(
+                self.home.questions.archive_command.generation,
+                archive_stop_generation,
+            )),
             State::Idle | State::Discovering { .. } | State::Archiving { .. } => None,
         }
     }

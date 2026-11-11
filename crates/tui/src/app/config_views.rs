@@ -1200,6 +1200,7 @@ impl App {
                 | super::Waiting::Subscribe { .. }
                 | super::Waiting::Stop
                 | super::Waiting::Delete
+                | super::Waiting::Archive
                 | super::Waiting::OfferImport
                 | super::Waiting::DeleteDiscovery(..)
                 | super::Waiting::DeleteStop { .. }

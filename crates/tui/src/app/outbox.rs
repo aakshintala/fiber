@@ -90,6 +90,8 @@ pub(crate) enum Waiting {
     Stop,
     /// A `delete` for an exited row.
     Delete,
+    /// An `archive` for an exited row.
+    Archive,
     /// The first-run offer's `import`.
     OfferImport,
     /// `/delete`'s discovery dry run, for the command's generation.

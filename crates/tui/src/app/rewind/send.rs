@@ -265,6 +265,7 @@ impl App {
             | Waiting::Subscribe { .. }
             | Waiting::Stop
             | Waiting::Delete
+            | Waiting::Archive
             | Waiting::OfferImport
             | Waiting::DeleteDiscovery(..)
             | Waiting::DeleteStop { .. }
@@ -330,6 +331,7 @@ impl App {
             | Waiting::Subscribe { .. }
             | Waiting::Stop
             | Waiting::Delete
+            | Waiting::Archive
             | Waiting::OfferImport
             | Waiting::DeleteDiscovery(..)
             | Waiting::DeleteStop { .. }

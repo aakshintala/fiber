@@ -855,6 +855,24 @@ fn accepted(id: &str, result: serde_json::Value) -> Line {
     })
 }
 
+/// A hub `command_accepted` with no `result`, the wire shape the hub
+/// sends for a successful `archive` (`crates/hub/src/archive.rs`
+/// returns `Ok(None)`, folded with no `result` per
+/// `crates/hub/src/feed.rs`).
+fn accepted_no_result(id: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: HubEventKind::CommandAccepted,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [(
+            "command_id".to_owned(),
+            serde_json::Value::String(id.to_owned()),
+        )]
+        .into_iter()
+        .collect(),
+    })
+}
+
 /// A session spend with `cost` and the common token fields.
 fn session_spend(cost: f64) -> serde_json::Value {
     serde_json::json!({
@@ -2209,6 +2227,9 @@ fn backspace_archives_the_exited_row_with_no_question() {
     let Effect::Send(lines) = app.on_key(Key::Backspace, now) else {
         panic!("Backspace archives");
     };
+    // One `archive` line for the exited row (`docs/tui.md`, "The session
+    // list": a ✕ on an exited row, or Backspace on it, archives that
+    // session through the hub and asks nothing).
     assert_eq!(lines.len(), 1);
     let line: serde_json::Value =
         serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
@@ -2245,6 +2266,9 @@ fn cross_archives_the_exited_row_with_no_question() {
     let Effect::Send(lines) = app.on_click(crate::mouse::TargetId::Home(Spot::Stop(key))) else {
         panic!("the ✕ archives");
     };
+    // One `archive` line for the exited row (`docs/tui.md`, "The session
+    // list": a ✕ on an exited row, or Backspace on it, archives that
+    // session through the hub and asks nothing).
     assert_eq!(lines.len(), 1);
     let line: serde_json::Value =
         serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
@@ -2309,6 +2333,9 @@ fn shift_backspace_and_delete_ask_then_delete() {
     let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    // One `delete` line for the exited row (`docs/tui.md`, "The session
+    // list": Delete on a selected exited row deletes that session
+    // through the hub, after asking).
     assert_eq!(sents.len(), 1);
     let line: serde_json::Value =
         serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
@@ -2365,6 +2392,9 @@ fn archive_command_stops_archives_and_lands_home() {
         .iter()
         .filter(|line| line["command"] == "close")
         .collect();
+    // One `close` stop for the held session (`docs/tui.md`, "The session
+    // list": `/archive` stops that session the way `/delete` does, and
+    // `/delete` stops every running one first).
     assert_eq!(closes.len(), 1, "{stops:?}");
     assert_eq!(closes[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert!(app.on_home());
@@ -2375,6 +2405,8 @@ fn archive_command_stops_archives_and_lands_home() {
         .iter()
         .filter(|line| line["command"] == "archive")
         .collect();
+    // Exactly that one `archive` (`docs/tui.md`, "The session list":
+    // then archives that one session and goes home).
     assert_eq!(archived.len(), 1, "{out:?}");
     assert_eq!(
         archived[0]["args"],
@@ -2383,13 +2415,13 @@ fn archive_command_stops_archives_and_lands_home() {
     let scoped_ask = scoped_ask_id(&out);
     let archived_ask = archived_ask_id(&out);
     // The accepted archive lands home with the session gone from the
-    // exited rows.
+    // exited rows. The hub accepts with no `result`, so the test folds
+    // the no-result wire shape.
     let out = outgoings(
-        app.on_line(accepted(
+        app.on_line(accepted_no_result(
             archived[0]["id"]
                 .as_str()
                 .unwrap_or_else(|| panic!("archive id")),
-            serde_json::json!({"archived": true}),
         )),
     );
     assert!(

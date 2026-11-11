@@ -921,7 +921,9 @@ impl App {
                                 return Some(lines);
                             }
                         }
-                        Some(super::Waiting::Stop) | Some(super::Waiting::Delete) => {
+                        Some(super::Waiting::Stop)
+                        | Some(super::Waiting::Delete)
+                        | Some(super::Waiting::Archive) => {
                             if let Some(ask) = self.take_ask(id) {
                                 return Some(self.answer_ask(ask, accepted, &hub.payload));
                             }
@@ -1120,6 +1122,7 @@ impl App {
                         Some(
                             super::Waiting::Stop
                             | super::Waiting::Delete
+                            | super::Waiting::Archive
                             | super::Waiting::OfferImport,
                         ) => {
                             if let Some(ask) = self.take_ask(id) {

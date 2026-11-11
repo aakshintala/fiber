@@ -425,7 +425,7 @@ impl App {
             .questions
             .asks
             .insert(command.clone(), Ask::Archive(id));
-        self.outbox.wait(&command, super::super::Waiting::Delete);
+        self.outbox.wait(&command, super::super::Waiting::Archive);
         Effect::Send(vec![line])
     }
 
@@ -632,6 +632,24 @@ impl App {
         self.home.sessions.note(id, note);
     }
 
+    /// Removes `id`'s row after an accepted row delete or archive and
+    /// refetches its project's first `recent` page. The row's project
+    /// goes with the refresh: the removal below erases where to re-ask.
+    /// The refill cruises the fold: each id rides paired, so a failed
+    /// write settles by the carried id.
+    fn accept_row_removal(&mut self, id: &SessionId) -> Vec<String> {
+        self.clear_prompt(id);
+        let project = self.home.sessions.row(id).map(|row| row.project.clone());
+        self.home.sessions.remove(id);
+        self.ask_recent_first(project.as_deref())
+            .into_iter()
+            .map(|sent| {
+                self.outbox.note_hub_sent(&sent.id, &sent.line);
+                sent.line
+            })
+            .collect()
+    }
+
     /// Answers a stop or delete. An accepted delete drops the row and
     /// asks the first `recent` page again. A dependents refusal, or a
     /// stale cascade refusal, reopens the cascade question naming the
@@ -658,21 +676,7 @@ impl App {
             }
             Ask::Archive(id) => {
                 if accepted {
-                    self.clear_prompt(&id);
-                    // The row's project goes with the refresh: the
-                    // removal below erases where to re-ask. The refill
-                    // cruises the fold: each id rides paired, so a
-                    // failed write settles by the carried id.
-                    let project = self.home.sessions.row(&id).map(|row| row.project.clone());
-                    self.home.sessions.remove(&id);
-                    return self
-                        .ask_recent_first(project.as_deref())
-                        .into_iter()
-                        .map(|sent| {
-                            self.outbox.note_hub_sent(&sent.id, &sent.line);
-                            sent.line
-                        })
-                        .collect();
+                    return self.accept_row_removal(&id);
                 }
                 let (code, message) = refusal_parts(payload);
                 self.note(&id, message.clone());
@@ -682,21 +686,7 @@ impl App {
             }
             Ask::Delete(id) => {
                 if accepted {
-                    self.clear_prompt(&id);
-                    // The row's project goes with the refresh: the
-                    // removal below erases where to re-ask. The refill
-                    // cruises the fold: each id rides paired, so a
-                    // failed write settles by the carried id.
-                    let project = self.home.sessions.row(&id).map(|row| row.project.clone());
-                    self.home.sessions.remove(&id);
-                    return self
-                        .ask_recent_first(project.as_deref())
-                        .into_iter()
-                        .map(|sent| {
-                            self.outbox.note_hub_sent(&sent.id, &sent.line);
-                            sent.line
-                        })
-                        .collect();
+                    return self.accept_row_removal(&id);
                 }
                 let (code, message) = refusal_parts(payload);
                 if code == ErrorCode::SessionHasDependents || code == ErrorCode::StaleRequest {
