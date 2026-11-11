@@ -328,3 +328,16 @@ crates/extensions/src/tui_vm.rs	fiber-2720	plan	2026-11-11T14:33:31Z	Amoghs-MacB
 crates/main/tests/screen_looks/search_look.rs	fiber-4592	plan	2026-11-11T14:47:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/commands/changed_files_editor.rs	fiber-4592	plan	2026-11-11T14:47:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 Cargo.lock	fiber-4654	plan	2026-11-11T14:51:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/events.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/contract/src/events/host.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/contract/src/events_tests.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/extensions/src/providers.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/extensions/tests/models.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/loop/src/reload.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/loop/src/reload_tests.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/loop/tests/fork.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/loop/tests/late_extensions.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/loop/tests/reload.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/main/src/reload.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+crates/main/src/reload_tests.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+docs/events.md	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
