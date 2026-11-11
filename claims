@@ -325,3 +325,4 @@ crates/main/src/keeper_child_tests.rs	fiber-4646	plan	2026-11-11T13:34:43Z	Amogh
 providers/databricks/providers/databricks.lua	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/provider/src/openai_completions.rs	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4616	plan	2026-11-11T13:40:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view_tests.rs	fiber-4596	plan	2026-11-11T13:52:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
