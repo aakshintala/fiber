@@ -74,7 +74,10 @@ and its limits are in
 So Fiber sends `strict` on every tool, on every protocol that has strict mode,
 and decides it per tool, except on `bedrock-converse`, which sends no
 `strict`: Nova refuses the field whether it is `true` or `false` ("Bedrock
-Converse wire facts"). It sends `true` only when the tool's schema already
+Converse wire facts"), and except on a model whose data sets
+`compat.no_strict`, which sends no `strict` key at all: the Databricks
+gateway rejects `strict` even as `false` on `claude-opus-4-1` (the Databricks
+gateway example below). It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
 tools are written to fit the strict subset, except a tool whose section in
@@ -628,8 +631,10 @@ For each model:
 - its protocol and base URL, which can differ between models of one provider,
   and may name a per-account host ("A per-account host")
 - compatibility flags the native protocol reads, such as whether the vendor
-  accepts `store`, which field carries the token limit, and which thinking
-  dialect it speaks
+  accepts `store`, which field carries the token limit, which thinking
+  dialect it speaks, and whether the request leaves the `strict` key off
+  every tool (`compat.no_strict`, which `claude-opus-4-1` needs on the
+  Databricks gateway: it rejects `strict` even as `false`)
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees"), except the Databricks
@@ -844,7 +849,12 @@ models work only through its Anthropic route, because its default route rejects
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. A
 `gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
-carries `compat.gemini` on the protocol already chosen. All of that is data.
+carries `compat.gemini` on the protocol already chosen. Two Claude rows
+differ per model, as probed through the gateway: the `claude-sonnet-4-5`
+rows carry no `deferred_tools`, because the gateway rejects their deferred
+load; and `claude-opus-4-1` carries `compat.no_strict`, because the gateway
+rejects the `strict` key on it, even as `false`, so its tools are sent with
+no `strict` key at all. All of that is data.
 
 ### Model discovery
 
