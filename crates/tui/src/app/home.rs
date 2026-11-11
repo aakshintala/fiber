@@ -198,9 +198,11 @@ fn hint_back(spans: &mut Vec<Span<'static>>, esc: Option<&str>) {
 }
 
 /// The foot hint with its keys bold: each action by its first bound
-/// key, leaving an unbound action's part out with its joiner.
+/// key, leaving an unbound action's part out with its joiner. The
+/// project jump shows its doc wording while the row holds a key.
 fn home_foot(
     open: Option<String>,
+    project: Option<String>,
     delete: Option<String>,
     key_map: Option<String>,
     back: bool,
@@ -215,6 +217,9 @@ fn home_foot(
         );
     }
     hint_key(&mut spans, "↑↓", "move");
+    if project.is_some() {
+        hint_key(&mut spans, "Shift+↑↓", "project");
+    }
     if back {
         hint_back(&mut spans, esc.as_deref());
     }
@@ -556,6 +561,7 @@ impl App {
         } else {
             home_foot(
                 self.keys().first_label("open_focused"),
+                self.keys().first_label("focus_project"),
                 self.keys().first_label("delete_session"),
                 self.keys().first_label("key_map"),
                 self.came_from_live(),
