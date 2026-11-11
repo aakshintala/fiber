@@ -277,13 +277,16 @@ pub(super) fn delegate_request(args: &[Value]) -> Result<DelegateParts, (ErrorCo
             ));
         }
     };
-    if !matches!(opts.get("run").unwrap_or(&Value::Null), Value::Bool(true)) {
-        return Err((
-            ErrorCode::InvalidArguments,
-            "host.delegate: `run` must be a function".to_owned(),
-        ));
-    }
-    Ok((spec, timeout, true))
+    let run = match opts.get("run").unwrap_or(&Value::Null) {
+        Value::Bool(run) => *run,
+        Value::Null | Value::Number(_) | Value::String(_) | Value::Array(_) | Value::Object(_) => {
+            return Err((
+                ErrorCode::InvalidArguments,
+                "host.delegate: `run` must be a function".to_owned(),
+            ));
+        }
+    };
+    Ok((spec, timeout, run))
 }
 
 /// The `host.ask` interaction: the closed kind with its spec.

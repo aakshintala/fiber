@@ -171,6 +171,17 @@ pub(crate) struct Table {
     next_stream_wait: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
+/// The callback details used to mint one pending request.
+struct MintSpec<'a> {
+    kind: RequestKind,
+    extension: &'a str,
+    ran_by: String,
+    deadline: Option<Instant>,
+    state_call: Option<u64>,
+    credential: Option<crate::lua::CredentialFor>,
+    inner_calls: Option<Arc<dyn InnerCalls>>,
+}
+
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl Table {
     /// An empty table at its first generation.
@@ -225,22 +236,19 @@ impl Table {
         state_call: Option<u64>,
         credential: Option<crate::lua::CredentialFor>,
     ) -> Minted {
-        self.mint_with_inner_calls(
-            kind, extension, ran_by, deadline, state_call, credential, None,
-        )
+        self.mint_with_inner_calls(MintSpec {
+            kind,
+            extension,
+            ran_by,
+            deadline,
+            state_call,
+            credential,
+            inner_calls: None,
+        })
     }
 
     /// Mints a pending request carrying the outer tool call's inner runner.
-    fn mint_with_inner_calls(
-        &self,
-        kind: RequestKind,
-        extension: &str,
-        ran_by: String,
-        deadline: Option<Instant>,
-        state_call: Option<u64>,
-        credential: Option<crate::lua::CredentialFor>,
-        inner_calls: Option<Arc<dyn InnerCalls>>,
-    ) -> Minted {
+    fn mint_with_inner_calls(&self, spec: MintSpec<'_>) -> Minted {
         let mut inner = support::lock(&self.inner);
         let sequence = inner.next_request_id;
         inner.next_request_id = sequence.wrapping_add(1);
@@ -253,20 +261,20 @@ impl Table {
         let id = RequestId(format!("{nonce}_{sequence:032x}"));
         let cancel = support::cancel::Token::new();
         let context = CallbackContext::request(
-            extension,
+            spec.extension,
             id.clone(),
-            ran_by,
-            deadline,
+            spec.ran_by,
+            spec.deadline,
             cancel.clone(),
-            state_call,
-            credential,
+            spec.state_call,
+            spec.credential,
         )
-        .with_inner_calls(inner_calls);
+        .with_inner_calls(spec.inner_calls);
         let wait = WaitCell::new();
         inner.pending.insert(
             id.clone(),
             Pending {
-                kind,
+                kind: spec.kind,
                 context,
                 cancel: cancel.clone(),
                 done: false,
@@ -624,15 +632,15 @@ pub(crate) fn run_request(
     // Only the dispatcher that runs a provider's `credential()` sets a
     // scope: every other dispatch carries `None`, and a
     // `host.oauth.refresh` under it is refused.
-    let minted = shared.table.mint_with_inner_calls(
-        dispatch.kind,
-        &shared.owner,
-        dispatch.ran_by,
+    let minted = shared.table.mint_with_inner_calls(MintSpec {
+        kind: dispatch.kind,
+        extension: &shared.owner,
+        ran_by: dispatch.ran_by,
         deadline,
-        dispatch.state_call,
-        dispatch.credential,
-        dispatch.inner_calls,
-    );
+        state_call: dispatch.state_call,
+        credential: dispatch.credential,
+        inner_calls: dispatch.inner_calls,
+    });
     let id = minted.id;
     if dispatch.kind == RequestKind::Stream {
         let generation = shared.table.generation();
