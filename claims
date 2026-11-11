@@ -324,3 +324,5 @@ providers/databricks/tests/models-max-tokens-compat.json	fiber-4616	grant	2026-1
 crates/tui/src/snapshots/tui__view__tests__read_only_bar.snap	fiber-4596	plan	2026-11-11T14:22:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__view__tests__read_only_bar_narrow.snap	fiber-4596	plan	2026-11-11T14:22:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/models_dev_corrections.rs	fiber-4633	plan	2026-11-11T14:32:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop.rs	fiber-2720	plan	2026-11-11T14:33:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/tui_vm.rs	fiber-2720	plan	2026-11-11T14:33:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
