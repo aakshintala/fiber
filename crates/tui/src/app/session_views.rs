@@ -324,9 +324,12 @@ impl App {
             if self.session_views.diff.is_some() {
                 self.session_views.diff_list.key(key, rows, height);
             } else if *key == Key::Enter {
-                return Some(self.session_view_file_rank(list.selected()));
+                return Some(self.session_view_file_enter(list.selected()));
             } else if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
-                list.key(key, rows, height);
+                // Folder and rule rows take no Enter: the selection moves
+                // over file rows only.
+                let takes = changed_files_view::file_takes(self.panel_state.changes());
+                list.key_over(key, rows, height, &takes);
             }
             return Some(Effect::None);
         }
@@ -445,16 +448,26 @@ impl App {
         };
         if matches!(self.session_views.open, Some(Open::Files(_))) {
             if self.session_views.diff.is_some() {
-                if let Spot::Row(at) = spot {
-                    self.session_views.diff_list.select(at, rows, height);
+                match spot {
+                    Spot::Row(at) => self.session_views.diff_list.select(at, rows, height),
+                    // A click on "Open in editor ›" runs the same editor
+                    // path as Ctrl+G.
+                    Spot::Cell(_, _) => return self.open_in_editor(),
+                    _ => {}
                 }
                 return Effect::None;
             }
             if let Spot::Row(at) = spot {
+                // A click on a file row does what Enter does on it; a
+                // click on a folder or rule row is a no-op, never a diff
+                // request for a stale rank.
+                if !changed_files_view::file_takes(self.panel_state.changes()).contains(&at) {
+                    return Effect::None;
+                }
                 if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
                     list.select(at, rows, height);
                 }
-                return self.session_view_file_rank(at);
+                return self.session_view_file_enter(at);
             }
             return Effect::None;
         }
@@ -692,10 +705,10 @@ impl App {
             }
             Some((path, _)) => Some((path.clone(), 1)),
             None => {
-                let displayed = self.displayed_figures();
-                let (path, _, _) = changed_files_view::ranked(&displayed.figures)
-                    .get(list.selected())
-                    .copied()?;
+                // The grouped row's path: a folder or rule row selects
+                // no file, so Ctrl+G opens nothing.
+                let plan = changed_files_view::list_rows(self.panel_state.changes());
+                let path = changed_files_view::row_path(&plan, list.selected())?;
                 Some((path.to_owned(), 1))
             }
         }
@@ -837,6 +850,24 @@ impl App {
             }
         }
         relative
+    }
+
+    /// Enter or a click on the grouped list row `at`: the row's path
+    /// sends its diff request through its ranked index, while a folder
+    /// or rule row sends nothing, and a stale rank leaves an empty list.
+    fn session_view_file_enter(&mut self, at: usize) -> Effect {
+        let plan = changed_files_view::list_rows(self.panel_state.changes());
+        let Some(path) = changed_files_view::row_path(&plan, at).map(str::to_owned) else {
+            return Effect::None;
+        };
+        let displayed = self.displayed_figures();
+        let Some(rank) = changed_files_view::ranked(&displayed.figures)
+            .iter()
+            .position(|(candidate, _, _)| *candidate == path.as_str())
+        else {
+            return Effect::None;
+        };
+        self.session_view_file_rank(rank)
     }
 
     /// Starts the selected file's diff request, or leaves an empty list when
@@ -1103,8 +1134,20 @@ impl App {
         }
         let path = path.clone();
         self.session_views.request = None;
-        self.session_views.diff =
-            Some((path, changed_files_view::answer(accepted.result.as_ref())));
+        let diff = changed_files_view::answer(accepted.result.as_ref());
+        // The view learns a path is no-diff only from an `Empty` answer:
+        // a committed or undone file stays listed and dim, while a fresh
+        // diff unmarks it. An untracked file never lands in the set: its
+        // diff reads through --no-index as lines, never empty.
+        match &diff {
+            Diff::Empty if !self.displayed_figures().untracked.contains(&path) => {
+                self.session_views.no_diff.insert(path.clone());
+            }
+            _ => {
+                self.session_views.no_diff.remove(&path);
+            }
+        }
+        self.session_views.diff = Some((path, diff));
     }
 
     /// Folds a numstat answer into stored figures: git's raw output

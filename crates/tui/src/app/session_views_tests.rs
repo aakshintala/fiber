@@ -976,12 +976,18 @@ fn command(effect: Effect) -> Value {
 }
 
 fn accepted_diff(id: &str, text: &str) -> Line {
+    accepted_diff_exited(id, text, 1)
+}
+
+/// A `command_accepted` line whose shell result exits `exit_code`: an
+/// `Empty` diff answer needs a zero exit with only the closing line.
+fn accepted_diff_exited(id: &str, text: &str, exit_code: i32) -> Line {
     session_line(
         SESSION,
         "command_accepted",
         json!({
             "command_id": id,
-            "result": {"output": text, "process": {"exit_code": 1, "timed_out": false}},
+            "result": {"output": text, "process": {"exit_code": exit_code, "timed_out": false}},
         }),
         Some("a_1"),
     )
@@ -1034,24 +1040,30 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
 }
 
 #[test]
-fn the_totals_row_opens_every_changed_file_in_ranked_order() {
+fn the_totals_row_opens_every_changed_file_in_grouped_order() {
     let mut app = files_attached(160, 40);
     many_changes(&mut app, 7);
     open_files_from_totals(&mut app, 160, 40);
     let shown = screen(&app, 160, 40).0;
     assert!(shown.contains("Changed files"), "{shown}");
     let frame = app.session_view_screen(0).expect("changed-files frame");
-    assert_eq!(frame.rows.len(), 7);
-    let paths: Vec<String> = frame
+    // The folder row, the seven file rows in name order, then the rule
+    // above the totals.
+    assert_eq!(frame.rows.len(), 9);
+    let rows: Vec<String> = frame
         .rows
         .iter()
         .map(|row| row.iter().map(|cell| cell.0.as_str()).collect())
         .collect();
-    let expected: Vec<String> = ranked(app.panel_state().changes())
-        .into_iter()
-        .map(|(path, added, removed)| format!("{path} · +{added} −{removed}"))
+    // The fake workspace holds no files, so every letter reads deleted.
+    let expected: Vec<String> = (0..7)
+        .map(|at| format!("    D  file-{at}.rs  +{} −0", 7 - at))
         .collect();
-    assert_eq!(paths, expected);
+    assert_eq!(rows[0], "src/");
+    assert_eq!(&rows[1..8], expected.as_slice());
+    assert!(rows[8].chars().all(|cell| cell == '─'));
+    // The view opens with a file row focused, never the folder.
+    assert_eq!(frame.list.selected(), 1);
 }
 
 #[test]
@@ -1155,7 +1167,7 @@ fn left_returns_to_the_same_file_selection_and_drops_a_late_answer() {
     app.on_key(Key::Down, now());
     let request = command(app.on_key(Key::Enter, now()));
     assert_eq!(app.on_edit(Edit::Left), Effect::None);
-    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
+    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 2);
     assert!(screen(&app, 120, 35).0.contains("Changed files"));
     app.on_line(accepted_diff(
         request["id"].as_str().unwrap_or_default(),
@@ -1163,7 +1175,7 @@ fn left_returns_to_the_same_file_selection_and_drops_a_late_answer() {
     ));
     let shown = screen(&app, 120, 35).0;
     assert!(!shown.contains("late diff"), "{shown}");
-    assert!(shown.contains("src/file-1.rs"), "{shown}");
+    assert!(shown.contains("file-1.rs"), "{shown}");
 }
 
 #[test]
@@ -1326,19 +1338,71 @@ fn clicking_a_file_list_row_chooses_that_file() {
     many_changes(&mut app, 2);
     open_files_from_totals(&mut app, 120, 35);
     let expected = ranked(app.panel_state().changes())[1].0.to_owned();
+    // The folder row leads, so the second file sits on display row 2.
     let (_, targets) = screen(&app, 120, 35);
     assert!(
         targets
             .iter()
-            .any(|target| { target.id == TargetId::View(ViewSpot::Row(1)) })
+            .any(|target| { target.id == TargetId::View(ViewSpot::Row(2)) })
     );
-    let value = command(app.on_click(TargetId::View(ViewSpot::Row(1))));
+    let value = command(app.on_click(TargetId::View(ViewSpot::Row(2))));
     assert_eq!(value["args"]["command"], diff_command(&expected));
     assert!(
         screen(&app, 120, 35)
             .0
             .contains(&format!("Changed files › {expected}"))
     );
+}
+
+#[test]
+fn enter_on_a_folder_or_rule_row_sends_no_diff_request() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    // Display rows: the folder, two files, then the rule.
+    assert_eq!(app.session_view_file_enter(0), Effect::None);
+    assert_eq!(app.session_view_file_enter(3), Effect::None);
+    assert_eq!(app.session_view_file_enter(4), Effect::None);
+    // A file row sends its own path's diff request.
+    let effect = app.session_view_file_enter(2);
+    let Effect::Send(lines) = effect else {
+        panic!("a file row sends its diff, got {effect:?}");
+    };
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    assert_eq!(request["args"]["command"], diff_command("src/file-1.rs"));
+}
+
+#[test]
+fn clicking_a_folder_row_sends_nothing_and_keeps_selection() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    assert_eq!(
+        app.session_view_screen(0).unwrap().list.selected(),
+        1,
+        "the view opens with the first file focused"
+    );
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(0))), Effect::None);
+    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
+    assert!(app.session_view_open());
+}
+
+#[test]
+fn arrow_keys_move_over_file_rows_only() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let selected = |app: &App| app.session_view_screen(0).unwrap().list.selected();
+    assert_eq!(selected(&app), 1);
+    app.on_key(Key::Up, now());
+    assert_eq!(selected(&app), 1, "no file sits above the first");
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 2);
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 2, "the rule never takes the selection");
+    app.on_key(Key::Up, now());
+    assert_eq!(selected(&app), 1);
 }
 
 /// Folds a plain job as `job`.
@@ -2154,7 +2218,9 @@ fn wheel_over_files_scrolls_the_list_not_the_conversation() {
     }
     let frame = app.session_view_screen(0).expect("changed-files frame");
     assert!(frame.rows.len() >= 4, "the list fits three steps");
-    assert_eq!(frame.list.selected(), 3);
+    // Three steps down from the first file row lands on the fourth file:
+    // the folder and rule rows never take the selection.
+    assert_eq!(frame.list.selected(), 4);
     let shown_top = frame.list.top();
     app.on_wheel(&wheel(30, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
@@ -2166,7 +2232,7 @@ fn wheel_over_files_scrolls_the_list_not_the_conversation() {
     );
     assert_eq!(
         frame.list.selected(),
-        3,
+        4,
         "a selection still on screen stays where it was"
     );
 }
@@ -2505,7 +2571,7 @@ fn the_matching_numstat_answer_shows_git_figures_in_the_rows() {
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +2 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +2 −0"), "{shown}");
     app.on_line(accepted_figures(
         request["id"].as_str().unwrap_or_default(),
         "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
@@ -2514,8 +2580,8 @@ fn the_matching_numstat_answer_shows_git_figures_in_the_rows() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
-    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-1.rs  +0 −3"), "{shown}");
 }
 
 #[test]
@@ -2540,7 +2606,7 @@ fn a_rejected_numstat_query_keeps_the_card_figures() {
         "hub refused",
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
 }
 
 fn files_attached_in(root: &std::path::Path, width: u16, height: u16) -> App {
@@ -2613,7 +2679,7 @@ fn a_numstat_answer_ended_by_a_signal_keeps_the_card_figures() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -2629,7 +2695,7 @@ fn a_timed_out_numstat_answer_keeps_the_card_figures() {
         true,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -2645,7 +2711,7 @@ fn a_numstat_answer_with_a_failure_exit_keeps_the_card_figures() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -2660,8 +2726,8 @@ fn an_empty_numstat_answer_with_exit_zero_counts_untracked_lines() {
     let id = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(&id, "Exit code 0.\n", 0, None, false));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("untracked, wholly added"), "{shown}");
-    assert!(shown.contains("1 file changed  +4 −0"), "{shown}");
+    assert!(shown.contains("    A  file-0.rs  +4 −0"), "{shown}");
+    assert!(shown.contains("1 file  +4 −0"), "{shown}");
 }
 
 #[test]
@@ -2676,7 +2742,8 @@ fn an_empty_numstat_answer_with_a_failure_exit_keeps_the_card_figures() {
     let id = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(&id, "", 128, None, false));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    // The workspace file exists, so its letter stays changed.
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -2693,7 +2760,7 @@ fn a_refused_numstat_query_drops_its_late_answer() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -2710,7 +2777,7 @@ fn a_refusal_for_another_command_keeps_the_numstat_query_pending() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
 }
 
 /// Opens the Changed files list on `app` holding two changed files.
@@ -2801,6 +2868,19 @@ fn ctrl_g_on_an_empty_list_opens_nothing() {
     assert!(app.session_view_open());
     assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
     assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn a_cell_click_on_open_in_editor_runs_the_same_path_as_ctrl_g() {
+    let mut app = files_attached(120, 35);
+    open_two_files(&mut app);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    let wanted = Effect::OpenFile(OpenFile {
+        path: PathBuf::from("/w/src/file-0.rs"),
+        line: Some(1),
+    });
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Cell(0, 1))), wanted);
+    assert_eq!(app.on_key(Key::CtrlG, now()), wanted);
 }
 
 #[test]
@@ -3176,7 +3256,9 @@ fn a_remote_numstat_answer_matches_hub_absolute_paths_by_the_viewed_workspace() 
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("file-0.rs · +2 −0"), "{shown}");
+    // A remote terminal has no local root to stat, so the letter stays
+    // changed.
+    assert!(shown.contains("    M  file-0.rs  +2 −0"), "{shown}");
 }
 
 /// The workspace path of the first changed file.
@@ -3264,7 +3346,138 @@ fn the_resent_requests_fill_the_diff_and_move_the_row_when_they_answer() {
     assert!(shown.contains("new hunk"), "{shown}");
     assert_eq!(app.on_edit(Edit::Left), Effect::None);
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+}
+
+#[test]
+fn an_empty_diff_answer_marks_the_path_so_its_row_turns_dim() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff_exited(
+        request["id"].as_str().unwrap_or_default(),
+        "Exit code 0.\n",
+        0,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(
+        shown.contains("No changes against HEAD: committed or undone since Fiber changed it."),
+        "{shown}"
+    );
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    let text: String = frame.rows[1].iter().map(|cell| cell.0.as_str()).collect();
+    assert_eq!(text, "    ·  file-0.rs  no changes");
+    assert!(
+        frame.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Muted))
+    );
+    // The unmarked file keeps its figures.
+    let text: String = frame.rows[2].iter().map(|cell| cell.0.as_str()).collect();
+    assert_eq!(text, "    D  file-1.rs  +1 −0");
+}
+
+#[test]
+fn a_later_diff_answer_unmarks_the_path_so_its_row_returns() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    let id = request["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(accepted_diff_exited(&id, "Exit code 0.\n", 0));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    assert!(
+        screen(&app, 120, 35)
+            .0
+            .contains("    ·  file-0.rs  no changes")
+    );
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "@@ -1 +1 @@\n-old\n+new\n",
+    ));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    D  file-0.rs  +2 −0"), "{shown}");
+    assert!(!shown.contains("no changes"), "{shown}");
+}
+
+#[test]
+fn an_empty_diff_answer_for_an_untracked_path_does_not_flip_it() {
+    let dir = fakes::TempDir::new("tui-numstat-untracked-no-diff");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\nb\nc\nd\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(&id, "Exit code 0.\n", 0, None, false));
+    assert!(screen(&app, 120, 35).0.contains("    A  file-0.rs  +4 −0"));
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff_exited(
+        request["id"].as_str().unwrap_or_default(),
+        "Exit code 0.\n",
+        0,
+    ));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    // An untracked file never lands in the no-diff set: its row keeps
+    // its line count as added.
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    A  file-0.rs  +4 −0"), "{shown}");
+    assert!(!shown.contains("no changes"), "{shown}");
+}
+
+#[test]
+fn returning_from_the_editor_with_an_empty_diff_marks_the_path_dim() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    let lines = app.changed_file_closed(&first_file(), Ok(()));
+    assert_eq!(lines.len(), 2);
+    let requests = shell_requests(&lines);
+    let id = requests[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(accepted_diff_exited(&id, "Exit code 0.\n", 0));
+    let shown = screen(&app, 120, 35).0;
+    assert!(
+        shown.contains("No changes against HEAD: committed or undone since Fiber changed it."),
+        "{shown}"
+    );
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    ·  file-0.rs  no changes"), "{shown}");
+}
+
+#[test]
+fn a_locally_deleted_file_draws_d_in_removed() {
+    let dir = fakes::TempDir::new("tui-changed-files-deleted");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
+    std::fs::remove_file(dir.path().join("src/file-0.rs"))
+        .unwrap_or_else(|error| panic!("delete workspace file: {error}"));
+    // The presence read runs at frame time, so no reopen is needed.
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    let text: String = frame.rows[1].iter().map(|cell| cell.0.as_str()).collect();
+    assert_eq!(text, "    D  file-0.rs  +1 −0");
+    assert!(matches!(
+        frame.rows[1][1].2,
+        crate::swapped::Ink::Role(crate::theme::Role::Removed)
+    ));
+    // Restoring the file flips its letter back to changed.
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\n")
+        .unwrap_or_else(|error| panic!("restore workspace file: {error}"));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -3320,8 +3533,8 @@ fn figures_answer_reaches_its_handler_and_settles_its_tag() {
     ));
     assert_eq!(app.outbox.waiting(&id), None);
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
-    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-1.rs  +0 −3"), "{shown}");
 }
 
 #[test]
@@ -3334,7 +3547,7 @@ fn figures_refusal_settles_its_tag_and_keeps_the_card_figures() {
     app.on_line(rejected_diff(SESSION, &id, "hub refused"));
     assert_eq!(app.outbox.waiting(&id), None);
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -3357,8 +3570,8 @@ fn a_second_figures_answer_after_settle_changes_nothing() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
-    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-1.rs  +0 −3"), "{shown}");
 }
 
 #[test]
