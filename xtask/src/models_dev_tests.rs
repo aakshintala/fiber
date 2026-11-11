@@ -216,16 +216,76 @@ fn an_only_id_filtered_out_is_an_error() {
     );
 }
 
+/// Thinking rows for the `old` fixture id on gateway probes: a gateway
+/// model needs a row, so the probe names one.
+static OLD_THINKING: [(&str, &[&str], Option<&str>); 1] = [("old", &["low"], None)];
+
+/// `package` with its identity kept but its reviewer, subset and stale
+/// entries cleared, so one fixture model generates cleanly. A gateway
+/// probe keeps a left-out model only when it names no thinking row: a
+/// row for a left-out id is a stale table entry.
+fn probe_package(
+    package: &Package,
+    thinking: &'static [(&'static str, &'static [&'static str], Option<&'static str>)],
+) -> Package {
+    Package {
+        path: package.path,
+        source: package.source,
+        provider: r#"{"name":"t"}"#,
+        protocol: match package.protocol {
+            ProtocolRule::Fixed(protocol) => ProtocolRule::Fixed(protocol),
+            ProtocolRule::ByNpm => ProtocolRule::ByNpm,
+        },
+        base_url: package.base_url,
+        drop_deprecated: package.drop_deprecated,
+        skip: package.skip,
+        only: &[],
+        protocol_overrides: &[],
+        every_model: package.every_model,
+        by_protocol: package.by_protocol,
+        by_model: &[],
+        thinking,
+    }
+}
+
 #[test]
-fn deprecated_is_dropped_only_where_flagged() {
-    let mut flagged = npm_package("s");
-    flagged.drop_deprecated = true;
-    let deprecated = tool_model(json!({"status": "deprecated"}));
-    let (output, _) = generate_one(&flagged, &[("old", deprecated.clone())]);
-    assert_eq!(output.models, 0);
-    let plain = npm_package("s");
-    let (output, _) = generate_one(&plain, &[("old", deprecated)]);
-    assert_eq!(output.models, 1);
+fn deprecated_is_dropped_in_every_package() {
+    for package in &PACKAGES {
+        assert!(
+            package.drop_deprecated,
+            "{} leaves out deprecated models",
+            package.path
+        );
+        let probe = probe_package(package, &[]);
+        let (output, left_out) = generate_one(
+            &probe,
+            &[("old", tool_model(json!({"status": "deprecated"})))],
+        );
+        assert_eq!(output.models, 0, "{}", package.path);
+        assert_eq!(
+            left_out,
+            [format!(
+                "models-dev: {}/old is deprecated in models.dev; left out",
+                stem(package)
+            )],
+            "{}",
+            package.path
+        );
+        let probe = probe_package(
+            package,
+            if is_gateway(package) {
+                &OLD_THINKING
+            } else {
+                &[]
+            },
+        );
+        for status in [json!({"status": "stable"}), json!({"status": null})] {
+            let (output, _) = generate_one(&probe, &[("old", tool_model(status))]);
+            assert_eq!(output.models, 1, "{}", package.path);
+        }
+        let (output, _) = generate_one(&probe, &[("old", tool_model(json!({})))]);
+        assert_eq!(output.models, 1, "{}", package.path);
+    }
 }
 
 #[test]
