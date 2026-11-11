@@ -1285,6 +1285,9 @@ impl App {
                 self.entry_down()
             };
         }
+        if matches!(key, Key::ShiftUp | Key::ShiftDown) {
+            return self.project_key(key);
+        }
         if !matches!(key, Key::Char('j')) {
             if matches!(key, Key::Backspace) {
                 return self.delete_key();
@@ -1327,6 +1330,54 @@ impl App {
             return Some(effect);
         }
         self.focus = None;
+        Some(Effect::None)
+    }
+
+    /// Shift+↑ Shift+↓ on a focused home row: focus the next or
+    /// previous project section's first row, its first live row else
+    /// its first exited row, expanding and opening folds as
+    /// `focus_row` does so the row is a list stop. The ends and a
+    /// lone project keep focus. `None` without a focused row, so the
+    /// key routes on as it does today.
+    fn project_key(&mut self, key: &Key) -> Option<Effect> {
+        let down = matches!(key, Key::ShiftDown);
+        let row = match self.focus {
+            Some(TargetId::Home(
+                Spot::Entry(row) | Spot::Stop(row) | Spot::More(row) | Spot::Archived(row),
+            )) => row,
+            _ => return None,
+        };
+        let Some(project) = self
+            .home
+            .sessions
+            .by_key(row)
+            .map(|found| found.project.clone())
+        else {
+            return Some(Effect::None);
+        };
+        let sections = self.home.sessions.sections(self.home.launch_project());
+        let Some(at) = sections
+            .iter()
+            .position(|section| section.project == project)
+        else {
+            return Some(Effect::None);
+        };
+        let side = if down {
+            at.checked_add(1)
+        } else {
+            at.checked_sub(1)
+        };
+        let Some(landed) = side.and_then(|at| sections.get(at)).and_then(|section| {
+            section
+                .live
+                .first()
+                .or(section.exited.first())
+                .or(section.archived.first())
+        }) else {
+            return Some(Effect::None);
+        };
+        let key = landed.key;
+        self.focus_row(key);
         Some(Effect::None)
     }
 

@@ -4645,3 +4645,74 @@ fn home_logo_rect_values() {
     keys.open_keys();
     assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
 }
+
+/// The focused home entry's row name.
+fn focused_name(app: &App) -> String {
+    let Some(crate::mouse::TargetId::Home(Spot::Entry(key))) = app.focused() else {
+        panic!("a focused row, got {:?}", app.focused())
+    };
+    app.home_screen()
+        .expect("home draws")
+        .list
+        .into_iter()
+        .find_map(|line| match line {
+            ListLine::Live { key: row, name, .. } if row == key => Some(name),
+            ListLine::Exited { key: row, name, .. } if row == key => Some(name),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("row {key}"))
+}
+
+/// Draws `app` at 160x48 so list focus applies.
+fn draw_160x48(app: &mut App) {
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    app.drawn(&targets);
+}
+
+#[test]
+fn shift_arrows_jump_between_projects_first_rows() {
+    let mut app = home(160, 48);
+    app.on_line(hello());
+    // Three projects: two live rows in the launch project, one live
+    // row in each of the other two, in feed order.
+    for (id, name, project, workspace) in [
+        ("s_aaaaaaaaaaaaaaaa", "first work", "-w", "/w"),
+        ("s_bbbbbbbbbbbbbbbb", "second work", "-w", "/w"),
+        ("s_cccccccccccccccc", "other work", "other", "/o"),
+        ("s_dddddddddddddddd", "third work", "third", "/t"),
+    ] {
+        let mut state = live();
+        state["project"] = serde_json::json!(project);
+        state["workspace"] = serde_json::json!(workspace);
+        app.on_line(status(id, name, state));
+    }
+    draw_160x48(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    // Up from the entry bar to the middle of the first project.
+    for key in [Key::Up, Key::Up, Key::Up] {
+        assert_eq!(app.on_key(key, now), Effect::None);
+    }
+    assert_eq!(focused_name(&app), "second work");
+    // Shift+↓ lands on the second project's first row.
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    draw_160x48(&mut app);
+    assert_eq!(focused_name(&app), "other work");
+    // Shift+↑ returns to the first project's first row.
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    draw_160x48(&mut app);
+    assert_eq!(focused_name(&app), "first work");
+    // No wrap past the first project.
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    draw_160x48(&mut app);
+    assert_eq!(focused_name(&app), "first work");
+    // Down to the last row, then no wrap past the last project.
+    for key in [Key::Down, Key::Down, Key::Down] {
+        assert_eq!(app.on_key(key, now), Effect::None);
+    }
+    assert_eq!(focused_name(&app), "third work");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    draw_160x48(&mut app);
+    assert_eq!(focused_name(&app), "third work");
+}

@@ -2186,6 +2186,307 @@ fn home_arrows_focus_the_list_and_entry_bar() {
     );
 }
 
+/// Two live rows in the launch project and one live row in "other".
+fn two_projects(app: &mut App) {
+    linked(app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_cccccccccccccccc",
+        "other work",
+        "/o",
+        "other",
+        json!({"state": "idle"}),
+    ));
+}
+
+/// Focuses the home row of `session`.
+fn focus_session(app: &mut App, session: &str) {
+    let key = row_key(app, session);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+}
+
+#[test]
+fn shift_down_from_a_projects_middle_row_lands_on_the_next_projects_first_row() {
+    let mut app = home_with(80, 24, launch());
+    two_projects(&mut app);
+    drawn(&mut app);
+    focus_session(&mut app, "s_bbbbbbbbbbbbbbbb");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+}
+
+#[test]
+fn shift_keys_hold_at_the_first_and_last_project() {
+    let mut app = home_with(80, 24, launch());
+    two_projects(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+    focus_session(&mut app, "s_cccccccccccccccc");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+}
+
+#[test]
+fn shift_keys_keep_focus_with_one_project() {
+    let mut app = home_with(80, 24, launch());
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+}
+
+#[test]
+fn shift_down_lands_on_the_first_exited_row_with_no_live_rows() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    drawn(&mut app);
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+}
+
+#[test]
+fn shift_down_expands_a_more_collapsed_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [
+                exited_in("s_dddddddddddddddd", "second old", "/o", "other"),
+                exited_in("s_eeeeeeeeeeeeeeee", "third old", "/o", "other"),
+                exited_in("s_ffffffffffffffff", "fourth old", "/o", "other"),
+            ], "total": 4}),
+        ))
+        .is_empty()
+    );
+    drawn(&mut app);
+    let stops = app.all_list_stops();
+    assert!(
+        stops.iter().any(|stop| matches!(stop, Spot::More(_))),
+        "{stops:?}"
+    );
+    assert!(
+        !stops.contains(&Spot::Entry(row_key(&app, "s_ffffffffffffffff"))),
+        "{stops:?}"
+    );
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert!(
+        app.all_list_stops()
+            .contains(&Spot::Entry(row_key(&app, "s_cccccccccccccccc"))),
+    );
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert!(
+        app.all_list_stops()
+            .contains(&Spot::Entry(row_key(&app, "s_ffffffffffffffff"))),
+    );
+}
+
+#[test]
+fn shift_down_opens_an_archived_only_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    let archived = fanout
+        .iter()
+        .find(|line| is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's archived ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "filed work", "/o", "other")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(!app.home.sessions.is_archived_open("other"));
+    drawn(&mut app);
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert!(app.home.sessions.is_archived_open("other"));
+}
+
+#[test]
+fn shift_down_with_a_home_question_open_keeps_the_question() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    let before = question(&app);
+    assert!(before.contains("Delete old work"), "{before}");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert_eq!(question(&app), before);
+}
+
+#[test]
+fn shift_down_from_the_entry_bar_routes_on() {
+    let mut app = home_with(80, 24, launch());
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
 #[test]
 fn up_on_a_home_with_nothing_open_focuses_the_last_row_and_esc_drops_it() {
     let mut app = home_with(80, 24, launch());
