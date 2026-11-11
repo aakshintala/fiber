@@ -302,7 +302,7 @@ impl crate::Machine for InvokeMachine {
     fn import(
         &self,
         home: &std::path::Path,
-        source: Option<&str>,
+        source: Option<contract::commands::ImportSource>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure> {
         self.fake.import(home, source, clock)

@@ -1100,10 +1100,12 @@ fn logged_out_app(login: bool) -> (App, Arc<crate::configure_fake::Fake>) {
             LoginTarget {
                 name: "acme".to_owned(),
                 kind: LoginKind::Key,
+                label: None,
             },
             LoginTarget {
                 name: "zed".to_owned(),
                 kind: LoginKind::Key,
+                label: None,
             },
         ]);
     }

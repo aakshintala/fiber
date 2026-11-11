@@ -477,6 +477,8 @@ fn matched(
         | HubEventKind::Attention
         | HubEventKind::DeviceChanged
         | HubEventKind::SessionLeft
+        | HubEventKind::SessionDeleted
+        | HubEventKind::SessionArchived
         | HubEventKind::StreamClosed
         | HubEventKind::StreamReopened
         | HubEventKind::Unknown(_) => None,
