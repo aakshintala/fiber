@@ -19,12 +19,13 @@ x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
-(`lint` and `test_linux`, plus the two `bug_red` legs when an issue its
-body resolves carries the `bug` label) and one macOS check: when its diff
-touches a file containing `target_os`, `clippy_macos` lints the selected
-crates on the macOS arm64 runner ("On every pull request that changes code").
-The check holds one macOS slot against the 5-slot cap while it runs; no
-Linux-side job changes. Draft and ready pull requests select
+(`lint` and `test_linux`, plus `bug_red_linux` when an issue its
+body resolves carries the `bug` label) and macOS arm64 jobs
+(`bug_red_macos` on the same bug pull requests, and `clippy_macos`
+when its diff touches a file containing `target_os`, which lints the
+selected crates on the macOS arm64 runner ("On every pull request that
+changes code")). Each macOS job holds one macOS slot against the 5-slot
+cap while it runs; no Linux-side job changes. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff

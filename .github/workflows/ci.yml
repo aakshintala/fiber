@@ -254,12 +254,12 @@ jobs:
           # deleted file never does.
           clippy_macos=false
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            while IFS= read -r path; do
-              if [ -n "$path" ] && [ -f "$path" ] && grep -q 'target_os' "$path"; then
+            while IFS= read -r -d '' path; do
+              if [ -n "$path" ] && [ -f "$path" ] && grep -q 'target_os' -- "$path"; then
                 clippy_macos=true
                 break
               fi
-            done <<<"$(git diff --name-only "$BASE...HEAD")"
+            done < <(git diff -z --name-only "$BASE...HEAD")
           fi
           # Merge the flag into the selection's jobs map: a missing or
           # malformed jobs line fails the step closed instead of silently
