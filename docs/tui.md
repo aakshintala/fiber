@@ -2502,10 +2502,10 @@ character. An uppercase letter means Shift and that letter, and Shift on a
 character that is not a letter is dropped. `+` alone, or after a modifier as in `ctrl++`,
 is the plus key.
 
-Six actions have ordered variants: `move_word` (left, right),
+Seven actions have ordered variants: `move_word` (left, right),
 `line_start_end` (start, end), `focus_next_prev` (next, prev),
-`search_next_prev` (next, prev), `select_steering` (up, down) and
-`rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
+`focus_project` (next, prev), `search_next_prev` (next, prev),
+`select_steering` (up, down) and `rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
 in that order, so `["ctrl+b", "ctrl+f", "alt+b", "alt+f"]` gives `move_word`
 two keys each way. A list whose length is not a multiple of the number of
 variants is invalid, and `[]` unbinds the action. A group identical to an
