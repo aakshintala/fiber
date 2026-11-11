@@ -5951,12 +5951,8 @@ fn a_history_with_an_unreadable_log_is_log_corrupt() {
     let session_dir = dir.join("projects").join("-w").join("sessions").join(&sid);
     let log = session_dir.join("events.jsonl");
     std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).unwrap();
-    // Root bypasses file modes, so the mode row cannot fail there: skip
-    // rather than fail, as `log`'s own unreadable tests note.
     if std::fs::File::open(&log).is_ok() {
-        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
-        drop(held);
-        return;
+        panic!("running as root: root bypasses file modes, so the read cannot fail here");
     }
     let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
     let refused = history_direct(&hub, &sid, &session_dir, json!({}), "c_hist");
