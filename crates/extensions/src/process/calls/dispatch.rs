@@ -92,6 +92,9 @@ impl ProcessExtension {
                     transport::UNFIT.to_owned(),
                 );
             }
+            transport::ParsedLine::Refused { id, message } => {
+                self.answer_rejected(&id, ErrorCode::InvalidArguments, message);
+            }
             transport::ParsedLine::Malformed { id } => {
                 self.answer_rejected(&id, ErrorCode::Malformed, transport::MALFORMED.to_owned());
             }

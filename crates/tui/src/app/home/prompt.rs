@@ -10,6 +10,7 @@ use super::super::reconnect::UNANSWERED;
 use super::super::{App, Effect, Kind, Sent, hub_line, session_line};
 use super::{refusal, refusal_code};
 use crate::home::{Spot, State, dependents};
+use crate::import_report::parse_import;
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::mouse::TargetId;
@@ -443,7 +444,7 @@ impl App {
             line: hub_line(
                 &id,
                 HubCommand::Import(ImportArgs {
-                    source: Some(source.to_owned()),
+                    source: parse_import(source).flatten(),
                 }),
             ),
             id: id.clone(),
