@@ -26,8 +26,11 @@ mod clear;
 
 mod delete;
 
+mod archive;
+
 mod hooks_offer;
 
+use archive::ArchiveCommand;
 use delete::DeleteCommand;
 
 /// A stop, delete, archive or import waiting for its answer: a
@@ -142,6 +145,11 @@ pub(super) struct Questions {
     /// confirmed stops, beside the asks they correlate. The module owns
     /// the field; the rest of the app goes through its methods.
     delete_command: DeleteCommand,
+    /// `/archive` for the session on screen: its discovery and
+    /// confirmed stops, beside the ask the one archive correlates. The
+    /// module owns the field; the rest of the app goes through its
+    /// methods.
+    archive_command: ArchiveCommand,
 }
 
 impl Questions {
@@ -244,6 +252,7 @@ impl App {
     /// end in its stop uncertainty.
     pub(super) fn settle_deletes(&mut self) {
         self.delete_command_disconnected();
+        self.archive_command_disconnected();
         let home = &self.home;
         let mut deletes: Vec<String> = home
             .questions

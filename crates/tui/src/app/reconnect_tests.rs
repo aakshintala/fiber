@@ -863,7 +863,10 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
             }]}}),
         ),
     );
-    assert_eq!(app.home_click(Spot::Stop(first_key(&app))), Effect::None);
+    // The delete question opens with the Delete key now: the row's ✕
+    // archives an exited row.
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(first_key(&app))));
+    assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     let now = fakes::clock::FakeClock::new().now();
     let delete = parsed(&sent(&mut app, |app| app.on_key(Key::Enter, now)));
     assert_eq!(names(&delete), ["delete"]);

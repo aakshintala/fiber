@@ -744,6 +744,9 @@ impl App {
                     // The command's confirmed stops retire here: only an
                     // exit permits its one delete.
                     lines.extend(self.delete_command_session_left(&exited));
+                    // The archive command's stops retire the same way:
+                    // only an exit permits its one archive.
+                    lines.extend(self.archive_command_session_left(&exited));
                     Some(lines)
                 } else if matches!(
                     kind,
@@ -840,6 +843,20 @@ impl App {
                             // fold before unrelated ask handling.
                             if let Some(lines) =
                                 self.delete_command_answer(id, accepted, &hub.payload)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(
+                            super::Waiting::ArchiveDiscovery(..)
+                            | super::Waiting::ArchiveStop { .. }
+                            | super::Waiting::ArchiveFinal(..),
+                        ) => {
+                            // The archive command's discovery, stops and
+                            // one archive fold the same way, with no
+                            // question at any phase.
+                            if let Some(lines) =
+                                self.archive_command_answer(id, accepted, &hub.payload)
                             {
                                 return Some(lines);
                             }
@@ -1015,6 +1032,20 @@ impl App {
                             // fold before unrelated ask handling.
                             if let Some(lines) =
                                 self.delete_command_answer(id, accepted, &envelope.payload)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(
+                            super::Waiting::ArchiveDiscovery(..)
+                            | super::Waiting::ArchiveStop { .. }
+                            | super::Waiting::ArchiveFinal(..),
+                        ) => {
+                            // The archive command's discovery, stops and
+                            // one archive fold the same way, with no
+                            // question at any phase.
+                            if let Some(lines) =
+                                self.archive_command_answer(id, accepted, &envelope.payload)
                             {
                                 return Some(lines);
                             }

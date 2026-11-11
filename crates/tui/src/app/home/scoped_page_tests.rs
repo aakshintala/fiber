@@ -7,7 +7,7 @@
 use super::{App, Effect};
 use crate::app::testkit::{hello, home_with};
 use crate::home::{Launch, ListLine, Spot};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use contract::SessionId;
 use contract::clock::Clock;
@@ -1082,13 +1082,14 @@ fn delete_fold_re_asks_both_the_scoped_and_the_archived_count() {
     // Delete the exited row through the foot question; the accepted
     // delete removes it and refills the unscoped page, re-asking both
     // counts for the deleted row's project (`docs/tui.md`, "The session
-    // list": one ask of each in flight per project).
+    // list": one ask of each in flight per project). The question opens
+    // with the Delete key: Backspace archives an exited row.
     app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
         &app,
         "s_aaaaaaaaaaaaaaaa",
     ))));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     let Effect::Send(delete) = app.on_key(Key::Enter, now) else {
         panic!("Enter confirms the delete");
     };

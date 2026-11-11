@@ -244,7 +244,10 @@ fn delete_question() -> App {
                 .map(|row| row.0)
         })
         .expect("one row");
-    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     app
 }
@@ -636,7 +639,10 @@ fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
                 .map(|row| row.0)
         })
         .expect("the exited row");
-    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     assert_eq!(press(&mut app, "right"), Effect::None);
     assert!(app.session().is_none());

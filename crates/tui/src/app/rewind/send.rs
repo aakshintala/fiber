@@ -269,6 +269,9 @@ impl App {
             | Waiting::DeleteDiscovery(..)
             | Waiting::DeleteStop { .. }
             | Waiting::DeleteFinal(..)
+            | Waiting::ArchiveDiscovery(..)
+            | Waiting::ArchiveStop { .. }
+            | Waiting::ArchiveFinal(..)
             | Waiting::Feed
             | Waiting::Recent(..)
             | Waiting::Close => false,
@@ -331,6 +334,9 @@ impl App {
             | Waiting::DeleteDiscovery(..)
             | Waiting::DeleteStop { .. }
             | Waiting::DeleteFinal(..)
+            | Waiting::ArchiveDiscovery(..)
+            | Waiting::ArchiveStop { .. }
+            | Waiting::ArchiveFinal(..)
             | Waiting::Feed
             | Waiting::Recent(..)
             | Waiting::Close => return None,
