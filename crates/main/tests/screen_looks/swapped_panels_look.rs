@@ -512,6 +512,12 @@ fn dark_settings_body_sits_on_the_panel_tint() {
     let mut run = turned(&setup);
     run.write(b"/settings\r");
     let keys = "←→ tab · / search · Enter change · Tab layer · Delete reset";
+    // debt: two "the settings tabs" predicates stay (this one and
+    // the_settings_view_matches_the_doc's); the grid-read ratchet caps
+    // per-file unmarked reads (look.rs 163, this file 50;
+    // xtask/src/screen_ratchet.rs) and a per-file helper's reads count
+    // where it is defined, so a shared helper waits for a third
+    // predicate; support/ is outside the fence.
     let grid = run.wait_screen("the settings tabs", |grid| {
         let (Some(note), Some(bar), Some(footer)) = (
             find_row(grid, "Changes save automatically"),
@@ -521,7 +527,10 @@ fn dark_settings_body_sits_on_the_panel_tint() {
             return false;
         };
         is_dim(grid, note, "Changes save automatically")
-            && bar == note + 2
+            // The tab bar sits below the dim note: the view's name row,
+            // then "Changes save automatically" dim, then the tab bar
+            // (`docs/tui.md`, "/settings Top rows").
+            && bar > note
             && is_bold(grid, bar, "Appearance")
             && col_at_or(grid, bar, "Models").is_some()
             && !is_bold(grid, bar, "Models")

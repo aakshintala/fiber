@@ -131,8 +131,11 @@ fn among_by_role() {
 
 #[test]
 fn dark_at_256_known_entries() {
-    // The dark theme at 256 colours, role by role: the terminal's own
-    // colours stay the default, every other role its nearest xterm entry.
+    // The dark theme at 256 colours, role by role: `text`, `code_text`
+    // and `operator` are the terminal's foreground and `muted` is dim
+    // over the default, so those four stay the default at 256 colours
+    // (`docs/tui.md`, "Themes"); every other role takes its nearest
+    // xterm entry, which the table pins row-for-row.
     let look = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
     for role in [Role::Text, Role::Muted, Role::CodeText, Role::Operator] {
         assert_eq!(look.colour(role), Color::Reset, "{}", role.name());
