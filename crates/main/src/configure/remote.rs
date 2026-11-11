@@ -326,6 +326,47 @@ impl hub::DeviceLogin for DeviceLogin {
         self.login.cancel();
     }
 }
+impl hub::KeeperProbe for Seam {
+    fn keepers(&self, home: &Path, clock: Arc<dyn Clock>) -> Vec<contract::SessionId> {
+        // The feed counts keepers, and the `stop_keepers` command stops
+        // them, through the one classifier: only keeper-or-gone sockets
+        // a keeper still holds read as keepers, in id order. A session
+        // that died as the probe landed reads keeper-or-gone but holds
+        // no lock, so the check below leaves it out.
+        match doors::classify_sockets(home, Arc::clone(&clock)) {
+            Ok(probed) => probed
+                .into_iter()
+                .filter_map(|(id, class)| {
+                    if !matches!(class, doors::SocketClass::KeeperOrGone) {
+                        return None;
+                    }
+                    keeper_held(home, &id).then_some(id)
+                })
+                .collect(),
+            Err(error) => {
+                log::diag::Diag::new(home, log::diag::Process::Hub, log::diag::Level::Info, clock)
+                    .line(
+                        log::diag::Severity::Warn,
+                        None,
+                        "keepers_unreadable",
+                        &format!("keeper probe of {} failed: {error}", home.display()),
+                    );
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// Whether `id`'s session log is keeper-held: the same lock the hub's
+/// stop split reads, so the feed publishes only ids a keeper still
+/// holds and `/close all` never counts a socket its session left
+/// behind.
+fn keeper_held(home: &Path, id: &contract::SessionId) -> bool {
+    log::find_session(home, id).is_some_and(|(_, dir)| {
+        log::lock_label(&dir).is_some_and(|label| label.starts_with("keeper "))
+    })
+}
+
 impl hub::Machine for Seam {
     fn import(
         &self,

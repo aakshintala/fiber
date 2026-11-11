@@ -659,6 +659,7 @@ impl App {
                     | HubEventKind::SessionArchived
                     | HubEventKind::CommandAccepted
                     | HubEventKind::CommandRejected
+                    | HubEventKind::Keepers
                     | HubEventKind::Unknown(_) => {}
                 }
             }

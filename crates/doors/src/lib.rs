@@ -57,6 +57,8 @@ pub use notes::{ReadOnlyOutcome, ReadOnlySummary};
 pub use session::{Declare, McpLogin, Replacement, ServersRefresh, Session};
 pub use session_error::SessionError;
 pub use sessions::SessionSockets;
+pub use sessions::SocketClass;
+pub use sessions::classify_sockets;
 pub use sessions::session_entries;
 pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
 pub use socket::bind;

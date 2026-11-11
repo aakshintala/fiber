@@ -293,9 +293,12 @@ fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
         }
         seen.len() == 3
     });
+    // The feed carries the hub's `keepers` line beside the statuses now
+    // (`docs/events.md`, "Hub feed"): it is not a session row.
     assert!(
         statuses
             .iter()
+            .filter(|line| line["kind"] != "keepers")
             .all(|line| line["kind"] == "session_status" && line["payload"].get("parent").is_none()),
         "{statuses:?}"
     );
@@ -449,41 +452,58 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
     )
     .unwrap();
     // The test holds the session's listener, as the killed process still
-    // does while the kernel closes its summary connection first.
+    // does while the kernel closes its summary connection first. A real
+    // session accepts every connection, and the hub connects twice: the
+    // keeper probe subscribes first and its read eats one line. The fake
+    // keeps every stream; the status goes out on each, so the relay
+    // carries it whichever connection it is.
     let listener = std::os::unix::net::UnixListener::bind(setup.session_socket(&id)).unwrap();
+    let serving = listener.try_clone().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let accepted = listener.accept().map(|(stream, _)| stream);
-        tx.send((listener, accepted)).unwrap_or(());
+        for accepted in serving.incoming() {
+            let Ok(stream) = accepted else {
+                continue;
+            };
+            if tx.send(stream).is_err() {
+                break;
+            }
+        }
     });
-    let (listener, accepted) = setup
+    let first = setup
         .deadline
         .recv(&rx)
         .expect("the hub connects to the session");
-    let summary = Socket::from(setup.deadline, accepted.unwrap());
+    let summary = Socket::from(setup.deadline, first);
     assert_eq!(
         recv(&summary, "the summary subscribe")["command"],
         "subscribe"
     );
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    summary.send(
-        &json!({
-            "kind": "session_status", "session_id": id, "ts": 5, "schema_version": 1,
-            "payload": {
-                "name": "doomed", "workspace": workspace, "project": "-w", "model": "fake/m",
-                "state": "streaming", "started": 0, "calls": 0, "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
-                "spend": {
-                    "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
-                    "cost": 0.0, "subscription_cost": 0.0,
-                },
+    let status = json!({
+        "kind": "session_status", "session_id": id, "ts": 5, "schema_version": 1,
+        "payload": {
+            "name": "doomed", "workspace": workspace, "project": "-w", "model": "fake/m",
+            "state": "streaming", "started": 0, "calls": 0, "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
+            "spend": {
+                "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0,
             },
-        })
-        .to_string(),
+        },
+    })
+    .to_string();
+    summary.send(&status);
+    // The probe's read eats the status when its subscribe wins the race,
+    // so the relay connection, which follows, carries a second copy.
+    let relay = Socket::from(
+        setup.deadline,
+        setup.deadline.recv(&rx).expect("the relay connects"),
     );
+    relay.send(&status);
     until(&watch, "the session's status", |line| {
         line["kind"] == "session_status" && line["session_id"] == id.as_str()
     });
-    drop(summary);
+    drop((summary, relay));
     let left = until(&watch, "the crash's session_left", |line| {
         line["kind"] == "session_left"
     });
