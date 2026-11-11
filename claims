@@ -168,7 +168,6 @@ crates/tui/src/rebind_view_tests.rs	fiber-4491	plan	2026-11-10T22:01:41Z	roundho
 crates/tui/src/app/keyboard_screen_tests.rs	fiber-4491	plan	2026-11-10T22:01:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/overlay_tests.rs	fiber-4491	plan	2026-11-10T22:01:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/snapshots	fiber-4491	plan	2026-11-10T22:01:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/hub_daemon/keeper.rs	fiber-4601	plan	2026-11-10T22:45:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/home.rs	fiber-4491	plan	2026-11-10T23:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/home.rs	fiber-4491	plan	2026-11-10T23:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/providers.rs,crates/main/tests/providers/databricks.rs	fiber-4337	grant	2026-11-10T23:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4337	
