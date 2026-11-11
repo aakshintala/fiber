@@ -293,4 +293,3 @@ crates/tui/src/app/snapshots/tui__app__config_views__tests__settings_has_no_scre
 crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4618	plan	2026-11-11T04:01:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop_panel_tests.rs	fiber-4602	plan	2026-11-11T04:08:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/prompt.rs	fiber-4557	grant	2026-11-11T04:12:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4557	
-crates/main/tests/hub_daemon/keeper.rs	fiber-4573	plan	2026-11-11T04:30:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
