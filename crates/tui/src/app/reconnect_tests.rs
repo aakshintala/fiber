@@ -371,8 +371,21 @@ fn write(app: &mut App, lines: Vec<String>) -> Vec<String> {
 /// What `act` sends, written.
 fn sent(app: &mut App, act: impl FnOnce(&mut App) -> Effect) -> Vec<String> {
     let effect = act(app);
-    let Effect::Send(lines) = effect else {
-        panic!("expected lines to send, got {effect:?}");
+    let lines = match effect {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("expected lines to send"),
     };
     write(app, lines)
 }
@@ -1157,4 +1170,106 @@ fn a_reset_after_reconnect_leaves_no_untagged_feature_id() {
     }
     assert!(after.iter().any(|line| line["command"] == "feed"));
     assert!(after.iter().any(|line| line["command"] == "recent"));
+}
+
+#[test]
+fn a_failed_sessions_fold_settles_by_its_carried_id() {
+    let mut app = home();
+    linked(&mut app);
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // The reconnect's hello carries the sessions snapshot, paired on
+    // the fold's tail.
+    let mut lines = reconnect(&mut app);
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"sessions\""))
+        .expect("a sessions line");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("sessions id");
+    // Tamper with the sessions line's JSON id, then pair the tampered
+    // line as a builder whose line and id diverge would: settlement
+    // must follow the carried id, never the line's JSON.
+    let tampered = lines[at].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    lines[at] = tampered;
+    app.write_failed(&lines);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
+}
+
+#[test]
+fn a_failed_sessions_write_ignores_the_forged_line_id() {
+    let mut app = home();
+    linked(&mut app);
+    // A live steer wait with a pending entry: settling by the forged
+    // line id would wrongly settle and fail it, while the carried
+    // sessions id settles nothing.
+    app.outbox.wait("c_live", crate::app::Waiting::Steer);
+    app.outbox.insert(
+        "c_live".to_owned(),
+        crate::app::Kind::Prompt,
+        crate::input::Draft::default(),
+    );
+    // The reconnect's hello carries the sessions snapshot, paired on
+    // the fold's tail.
+    let mut lines = reconnect(&mut app);
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"sessions\""))
+        .expect("a sessions line");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("sessions id");
+    // Forge the sessions line's JSON id to the live command's: the
+    // disconnect below purges the carried pair with its wait, so only
+    // the id captured before the disconnect may settle.
+    let tampered = lines[at].replacen(&carried, "c_live", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    lines[at] = tampered;
+    app.write_failed(&lines);
+    // Settlement followed the carried sessions id: the live command
+    // keeps its wait and its pending entry.
+    assert_eq!(
+        app.outbox.waiting("c_live"),
+        Some(crate::app::Waiting::Steer)
+    );
+    assert!(app.outbox.pending.contains_key("c_live"));
+}
+
+#[test]
+fn a_flushed_held_start_leaves_no_registry_entry_once_answered() {
+    let mut app = home();
+    // Enter before the hub connects: the start is held, paired in the
+    // registry once at flush time with the line as flushed.
+    assert_eq!(enter(&mut app, "hi"), Effect::None);
+    // The hello flushes the held start with that single note.
+    let out = fold(&mut app, hello());
+    let start = out
+        .iter()
+        .find(|line| line.contains("\"start\""))
+        .expect("a held start")
+        .clone();
+    let id: String = serde_json::from_str::<Value>(&start)
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("start id");
+    // The accept answers the start and purges its pair ...
+    fold(
+        &mut app,
+        hub(
+            "command_accepted",
+            json!({"command_id": id, "result": {"session_id": S_A}}),
+        ),
+    );
+    // ... so a second disconnect retains no completed line.
+    app.disconnected();
+    assert_eq!(app.outbox.hub_id(&start), None);
 }

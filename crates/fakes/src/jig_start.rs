@@ -75,7 +75,9 @@ fn assert_jig_fresh(binary: &Path) {
 /// The stale input for `binary`, or `None` when the binary is fresh or
 /// unchecked: no sibling dep-info file means unchecked, never stale. Any
 /// listed file missing or dated at or after the binary means stale, as does
-/// a dep-info file that cannot be read or parsed.
+/// a dep-info file that cannot be read or parsed. Listed files under the
+/// git dir are skipped: they name the ref the build watched, not a source
+/// the binary was built from.
 fn stale_evidence(binary: &Path) -> Option<PathBuf> {
     let dep_info = sibling_dep_info(binary);
     let text = match std::fs::read_to_string(&dep_info) {
@@ -92,6 +94,17 @@ fn stale_evidence(binary: &Path) -> Option<PathBuf> {
         .ok()?;
     for dep in deps {
         let dep_path = PathBuf::from(dep);
+        // A packed ref has no loose file, so a watched ref path stays
+        // missing on a fresh build, and a commit after the build leaves
+        // the loose ref newer than the binary; neither is a source, and
+        // no source lives under the git dir. Only a whole path component
+        // counts, so a source merely containing that string still refuses.
+        if dep_path
+            .components()
+            .any(|component| component.as_os_str() == ".git")
+        {
+            continue;
+        }
         let stale = match std::fs::metadata(&dep_path).and_then(|meta| meta.modified()) {
             Ok(dep_mtime) => dep_mtime >= binary_mtime,
             Err(_) => true,

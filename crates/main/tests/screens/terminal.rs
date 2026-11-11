@@ -86,16 +86,14 @@ fn provider_full(
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}});
     if let Some(width) = panel_width {
         config["tui"] = json!({"panel": {"width": width}});
@@ -1282,7 +1280,6 @@ fn expected_card(text: usize, _panel: u16) -> Vec<String> {
         let kept: String = compaction.chars().take(room - 1).collect();
         rows.push(format!("{kept}… {share}"));
     }
-    rows.push(fit_row("then a summary, fresh context", text));
     // Every figure: its dim label with the value right-aligned.
     let figure = |label: &str, value: &str| {
         format!(
@@ -2570,16 +2567,14 @@ fn provider_thinking_pair(setup: &support::Setup, server: &ProviderServer) {
             ],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     let other = setup.root.path().join("src-other");
     write_json(
         &other.join("extension.json"),
@@ -2594,16 +2589,14 @@ fn provider_thinking_pair(setup: &support::Setup, server: &ProviderServer) {
                         "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(other);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(other),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
@@ -3084,16 +3077,14 @@ fn credential_provider_pair(setup: &support::Setup, server: &ProviderServer) {
             "models":[{"id":model,"protocol":"openai-responses","base_url":url,"context_window":100000}]}),
         );
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     for (provider, names) in [("fake", ["home", "work"]), ("other", ["day", "night"])] {
         for name in names {
             config::store_credential(
@@ -3464,16 +3455,14 @@ fn hooks_lists_registered_rows_and_names_its_empty_state() {
     let server = ProviderServer::start([hello()]).unwrap();
     provider(&setup, &server);
     let hooks = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks");
-    extensions::plan(
+    let request = extensions::Request::Path(hooks);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(hooks),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config/hooks.json"),
         &json!({"hooks": {"audit": {
@@ -3496,16 +3485,14 @@ fn hooks_lists_registered_rows_and_names_its_empty_state() {
          fiber.watch({ \"turn_completed\" }, { timeout = 5000, run = function() end })\n",
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     let second = setup.root.path().join("second");
     std::fs::create_dir_all(&second).unwrap();
     write_json(
@@ -3517,16 +3504,14 @@ fn hooks_lists_registered_rows_and_names_its_empty_state() {
         "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 5000, on_failure = \"non-blocking\", run = function() end })\n",
     )
     .unwrap();
-    extensions::plan(
+    let request = extensions::Request::Path(second);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(second),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();

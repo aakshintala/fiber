@@ -276,6 +276,13 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        crate::app::Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         crate::app::Effect::None
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
@@ -284,7 +291,7 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ExitTracked(_)
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_) => Vec::new(),

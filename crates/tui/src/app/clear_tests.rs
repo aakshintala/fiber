@@ -709,10 +709,10 @@ fn clear_start_refused_keeps_the_old_session_with_one_notice() {
 fn clear_start_lost_before_write_keeps_the_old_session() {
     let mut app = homed();
     app.on_line(clear_status(SESSION, "/w", "fake/m", None));
-    let Effect::Send(out) = enter(&mut app, "/clear") else {
+    let Effect::SendTracked(out) = enter(&mut app, "/clear") else {
         panic!("the start goes out");
     };
-    app.write_failed(&out);
+    app.write_failed_tracked(&out);
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
         Some(SESSION)

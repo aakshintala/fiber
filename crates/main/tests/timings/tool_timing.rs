@@ -45,16 +45,14 @@ fn run_from(output: std::process::Output) -> Run {
 impl Setup {
     /// Installs the extension in `source`.
     fn tool_timing_install(&self, source: PathBuf) {
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
@@ -482,16 +480,14 @@ fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>
     }
     write(&source.join("extension.json"), &manifest.to_string());
     write(&source.join("providers/syn.json"), &data.to_string());
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 #[test]

@@ -140,16 +140,14 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
             ],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 200}, "diagnostics": {"level": "debug"}}),

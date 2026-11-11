@@ -96,13 +96,14 @@ fn opened(app: &mut App) {
         .unwrap_or_else(|| panic!("a row"));
     let out = match app.on_click(crate::mouse::TargetId::Home(crate::home::Spot::Entry(key))) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -235,13 +236,14 @@ fn complete(app: &mut App, job: &str) {
 fn open(app: &mut App, job: &str) -> Vec<Value> {
     match app.open_item(&contract::JobId(job.to_owned())) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None => Vec::new(),
         Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
