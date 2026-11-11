@@ -727,6 +727,23 @@ fn compat_flags_and_extra_fields_come_from_model_data_only() {
     assert_eq!(sent_body(&server, 2)["max_completion_tokens"], 4096);
 }
 
+/// A `compat.max_tokens` endpoint sends the output limit as `max_tokens`
+/// with no `max_completion_tokens`: the Databricks open-weight route
+/// rejects the latter with a 400. The endpoint below carries no flag, the
+/// shape `entry_for` builds for those services before the fix, so the
+/// limit lands in the rejected field.
+#[test]
+fn a_max_tokens_endpoint_sends_the_limit_as_max_tokens() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut endpoint = endpoint(&server);
+    endpoint.max_output_tokens = Some(4096);
+    let req = request();
+    send(endpoint, &req);
+    let body = sent_body(&server, 0);
+    assert_eq!(body["max_tokens"], 4096);
+    assert_eq!(body.get("max_completion_tokens"), None);
+}
+
 #[test]
 fn the_output_limit_never_exceeds_the_models_limit() {
     let server =
