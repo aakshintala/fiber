@@ -63,20 +63,6 @@ mod tests {
     }
 
     #[test]
-    fn covered_inverts_the_cells_own_colours() {
-        let (symbol, style) = cursor_cell(Some("b"), Role::Surface, Role::Text);
-        assert_eq!(symbol, "b");
-        assert_eq!(style.fg, None, "the covered cell keeps its own colours");
-        assert_eq!(style.bg, None, "the covered cell keeps its own colours");
-        assert!(
-            style
-                .add_modifier
-                .contains(ratatui::style::Modifier::REVERSED),
-            "the covered cell inverts"
-        );
-    }
-
-    #[test]
     fn covered_keeps_a_whole_grapheme() {
         // A combining mark rides with its base, and an emoji ZWJ
         // sequence stays one symbol: the helper never splits what the

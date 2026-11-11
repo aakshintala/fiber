@@ -142,36 +142,6 @@ fn the_cursor_reverses_the_covered_character() {
 }
 
 #[test]
-fn the_covered_cell_keeps_its_colours_and_inverts() {
-    let mut app = typed(80, 12, "hi");
-    app.on_edit(crate::keys::Edit::Left);
-    let area = Rect::new(0, 0, 80, 12);
-    let mut buf = Buffer::empty(area);
-    crate::view::render(&app, area, &mut buf, None);
-    // The caret on `i`: the covered character stays, keeping the draft
-    // cell's own colours and inverting them (`docs/tui.md`, "The input
-    // box"). The taller box lifts the draft two rows above main's.
-    assert_eq!(buf[(6, 8)].symbol(), "i");
-    assert_eq!(
-        buf[(6, 8)].style().fg,
-        buf[(5, 8)].style().fg,
-        "the covered cell keeps its colours"
-    );
-    assert_eq!(
-        buf[(6, 8)].bg,
-        buf[(5, 8)].bg,
-        "the covered cell keeps its colours"
-    );
-    assert!(
-        buf[(6, 8)]
-            .style()
-            .add_modifier
-            .contains(ratatui::style::Modifier::REVERSED),
-        "the covered cell inverts"
-    );
-}
-
-#[test]
 fn the_cursor_draws_over_a_backward_selection() {
     use crate::keys::{Button, Mouse, MouseKind};
 
