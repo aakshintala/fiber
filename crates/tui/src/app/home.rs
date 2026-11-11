@@ -497,6 +497,9 @@ impl App {
             for row in section.exited.iter().take(section.shown_exited) {
                 list.push(ListLine::Exited {
                     key: row.key,
+                    // An exited row draws its ✕: Backspace and the
+                    // cross archive it through the hub.
+                    stop: true,
                     glyph: "○",
                     name: crate::home::title(row),
                     id: row.id.0.clone(),
@@ -528,6 +531,9 @@ impl App {
             for row in section.archived.iter().take(section.shown_archived) {
                 list.push(ListLine::Exited {
                     key: row.key,
+                    // An archived row draws no ✕: opening it resumes
+                    // it, which unarchives it.
+                    stop: false,
                     glyph: "○",
                     name: crate::home::title(row),
                     id: row.id.0.clone(),

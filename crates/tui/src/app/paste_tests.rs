@@ -527,7 +527,10 @@ fn ctrl_v_does_nothing_with_the_delete_question_open() {
     ));
     type_text(&mut app, "hi");
     let key = row_keys(&app)[0];
-    app.home_click(Spot::Stop(key));
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert!(
         app.home_screen()
             .and_then(|screen| screen.question)

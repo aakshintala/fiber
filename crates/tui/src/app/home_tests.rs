@@ -2308,7 +2308,7 @@ fn up_and_j_walk_the_row_stops() {
 }
 
 #[test]
-fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
+fn j_steps_onto_the_focused_exited_rows_cross() {
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let rows = [
@@ -2349,10 +2349,12 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(entries[1])))
     );
+    // An exited row draws its ✕, so j steps onto it instead of leaving
+    // the row.
     assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Start(entries[2])))
+        Some(crate::mouse::TargetId::Home(Spot::Stop(entries[1])))
     );
 }
 

@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/../home_view_tests.rs
-assertion_line: 570
+assertion_line: 579
 expression: frame
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -10,7 +10,7 @@ expression: frame
 
 w +  0 live · $0.00
   exited · 1
-   ○ old work                                         s_aaaaaaaaaaaaaaaa · $0.00
+   ○ old work                                       s_aaaaaaaaaaaaaaaa · $0.00 ✕
   archived · 51
    ○ filed 00                                         s_0000000000000000 · $0.00
    ○ filed 01                                         s_0000000000000001 · $0.00

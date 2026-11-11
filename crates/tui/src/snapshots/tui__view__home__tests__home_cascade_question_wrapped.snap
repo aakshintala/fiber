@@ -1,5 +1,6 @@
 ---
-source: crates/tui/src/home_view_tests.rs
+source: crates/tui/src/view/../home_view_tests.rs
+assertion_line: 2440
 expression: drawn
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -9,7 +10,7 @@ expression: drawn
 
 w +  0 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   exite
-   ○ fi  Delete session                                               ✕   0s ago
+   ○ fi  Delete session                                               ✕  s ago ✕
 
          Delete fix the parser (s_0123456789abcdef) and 8 sessions that
          continue it: s_0000000000000001, s_0000000000000002,
@@ -21,7 +22,7 @@ w +  0 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄�
          Enter delete all · Esc keep
 
 ▄▄▄▄▄▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄
-▌ › █? for shortcuts
+▌ › /? for shortcuts
 ▌
 ▌ [w]  [no model]  [thinking: default]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

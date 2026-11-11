@@ -88,6 +88,7 @@ const DRAWN_ORDER: &[&str] = &[
     "import",
     "clear",
     "close",
+    "archive",
     "delete",
     "feedback",
     "quit",
@@ -106,11 +107,20 @@ fn the_list_draws_every_drawn_command_once_in_drawn_order() {
 }
 
 #[test]
-fn delete_draws_after_close_naming_the_stop_first() {
+fn archive_draws_after_close_before_delete_naming_the_stop_first() {
     let all = rows(&[]);
     let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
     let close = names.iter().position(|name| *name == "close").unwrap();
-    assert_eq!(names[close + 1], "delete");
+    assert_eq!(names[close + 1], "archive");
+    assert_eq!(names[close + 2], "delete");
+    let row = all
+        .iter()
+        .find(|row| row.name == "archive")
+        .unwrap_or_else(|| panic!("no archive row"));
+    assert_eq!(
+        row.description,
+        "Stops the session and its cascade as /delete does, then archives that one session and goes home, asking nothing."
+    );
     let row = all
         .iter()
         .find(|row| row.name == "delete")

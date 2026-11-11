@@ -312,6 +312,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_close,
     },
     CommandEntry {
+        name: "archive",
+        description: "Stops the session and its cascade as /delete does, then archives that one session and goes home, asking nothing.",
+        hint: None,
+        run: run_archive,
+    },
+    CommandEntry {
         name: "delete",
         description: "Stops, then deletes the session on screen.",
         hint: None,
@@ -475,6 +481,10 @@ fn run_clear(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_delete(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.delete_on_screen())
+}
+
+fn run_archive(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.archive_on_screen())
 }
 
 /// `/feedback`: with no description, asks for one by leaving the draft

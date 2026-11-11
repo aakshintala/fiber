@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/app/home/prompt/delete_tests.rs
+assertion_line: 1126
 expression: frame(&app)
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -9,7 +10,7 @@ expression: frame(&app)
 
 w +  0 live · $0.00
   exited · 1
-   ○ old work                                s_aaaaaaaaaaaaaaaa · $0.00 · 0s ago
+   ○ old work                              s_aaaaaaaaaaaaaaaa · $0.00 · 0s ago ✕
 
 
 
