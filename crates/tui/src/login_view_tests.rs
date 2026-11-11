@@ -1275,6 +1275,168 @@ fn esc_on_the_list_closes() {
 }
 
 #[test]
+fn login_signed_in_first_80x24() {
+    // `docs/tui.md`, "Logging in": providers with a usable credential
+    // come first, each marked "✓ <label>" with its default label, or
+    // the variable's name for a key read from the environment.
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+            label: None,
+        },
+        LoginTarget {
+            name: "acme".to_owned(),
+            kind: LoginKind::Key,
+            label: Some("default".to_owned()),
+        },
+        LoginTarget {
+            name: "acme.api_key".to_owned(),
+            kind: LoginKind::Secret,
+            label: None,
+        },
+        LoginTarget {
+            name: "zeta".to_owned(),
+            kind: LoginKind::Key,
+            label: Some("ZETA_KEY".to_owned()),
+        },
+    ]);
+    let login = Login::open(&ctx(&fake));
+    // `docs/tui.md`, "Logging in": the two signed-in providers list
+    // first, then the two unsigned rows.
+    assert_eq!(
+        login
+            .targets
+            .iter()
+            .map(|target| target.name.as_str())
+            .collect::<Vec<_>>(),
+        ["acme", "zeta", "codex", "acme.api_key"]
+    );
+    assert_eq!(
+        login
+            .targets
+            .iter()
+            .filter(|target| target.label.is_some())
+            .count(),
+        2
+    );
+    let screen = drawn(&login, 80, 24);
+    // `docs/tui.md`, "Logging in": each signed-in row shows its mark.
+    for mark in ["✓ default", "✓ ZETA_KEY"] {
+        assert!(screen.lines().any(|row| row.contains(mark)), "{screen}");
+    }
+    // Each signed-in mark draws in the doc's `success`
+    // (`docs/tui.md`, "Logging in"), one per signed-in row. The
+    // focused row rides the bar, which covers the whole row in black
+    // whatever the row names.
+    let (buf, _) = overlaid(&login, 80, 24);
+    let success = Role::Success.color();
+    let accent = Role::Accent.color();
+    let mut marks = Vec::new();
+    let mut barred_marks = 0;
+    for y in 0..24u16 {
+        for x in 0..80u16 {
+            if buf[(x, y)].symbol() == "✓" {
+                if buf[(x, y)].bg == accent {
+                    barred_marks += 1;
+                    assert_eq!(
+                        buf[(x, y)].fg,
+                        crate::look::BAR_TEXT,
+                        "the bar covers the focused mark in black"
+                    );
+                } else {
+                    assert_eq!(buf[(x, y)].fg, success, "the mark draws in success");
+                }
+                marks.push((x, y));
+            }
+        }
+    }
+    assert_eq!(marks.len(), 2, "one mark per signed-in row");
+    assert_eq!(barred_marks, 1, "the focused row rides the bar");
+    // The focused signed-in row keeps `bold` with the bar; the other
+    // mark draws unbolded.
+    let rows = text_of(&buf, 80, 24);
+    let row_y = |needle: &str| {
+        u16::try_from(rows.iter().position(|row| row.contains(needle)).unwrap()).unwrap()
+    };
+    let col_x =
+        |y: u16, needle: &str| u16::try_from(rows[usize::from(y)].find(needle).unwrap()).unwrap();
+    let tag_cells = |y: u16, tag: &str| {
+        let x = col_x(y, tag);
+        let len = u16::try_from(tag.len()).unwrap();
+        (0..len).map(move |dx| (x + dx, y))
+    };
+    let focused_y = row_y("✓ default");
+    let (mark_x, _) = marks
+        .iter()
+        .find(|(_, my)| *my == focused_y)
+        .copied()
+        .unwrap();
+    assert!(buf[(mark_x, focused_y)].modifier.contains(Modifier::BOLD));
+    let other_y = row_y("✓ ZETA_KEY");
+    let (other_x, _) = marks
+        .iter()
+        .find(|(_, my)| *my == other_y)
+        .copied()
+        .unwrap();
+    assert!(!buf[(other_x, other_y)].modifier.contains(Modifier::BOLD));
+    // `docs/tui.md`, "Logging in": the rest follow in the text colour.
+    for (x, y) in tag_cells(row_y("codex"), "browser") {
+        let cell = &buf[(x, y)];
+        assert!(
+            !cell.modifier.contains(Modifier::DIM),
+            "an unsigned tag draws in the text colour"
+        );
+        assert!(!cell.modifier.contains(Modifier::BOLD));
+    }
+    // The focused row keeps `bold` on its tag with the bar.
+    for (x, y) in tag_cells(row_y("acme"), "key") {
+        assert!(
+            buf[(x, y)].modifier.contains(Modifier::BOLD),
+            "the focused tag keeps bold with the bar"
+        );
+    }
+    // Every row can be picked, so a signed-in provider can be signed
+    // in again or under another label.
+    for (downs, name) in [(0, "acme"), (1, "zeta"), (2, "codex"), (3, "acme.api_key")] {
+        let mut picked = Login::open(&ctx(&fake));
+        for _ in 0..downs {
+            press(&mut picked, &fake, &[Key::Down]);
+        }
+        let act = picked.key(&Key::Enter, &ctx(&fake));
+        if name == "codex" {
+            assert!(
+                matches!(act, Act::Login(browser) if browser == "codex"),
+                "{name}"
+            );
+        } else {
+            assert!(matches!(act, Act::Stay), "{name}");
+            assert!(panel_open(&picked), "{name}");
+        }
+    }
+    // Esc closes the sorted list.
+    let mut closed = Login::open(&ctx(&fake));
+    assert!(matches!(closed.key(&Key::Esc, &ctx(&fake)), Act::Close));
+    insta::assert_snapshot!("login_signed_in_first_80x24", drawn(&login, 80, 24));
+}
+
+#[test]
+fn a_long_mark_keeps_its_row_on_one_row() {
+    // A long variable name comes out of the shared cut budget: the
+    // name shortens, the whole mark stays on the row.
+    let label = "ZETA_".repeat(12);
+    let fake = fake_with(vec![LoginTarget {
+        name: "zeta".repeat(10),
+        kind: LoginKind::Key,
+        label: Some(label.clone()),
+    }]);
+    let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
+    let marked: Vec<&str> = screen.lines().filter(|row| row.contains('✓')).collect();
+    assert_eq!(marked.len(), 1, "{screen}");
+    assert!(marked[0].contains(&format!("✓ {label}")), "{screen}");
+}
+
+#[test]
 fn a_click_selects_a_row_and_the_x_closes() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));

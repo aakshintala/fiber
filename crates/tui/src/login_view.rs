@@ -342,7 +342,13 @@ impl Login {
     /// The view, its rows read.
     pub(crate) fn open(ctx: &Ctx<'_>) -> Self {
         let (targets, items, said) = match ctx.seam.login_targets() {
-            Ok(targets) => {
+            Ok(mut targets) => {
+                // Signed-in providers list first, each class in
+                // declaration order; secrets keep their own group
+                // after the providers.
+                targets.sort_by_key(|target| {
+                    (target.kind == LoginKind::Secret, target.label.is_none())
+                });
                 let items = build(&targets);
                 (targets, items, Vec::new())
             }
@@ -471,7 +477,21 @@ impl Login {
             })
             .max()
             .unwrap_or(0);
-        let budget = usize::from(inner_w).saturating_sub(4).saturating_sub(tag);
+        // The marks ride after their tags, two spaces apart, in the same
+        // row: the widest whole tail comes out of the shared cut
+        // budget, so names are cut to what is left first. With no
+        // marks the tail is empty and the budget is today's.
+        let mark = self
+            .targets
+            .iter()
+            .filter_map(|target| target.label.as_deref())
+            .map(|label| format::width(&format!("  ✓ {label}")))
+            .max()
+            .unwrap_or(0);
+        let budget = usize::from(inner_w)
+            .saturating_sub(4)
+            .saturating_sub(tag)
+            .saturating_sub(mark);
         // One choice row per target, each exactly one row: the cut
         // names leave every tag a single row at any area width.
         let mut cut: Vec<(usize, String, &'static str)> = Vec::new();
@@ -504,6 +524,31 @@ impl Login {
         for (row, (at, _, _)) in choices.iter_mut().zip(cut.iter()) {
             row.targets
                 .push((0, u16::MAX, TargetId::View(Spot::Row(*at))));
+            // The tag draws in the text colour, not dim; a signed-in
+            // row carries its `✓ <label>` mark in `success` after the
+            // tag, two spaces apart. The focused row keeps `bold`
+            // with the bar.
+            // Focused rows keep the bar's own styling: only unbarred
+            // tags drop their dim for the text colour.
+            if !row.barred
+                && let Some(tag) = row.spans.last_mut()
+            {
+                tag.style = Style::new();
+            }
+            let label = match self.items.get(*at) {
+                Some(Item::Target(t)) => self
+                    .targets
+                    .get(*t)
+                    .and_then(|target| target.label.as_deref()),
+                _ => None,
+            };
+            if let Some(label) = label {
+                let mut mark = Style::new().fg(Role::Success.color());
+                if row.barred {
+                    mark = mark.add_modifier(Modifier::BOLD);
+                }
+                row.spans.push(Span::styled(format!("  ✓ {label}"), mark));
+            }
         }
         let mut choices = choices.into_iter();
         let dim = Style::new().add_modifier(Modifier::DIM);
