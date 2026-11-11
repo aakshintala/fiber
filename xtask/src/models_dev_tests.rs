@@ -1423,6 +1423,19 @@ fn thinking_overlay_accepts_empty_levels() {
 }
 
 #[test]
+fn thinking_overlay_rejects_an_empty_row_with_a_default() {
+    // An explicitly empty row carrying a `default` fails: the default
+    // sits outside its (empty) levels.
+    match parse_thinking_overlay("overlay.json", r#"{"m": {"levels": [], "default": "low"}}"#) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names default `low` outside its levels"
+        ),
+        Ok(_) => panic!("overlay with an empty row carrying a default unexpectedly succeeded"),
+    };
+}
+
+#[test]
 fn thinking_overlay_rejects_a_non_object_row() {
     // A top level that is no object, a row with no levels array, a level
     // that is no string and a default that is no string each fail.
