@@ -19,6 +19,7 @@ use crate::support;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -732,16 +733,23 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         .kill_and_wait();
 }
 
-/// Asserts no line arrives within 3 s: the read times out rather
+/// Nothing arrives past the fold, so the silence bound is kept by
+/// name (`docs/testing.md`, "Waits and timeouts").
+const ABSENT: Duration = Duration::from_secs(3);
+
+/// Asserts no line arrives within `ABSENT`: the read times out rather
 /// than closing, so the stream holds no live tail.
 fn assert_silent(client: &Socket) {
     let mut read = client.read.lock().unwrap();
-    match support::read_line(
-        &mut read,
-        Deadline::after(std::time::Duration::from_secs(3)),
-        "the live tail",
-    ) {
-        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+    read.get_mut().set_read_timeout(Some(ABSENT)).unwrap();
+    let mut line = String::new();
+    match std::io::BufRead::read_line(&mut *read, &mut line) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) => {}
+        Ok(0) => panic!("the socket closed instead of staying silent"),
         other => panic!("the tail stays silent: {other:?}"),
     }
 }

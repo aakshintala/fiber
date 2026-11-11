@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource};
 use contract::{JobId, SessionId};
@@ -349,16 +350,19 @@ fn archive(id: &str, session: &str) -> Value {
     json!({"id": id, "command": "archive", "args": {"session": session}})
 }
 
-/// Asserts no line arrives within 3 s: the read times out rather than
-/// closing, so the stream holds no live tail.
+/// Nothing arrives past the fold, so the silence bound is kept by
+/// name (`docs/testing.md`, "Waits and timeouts").
+const ABSENT: Duration = Duration::from_secs(3);
+
+/// Asserts no line arrives within `ABSENT`: the read times out rather
+/// than closing, so the stream holds no live tail.
 fn assert_silent(client: &Socket) {
     let mut read = client.read.lock().unwrap();
-    match support::read_line(
-        &mut read,
-        Deadline::after(std::time::Duration::from_secs(3)),
-        "the live tail",
-    ) {
-        Err(error) if error.kind() == ErrorKind::TimedOut => {}
+    read.get_mut().set_read_timeout(Some(ABSENT)).unwrap();
+    let mut line = String::new();
+    match std::io::BufRead::read_line(&mut *read, &mut line) {
+        Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {}
+        Ok(0) => panic!("the socket closed instead of staying silent"),
         other => panic!("the tail stays silent: {other:?}"),
     }
 }
