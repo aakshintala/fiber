@@ -4,7 +4,6 @@ expression: "super::super::text(&buf)"
 ---
 
    compacts at —                —
-   then a summary, fresh context
    tokens in / out              —
    cache hits                   —
    cache resets in              —
@@ -42,3 +41,4 @@ expression: "super::super::text(&buf)"
    line 23
    line 24
    line 25
+   line 26
