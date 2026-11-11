@@ -60,7 +60,7 @@ fn row(frame: &crate::swapped::Frame, at: usize) -> String {
 /// empty no-diff set and no local root: what the view shows before the
 /// numstat answer.
 fn list_frame(changes: &BTreeMap<String, (u64, u64)>, list: List) -> crate::swapped::Frame {
-    frame(changes, None, None, list, &BTreeSet::new(), None)
+    frame(changes, None, None, list, &BTreeSet::new(), None, None)
 }
 
 /// The grouped list frame over `resolved` figures with the card's
@@ -70,7 +70,15 @@ fn resolved_frame(
     resolved: &ResolvedFigures,
     list: List,
 ) -> crate::swapped::Frame {
-    frame(changes, Some(resolved), None, list, &BTreeSet::new(), None)
+    frame(
+        changes,
+        Some(resolved),
+        None,
+        list,
+        &BTreeSet::new(),
+        None,
+        None,
+    )
 }
 
 fn screen(app: &App) -> String {
@@ -160,7 +168,7 @@ fn files_group_by_folder_in_path_order_with_top_level_under_dot_slash() {
         ("src/a.rs", 5, 0),
     ]);
     assert_eq!(
-        list_rows(&card),
+        list_rows(&card, None, None),
         [
             ListRow::Folder("./".to_owned()),
             ListRow::File("z.rs".to_owned()),
@@ -174,6 +182,74 @@ fn files_group_by_folder_in_path_order_with_top_level_under_dot_slash() {
             ListRow::Rule,
         ]
     );
+}
+
+#[test]
+fn displayed_paths_strip_the_workspace_root_but_mapping_keeps_the_card_path() {
+    let dir = fakes::TempDir::new("tui-changed-files-display-root");
+    let absolute = dir
+        .path()
+        .join("src/a.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 4, 2)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+    );
+    assert_eq!(row(&frame, 0), "src/");
+    assert_eq!(row(&frame, 1), "    D  a.rs  +4 −2");
+    // Selection and Enter read the card's own path, not the display.
+    let plan = list_rows(&card, Some(dir.path()), None);
+    assert_eq!(row_path(&plan, 1), Some(absolute.as_str()));
+}
+
+#[test]
+fn displayed_paths_fall_back_to_the_viewed_workspace_without_a_local_root() {
+    let dir = fakes::TempDir::new("tui-changed-files-display-viewed");
+    let absolute = dir
+        .path()
+        .join("top.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 1, 0)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        Some(dir.path()),
+    );
+    // A remote terminal has no local root to stat, so the letter stays
+    // changed while the name shows workspace-relative.
+    assert_eq!(row(&frame, 0), "./");
+    assert_eq!(row(&frame, 1), "    M  top.rs  +1 −0");
+}
+
+#[test]
+fn a_path_outside_every_root_shows_whole() {
+    let dir = fakes::TempDir::new("tui-changed-files-display-outside");
+    let card = changes(&[("/elsewhere/f.rs", 2, 1)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+    );
+    assert_eq!(row(&frame, 0), "/elsewhere/");
+    assert_eq!(row(&frame, 1), "    D  f.rs  +2 −1");
 }
 
 #[test]
@@ -240,6 +316,7 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
         List::default(),
         &BTreeSet::new(),
         Some(dir.path()),
+        None,
     );
     assert_eq!(row(&lettered, 1), "    D  gone.rs  +2 −0");
     assert_eq!(lettered.rows[1][1].2, Ink::Role(Role::Removed));
@@ -257,6 +334,7 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
         List::default(),
         &BTreeSet::new(),
         Some(dir.path()),
+        None,
     );
     assert_eq!(row(&restored, 1), "    M  gone.rs  +2 −0");
 }
@@ -264,7 +342,15 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
 #[test]
 fn a_missing_file_without_a_local_root_stays_changed() {
     let card = changes(&[("gone.rs", 2, 0)]);
-    let frame = frame(&card, None, None, List::default(), &BTreeSet::new(), None);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+    );
     assert_eq!(row(&frame, 1), "    M  gone.rs  +2 −0");
 }
 
@@ -275,7 +361,7 @@ fn the_focused_name_draws_bold_accent_with_an_accent_gutter_mark() {
     let card = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
     let mut list = List::gutter_accent();
     list.select(2, 4, 24);
-    let accented = frame(&card, None, None, list, &BTreeSet::new(), None);
+    let accented = frame(&card, None, None, list, &BTreeSet::new(), None, None);
     // The unfocused file row keeps its heading name.
     assert_eq!(accented.rows[1][2].2, Ink::Heading);
     assert_eq!(accented.rows[2][2].2, Ink::Bold(Role::Accent));
@@ -287,7 +373,7 @@ fn the_focused_name_draws_bold_accent_with_an_accent_gutter_mark() {
     // A plain gutter list keeps the uncoloured mark on the same row.
     let mut plain = List::gutter();
     plain.select(2, 4, 24);
-    let unaccented = frame(&card, None, None, plain, &BTreeSet::new(), None);
+    let unaccented = frame(&card, None, None, plain, &BTreeSet::new(), None, None);
     assert_eq!(unaccented.rows[2][2].2, Ink::Heading);
     let mut buf = Buffer::empty(area);
     crate::swapped::render(&unaccented, area, &mut buf, &mut Vec::new());
@@ -306,6 +392,7 @@ fn a_blurred_accent_list_draws_no_accent_name_or_mark() {
         List::gutter_accent().blur(),
         &BTreeSet::new(),
         None,
+        None,
     );
     assert_eq!(frame.rows[1][2].2, Ink::Heading);
     let area = Rect::new(0, 0, 40, 8);
@@ -317,7 +404,7 @@ fn a_blurred_accent_list_draws_no_accent_name_or_mark() {
 #[test]
 fn folder_and_rule_rows_hold_no_path_while_file_rows_do() {
     let card = changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)]);
-    let plan = list_rows(&card);
+    let plan = list_rows(&card, None, None);
     assert_eq!(row_path(&plan, 0), None);
     assert_eq!(row_path(&plan, 1), Some("top.rs"));
     assert_eq!(row_path(&plan, 2), None);
@@ -329,11 +416,15 @@ fn folder_and_rule_rows_hold_no_path_while_file_rows_do() {
 #[test]
 fn file_takes_names_the_file_rows_only() {
     assert_eq!(
-        file_takes(&changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)])),
+        file_takes(
+            &changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)]),
+            None,
+            None
+        ),
         [1, 3]
     );
-    assert!(file_takes(&changes(&[])).is_empty());
-    assert_eq!(file_takes(&changes(&[("top.rs", 2, 0)])), [1]);
+    assert!(file_takes(&changes(&[]), None, None).is_empty());
+    assert_eq!(file_takes(&changes(&[("top.rs", 2, 0)]), None, None), [1]);
 }
 
 #[test]
@@ -382,7 +473,7 @@ fn a_no_diff_row_stays_dim_with_no_changes_where_the_figures_go() {
     let card = changes(&[("src/a.rs", 4, 2)]);
     let mut no_diff = BTreeSet::new();
     no_diff.insert("src/a.rs".to_owned());
-    let dimmed = frame(&card, None, None, List::default(), &no_diff, None);
+    let dimmed = frame(&card, None, None, List::default(), &no_diff, None, None);
     assert_eq!(row(&dimmed, 1), "    ·  a.rs  no changes");
     assert!(
         dimmed.rows[1]
@@ -393,7 +484,7 @@ fn a_no_diff_row_stays_dim_with_no_changes_where_the_figures_go() {
     // Focus marks the gutter but leaves the dim row alone.
     let mut list = List::gutter_accent();
     list.select(1, 3, 24);
-    let focused = frame(&card, None, None, list, &no_diff, None);
+    let focused = frame(&card, None, None, list, &no_diff, None, None);
     assert!(
         focused.rows[1]
             .iter()
@@ -743,6 +834,7 @@ fn no_exit_code_text_reaches_any_diff_frame() {
         List::default(),
         &BTreeSet::new(),
         None,
+        None,
     );
     assert!(
         frame
@@ -846,6 +938,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         List::default(),
         &BTreeSet::new(),
         None,
+        None,
     );
     assert_eq!(
         reading.title,
@@ -865,6 +958,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         List::default(),
         &BTreeSet::new(),
         None,
+        None,
     );
     assert_eq!(row(&local_diff, 0), "src/a.rs  Open in editor ›");
     assert_eq!(row(&local_diff, 1), "+new");
@@ -879,6 +973,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         List::default(),
         &BTreeSet::new(),
         None,
+        None,
     );
     assert_eq!(
         remote_diff.footer,
@@ -890,6 +985,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         Some(("src/a.rs", &Diff::Empty)),
         List::default(),
         &BTreeSet::new(),
+        None,
         None,
     );
     assert_eq!(row(&empty, 0), "src/a.rs  Open in editor ›");
@@ -913,6 +1009,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
                 List::default(),
                 &BTreeSet::new(),
                 None,
+                None,
             ),
             1
         ),
@@ -929,6 +1026,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
             Some(("src/a.rs", &cut)),
             List::default(),
             &BTreeSet::new(),
+            None,
             None,
         )
         .below,
@@ -955,6 +1053,7 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
         List::default(),
         &BTreeSet::new(),
         None,
+        None,
     )
 }
 
@@ -972,6 +1071,7 @@ fn the_diff_frame_shows_the_path_with_an_open_in_editor_target() {
         Some(("src/a.rs", &diff)),
         List::default(),
         &BTreeSet::new(),
+        None,
         None,
     );
     assert_eq!(

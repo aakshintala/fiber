@@ -293,13 +293,19 @@ pub(crate) enum ListRow {
 
 /// The grouped list's body rows for `changes`: each folder holding a
 /// listed file in path order with its files under it in name order,
-/// then the rule above the totals. With no files the plan holds no
-/// rule, since the totals have no last file to follow.
-pub(crate) fn list_rows(changes: &BTreeMap<String, (u64, u64)>) -> Vec<ListRow> {
+/// then the rule above the totals. Folders group the workspace-relative
+/// display paths; file rows hold the card's own path, which Enter, the
+/// editor and the figures read. With no files the plan holds no rule,
+/// since the totals have no last file to follow.
+pub(crate) fn list_rows(
+    changes: &BTreeMap<String, (u64, u64)>,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> Vec<ListRow> {
     let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for path in changes.keys() {
         folders
-            .entry(folder_of(path))
+            .entry(folder_of(display_path(path, workspace, viewed)))
             .or_default()
             .push(path.clone());
     }
@@ -317,8 +323,12 @@ pub(crate) fn list_rows(changes: &BTreeMap<String, (u64, u64)>) -> Vec<ListRow> 
 
 /// The display rows holding files: the rows selection, Enter and clicks
 /// move over, so folder and rule rows never send a diff request.
-pub(crate) fn file_takes(changes: &BTreeMap<String, (u64, u64)>) -> Vec<usize> {
-    list_rows(changes)
+pub(crate) fn file_takes(
+    changes: &BTreeMap<String, (u64, u64)>,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> Vec<usize> {
+    list_rows(changes, workspace, viewed)
         .iter()
         .enumerate()
         .filter(|(_, row)| matches!(row, ListRow::File(_)))
@@ -350,6 +360,28 @@ fn name_of(path: &str) -> &str {
         Some(at) => &path[at + 1..],
         None => path,
     }
+}
+
+/// The path the list shows: workspace-relative, since the card holds
+/// absolute workspace paths (`docs/tui.md`, "Swapped views"). Strips
+/// the first root that prefixes it — the local launch workspace, else
+/// the viewed one — like the figures lookup does; anything else, such
+/// as a path outside the workspace, shows whole.
+fn display_path<'a>(
+    path: &'a str,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> &'a str {
+    for root in [workspace, viewed].into_iter().flatten() {
+        if let Some(relative) = std::path::Path::new(path)
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.to_str())
+        {
+            return relative;
+        }
+    }
+    path
 }
 
 /// A file row's letter: `A` in `added` for a path the answered figures
@@ -398,6 +430,7 @@ pub(crate) fn frame(
     list: List,
     no_diff: &BTreeSet<String>,
     root: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
 ) -> Frame {
     if let Some((path, diff)) = chosen {
         return diff_frame(path, diff, list);
@@ -413,7 +446,7 @@ pub(crate) fn frame(
             &resolved
         }
     };
-    let plan = list_rows(changes);
+    let plan = list_rows(changes, root, viewed);
     // The figures column's widths: every figured row right-aligns its
     // counts in them, and the totals reuse them below.
     let mut added_w = 0;
@@ -451,17 +484,19 @@ pub(crate) fn frame(
                 // The focused name draws bold in accent only for the
                 // accent list: any other list keeps its plain names, so
                 // the focus stays scoped to the Changed files list.
-                rows.push(file_row(
+                let row = file_row(
                     path,
                     figures,
                     changes,
                     no_diff,
                     root,
+                    viewed,
                     at == list.selected() && list.is_accent(),
                     added_w,
                     removed_w,
-                ));
-                content_w = content_w.max(row_width(&rows[rows.len() - 1]));
+                );
+                content_w = content_w.max(row_width(&row));
+                rows.push(row);
             }
         }
     }
@@ -489,13 +524,15 @@ pub(crate) fn frame(
     }
 }
 
-/// One file row: the indent, the letter, the name, then the figures
-/// right-aligned in the column's widths. A no-diff path draws wholly
-/// dim with "no changes" where the figures go; the focused name draws
-/// bold in accent.
+/// One file row: the indent, the letter, the workspace-relative name,
+/// then the figures right-aligned in the column's widths. The card's
+/// own path drives the letter, the figures and the no-diff set; only
+/// the shown name relativizes. A no-diff path draws wholly dim with
+/// "no changes" where the figures go; the focused name draws bold in
+/// accent.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the row reads the figures, the no-diff set, the local root, the focus and the column widths"
+    reason = "the row reads the figures, the no-diff set, both workspace roots, the focus and the column widths"
 )]
 fn file_row(
     path: &str,
@@ -503,15 +540,17 @@ fn file_row(
     changes: &BTreeMap<String, (u64, u64)>,
     no_diff: &BTreeSet<String>,
     root: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
     focused: bool,
     added_w: usize,
     removed_w: usize,
 ) -> Vec<(String, Option<Spot>, Ink)> {
+    let shown = display_path(path, root, viewed);
     if no_diff.contains(path) {
         return vec![
             ("    ".to_owned(), None, Ink::Muted),
             ("·  ".to_owned(), None, Ink::Muted),
-            (safe_line(name_of(path)), None, Ink::Muted),
+            (safe_line(name_of(shown)), None, Ink::Muted),
             ("  ".to_owned(), None, Ink::Muted),
             ("no changes".to_owned(), None, Ink::Muted),
         ];
@@ -526,7 +565,7 @@ fn file_row(
     vec![
         ("    ".to_owned(), None, Ink::Plain),
         (letter, None, letter_ink),
-        (safe_line(name_of(path)), None, name_ink),
+        (safe_line(name_of(shown)), None, name_ink),
         ("  ".to_owned(), None, Ink::Plain),
         (
             format!("{:>added_w$}", format!("+{added}")),

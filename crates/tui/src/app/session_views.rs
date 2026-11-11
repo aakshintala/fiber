@@ -190,7 +190,12 @@ impl App {
     /// rows take no Enter or click, so the view opens with a file
     /// focused.
     fn reseat_files_list(&mut self) {
-        let takes = changed_files_view::file_takes(self.panel_state.changes());
+        let (workspace, viewed) = self.changed_files_roots();
+        let takes = changed_files_view::file_takes(
+            self.panel_state.changes(),
+            workspace,
+            viewed.as_deref(),
+        );
         let Some((rows, height)) = self.session_view_list_metrics() else {
             return;
         };
@@ -325,11 +330,18 @@ impl App {
                 self.session_views.diff_list.key(key, rows, height);
             } else if *key == Key::Enter {
                 return Some(self.session_view_file_enter(list.selected()));
-            } else if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
+            } else {
                 // Folder and rule rows take no Enter: the selection moves
                 // over file rows only.
-                let takes = changed_files_view::file_takes(self.panel_state.changes());
-                list.key_over(key, rows, height, &takes);
+                let (workspace, viewed) = self.changed_files_roots();
+                let takes = changed_files_view::file_takes(
+                    self.panel_state.changes(),
+                    workspace,
+                    viewed.as_deref(),
+                );
+                if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
+                    list.key_over(key, rows, height, &takes);
+                }
             }
             return Some(Effect::None);
         }
@@ -453,7 +465,7 @@ impl App {
                     // A click on "Open in editor ›" runs the same editor
                     // path as Ctrl+G.
                     Spot::Cell(_, _) => return self.open_in_editor(),
-                    _ => {}
+                    Spot::Close | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => {}
                 }
                 return Effect::None;
             }
@@ -461,7 +473,13 @@ impl App {
                 // A click on a file row does what Enter does on it; a
                 // click on a folder or rule row is a no-op, never a diff
                 // request for a stale rank.
-                if !changed_files_view::file_takes(self.panel_state.changes()).contains(&at) {
+                let (workspace, viewed) = self.changed_files_roots();
+                let takes = changed_files_view::file_takes(
+                    self.panel_state.changes(),
+                    workspace,
+                    viewed.as_deref(),
+                );
+                if !takes.contains(&at) {
                     return Effect::None;
                 }
                 if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
@@ -608,13 +626,15 @@ impl App {
                 } else {
                     *list
                 };
+                let (workspace, viewed) = self.changed_files_roots();
                 Some(changed_files_view::frame(
                     self.panel_state.changes(),
                     Some(&self.displayed_figures()),
                     chosen,
                     list,
                     &self.session_views.no_diff,
-                    self.workspace_root(),
+                    workspace,
+                    viewed.as_deref(),
                 ))
             }
             Open::ReleaseNotes(list) => {
@@ -707,7 +727,12 @@ impl App {
             None => {
                 // The grouped row's path: a folder or rule row selects
                 // no file, so Ctrl+G opens nothing.
-                let plan = changed_files_view::list_rows(self.panel_state.changes());
+                let (workspace, viewed) = self.changed_files_roots();
+                let plan = changed_files_view::list_rows(
+                    self.panel_state.changes(),
+                    workspace,
+                    viewed.as_deref(),
+                );
                 let path = changed_files_view::row_path(&plan, list.selected())?;
                 Some((path.to_owned(), 1))
             }
@@ -856,7 +881,9 @@ impl App {
     /// sends its diff request through its ranked index, while a folder
     /// or rule row sends nothing, and a stale rank leaves an empty list.
     fn session_view_file_enter(&mut self, at: usize) -> Effect {
-        let plan = changed_files_view::list_rows(self.panel_state.changes());
+        let (workspace, viewed) = self.changed_files_roots();
+        let plan =
+            changed_files_view::list_rows(self.panel_state.changes(), workspace, viewed.as_deref());
         let Some(path) = changed_files_view::row_path(&plan, at).map(str::to_owned) else {
             return Effect::None;
         };
@@ -1138,12 +1165,13 @@ impl App {
         // The view learns a path is no-diff only from an `Empty` answer:
         // a committed or undone file stays listed and dim, while a fresh
         // diff unmarks it. An untracked file never lands in the set: its
-        // diff reads through --no-index as lines, never empty.
+        // diff reads through --no-index as lines, never empty, per
+        // `changed_files_view::diff_command`.
         match &diff {
-            Diff::Empty if !self.displayed_figures().untracked.contains(&path) => {
+            Diff::Empty => {
                 self.session_views.no_diff.insert(path.clone());
             }
-            _ => {
+            Diff::Reading | Diff::Lines { .. } | Diff::Failed(_) => {
                 self.session_views.no_diff.remove(&path);
             }
         }
@@ -1203,6 +1231,13 @@ impl App {
             crate::LaunchLocation::Local { workspace, .. } => Some(workspace),
             crate::LaunchLocation::Remote { .. } => None,
         }
+    }
+
+    /// The roots the Changed files list shows paths against: the local
+    /// launch workspace, else the viewed one on a remote terminal, like
+    /// the figures lookup.
+    fn changed_files_roots(&self) -> (Option<&std::path::Path>, Option<std::path::PathBuf>) {
+        (self.workspace_root(), self.workspace())
     }
 
     /// A session rejection fills only the diff request that still owns its id.

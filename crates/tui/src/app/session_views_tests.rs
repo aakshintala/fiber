@@ -3405,8 +3405,10 @@ fn a_later_diff_answer_unmarks_the_path_so_its_row_returns() {
 }
 
 #[test]
-fn an_empty_diff_answer_for_an_untracked_path_does_not_flip_it() {
-    let dir = fakes::TempDir::new("tui-numstat-untracked-no-diff");
+fn an_untracked_path_s_diff_answer_is_lines_so_its_row_never_dims() {
+    // An untracked file's diff reads through --no-index as lines, never
+    // empty, so its answer keeps the row on its line count as added.
+    let dir = fakes::TempDir::new("tui-numstat-untracked-lines");
     std::fs::create_dir_all(dir.path().join("src"))
         .unwrap_or_else(|error| panic!("workspace src: {error}"));
     std::fs::write(dir.path().join("src/file-0.rs"), "a\nb\nc\nd\n")
@@ -3417,14 +3419,11 @@ fn an_empty_diff_answer_for_an_untracked_path_does_not_flip_it() {
     app.on_line(accepted_figures(&id, "Exit code 0.\n", 0, None, false));
     assert!(screen(&app, 120, 35).0.contains("    A  file-0.rs  +4 −0"));
     let request = command(app.on_key(Key::Enter, now()));
-    app.on_line(accepted_diff_exited(
+    app.on_line(accepted_diff(
         request["id"].as_str().unwrap_or_default(),
-        "Exit code 0.\n",
-        0,
+        "diff --git a/src/file-0.rs b/src/file-0.rs\n@@ -0,0 +1,4 @@\n+a\n+b\n+c\n+d\n",
     ));
     assert_eq!(app.on_edit(Edit::Left), Effect::None);
-    // An untracked file never lands in the no-diff set: its row keeps
-    // its line count as added.
     let shown = screen(&app, 120, 35).0;
     assert!(shown.contains("    A  file-0.rs  +4 −0"), "{shown}");
     assert!(!shown.contains("no changes"), "{shown}");
