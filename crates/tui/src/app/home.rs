@@ -763,6 +763,37 @@ impl App {
                         lines.push(sent.line);
                     }
                     Some(lines)
+                } else if kind == contract::HubEventKind::SessionDeleted
+                    || kind == contract::HubEventKind::SessionArchived
+                {
+                    // A deleted or archived session left the feed on every
+                    // terminal: drop its row and re-ask that project's
+                    // counts, as the exit path does, but with the project
+                    // the hub line carries — the row may already be gone.
+                    // A line missing its session or project, or naming an
+                    // empty project, is ignored. No unscoped refill and
+                    // no rail or exit bookkeeping: it is not an exit.
+                    let id = hub.payload.get("session_id").and_then(Value::as_str)?;
+                    let project = hub.payload.get("project").and_then(Value::as_str)?;
+                    if project.is_empty() {
+                        return Some(Vec::new());
+                    }
+                    self.home.sessions.remove(&SessionId(id.to_owned()));
+                    // Both counts, as the exit path does: a delete or an
+                    // archive can move either total. Each id rides paired,
+                    // so a failed write settles by the carried id.
+                    let mut lines: Vec<String> = Vec::new();
+                    lines.extend(
+                        self.scoped_first(project)
+                            .into_iter()
+                            .map(|sent| self.outbox.fold_line(sent)),
+                    );
+                    lines.extend(
+                        self.archived_first(project)
+                            .into_iter()
+                            .map(|sent| self.outbox.fold_line(sent)),
+                    );
+                    Some(lines)
                 } else if matches!(
                     kind,
                     contract::HubEventKind::CommandAccepted

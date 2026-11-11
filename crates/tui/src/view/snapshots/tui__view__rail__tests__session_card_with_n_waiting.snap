@@ -10,7 +10,6 @@ expression: text(&buf)
                                                                                                                                  test/model
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
                                                                                                                                  compacts at —                —
-                                                                                                                                 then a summary, fresh context
                                                                                                                                  tokens in / out          1 / 2
                                                                                                                                  cache hits                  0%
                                                                                                                                  cache resets in              —
@@ -20,6 +19,7 @@ expression: text(&buf)
                                                                                                                                  turns                        0
                                                                                                                                  ! 2 waiting · hidden · show
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
 
 ⋮                                                                                                                             ⋮
 ⋮                                                                                                                             ⋮

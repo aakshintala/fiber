@@ -10,15 +10,15 @@ expression: "rows.join(\"\\n\")"
  Output since this terminal attached · /tmp/out
                                                                                              ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆        —
  Protected path .fiber changed while a confined call ran; Fiber restored it.                 compacts at —            —
-                                                                                             then a summary, fresh con…
                                                                                              tokens in / out          —
                                                                                              cache hits               —
                                                                                              cache resets in          —
                                                                                              cost                     —
                                                                                              cost on subscription     —
                                                                                              speed, last reply        —
-⋮                                                                                         ⋮  turns                    0
+                                                                                             turns                    0
 ⋮                                                                                         ⋮▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+⋮                                                                                         ⋮
 ⋮                                                                                         ⋮
 
 

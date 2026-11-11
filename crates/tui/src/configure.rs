@@ -144,6 +144,10 @@ pub struct LoginTarget {
     pub name: String,
     /// How the row logs in.
     pub kind: LoginKind,
+    /// The sign-in mark's text: the provider's default label, or the
+    /// environment variable's name when the proving source reads the
+    /// environment. `None` on an unsigned row and on every secret.
+    pub label: Option<String>,
 }
 
 /// One `/logout` row: a provider's label or a declared secret, by name.

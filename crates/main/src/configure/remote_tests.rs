@@ -95,6 +95,32 @@ fn import_pending_reads_the_seam_homes_receipts() {
     );
 }
 
+#[test]
+fn login_targets_carries_the_label_only_while_signed_in() {
+    // The wire carries `label` only when `Some`: an unsigned row omits
+    // it, and a stored credential marks with the default label.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    install(&home);
+    assert_eq!(
+        result(&seam, "login_targets", json!({})),
+        json!({"targets": [{"name": "acme", "kind": "key"}]})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name": "acme", "key": "sk-test"})
+        ),
+        json!({"path": "credentials/acme/default", "replaced": false})
+    );
+    assert_eq!(
+        result(&seam, "login_targets", json!({})),
+        json!({"targets": [{"name": "acme", "kind": "key", "label": "default"}]})
+    );
+}
+
 fn install(home: &Path) {
     crate::test_support::install_extension(
         home,
