@@ -332,3 +332,5 @@ crates/tui/src/app/items/keys_tests.rs	fiber-4599	grant	2026-11-11T08:52:20Z	rou
 crates/tui/src/event_loop_tests.rs	fiber-4491	plan	2026-11-11T08:55:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/hub_start_worktree.rs	fiber-4596	plan	2026-11-11T08:56:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view.rs	fiber-4596	plan	2026-11-11T08:56:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/ci.yml	fiber-4630	plan	2026-11-11T09:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4630	plan	2026-11-11T09:26:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
