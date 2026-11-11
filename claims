@@ -377,3 +377,6 @@ crates/main/tests/screen_looks/look.rs	fiber-4588	plan	2026-11-10T23:00:58Z	roun
 crates/tui/src/home.rs	fiber-4491	plan	2026-11-10T23:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/home.rs	fiber-4491	plan	2026-11-10T23:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/providers.rs,crates/main/tests/providers/databricks.rs	fiber-4337	grant	2026-11-10T23:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4337	
+crates/tui/src/theme.rs	fiber-4593	plan	2026-11-11T00:52:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/theme_tests.rs	fiber-4593	plan	2026-11-11T00:52:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4593	plan	2026-11-11T00:52:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
