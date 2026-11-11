@@ -8,10 +8,14 @@
 # case's fixture. Every write path is proven: a create carrying the `bug`
 # label for each failing journey, a comment on the open issue, and the
 # recheck commenting instead of creating when the issue appears between the
-# lookup and the create. Every no-write path is proven: an empty or missing
-# failures file writes nothing, a failed open lookup or recheck files
-# nothing for that journey, and a blank failures line is skipped. A missing
-# `FAILURES` environment fails the step. Nothing reaches the GitHub API.
+# lookup and the create. The streak line is proven on a second consecutive
+# failure (comment and create), absent after a pass, absent with a per-journey
+# fallback note when the history lookup fails, and absent when the prior
+# artifact is missing; mixed streaks ride one run. Every no-write path is
+# proven: an empty or missing failures file writes nothing, a failed open
+# lookup or recheck files nothing for that journey, and a blank failures
+# line is skipped. A missing `FAILURES` environment fails the step. Nothing
+# reaches the GitHub API.
 #
 # Usage: scripts/test-journey-report
 set -euo pipefail
@@ -124,6 +128,32 @@ gh() {
         printf '%s %s\n%s\nlabel=%s' "$header" "$title" "$body" "$label" >"$STUB_CALLS/$n"
       fi
       ;;
+    run)
+      sub=$2
+      shift 2
+      case "$sub" in
+        list)
+          [ -z "${STUB_RUN_LIST_FAIL:-}" ] || return 1
+          cat "${STUB_RUNS:-/dev/null}" 2>/dev/null || true
+          ;;
+        download)
+          id=$1
+          shift
+          dir=""
+          while [ $# -gt 0 ]; do
+            if [ "$1" = --dir ]; then dir=$2; shift 2; else shift; fi
+          done
+          src="$STUB_HISTORY/$id/journey-failures.txt"
+          if [ -n "$dir" ] && [ -f "$src" ]; then
+            mkdir -p "$dir"
+            cp "$src" "$dir/journey-failures.txt"
+          else
+            return 1
+          fi
+          ;;
+        *) echo "stub gh: unexpected run call: $sub" >&2; return 1 ;;
+      esac
+      ;;
     *) echo "stub gh: unexpected call: $*" >&2; return 1 ;;
   esac
 }
@@ -132,12 +162,18 @@ cat "$tmp/stub.sh" "$tmp/ci-step.norm" >"$tmp/run.sh"
 
 sha=1111111111111111111111111111111111111111
 url=https://github.example/aakshintala/fiber/actions/runs/1
+prior_sha=2222222222222222222222222222222222222222
 
 # The expected body for one journey: the commit, the run URL, then every
-# failing journey in this run as a dash list.
+# failing journey in this run as a dash list; with a count and a first SHA,
+# the streak line follows.
 body() {
   # shellcheck disable=SC2016 # the backticks are literal markdown in the issue body; printf expands the %s.
-  printf 'Journey `%s` failed at %s: %s\nFailing journeys in this run:\n%s' "$1" "$sha" "$url" "$2"
+  if [ $# -gt 2 ]; then
+    printf 'Journey `%s` failed at %s: %s\nFailing journeys in this run:\n%s\nStreak: %s consecutive failures since %s.' "$1" "$sha" "$url" "$2" "$3" "$4"
+  else
+    printf 'Journey `%s` failed at %s: %s\nFailing journeys in this run:\n%s' "$1" "$sha" "$url" "$2"
+  fi
 }
 
 # run_step DIR OPEN: runs the writer step and prints its exit code. OPEN is
@@ -154,6 +190,7 @@ run_step() {
     GH_TOKEN=test GH_REPO=aakshintala/fiber COMMIT="$sha" RUN_URL="$url" \
     FAILURES="$dir/failures.txt" \
     STUB_OPEN="$open" STUB_CALLS="$dir/calls" \
+    REPORT_WORKFLOW=test-workflow GITHUB_RUN_ID=1000 \
     "$@" \
     bash --noprofile --norc -eo pipefail "$tmp/run.sh" >"$dir/out" 2>"$dir/err" || code=$?
   [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$dir: the step printed to stderr"; }
@@ -301,5 +338,86 @@ grep -Fq "FAILURES" "$tmp/env-missing/err" || fail "env-missing: the failure doe
 expect_exit env-missing "$code" 1
 # `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
 expect_writes "$tmp/env-missing" 0
+
+# A second consecutive failure of the same journey states the streak: the
+# comment carries the streak line with the first failing commit. The run
+# listing names this run first, and the step skips it.
+setup_case streak-two-comment
+printf 'qa\n' >"$tmp/streak-two-comment/failures.txt"
+mkdir -p "$tmp/streak-two-comment/history/1001"
+printf 'qa\n' >"$tmp/streak-two-comment/history/1001/journey-failures.txt"
+printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/streak-two-comment/runs"
+listed_qa=$(printf -- '- %s' qa)
+code=$(run_step "$tmp/streak-two-comment" "9|Journey failure: qa" STUB_RUNS="$tmp/streak-two-comment/runs" STUB_HISTORY="$tmp/streak-two-comment/history")
+expect_exit streak-two-comment "$code" 0
+# `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
+expect_writes "$tmp/streak-two-comment" 1
+expect_write "$tmp/streak-two-comment" 0 "$(printf 'comment 9\n%s' "$(body qa "$listed_qa" 2 "$prior_sha")")"
+expect_summary "$tmp/streak-two-comment" ""
+
+# Without an open issue the streak rides the create instead.
+setup_case streak-two-create
+printf 'qa\n' >"$tmp/streak-two-create/failures.txt"
+mkdir -p "$tmp/streak-two-create/history/1001"
+printf 'qa\n' >"$tmp/streak-two-create/history/1001/journey-failures.txt"
+printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/streak-two-create/runs"
+code=$(run_step "$tmp/streak-two-create" "" STUB_RUNS="$tmp/streak-two-create/runs" STUB_HISTORY="$tmp/streak-two-create/history")
+expect_exit streak-two-create "$code" 0
+# `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
+expect_writes "$tmp/streak-two-create" 1
+expect_write "$tmp/streak-two-create" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_qa" 2 "$prior_sha")")"
+expect_summary "$tmp/streak-two-create" ""
+
+# A pass for the journey in the prior run keeps the plain sighting: the
+# prior failures file names another journey, so the streak stays at one.
+setup_case streak-one
+printf 'qa\n' >"$tmp/streak-one/failures.txt"
+mkdir -p "$tmp/streak-one/history/1001"
+printf 'qr\n' >"$tmp/streak-one/history/1001/journey-failures.txt"
+printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/streak-one/runs"
+code=$(run_step "$tmp/streak-one" "" STUB_RUNS="$tmp/streak-one/runs" STUB_HISTORY="$tmp/streak-one/history")
+expect_exit streak-one "$code" 0
+# `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
+expect_writes "$tmp/streak-one" 1
+expect_write "$tmp/streak-one" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_qa")")"
+expect_summary "$tmp/streak-one" ""
+
+# A failed history lookup files the plain sighting, never a streak claim,
+# and notes the journey it could not prove.
+setup_case history-fetch-fail
+printf 'qa\n' >"$tmp/history-fetch-fail/failures.txt"
+code=$(run_step "$tmp/history-fetch-fail" "" STUB_RUN_LIST_FAIL=1)
+expect_exit history-fetch-fail "$code" 0
+# `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
+expect_writes "$tmp/history-fetch-fail" 1
+expect_write "$tmp/history-fetch-fail" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_qa")")"
+expect_summary "$tmp/history-fetch-fail" "the history lookup for Journey failure: qa failed, so no streak is reported"
+
+# A prior run with no failures artifact ends the walk: the streak restarts
+# at one with the plain sighting and no note.
+setup_case prior-artifact-missing
+printf 'qa\n' >"$tmp/prior-artifact-missing/failures.txt"
+printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/prior-artifact-missing/runs"
+code=$(run_step "$tmp/prior-artifact-missing" "" STUB_RUNS="$tmp/prior-artifact-missing/runs" STUB_HISTORY="$tmp/prior-artifact-missing/history")
+expect_exit prior-artifact-missing "$code" 0
+# `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
+expect_writes "$tmp/prior-artifact-missing" 1
+expect_write "$tmp/prior-artifact-missing" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_qa")")"
+expect_summary "$tmp/prior-artifact-missing" ""
+
+# Mixed streaks in one run: each journey carries its own streak line or none.
+setup_case mixed-streaks
+printf 'qa\nqb\n' >"$tmp/mixed-streaks/failures.txt"
+mkdir -p "$tmp/mixed-streaks/history/1001"
+printf 'qa\n' >"$tmp/mixed-streaks/history/1001/journey-failures.txt"
+printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/mixed-streaks/runs"
+listed_mixed=$(printf -- '- %s\n- %s' qa qb)
+code=$(run_step "$tmp/mixed-streaks" "" STUB_RUNS="$tmp/mixed-streaks/runs" STUB_HISTORY="$tmp/mixed-streaks/history")
+expect_exit mixed-streaks "$code" 0
+# `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
+expect_writes "$tmp/mixed-streaks" 2
+expect_write "$tmp/mixed-streaks" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_mixed" 2 "$prior_sha")")"
+expect_write "$tmp/mixed-streaks" 1 "$(printf 'create Journey failure: qb\n%s\nlabel=bug' "$(body qb "$listed_mixed")")"
+expect_summary "$tmp/mixed-streaks" ""
 
 echo "scripts/test-journey-report: ok"
