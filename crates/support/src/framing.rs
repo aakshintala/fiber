@@ -9,13 +9,25 @@ pub const MAX_LINE: usize = 64 << 20;
 /// The next line, without its trailing CR and LF bytes. `Ok(None)` at end of
 /// input with nothing read. A line longer than `max` is `InvalidData`.
 pub fn read_line<R: BufRead>(reader: &mut R, max: usize) -> io::Result<Option<Vec<u8>>> {
+    read_line_partial(reader, max).map_err(|(error, _)| error)
+}
+
+/// The next line exactly as [`read_line`] reads it, but a failed read also
+/// returns the bytes consumed before the error: an unterminated fragment a
+/// stalled connection delivered, so the caller can record it instead of
+/// dropping it. `Ok` matches [`read_line`] byte for byte; `Err` carries the
+/// error with the raw consumed bytes, empty when nothing was consumed.
+pub fn read_line_partial<R: BufRead>(
+    reader: &mut R,
+    max: usize,
+) -> Result<Option<Vec<u8>>, (io::Error, Vec<u8>)> {
     let mut line = Vec::new();
     loop {
         let (chunk, found, eof) = {
             let buf = match reader.fill_buf() {
                 Ok(buf) => buf,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error),
+                Err(error) => return Err((error, line)),
             };
             if buf.is_empty() {
                 (Vec::new(), false, true)
@@ -34,9 +46,9 @@ pub fn read_line<R: BufRead>(reader: &mut R, max: usize) -> io::Result<Option<Ve
             return Ok(Some(line));
         }
         if line.len() + chunk.len() > max {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "a line is longer than its cap",
+            return Err((
+                io::Error::new(io::ErrorKind::InvalidData, "a line is longer than its cap"),
+                line,
             ));
         }
         let take = chunk.len();

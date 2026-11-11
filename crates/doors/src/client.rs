@@ -491,19 +491,12 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
 /// retry short-circuits what landed and completes the rest.
 fn import(conn: &mut Conn, id: CommandId, args: &contract::commands::ImportArgs) {
     use config::{ImportSource, source_home};
-    let sources: &[ImportSource] = match args.source.as_deref() {
+    // The parse refused any other source naming the two, so every
+    // typed source routes and no refusal arm remains.
+    let sources: &[ImportSource] = match args.source {
         None => &[ImportSource::ClaudeCode, ImportSource::Codex],
-        Some("claude-code") => &[ImportSource::ClaudeCode],
-        Some("codex") => &[ImportSource::Codex],
-        Some(_) => {
-            reject(
-                conn,
-                Some(id),
-                ErrorCode::InvalidArguments,
-                "`source` must be `claude-code` or `codex`.",
-            );
-            return;
-        }
+        Some(ImportSource::ClaudeCode) => &[ImportSource::ClaudeCode],
+        Some(ImportSource::Codex) => &[ImportSource::Codex],
     };
     let Some(home_env) = std::env::var_os("HOME") else {
         reject(

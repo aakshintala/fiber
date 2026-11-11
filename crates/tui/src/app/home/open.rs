@@ -219,6 +219,16 @@ impl App {
         session: &SessionId,
         level: SubscribeLevel,
     ) -> String {
+        self.subscribe_sent(session, level).line
+    }
+
+    /// A `subscribe` line for `session` at `level` with its command id
+    /// carried alongside, tagged as sent.
+    pub(in crate::app) fn subscribe_sent(
+        &mut self,
+        session: &SessionId,
+        level: SubscribeLevel,
+    ) -> super::super::Sent {
         let (id, line) = subscribe_line(session, level, None);
         self.outbox.wait(
             &id,
@@ -227,7 +237,10 @@ impl App {
                 level,
             },
         );
-        line
+        super::super::Sent {
+            id: contract::CommandId(id),
+            line,
+        }
     }
 
     /// The level this connection holds or asks for `session` at, if any:

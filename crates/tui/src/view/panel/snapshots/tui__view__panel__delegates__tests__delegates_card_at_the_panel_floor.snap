@@ -10,7 +10,6 @@ expression: "crate::view::text(&buf)"
 
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆        —
    compacts at —            —
-   then a summary, fresh con…
    tokens in / out          —
    cache hits               —
    cache resets in          —

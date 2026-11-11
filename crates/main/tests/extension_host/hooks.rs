@@ -37,16 +37,14 @@ const FIXTURE: &str = "fiber.test/lua-fixture";
 impl Setup {
     /// Installs the extension in `source`.
     fn install(&self, source: PathBuf) {
-        extensions::plan(
+        let request = extensions::Request::Path(source);
+        support::install_with_retry(
             &self.home(),
-            &extensions::Request::Path(source),
+            self.deadline.start_wait(),
+            &request,
             "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+            None,
+        );
     }
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the

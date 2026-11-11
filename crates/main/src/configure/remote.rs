@@ -330,24 +330,19 @@ impl hub::Machine for Seam {
     fn import(
         &self,
         home: &Path,
-        source: Option<&str>,
+        source: Option<config::ImportSource>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure> {
-        // The hub already refused anything but the two; this names
-        // them again so the seam never misroutes a source.
+        // The hub already refused anything but the two, and the type
+        // carries only the two: every source routes, so no refusal arm
+        // remains.
         let sources: &[config::ImportSource] = match source {
             None => &[
                 config::ImportSource::ClaudeCode,
                 config::ImportSource::Codex,
             ],
-            Some("claude-code") => &[config::ImportSource::ClaudeCode],
-            Some("codex") => &[config::ImportSource::Codex],
-            Some(_) => {
-                return Err(failure(
-                    ErrorCode::InvalidArguments,
-                    "`source` must be `claude-code` or `codex`.",
-                ));
-            }
+            Some(config::ImportSource::ClaudeCode) => &[config::ImportSource::ClaudeCode],
+            Some(config::ImportSource::Codex) => &[config::ImportSource::Codex],
         };
         // The ports the driver would print, minus the printing: each
         // source's report extended into one answer, a failed source
@@ -486,7 +481,7 @@ impl hub::Machine for Seam {
             }
             "login_targets" => {
                 a.shape(&[], &[])?;
-                json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|json!({"name":t.name,"kind":match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}})).collect::<Vec<_>>()})
+                json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|{let mut value=Map::from_iter([("name".to_owned(),json!(t.name)),("kind".to_owned(),json!(match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}))]);if let Some(label)=t.label{drop(value.insert("label".to_owned(),json!(label)));}Value::Object(value)}).collect::<Vec<_>>()})
             }
             "logout_rows" => {
                 a.shape(&[], &[])?;

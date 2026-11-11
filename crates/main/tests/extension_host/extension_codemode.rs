@@ -78,18 +78,16 @@ fn script(setup: &Setup, name: &str, script: &Value) {
 
 /// Installs the real `codemode` package from the repository.
 fn install_codemode(setup: &Setup) {
-    extensions::plan(
+    let request = extensions::Request::Path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode"),
+    );
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode"),
-        ),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Configures the scripted reviewer; the model arrives on the command line.
@@ -654,16 +652,14 @@ fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Installs the parent's `pa/m` and the child's `pb/m` on

@@ -5437,8 +5437,20 @@ fn stage_delegate(history: &History, session: &str) -> Arc<Log> {
 /// Resumes for the backfill's side effects only: no model switch, so no
 /// `model_changed`; no reviewer and no turns run.
 fn resume_for_backfill(history: &mut History) -> Loop {
+    resume_with_finish(history, None)
+}
+
+/// Resumes as [`resume_for_backfill`] does, with the settle's worktree
+/// inspection installed: the settled finish reports through `finish`, or
+/// with no worktree when it is `None`.
+fn resume_with_finish(
+    history: &mut History,
+    finish: Option<contract::jobs::FinishWorktree>,
+) -> Loop {
     let (tx, rx) = mpsc::channel();
     drop(tx);
+    let mut folded = r#loop::resumed(&history.dir).unwrap();
+    folded.settle_finish = finish;
     Loop::resume(
         r#loop::Session {
             log: Arc::clone(&history.log),
@@ -5454,7 +5466,7 @@ fn resume_for_backfill(history: &mut History) -> Loop {
                 rules: history.rules.clone(),
             },
         },
-        r#loop::resumed(&history.dir).unwrap(),
+        folded,
     )
     .unwrap()
 }
@@ -6303,4 +6315,162 @@ fn a_settled_message_is_written_whole_to_the_delegates_final_file() {
         // delegate wrote it.
         assert_eq!(std::fs::read(&file).unwrap(), message.as_bytes());
     }
+}
+
+/// The delegate's opening `session_started`, carrying its recorded worktree:
+/// an isolated delegate's own worktree, with its path, branch and repository.
+fn delegate_session_started(worktree: Option<contract::shapes::Worktree>) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: "/w".into(),
+        variables: Variables {
+            path: String::new(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: None,
+        rewind: None,
+        worktree,
+        supervised: false,
+    })
+}
+
+/// The settle's recording inspection: asserts the settle reports only, then
+/// echoes the reported path and branch back with a marker `dirty`.
+fn recording_finish() -> contract::jobs::FinishWorktree {
+    Arc::new(|end: contract::jobs::EndWorktree| {
+        assert!(!end.remove, "a settled finish reports only: {end:?}");
+        assert!(
+            end.base.is_none(),
+            "a settled finish carries no base: {end:?}"
+        );
+        contract::events::FinishedWorktree {
+            worktree: contract::shapes::Worktree {
+                path: end.path.display().to_string(),
+                branch: end.branch.clone(),
+                repository: None,
+            },
+            dirty: true,
+        }
+    })
+}
+
+/// Stages a parent orphaned on `job` with a delegate log whose first line is
+/// `first` and whose latest run exits cleanly with `text`.
+fn settle_history(job: &str, session: &str, first: Event, text: &str) -> History {
+    let mut history = History::new(Vec::new());
+    history.write(job_started(job), None);
+    history.write(delegate_started(job, session, "fiber"), None);
+    let delegate = stage_delegate(&history, session);
+    delegate.append(&first, None, None).unwrap();
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some(text), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+    history
+}
+
+/// The settled pair for `job` in `history`'s new lines: the finish precedes
+/// its completion.
+fn settled_pair(history: &History, job: &str) -> (contract::Envelope, contract::Envelope) {
+    let lines = history.new_lines();
+    let finished_pos = lines
+        .iter()
+        .position(|line| {
+            line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == job
+        })
+        .expect("the settle writes the finish");
+    let completed_positions: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.kind() == EventKind::JobCompleted && line.payload["job_id"] == job)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        completed_positions.len(),
+        1,
+        "the settle writes exactly one completion for the job"
+    );
+    let completed_pos = completed_positions[0];
+    assert!(
+        finished_pos < completed_pos,
+        "the finish precedes its completion"
+    );
+    let finished = lines[finished_pos].clone();
+    let completed = lines[completed_pos].clone();
+    assert_eq!(completed.payload["status"], "completed");
+    (finished, completed)
+}
+
+#[test]
+fn a_settled_finish_reports_the_delegate_worktree() {
+    let worktree = contract::shapes::Worktree {
+        path: "/work/s_child".into(),
+        branch: "fiber/s_child".into(),
+        repository: Some("/repo".into()),
+    };
+    let mut history = settle_history(
+        "j_1",
+        "s_child",
+        delegate_session_started(Some(worktree)),
+        "migrated 3 queries",
+    );
+
+    drop(resume_with_finish(&mut history, Some(recording_finish())));
+    let (finished, _) = settled_pair(&history, "j_1");
+    assert_eq!(finished.payload["text"], "migrated 3 queries");
+    assert_eq!(finished.payload["worktree"]["path"], "/work/s_child");
+    assert_eq!(finished.payload["worktree"]["branch"], "fiber/s_child");
+    assert!(finished.payload["worktree"].get("repository").is_none());
+    assert_eq!(finished.payload["worktree"]["dirty"], true);
+}
+
+#[test]
+fn a_settled_finish_without_a_finisher_reports_no_worktree() {
+    let mut history = settle_history(
+        "j_1",
+        "s_child",
+        delegate_session_started(Some(contract::shapes::Worktree {
+            path: "/work/s_child".into(),
+            branch: "fiber/s_child".into(),
+            repository: Some("/repo".into()),
+        })),
+        "migrated 3 queries",
+    );
+
+    drop(resume_with_finish(&mut history, None));
+    let (finished, _) = settled_pair(&history, "j_1");
+    assert_eq!(finished.payload["text"], "migrated 3 queries");
+    assert!(finished.payload.get("worktree").is_none());
+}
+
+#[test]
+fn a_settled_finish_of_a_non_isolated_delegate_reports_no_worktree() {
+    let mut history = settle_history("j_1", "s_child", delegate_session_started(None), "done");
+
+    drop(resume_with_finish(&mut history, Some(recording_finish())));
+    let (finished, _) = settled_pair(&history, "j_1");
+    assert!(finished.payload.get("worktree").is_none());
+}
+
+#[test]
+fn a_settle_with_a_non_session_first_line_reports_no_worktree() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    // A readable first line that is not `session_started`: the exit still
+    // settles the job, but there is no recorded worktree to report.
+    let delegate = stage_delegate(&history, "s_child");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("done"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_with_finish(&mut history, Some(recording_finish())));
+    let (finished, _) = settled_pair(&history, "j_1");
+    assert!(finished.payload.get("worktree").is_none());
 }

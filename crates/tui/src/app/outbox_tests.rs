@@ -172,7 +172,13 @@ fn send_holds_the_line_until_hello_when_waiting() {
         ),
         None
     );
-    assert_eq!(outbox.held, [line]);
+    assert_eq!(
+        outbox.held,
+        [crate::app::Sent {
+            id: contract::CommandId("c_1".to_owned()),
+            line,
+        }]
+    );
     assert!(outbox.pending.contains_key("c_1"));
 }
 
@@ -414,7 +420,7 @@ fn enter_when_up_sends_the_start() {
     assert_eq!(app.outbox.link, Link::Up);
     type_text(&mut app, "go");
     let effect = app.on_key(crate::keys::Key::Enter, now());
-    assert!(matches!(effect, Effect::Send(_)), "{effect:?}");
+    assert!(matches!(effect, Effect::SendTracked(_)), "{effect:?}");
 }
 
 #[test]
@@ -432,7 +438,7 @@ fn a_held_start_is_pending_and_goes_out_on_hello() {
     assert!(app.outbox.held.is_empty());
     assert_eq!(app.outbox.link, Link::Up);
     assert!(
-        lines.contains(&held[0]),
+        lines.contains(&held[0].line),
         "the held start goes out: {lines:?}"
     );
     // `start` carries no `session_id`, so it is never kept.
@@ -460,16 +466,16 @@ fn kept_lines_go_out_again_unchanged_after_a_drop() {
 
 #[test]
 fn an_import_entry_answers_with_its_source_then_closes() {
-    use crate::import_report::ImportSource;
+    use contract::commands::ImportSource;
 
     let mut outbox = up();
     outbox.insert(
         "c_1".to_owned(),
-        Kind::Import(ImportSource::Codex),
+        Kind::Import(Some(ImportSource::Codex)),
         Draft::default(),
     );
     let (kind, _) = outbox.answered("c_1").expect("the pending import answers");
-    assert_eq!(kind, Kind::Import(ImportSource::Codex));
+    assert_eq!(kind, Kind::Import(Some(ImportSource::Codex)));
     assert!(outbox.pending.is_empty());
     assert!(outbox.answered("c_1").is_none());
 }
@@ -848,13 +854,14 @@ fn a_delegate_steer_send_registers_steer() {
     app.draft.set("focus on the tests");
     let out = match app.on_key(crate::keys::Key::Enter, now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
@@ -950,4 +957,38 @@ fn a_second_answer_for_one_id_changes_nothing() {
     let second = app.on_line(answer());
     assert!(second.is_empty());
     assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn hub_pairs_live_exactly_as_long_as_their_waits() {
+    let mut outbox = up();
+    let id = contract::CommandId("c_1".to_owned());
+    outbox.wait("c_1", Waiting::Feed);
+    outbox.note_hub_sent(&id, "line");
+    assert_eq!(outbox.hub_id("line"), Some(id.clone()));
+    // Settling the wait purges the pair: a later failure parses.
+    outbox.settled("c_1");
+    assert_eq!(outbox.hub_id("line"), None);
+}
+
+#[test]
+fn settle_where_and_forget_purge_their_hub_pairs() {
+    let mut outbox = up();
+    let scoped = contract::CommandId("c_s1".to_owned());
+    outbox.wait("c_s1", Waiting::Recent(RecentAsk::Scoped("p1".to_owned())));
+    outbox.note_hub_sent(&scoped, "scoped one");
+    let first = contract::CommandId("c_first".to_owned());
+    outbox.wait("c_first", Waiting::Recent(RecentAsk::First));
+    outbox.note_hub_sent(&first, "first");
+    // The disconnect path forgets abandoned waits the same way.
+    let abandoned = contract::CommandId("c_gone".to_owned());
+    outbox.wait("c_gone", Waiting::Abandoned);
+    outbox.note_hub_sent(&abandoned, "gone");
+    outbox.settle_where(|owner| matches!(owner, Waiting::Recent(RecentAsk::Scoped(_))));
+    assert_eq!(outbox.hub_id("scoped one"), None);
+    assert_eq!(outbox.hub_id("first"), Some(first));
+    outbox.forget(&Waiting::Recent(RecentAsk::First));
+    assert_eq!(outbox.hub_id("first"), None);
+    outbox.forget(&Waiting::Abandoned);
+    assert_eq!(outbox.hub_id("gone"), None);
 }

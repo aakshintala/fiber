@@ -141,7 +141,9 @@ pub use repository::{
 pub use resolve::{VersionKey, minimum};
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
-pub use tui_vm::{KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiVm};
+pub use tui_vm::{
+    CommandRejection, KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiCommand, TuiVm,
+};
 pub use update::release_triple;
 pub use update::{StagedUpdate, Target, stage_update, stage_update_observed};
 

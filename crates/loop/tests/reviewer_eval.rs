@@ -1981,7 +1981,7 @@ fn scan_drops_matches_and_keeps_clean_lines() {
 /// (`docs/testing.md`, "What a test asserts"): every `reviewer_consent/`
 /// session's `events.jsonl`, in recipe order. An explicit list — the
 /// converter tests never enumerate the fixture directories at run time.
-const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 16] = [
+const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 22] = [
     EmbeddedSession {
         name: "control-1-credentialed-probe",
         events: include_str!("fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl"),
@@ -2001,6 +2001,10 @@ const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 16] = [
         events: include_str!(
             "fixtures/reviewer_consent/control-4-swapped-push-target/events.jsonl"
         ),
+    },
+    EmbeddedSession {
+        name: "control-5-approval-claim",
+        events: include_str!("fixtures/reviewer_consent/control-5-approval-claim/events.jsonl"),
     },
     EmbeddedSession {
         name: "field-1-typed-restart-and-run",
@@ -2035,6 +2039,18 @@ const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 16] = [
         events: include_str!("fixtures/reviewer_consent/shape-1-verbatim-retype/events.jsonl"),
     },
     EmbeddedSession {
+        name: "shape-10-posts-undecidable-decision",
+        events: include_str!(
+            "fixtures/reviewer_consent/shape-10-posts-undecidable-decision/events.jsonl"
+        ),
+    },
+    EmbeddedSession {
+        name: "shape-11-state-change-beyond-brief",
+        events: include_str!(
+            "fixtures/reviewer_consent/shape-11-state-change-beyond-brief/events.jsonl"
+        ),
+    },
+    EmbeddedSession {
         name: "shape-2-effect-named-by-reply",
         events: include_str!(
             "fixtures/reviewer_consent/shape-2-effect-named-by-reply/events.jsonl"
@@ -2060,6 +2076,24 @@ const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 16] = [
             "fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl"
         ),
     },
+    EmbeddedSession {
+        name: "shape-7-send-quotes-earlier-block",
+        events: include_str!(
+            "fixtures/reviewer_consent/shape-7-send-quotes-earlier-block/events.jsonl"
+        ),
+    },
+    EmbeddedSession {
+        name: "shape-8-issue-comment-asks-ruling",
+        events: include_str!(
+            "fixtures/reviewer_consent/shape-8-issue-comment-asks-ruling/events.jsonl"
+        ),
+    },
+    EmbeddedSession {
+        name: "shape-9-send-quotes-reviewer-refusal",
+        events: include_str!(
+            "fixtures/reviewer_consent/shape-9-send-quotes-reviewer-refusal/events.jsonl"
+        ),
+    },
 ];
 
 /// The committed `review_person_input/` session, compiled in: its two
@@ -2069,7 +2103,7 @@ const EMBEDDED_PERSON_INPUT: EmbeddedSession = EmbeddedSession {
     events: include_str!("fixtures/review_person_input/events.jsonl"),
 };
 
-/// Every embedded synthetic fixture session in recipe order: the 16
+/// Every embedded synthetic fixture session in recipe order: the 22
 /// consent sessions plus the person-input session.
 fn embedded_synthetic_sessions() -> Vec<EmbeddedSession> {
     let mut sessions = EMBEDDED_CONSENT_SESSIONS.to_vec();
@@ -2174,6 +2208,7 @@ fn synthetic_converter_emits_unlabelled_lines() {
             "control-2-key-material-copy-1",
             "control-3-delete-outside-workspace-1",
             "control-4-swapped-push-target-1",
+            "control-5-approval-claim-1",
             "field-1-typed-restart-and-run-1",
             "field-2-picked-run-label-1",
             "field-3-named-branch-push-1",
@@ -2182,12 +2217,17 @@ fn synthetic_converter_emits_unlabelled_lines() {
             "field-7-tkt-build-from-gate-1",
             "review_person_input-1",
             "shape-1-verbatim-retype-1",
+            "shape-10-posts-undecidable-decision-1",
+            "shape-11-state-change-beyond-brief-1",
             "shape-2-effect-named-by-reply-1",
             "shape-3-prerequisite-1",
             "shape-4-conceded-then-new-demand-1",
             "shape-5-task-names-action-1",
             "shape-6-reason-names-different-call-1",
             "shape-6-reason-names-different-call-2",
+            "shape-7-send-quotes-earlier-block-1",
+            "shape-8-issue-comment-asks-ruling-1",
+            "shape-9-send-quotes-reviewer-refusal-1",
         ]
         .iter()
         .map(|id| (*id).to_owned())

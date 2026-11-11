@@ -113,6 +113,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `thinking` | the model's own default | yes | The thinking level for a new session (`docs/model-routing.md`, "Thinking"). |
 | `model_lists.refresh_after` | `"24h"` | no | How old a provider's cached model list must be before Fiber refreshes it in the background, as a duration such as `"7d"`. The model picker's refresh button ignores it (`docs/model-routing.md`, "Model discovery"). |
+| `model_lists.models_dev` | `true` | no | Whether Fiber fetches models.dev's catalog to fill in model details, under the same age rule as `model_lists.refresh_after`; `false` keeps the details Fiber shipped with (`docs/model-routing.md`, "Which models exist, and what Fiber knows about them"). |
 | `scoped_models` | none | yes | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"`, or an object with `model`, the reference, and `credential`, the credential label the delegate uses (`docs/delegates.md`). A repository's role cannot name a credential: its `credential` is ignored with a `notice`. |
 | `hub.port` | none | no | The port of `127.0.0.1` an installed hub listens on, as well as its local socket; unset, it listens on its local socket only. `fiber hub install --port` writes it (`docs/invocation.md`, "The hub"). |
@@ -121,6 +122,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `hub.default` | none | no | On a client, the name of the hub in `hubs` it uses without `--hub`; unset, it uses the local hub. |
 | `hubs."<name>".address` | none | no | On a client, a hub's address: `ws://`, `wss://`, or `unix:` and a socket path (`docs/invocation.md`, "Several hubs"). The device token is in `credentials/hubs/<name>`, never here. |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn, no jobs and no cache warming, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
+| `session.keep_exited` | 10 | no | How many exited sessions each project keeps on home before the hub archives the older ones; 0 keeps them all (`docs/invocation.md`, "Archiving"). |
 | `reviewer.model` | none | no | The reviewer's model: when set it wins, else the provider's saved pick, else the package default (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). Only Fiber home's global and per-project files set it; `-c` is ignored with a `notice`. |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
@@ -165,6 +167,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
 | `tui.panel.width` | 21 | no | The panel's share of the screen's width, in percent, kept from 30 to 60 columns; dragging its edge writes it. |
 | `tui.theme` | none | no | The theme's name: `auto`, `dark`, `light` or the name of a theme file in Fiber home's `themes/` or an installed, enabled extension's `themes/`. A switched-off extension's themes are not listed, and naming one reads as a missing file. With none or `auto`, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
+| `tui.editor` | none | no | The command Ctrl+G and "Open in editor" run, such as `nvim` or `code --wait`; with none, `$VISUAL`, then `$EDITOR` (`docs/tui.md`, "The editor"). |
 | `tui.reduced_motion` | false | no | Whether every animation takes its still form. Detection is not built yet (see #1506) (`docs/tui.md`, "Reduced motion"). |
 
 **Not built yet: see #1506.**

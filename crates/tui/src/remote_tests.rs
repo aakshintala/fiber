@@ -426,12 +426,22 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         hub.call(
             "login_targets",
             json!({}),
-            json!({"targets":[{"name":"a","kind":"browser"}]}),
+            json!({"targets":[{"name":"a","kind":"browser"},{"name":"b","kind":"key","label":"work"}]}),
             |r| r.login_targets()
         )
-        .unwrap()[0]
-            .kind,
-        LoginKind::Browser
+        .unwrap(),
+        [
+            crate::configure::LoginTarget {
+                name: "a".into(),
+                kind: LoginKind::Browser,
+                label: None,
+            },
+            crate::configure::LoginTarget {
+                name: "b".into(),
+                kind: LoginKind::Key,
+                label: Some("work".into()),
+            },
+        ]
     );
     for label in [None, Some("work")] {
         let mut args = json!({"name":"a","key":"secret"});
