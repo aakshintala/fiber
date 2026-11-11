@@ -24,6 +24,12 @@ pub(super) struct Subscriptions {
     /// dropped until the last subscribe's acknowledgement, which is the
     /// first line at the new level.
     opening: Option<Opening>,
+    /// The session attached read only with the hub's missing workspace
+    /// path: the hub replays its log instead of resuming it
+    /// (`docs/invocation.md`, "Lifecycle"). Set on the `full` accept
+    /// carrying the path, cleared by leave, go-home and reset like the
+    /// opening state.
+    unwritable: Option<(SessionId, String)>,
     /// Lowering lines reconciliation queued, sent from `on_line`'s tail.
     outbox: Vec<String>,
 }
@@ -145,6 +151,28 @@ impl Subscriptions {
     pub(super) fn reset(&mut self) {
         self.levels = Subs::default();
         self.opening = None;
+        self.unwritable = None;
+    }
+
+    /// Records `session` as read only with the hub's missing workspace
+    /// path: the conversation shows its replayed log, and the terminal
+    /// sends it nothing.
+    pub(super) fn set_unwritable(&mut self, session: SessionId, path: String) {
+        self.unwritable = Some((session, path));
+    }
+
+    /// Clears the read-only mark, as leaving and going home do with the
+    /// open gate.
+    pub(super) fn clear_unwritable(&mut self) {
+        self.unwritable = None;
+    }
+
+    /// The missing workspace path when `session` is the read-only one,
+    /// else `None`.
+    pub(super) fn unwritable(&self, session: &SessionId) -> Option<&str> {
+        self.unwritable
+            .as_ref()
+            .and_then(|(held, path)| (held == session).then_some(path.as_str()))
     }
 
     /// Takes the lowering lines reconciliation queued.
@@ -159,9 +187,10 @@ impl Subscriptions {
 }
 
 /// A session opening from home: the first stage in flight, the raise
-/// due after the first frame, the tail reading before the raise, or
-/// the raise in flight. Either acknowledgement's rejection fails the
-/// open; the raise's acceptance ends the gate.
+/// due after the first frame, the tail reading before the raise, the
+/// raise in flight, or the read-only retry in flight. Either
+/// acknowledgement's rejection fails the open; the raise's acceptance
+/// ends the gate.
 enum Opening {
     /// The first-stage `summary` subscribe in flight.
     Summary {
@@ -176,6 +205,15 @@ enum Opening {
     Reading { session: SessionId },
     /// The `full` raise in flight.
     Raised { session: SessionId, ack: String },
+    /// The `full` retry in flight after the first stage was refused
+    /// with the exact missing-workspace shape: its accept must carry
+    /// the missing path, or the stored refusal fails the open verbatim.
+    Retry {
+        session: SessionId,
+        ack: String,
+        code: ErrorCode,
+        message: String,
+    },
 }
 
 impl Opening {
@@ -185,7 +223,8 @@ impl Opening {
             Self::Summary { session, .. }
             | Self::Due { session, .. }
             | Self::Reading { session }
-            | Self::Raised { session, .. } => session,
+            | Self::Raised { session, .. }
+            | Self::Retry { session, .. } => session,
         }
     }
 }
@@ -248,6 +287,25 @@ impl App {
     /// `subscribe`).
     pub(in crate::app) fn subscribed_level(&self, session: &SessionId) -> Option<SubscribeLevel> {
         self.home.subs.expected(&self.outbox, session)
+    }
+
+    /// Records `session` as read only with the hub's missing workspace
+    /// path: the conversation shows its replayed log, and the terminal
+    /// sends it nothing.
+    pub(in crate::app) fn set_unwritable(&mut self, session: SessionId, path: String) {
+        self.home.subs.set_unwritable(session, path);
+    }
+
+    /// Clears the read-only mark, as leaving, going home and the reset do
+    /// with the open gate.
+    pub(in crate::app) fn clear_unwritable(&mut self) {
+        self.home.subs.clear_unwritable();
+    }
+
+    /// The missing workspace path when `session` is the read-only one,
+    /// else `None`.
+    pub(in crate::app) fn unwritable_session(&self, session: &SessionId) -> Option<&str> {
+        self.home.subs.unwritable(session)
     }
 
     /// Whether a subscribe for `session` waits for its answer.
@@ -385,15 +443,18 @@ impl App {
     }
 
     /// Whether `id` is the open's subscribe in flight: the first
-    /// stage's or the raise's. Only its rejection fails the open, and
-    /// only the raise's acceptance ends the gate.
+    /// stage's, the raise's, or the read-only retry's. Only its
+    /// rejection fails the open, and only the raise's acceptance ends
+    /// the gate.
     fn is_ack(&self, id: &str) -> bool {
         self.home
             .subs
             .opening
             .as_ref()
             .is_some_and(|opening| match opening {
-                Opening::Summary { ack, .. } | Opening::Raised { ack, .. } => ack == id,
+                Opening::Summary { ack, .. }
+                | Opening::Raised { ack, .. }
+                | Opening::Retry { ack, .. } => ack == id,
                 Opening::Due { .. } | Opening::Reading { .. } => false,
             })
     }
@@ -424,9 +485,10 @@ impl App {
     /// `code` and `message` have exactly the hub's unrecoverable-workspace
     /// shape (`docs/invocation.md`, "Lifecycle"): `io_failed` with
     /// `Session <id> could not resume: <path> no longer exists`, with no
-    /// trailing period. A refusal carrying the starter-error wrapper's
-    /// trailing period is the race the ruling leaves alone, which renders
-    /// like any other refusal. Else `None`.
+    /// trailing period. That shape opens read only through one `full`
+    /// retry; a refusal carrying the starter-error wrapper's trailing
+    /// period is the race the ruling leaves alone, which renders like
+    /// any other refusal. Else `None`.
     fn missing_workspace<'message>(code: &str, message: &'message str) -> Option<&'message str> {
         if code != "io_failed" {
             return None;
@@ -443,9 +505,8 @@ impl App {
 
     /// A rejection of the open's subscribe in flight fails the open:
     /// home again when still attached, with the message as the row's
-    /// note and a notice. A missing-workspace refusal renders the ruled
-    /// sentence instead, naming the path. A rejection of an earlier step
-    /// changes nothing by itself.
+    /// note and a notice, rendered verbatim. A rejection of an earlier
+    /// step changes nothing by itself.
     fn fail_open(&mut self, code: ErrorCode, message: String) -> Vec<String> {
         let session = self
             .home
@@ -456,19 +517,53 @@ impl App {
         let Some(session) = session else {
             return Vec::new();
         };
-        let text = match Self::missing_workspace(code.name(), &message) {
-            Some(path) => {
-                format!("Cannot resume: {path} no longer exists. Delete removes the session.")
-            }
-            None => message,
-        };
-        self.home.sessions.note(&session, text.clone());
+        self.home.sessions.note(&session, message.clone());
         let attached = self.session() == Some(&session);
-        self.notices.push(code, text);
+        self.notices.push(code, message);
         if attached {
             self.go_home();
         }
         Vec::new()
+    }
+
+    /// The missing path a hub `command_accepted` result carries for a
+    /// gone-workspace replay, if any: the read-only mark the terminal
+    /// opens with (`docs/invocation.md`, "Lifecycle").
+    fn accepted_gone(payload: &serde_json::Map<String, Value>) -> Option<&str> {
+        payload
+            .get("result")
+            .and_then(Value::as_object)
+            .and_then(|result| result.get("workspace_gone"))
+            .and_then(Value::as_str)
+    }
+
+    /// The read-only retry for the exact missing-workspace refusal of
+    /// the first stage: one `full` subscribe with a fresh id, holding
+    /// the refusal for the verbatim fallback. Only the first stage
+    /// retries, so a refused retry fails the open instead of looping.
+    /// Some with the line to send when the retry goes out, else `None`.
+    fn retry_gone_workspace(
+        &mut self,
+        session: &SessionId,
+        id: &str,
+        code: ErrorCode,
+        message: &str,
+    ) -> Option<Vec<String>> {
+        let first_stage =
+            self.home.subs.opening.as_ref().is_some_and(
+                |opening| matches!(opening, Opening::Summary { ack, .. } if ack == id),
+            );
+        if !first_stage || Self::missing_workspace(code.name(), message).is_none() {
+            return None;
+        }
+        let sent = self.subscribe_sent(session, SubscribeLevel::Full);
+        self.home.subs.opening = Some(Opening::Retry {
+            session: session.clone(),
+            ack: sent.id.0.clone(),
+            code,
+            message: message.to_owned(),
+        });
+        Some(vec![sent.line])
     }
 
     /// Folds one hub subscribe acknowledgement into the levels: an
@@ -496,15 +591,50 @@ impl App {
         self.outbox.settled(id);
         if accepted {
             self.home.subs.accept(session.clone(), level);
+            // A hub-line accept answers the read-only retry: live
+            // sessions answer on their own lines. It ends the open only
+            // with the missing path; without it the stored refusal fails
+            // the open verbatim, taking the gate itself.
+            if source.is_none()
+                && self.is_ack(id)
+                && matches!(self.home.subs.opening, Some(Opening::Retry { .. }))
+            {
+                match Self::accepted_gone(payload) {
+                    Some(path) => {
+                        let session = match self.home.subs.opening.take() {
+                            Some(Opening::Retry { session, .. }) => session,
+                            _ => return Some(Vec::new()),
+                        };
+                        self.home
+                            .subs
+                            .set_unwritable(session.clone(), path.to_owned());
+                        self.notices.clear_code(ErrorCode::StreamClosed, &session.0);
+                    }
+                    None => {
+                        let (code, message) = match &self.home.subs.opening {
+                            Some(Opening::Retry { code, message, .. }) => {
+                                (code.clone(), message.clone())
+                            }
+                            _ => return Some(Vec::new()),
+                        };
+                        return Some(self.fail_open(code, message));
+                    }
+                }
+            }
         }
         if !accepted {
             let code = payload
                 .get("code")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            self.subscribe_refused(session, code, &refusal(payload));
+            self.subscribe_refused(session.clone(), code, &refusal(payload));
         }
         if !accepted && self.is_ack(id) {
+            if let Some(lines) =
+                self.retry_gone_workspace(&session, id, refusal_code(payload), &refusal(payload))
+            {
+                return Some(lines);
+            }
             let code = refusal_code(payload);
             return Some(self.fail_open(code, refusal(payload)));
         }
@@ -565,7 +695,10 @@ impl App {
         let opening = self.home.subs.opening.as_ref();
         let due = opening.as_ref().and_then(|opening| match opening {
             Opening::Due { held, .. } => Some(*held),
-            Opening::Summary { .. } | Opening::Reading { .. } | Opening::Raised { .. } => None,
+            Opening::Summary { .. }
+            | Opening::Reading { .. }
+            | Opening::Raised { .. }
+            | Opening::Retry { .. } => None,
         });
         let reading_done = opening.is_some_and(|opening| {
             matches!(opening, Opening::Reading { .. })

@@ -7851,7 +7851,7 @@ fn archived_resumed_exit_returns_the_row_under_exited() {
 }
 
 #[test]
-fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
+fn archived_a_missing_workspace_refusal_retries_then_renders_verbatim() {
     let mut app = home_with_archived_row();
     let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
     let lines = open(&mut app, key);
@@ -7859,10 +7859,32 @@ fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
         .as_str()
         .unwrap_or_else(|| panic!("summary id"));
     let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
-    assert!(
+    // The exact missing-workspace shape retries once, with a fresh id,
+    // instead of failing the open.
+    let retry: Vec<Value> = commands(
         app.on_line(session_refused(
             "s_bbbbbbbbbbbbbbbb",
             ack,
+            "io_failed",
+            message,
+        )),
+    );
+    assert_eq!(retry.len(), 1, "exactly one retry goes out: {retry:?}");
+    assert_eq!(retry[0]["command"], "subscribe", "{retry:?}");
+    assert_eq!(retry[0]["args"], json!({"level": "full"}), "{retry:?}");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert_ne!(second, ack, "the retry mints a fresh id");
+    assert!(!app.on_home(), "the open holds through the retry");
+    // An archived log ends in the marker, never `fiber_exited`, so the
+    // hub refuses the retry too: the open fails home with the message
+    // verbatim, and the row stays archived (`docs/tui.md`, "The session
+    // list").
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            second,
             "io_failed",
             message
         ))
@@ -7870,11 +7892,7 @@ fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
     );
     assert!(app.session().is_none());
     assert!(app.on_home());
-    // A resume the hub refuses because the workspace is gone shows the
-    // ruled sentence, keeps the row, and adds no rail card
-    // (`docs/tui.md`, "The session list").
-    let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
-    assert_eq!(app.notice(), Some(ruled), "{message}");
+    assert_eq!(app.notice(), Some(message), "{message}");
     let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     assert!(
         app.home.sessions.is_archived(&id),
@@ -7887,8 +7905,8 @@ fn archived_a_missing_workspace_refusal_keeps_the_row_with_no_rail_card() {
         .unwrap_or_else(|| panic!("the row stays: {message}"));
     assert_eq!(
         row.note.as_deref(),
-        Some(ruled),
-        "the row's note: {message}"
+        Some(message),
+        "the row's note renders verbatim: {message}"
     );
     assert!(
         app.home.sessions.cards().is_empty(),

@@ -934,6 +934,14 @@ impl App {
                         return Some(Vec::new());
                     }
                     let session = envelope.session_id.clone();
+                    // A replayed status for a read-only session reaches
+                    // the conversation below but never touches the rows:
+                    // no row-status fold, no unarchive, no left clearing,
+                    // no refetch asks. The row stays where it was,
+                    // archived or exited.
+                    if self.home.subs.unwritable(&session).is_some() {
+                        return None;
+                    }
                     let was_left = self
                         .home
                         .sessions

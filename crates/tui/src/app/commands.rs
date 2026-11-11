@@ -949,6 +949,18 @@ impl App {
         }
     }
 
+    /// The missing workspace path when the attached session is read
+    /// only: the hub replays its log instead of resuming it
+    /// (`docs/invocation.md`, "Lifecycle"). `None` anywhere else, so
+    /// the read-only bar draws only for a read-only attach and no
+    /// prompt ever leaves one.
+    pub(crate) fn unwritable(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Attached { session, .. } => self.unwritable_session(session),
+            _ => None,
+        }
+    }
+
     /// Resets the screen before a session without clearing its rows,
     /// so a reconnect keeps them for the landing: the conversation and
     /// the draft cleared everywhere else, the old session left running.
@@ -956,6 +968,9 @@ impl App {
     /// False without the reset.
     pub(super) fn reset_session(&mut self) -> bool {
         self.draft.clear();
+        // Leaving and going home end a read-only attach with the open
+        // gate: the next open sets its own mark.
+        self.clear_unwritable();
         // A `/pwd` waiting on the old session's root ends with the
         // detach: going home forgets the wait with the screen.
         self.pwd_pending = false;
@@ -1194,6 +1209,12 @@ impl App {
         let id = support::mint("c_");
         let args = content_arg(&self.draft);
         let shell = (!has_image).then(|| shell::parse(&text)).flatten();
+        // A read-only session emits nothing new: no prompt, no steer,
+        // no shell run. The bar below is the only affordance.
+        if matches!(&self.phase, Phase::Attached { session, .. } if self.unwritable_session(session).is_some())
+        {
+            return Effect::None;
+        }
         let (kind, line) = match (&self.phase, shell) {
             (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
                 self.notices.push(
@@ -1296,8 +1317,16 @@ impl App {
         line
     }
 
-    /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
+    /// Esc with nothing open goes home from a read-only session and
+    /// interrupts the turn otherwise: `cancel`, only when busy.
     pub(super) fn on_esc(&mut self) -> Effect {
+        // A read-only session takes no prompt, so Esc leaves it the way
+        // the go-home action does.
+        if let Phase::Attached { session, .. } = &self.phase
+            && self.unwritable_session(session).is_some()
+        {
+            return self.on_action("go_home");
+        }
         let session = match &self.phase {
             Phase::Attached {
                 session,
