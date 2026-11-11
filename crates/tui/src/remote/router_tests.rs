@@ -1,4 +1,5 @@
 use super::*;
+use contract::commands::hub::{Configure, DeviceLogin, HubCommand, NoArgs, SearchFiles};
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::thread;
@@ -38,6 +39,16 @@ fn wait(pending: Pending) -> mpsc::Receiver<Result<contract::HubLine, AskError>>
     rx
 }
 
+/// A `configure` line for the settings read: the command the detached,
+/// epoch and retry paths exercise when the line's bytes are not the
+/// point of the test.
+fn configure() -> HubCommand {
+    HubCommand::Configure(Configure {
+        operation: "settings".into(),
+        arguments: serde_json::Map::new(),
+    })
+}
+
 #[test]
 fn routes_each_answer_once_and_forgets_it() {
     let deadline = Deadline::start();
@@ -46,9 +57,7 @@ fn routes_each_answer_once_and_forgets_it() {
     router.attach(client);
     let lines = read(hub);
     for kind in [HubEventKind::CommandAccepted, HubEventKind::CommandRejected] {
-        let pending = router
-            .send("configure", json!({"operation":"settings"}))
-            .unwrap();
+        let pending = router.send(configure()).unwrap();
         let line = deadline.recv_or_fail(&lines, "request");
         assert_eq!(line["command"], "configure");
         assert_eq!(line["args"], json!({"operation":"settings"}));
@@ -92,7 +101,11 @@ fn epochs_reject_a_result_on_another_connection() {
     let (client, hub) = UnixStream::pair().unwrap();
     router.attach(client);
     let lines = read(hub);
-    let pending = router.send("device_login", json!({"name":"acme"})).unwrap();
+    let pending = router
+        .send(HubCommand::DeviceLogin(DeviceLogin {
+            name: "acme".into(),
+        }))
+        .unwrap();
     assert_eq!(pending.epoch(), 1);
     deadline.recv_or_fail(&lines, "start");
     let result = wait(pending);
@@ -105,16 +118,26 @@ fn epochs_reject_a_result_on_another_connection() {
     router.attach(client);
     let lines = read(hub);
     assert!(matches!(
-        router.send_on(1, "device_login_result", json!({})),
+        router.send_on(1, HubCommand::DeviceLoginResult(NoArgs {})),
         Err(AskError::OtherConnection)
     ));
     assert_eq!(router.registered(), 0);
     let pending = router
-        .send_on(2, "device_login_result", json!({"probe":"current epoch"}))
+        .send_on(
+            2,
+            HubCommand::SearchFiles(SearchFiles {
+                workspace: "/w".into(),
+                text: "current epoch".into(),
+                fresh: None,
+            }),
+        )
         .unwrap();
     assert_eq!(pending.epoch(), 2);
     let line = deadline.recv_or_fail(&lines, "new result");
-    assert_eq!(line["args"], json!({"probe":"current epoch"}));
+    assert_eq!(
+        line["args"],
+        json!({"workspace": "/w", "text": "current epoch"})
+    );
     assert!(router.route(&answer(line["id"].as_str().unwrap(), "command_accepted")));
     assert!(deadline.recv_or_fail(&wait(pending), "new answer").is_ok());
     router.detach();
@@ -129,9 +152,9 @@ fn detached_send_and_loop_ask_return_without_registering() {
     thread::spawn(move || {
         let lock = Mutex::new(());
         let guard = support::lock(&lock);
-        let sent = worker.send("configure", json!({})).err();
+        let sent = worker.send(configure()).err();
         drop(guard);
-        let asked = worker.ask("configure", json!({}), Caller::Loop).err();
+        let asked = worker.ask(configure(), Caller::Loop).err();
         tx.send((sent, asked)).unwrap();
     });
     assert_eq!(
@@ -158,12 +181,10 @@ fn detach_under_an_outer_lock_returns_before_retrying_outside_it() {
         let guard = support::lock(&lock);
         held.send(()).unwrap();
         resume.recv().unwrap_or(());
-        sent.send(worker.send("configure", json!({})).err())
-            .unwrap();
+        sent.send(worker.send(configure()).err()).unwrap();
         drop(guard);
         worker.wait_link(&Cancel::default()).unwrap();
-        done.send(worker.send("configure", json!({})).unwrap().wait())
-            .unwrap();
+        done.send(worker.send(configure()).unwrap().wait()).unwrap();
     });
     deadline.recv_or_fail(&acquired, "outer lock acquired");
     router.detach();
@@ -203,7 +224,7 @@ fn detached_worker_waits_for_attach_and_can_be_cancelled() {
     let worker = Arc::clone(&router);
     let token = cancel.clone();
     thread::spawn(move || {
-        tx.send(worker.ask("configure", json!({}), Caller::Worker(&token)))
+        tx.send(worker.ask(configure(), Caller::Worker(&token)))
             .unwrap();
     });
     await_link(&router, &deadline);
@@ -219,7 +240,7 @@ fn detached_worker_waits_for_attach_and_can_be_cancelled() {
     let (tx, rx) = mpsc::channel();
     let worker = Arc::clone(&router);
     thread::spawn(move || {
-        tx.send(worker.ask("configure", json!({}), Caller::Worker(&Cancel::default())))
+        tx.send(worker.ask(configure(), Caller::Worker(&Cancel::default())))
             .unwrap();
     });
     let line = deadline.recv_or_fail(&lines, "worker request");
@@ -234,18 +255,15 @@ fn failed_write_removes_registration_and_detach_ends_all_waits() {
     let (client, hub) = UnixStream::pair().unwrap();
     drop(hub);
     router.attach(client);
-    assert!(matches!(
-        router.send("configure", json!({})),
-        Err(AskError::Lost)
-    ));
+    assert!(matches!(router.send(configure()), Err(AskError::Lost)));
     assert_eq!(router.registered(), 0);
     router.detach();
     let (client, hub) = UnixStream::pair().unwrap();
     router.attach(client);
     let lines = read(hub);
     let deadline = Deadline::start();
-    let first = wait(router.send("one", json!({})).unwrap());
-    let second = wait(router.send("two", json!({})).unwrap());
+    let first = wait(router.send(HubCommand::Status(NoArgs {})).unwrap());
+    let second = wait(router.send(HubCommand::Refresh(NoArgs {})).unwrap());
     deadline.recv_or_fail(&lines, "first request");
     deadline.recv_or_fail(&lines, "second request");
     router.detach();
@@ -270,7 +288,7 @@ fn worker_rechecks_after_a_link_wait_and_detach() {
     let (tx, rx) = mpsc::channel();
     let worker = Arc::clone(&router);
     thread::spawn(move || {
-        tx.send(worker.ask("configure", json!({}), Caller::Worker(&Cancel::default())))
+        tx.send(worker.ask(configure(), Caller::Worker(&Cancel::default())))
             .unwrap();
     });
     await_link(&router, &deadline);
@@ -302,8 +320,11 @@ fn mapped_answers_use_the_feed_without_credits() {
     let lines = read(hub);
     router
         .ask_into(
-            "search_files",
-            json!({}),
+            HubCommand::SearchFiles(SearchFiles {
+                workspace: "/w".into(),
+                text: "t".into(),
+                fresh: None,
+            }),
             Box::new(|_| {
                 Some(Input::Files {
                     generation: 7,
@@ -318,14 +339,28 @@ fn mapped_answers_use_the_feed_without_credits() {
         matches!(deadline.recv_or_fail(&rx, "mapped input"), Input::Files { generation: 7, result: Ok(rows) } if rows == ["src/"])
     );
     router
-        .ask_into("search_files", json!({}), Box::new(|_| None))
+        .ask_into(
+            HubCommand::SearchFiles(SearchFiles {
+                workspace: "/w".into(),
+                text: "t".into(),
+                fresh: None,
+            }),
+            Box::new(|_| None),
+        )
         .unwrap();
     let line = deadline.recv_or_fail(&lines, "ignored request");
     router.route(&answer(line["id"].as_str().unwrap(), "command_rejected"));
     assert!(rx.try_recv().is_err());
     router.detach();
     assert_eq!(
-        router.ask_into("search_files", json!({}), Box::new(|_| None)),
+        router.ask_into(
+            HubCommand::SearchFiles(SearchFiles {
+                workspace: "/w".into(),
+                text: "t".into(),
+                fresh: None,
+            }),
+            Box::new(|_| None)
+        ),
         Err(AskError::Detached)
     );
 }

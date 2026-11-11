@@ -751,7 +751,7 @@ fn back_keys_while_a_start_waits_are_a_no_op() {
     // picker, as on a launch that names one.
     app.home.launch.model = Some("test/model".to_owned());
     type_text(&mut app, "hi");
-    let Effect::Send(_) = app.on_key(Key::Enter, now()) else {
+    let Effect::SendTracked(_) = app.on_key(Key::Enter, now()) else {
         panic!("Enter starts");
     };
     assert_eq!(press(&mut app, "right"), Effect::None);
@@ -1009,7 +1009,7 @@ fn enter_on_the_delete_question_still_deletes() {
     let mut app = delete_question();
     keyed(&mut app, &[("send", json!("ctrl+s"))]);
     assert_eq!(app.top_surface(), Surface::DeleteQuestion);
-    assert!(matches!(press(&mut app, "enter"), Effect::Send(_)));
+    assert!(matches!(press(&mut app, "enter"), Effect::SendTracked(_)));
 }
 
 #[test]

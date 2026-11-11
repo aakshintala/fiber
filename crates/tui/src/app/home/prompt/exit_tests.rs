@@ -358,9 +358,10 @@ fn c_subscribes_where_needed_and_closes_each_now() {
         .accept(held, contract::commands::SubscribeLevel::Full);
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0]["command"], "subscribe");
@@ -448,9 +449,10 @@ fn a_session_that_leaves_while_the_question_shows_gets_no_close() {
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
     assert_eq!(app.quit_question(), Some((1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "subscribe");
@@ -474,9 +476,10 @@ fn a_session_that_goes_idle_gets_no_close() {
         0,
     ));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[1]["session_id"], "s_bbbbbbbbbbbbbbbb");
@@ -504,9 +507,10 @@ fn a_newly_working_session_shows_in_the_question_and_gets_a_close() {
     ));
     assert_eq!(app.quit_question(), Some((2, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 4);
     assert_eq!(lines[1]["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -543,9 +547,10 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // The first session's `close` is never written: it keeps its resume
     // line, while the written one does not.
     let close = lines
@@ -573,9 +578,10 @@ fn an_unsent_close_settles_only_its_tag() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let parsed = commands(lines.clone());
     let unsent_id = parsed
         .iter()
@@ -646,7 +652,7 @@ fn closing_sessions_get_no_line() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(_) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(_) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
     assert!(app.exit_lines().is_empty());
@@ -779,7 +785,7 @@ fn a_closing_attached_session_with_an_exited_row_gets_no_line() {
     };
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(_) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(_) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
     assert!(app.exit_lines().is_empty());
@@ -796,7 +802,7 @@ fn a_closing_attached_session_gets_no_line() {
     };
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(_) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(_) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
     assert!(app.exit_lines().is_empty());
@@ -967,9 +973,10 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     // Enter sends the delete; its ask waits for the hub.
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -1056,9 +1063,10 @@ fn enter_closes_every_live_session_now_and_stays_home() {
     // dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_closes(
         &closes(commands(lines)),
         &["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"],
@@ -1115,9 +1123,10 @@ fn a_refused_close_becomes_the_rows_note() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     let close = lines
         .iter()
@@ -1142,9 +1151,10 @@ fn a_session_that_leaves_while_close_all_shows_gets_no_close() {
     // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_bbbbbbbbbbbbbbbb"]);
 }
@@ -1160,9 +1170,10 @@ fn a_session_that_goes_live_while_close_all_shows_gets_no_close() {
     // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_aaaaaaaaaaaaaaaa"]);
 }
@@ -1178,9 +1189,10 @@ fn a_session_attached_then_left_after_attach_gets_no_close() {
     // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_bbbbbbbbbbbbbbbb"]);
 }
@@ -1199,9 +1211,10 @@ fn enter_clears_the_draft_and_builds_the_lines_before_going_home() {
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // The close lines exist before the trip home.
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"]);
@@ -1225,9 +1238,10 @@ fn a_session_that_is_idle_still_gets_a_close() {
     // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"]);
 }
@@ -1247,9 +1261,10 @@ fn an_unreadable_row_is_counted_and_closed() {
     // an unreadable row is still a live session (see #2962).
     assert_eq!(app.close_all_question(), Some((2, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"]);
 }
@@ -1267,9 +1282,10 @@ fn the_attached_session_with_no_row_counts_and_gets_a_close_and_the_terminal_goe
     // `docs/tui.md`, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = closes(commands(lines));
     assert_closes(&lines, &["s_aaaaaaaaaaaaaaaa"]);
     assert_eq!(app.draft(), "");
@@ -1297,7 +1313,7 @@ fn slash_quit_after_close_all_exits_without_asking_once_the_sessions_left() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Send(_) = app.on_key(Key::Enter, clock.now()) else {
+    let Effect::SendTracked(_) = app.on_key(Key::Enter, clock.now()) else {
         panic!("Enter closes all");
     };
     // Quit itself is unchanged (`docs/tui.md`, "Quit"): while the
@@ -1411,9 +1427,10 @@ fn quit_closes_register_a_close_tag_each() {
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     let closes: Vec<&Value> = lines
         .iter()
@@ -1434,9 +1451,10 @@ fn quit_close_session_answer_settles_its_tag() {
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     let close = lines
         .iter()
@@ -1461,4 +1479,32 @@ fn quit_close_session_answer_settles_its_tag() {
     });
     assert!(app.on_line(answer).is_empty());
     assert_eq!(app.outbox.waiting(id), None);
+}
+
+#[test]
+fn a_failed_quit_close_all_settles_closes_by_their_carried_ids() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::ExitTracked(sents) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    assert!(!sents.is_empty());
+    assert!(!app.home.questions.closing.is_empty());
+    // Tamper with every close's JSON id: the failure must settle by
+    // the carried ids, never by parsing the tampered lines.
+    let tampered: Vec<crate::app::Sent> = sents
+        .into_iter()
+        .map(|sent| {
+            let line = sent.line.replacen(&sent.id.0, "c_tampered", 1);
+            assert_ne!(line, sent.line);
+            crate::app::Sent { id: sent.id, line }
+        })
+        .collect();
+    app.write_failed_tracked(&tampered);
+    assert!(app.home.questions.closing.is_empty());
+    assert!(app.outbox.pending.is_empty());
+    assert!(app.outbox.waiting("c_tampered").is_none());
 }

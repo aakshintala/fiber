@@ -177,9 +177,9 @@ impl App {
             self.home
                 .questions
                 .closing
-                .push((session.clone(), close.clone()));
+                .push((session.clone(), close.0.clone()));
             self.outbox.wait(
-                close,
+                &close.0,
                 Waiting::ArchiveStop {
                     generation: self.home.questions.archive_command.generation,
                     session: session.clone(),
@@ -192,7 +192,14 @@ impl App {
             waiting,
         };
         self.go_home();
-        Some(lines)
+        // The stops cruise the fold: each id rides paired, so a failed
+        // write settles by the carried id.
+        Some(
+            lines
+                .into_iter()
+                .map(|sent| self.outbox.fold_line(sent))
+                .collect(),
+        )
     }
 
     /// The discovery's target and captured name, while its answer is
@@ -342,7 +349,13 @@ impl App {
                 self.clear_prompt(&target);
                 let project = self.archive_target_project(&target);
                 self.home.sessions.remove(&target);
-                let lines = self.ask_recent_first(project.as_deref());
+                // The refill cruises the fold: each id rides paired, so
+                // a failed write settles by the carried id.
+                let lines = self
+                    .ask_recent_first(project.as_deref())
+                    .into_iter()
+                    .map(|sent| self.outbox.fold_line(sent))
+                    .collect();
                 self.archive_command_finish(false);
                 self.go_home();
                 return Some(lines);

@@ -133,9 +133,16 @@ fn sent(effect: Effect) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None => Vec::new(),
         Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -1000,8 +1007,9 @@ fn type_query(app: &mut App, query: &str) {
             } => generation = gen_no,
             Effect::None
             | Effect::Send(_)
+            | Effect::SendTracked(_)
             | Effect::Quit
-            | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::Search { .. }
             | Effect::Editor { .. }
