@@ -334,3 +334,6 @@ crates/tui/src/snapshots/tui__changed_files_view__tests__changed_files_diff_80x2
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/changed_files_remote.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/tests/first_party_providers.rs	fiber-4633	plan	2026-11-11T13:02:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/provider/src/anthropic_messages.rs	fiber-4617	plan	2026-11-11T13:12:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/providers/databricks.lua	fiber-4617	plan	2026-11-11T13:12:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4617	plan	2026-11-11T13:12:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
