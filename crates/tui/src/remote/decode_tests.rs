@@ -222,6 +222,21 @@ fn rules_tools_targets_stores_and_reviewer_answers() {
 }
 
 #[test]
+fn login_target_labels_decode_present_and_missing_as_marks() {
+    // The wire carries `label` only when `Some`: a missing label
+    // decodes as `None`, so an old hub payload still decodes.
+    let rows = targets(&json!({"targets":[
+        {"name":"a","kind":"key","label":"default"},
+        {"name":"b","kind":"browser"},
+    ]}))
+    .unwrap();
+    assert_eq!(rows[0].label, Some("default".to_owned()));
+    assert_eq!(rows[1].label, None);
+    // A null label is not a mark: the row fails like any mistyped field.
+    assert!(targets(&json!({"targets":[{"name":"a","kind":"key","label":null}]})).is_none());
+}
+
+#[test]
 fn logout_rows_decode_each_variant_and_reject_an_unknown_row() {
     let rows = logout_rows(&json!({"rows":[
         {"row":"provider","name":"acme","label":"work","default":true,"deletable":true,"siblings":["beta"]},

@@ -37,6 +37,7 @@ fn first_run_enter_login(model: Option<String>) {
     *seam.targets.lock().unwrap() = Ok(vec![crate::configure::LoginTarget {
         name: "acme".to_owned(),
         kind: crate::configure::LoginKind::Key,
+        label: None,
     }]);
     let mut app = connected();
     app.set_configure(seam.clone());

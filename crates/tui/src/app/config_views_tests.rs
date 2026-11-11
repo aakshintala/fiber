@@ -2249,6 +2249,7 @@ fn wheel_over_login_scrolls_the_list_not_the_conversation() {
             .map(|at| crate::configure::LoginTarget {
                 name: format!("p{at}"),
                 kind: crate::configure::LoginKind::Key,
+                label: None,
             })
             .collect());
     }
@@ -2894,6 +2895,7 @@ fn login_seam() -> Arc<Fake> {
     *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     seam
 }

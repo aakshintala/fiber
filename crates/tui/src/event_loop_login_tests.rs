@@ -28,6 +28,7 @@ fn seam() -> Arc<Fake> {
         *targets = Ok(vec![LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         }]);
     }
     Arc::new(fake)
@@ -375,6 +376,7 @@ fn key_seam() -> Arc<Fake> {
         *targets = Ok(vec![LoginTarget {
             name: "acme".to_owned(),
             kind: LoginKind::Key,
+            label: None,
         }]);
     }
     Arc::new(fake)

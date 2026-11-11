@@ -27,14 +27,17 @@ fn targets() -> Vec<LoginTarget> {
         LoginTarget {
             name: "acme".to_owned(),
             kind: LoginKind::Key,
+            label: None,
         },
         LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         },
         LoginTarget {
             name: "acme.api_key".to_owned(),
             kind: LoginKind::Secret,
+            label: None,
         },
     ]
 }
@@ -396,6 +399,7 @@ fn one_browser_provider_pads_the_body_to_three_rows() {
     let fake = fake_with(vec![LoginTarget {
         name: "codex".to_owned(),
         kind: LoginKind::Browser,
+        label: None,
     }]);
     let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
     assert_eq!(slab_height(&buf, 80, 24), probe_height(3));
@@ -464,6 +468,7 @@ fn a_failed_body_drops_rows_in_order_at_the_cap() {
         vec![LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         }],
     ] {
         let cap: usize = if targets.len() == 1 { 3 } else { 6 };
@@ -495,6 +500,7 @@ fn a_very_long_browser_name_draws_one_barred_row() {
     let fake = fake_with(vec![LoginTarget {
         name: "b".repeat(65_530),
         kind: LoginKind::Browser,
+        label: None,
     }]);
     let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
     assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
@@ -510,6 +516,7 @@ fn names_cut_at_the_budget_keep_the_tag_on_screen() {
         let fake = fake_with(vec![LoginTarget {
             name: name.clone(),
             kind: LoginKind::Browser,
+            label: None,
         }]);
         let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
         let row = screen
@@ -565,6 +572,7 @@ fn at_saturation_the_last_provider_stays_visible_with_one_bar() {
         made.push(LoginTarget {
             name: format!("p{n}"),
             kind: LoginKind::Key,
+            label: None,
         });
     }
     let last = format!("p{}", PROVIDERS - 1);
@@ -634,6 +642,7 @@ fn the_footer_padding_holds_the_width_while_scrolled() {
     made.push(LoginTarget {
         name: "s".repeat(60),
         kind: LoginKind::Secret,
+        label: None,
     });
     let fake = fake_with(made);
     let login = Login::open(&ctx(&fake));
@@ -2077,6 +2086,7 @@ fn a_wrapping_prompt_drops_rows_in_order_at_the_body_cap() {
         vec![LoginTarget {
             name: "codex".to_owned(),
             kind: LoginKind::Browser,
+            label: None,
         }],
     ] {
         let cap = if targets.len() == 1 { 3 } else { 6 };
@@ -2349,6 +2359,7 @@ fn the_starting_step_keeps_the_lists_height() {
     let one = fake_with(vec![LoginTarget {
         name: "codex".to_owned(),
         kind: LoginKind::Browser,
+        label: None,
     }]);
     let context = ctx(&one);
     let mut login = Login::open(&context);
@@ -2368,6 +2379,7 @@ fn a_very_long_name_cuts_within_the_step_and_matches_the_panel() {
     let fake = fake_with(vec![LoginTarget {
         name: long.clone(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let context = ctx(&fake);
     let mut starting = Login::open(&context);
@@ -2447,6 +2459,7 @@ fn a_saturated_body_clips_to_the_lists_budget() {
             .map(|at| LoginTarget {
                 name: format!("key-{at}"),
                 kind: LoginKind::Key,
+                label: None,
             })
             .collect();
         let fake = fake_with(many);
@@ -2532,6 +2545,7 @@ fn a_secret_only_list_is_as_wide_as_its_heading_or_row() {
     let targets = vec![LoginTarget {
         name: "k".to_owned(),
         kind: LoginKind::Secret,
+        label: None,
     }];
     assert_eq!(super::list_widest(&targets), 7);
 }
@@ -2543,6 +2557,7 @@ fn a_key_only_list_is_as_wide_as_its_heading_or_row() {
     let targets = vec![LoginTarget {
         name: "k".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }];
     assert_eq!(super::list_widest(&targets), 9);
 }
@@ -2553,6 +2568,7 @@ fn a_long_row_sets_the_list_width_uncut() {
     let targets = vec![LoginTarget {
         name: "a-long-provider-name".to_owned(),
         kind: LoginKind::Browser,
+        label: None,
     }];
     assert_eq!(super::list_widest(&targets), 31);
 }
@@ -2567,6 +2583,7 @@ fn key_choices(
     let fake = fake_with(vec![LoginTarget {
         name: name.to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     press(&mut login, &fake, &[Key::Enter]);
@@ -3022,6 +3039,7 @@ fn a_failed_read_keeps_the_login_with_its_message() {
     let fake = fake_with(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     press(&mut login, &fake, &[Key::Enter]);
@@ -3052,6 +3070,7 @@ fn esc_in_preparing_and_choices_returns_to_the_rows_saving_nothing() {
     let fake = fake_with(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     press(&mut login, &fake, &[Key::Enter]);
@@ -3336,6 +3355,7 @@ fn preparing_view() -> (Fake, Login) {
     let fake = fake_with(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     let mut login = Login::open(&ctx(&fake));
     login.wait_reviewer(LoginTicket(1), "acme".to_owned());
@@ -3606,6 +3626,7 @@ fn many_targets() -> Vec<LoginTarget> {
         .map(|at| LoginTarget {
             name: format!("p{at:02}"),
             kind: LoginKind::Key,
+            label: None,
         })
         .collect()
 }

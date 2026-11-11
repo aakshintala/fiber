@@ -486,7 +486,7 @@ impl hub::Machine for Seam {
             }
             "login_targets" => {
                 a.shape(&[], &[])?;
-                json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|json!({"name":t.name,"kind":match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}})).collect::<Vec<_>>()})
+                json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|{let mut value=Map::from_iter([("name".to_owned(),json!(t.name)),("kind".to_owned(),json!(match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}))]);if let Some(label)=t.label{drop(value.insert("label".to_owned(),json!(label)));}Value::Object(value)}).collect::<Vec<_>>()})
             }
             "logout_rows" => {
                 a.shape(&[], &[])?;
