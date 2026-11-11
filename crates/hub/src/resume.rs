@@ -100,9 +100,11 @@ fn is_delegate_in(dir: &Path) -> bool {
 /// and the recorded repository when a recorded Fiber worktree's
 /// repository is gone too, exactly as the resume guard refuses them.
 /// A worktree whose repository still exists is made again, so `None`,
-/// as for a live log, a missing or unreadable one, and a delegate's:
-/// the delegate branch owns delegates, and the guard owns every other
-/// command.
+/// as for a live log, a missing or unreadable one, a delegate's, and a
+/// log ending in anything but `fiber_exited`: an `archived` marker ends
+/// an archived log, so the guard still refuses it — nothing resumes it,
+/// and nothing unarchives it. The delegate branch owns delegates, and
+/// the guard owns every other command.
 pub(crate) fn gone_readable(home: &Path, session: &SessionId) -> Option<(PathBuf, PathBuf)> {
     let (_, dir) = crate::recent::lookup_logged(home, session)?;
     if !exited_in(&dir) {

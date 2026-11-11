@@ -4295,6 +4295,19 @@ fn a_missing_log_is_not_readable_gone() {
 }
 
 #[test]
+fn an_archived_log_is_not_readable_gone() {
+    // The `archived` marker ends the log, so it is not an exited one:
+    // the guard still refuses it, nothing resumes it, and nothing
+    // unarchives it (`docs/invocation.md`, "Lifecycle").
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    temp.append("fiber_exited");
+    temp.append("archived");
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
 fn a_delegate_is_not_readable_gone() {
     // Delegates resume only through their parent: the delegate branch
     // owns them, even with the workspace gone.
