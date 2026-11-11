@@ -84,7 +84,6 @@ const LOW_HIGH_XHIGH_MAX: &[&str] = &["low", "high", "xhigh", "max"];
 const LOW_MEDIUM_HIGH_MAX: &[&str] = &["low", "medium", "high", "max"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX: &[&str] =
     &["off", "minimal", "low", "medium", "high", "max"];
-const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
 const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["off", "minimal", "low", "medium", "high"];
@@ -103,7 +102,7 @@ const ANTHROPIC: Package = Package {
     provider: r#"{"credential":{"env":"ANTHROPIC_API_KEY"},"name":"anthropic","reviewer_model":"claude-sonnet-5-5"}"#,
     protocol: ProtocolRule::Fixed("anthropic-messages"),
     base_url: "https://api.anthropic.com/v1",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &[],
     protocol_overrides: &[],
@@ -174,7 +173,7 @@ const GEMINI: Package = Package {
     provider: r#"{"credential":{"env":"GEMINI_API_KEY"},"name":"gemini","reviewer_model":"gemini-3.8-flash"}"#,
     protocol: ProtocolRule::Fixed("google-generative-ai"),
     base_url: "https://generativelanguage.googleapis.com/v1beta",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &[],
     protocol_overrides: &[],
@@ -182,7 +181,6 @@ const GEMINI: Package = Package {
     by_protocol: &[],
     by_model: &[
         ("gemini-3.1-flash-lite", GOOGLE_SEARCH),
-        ("gemini-3.1-flash-lite-preview", GOOGLE_SEARCH),
         ("gemini-3.1-pro-preview", GOOGLE_SEARCH),
         ("gemini-3.1-pro-preview-customtools", GOOGLE_SEARCH),
         ("gemini-3.5-flash", GOOGLE_SEARCH),
@@ -200,11 +198,6 @@ const GEMINI: Package = Package {
         ("gemini-3-flash-preview", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gemini-3.1-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gemini-3.1-flash-lite-image", MINIMAL_HIGH, None),
-        (
-            "gemini-3.1-flash-lite-preview",
-            MINIMAL_LOW_MEDIUM_HIGH,
-            None,
-        ),
         (
             "gemini-3.1-flash-live-preview",
             MINIMAL_LOW_MEDIUM_HIGH,
@@ -238,7 +231,7 @@ const OPENAI: Package = Package {
     provider: r#"{"credential":{"env":"OPENAI_API_KEY"},"name":"openai","reviewer_model":"gpt-6-luna"}"#,
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://api.openai.com/v1",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &["gpt-5.6"],
     only: &[],
     protocol_overrides: &[],
@@ -248,7 +241,6 @@ const OPENAI: Package = Package {
         ("gpt-4.1", OPENAI_SEARCH),
         ("gpt-4.1-mini", OPENAI_SEARCH),
         ("gpt-4o", OPENAI_SEARCH),
-        ("gpt-4o-2024-05-13", OPENAI_SEARCH),
         ("gpt-4o-2024-08-06", OPENAI_SEARCH),
         ("gpt-4o-2024-11-20", OPENAI_SEARCH),
         ("gpt-4o-mini", OPENAI_SEARCH),
@@ -274,7 +266,6 @@ const OPENAI: Package = Package {
         ("gpt-6-sol", OPENAI_SEARCH_DEFERRED),
         ("gpt-6.1-sol", OPENAI_SEARCH),
         ("o3", OPENAI_SEARCH),
-        ("o4-mini", OPENAI_SEARCH),
     ],
     thinking: &[
         ("gpt-5", MINIMAL_LOW_MEDIUM_HIGH, None),
@@ -283,7 +274,6 @@ const OPENAI: Package = Package {
         ("gpt-5-pro", HIGH_ONLY, None),
         ("gpt-5.1", OFF_LOW_MEDIUM_HIGH, None),
         ("gpt-5.2", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
-        ("gpt-5.2-chat-latest", MEDIUM_XHIGH, None),
         ("gpt-5.2-pro", MEDIUM_HIGH_XHIGH, None),
         ("gpt-5.3-codex", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
         ("gpt-5.3-codex-spark", LOW_MEDIUM_HIGH_XHIGH, None),
@@ -311,12 +301,8 @@ const OPENAI: Package = Package {
             None,
         ),
         ("gpt-realtime-2.1", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
-        ("o1", LOW_MEDIUM_HIGH, None),
-        ("o1-pro", LOW_MEDIUM_HIGH, None),
         ("o3", LOW_MEDIUM_HIGH, None),
-        ("o3-mini", LOW_MEDIUM_HIGH, None),
         ("o3-pro", LOW_MEDIUM_HIGH, None),
-        ("o4-mini", LOW_MEDIUM_HIGH, None),
     ],
 };
 
@@ -330,7 +316,7 @@ const CODEX: Package = Package {
     provider: r#"{"headers":{"originator":"fiber"},"login":"browser","name":"codex","reviewer_model":"gpt-6-luna"}"#,
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://chatgpt.com/backend-api/codex",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
     protocol_overrides: &[],
@@ -352,7 +338,7 @@ const MUSE: Package = Package {
     provider: r#"{"credential":{"env":"META_API_KEY"},"name":"muse","reviewer_model":"muse-spark-1.3"}"#,
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://api.meta.ai/v1",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &[],
     protocol_overrides: &[],

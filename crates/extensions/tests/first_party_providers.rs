@@ -181,7 +181,6 @@ fn first_party_hosted_searches_are_the_marked_models() {
         ("muse/muse-spark-1.3-contributor", "web_search"),
         ("muse/muse-wonder-1.0", "web_search"),
         ("gemini/gemini-3.1-flash-lite", "google_search"),
-        ("gemini/gemini-3.1-flash-lite-preview", "google_search"),
         ("gemini/gemini-3.1-pro-preview", "google_search"),
         ("gemini/gemini-3.1-pro-preview-customtools", "google_search"),
         ("gemini/gemini-3.5-flash", "google_search"),
@@ -197,7 +196,6 @@ fn first_party_hosted_searches_are_the_marked_models() {
         ("openai/gpt-4.1", "web_search"),
         ("openai/gpt-4.1-mini", "web_search"),
         ("openai/gpt-4o", "web_search"),
-        ("openai/gpt-4o-2024-05-13", "web_search"),
         ("openai/gpt-4o-2024-08-06", "web_search"),
         ("openai/gpt-4o-2024-11-20", "web_search"),
         ("openai/gpt-4o-mini", "web_search"),
@@ -223,7 +221,6 @@ fn first_party_hosted_searches_are_the_marked_models() {
         ("openai/gpt-6-sol", "web_search"),
         ("openai/gpt-6.1-sol", "web_search"),
         ("openai/o3", "web_search"),
-        ("openai/o4-mini", "web_search"),
         ("opencode-zen/gpt-6.1-sol", "web_search"),
     ]
     .into_iter()
