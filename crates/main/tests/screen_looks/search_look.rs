@@ -985,16 +985,18 @@ fn changed_file_row_ready(grid: &Grid) -> bool {
     if !grid.rows[0].contains(" Changed files  diff against HEAD") {
         return false;
     }
-    let Some(y) = row_with_or(&grid.rows, "changed.txt · +2 −0") else {
+    // The grouped row carries the letter before the name; the panel
+    // repeats the bare path, so the letter keeps the match on the list.
+    let Some(y) = row_with_or(&grid.rows, "M  changed.txt  +2 −0") else {
         return false;
     };
-    let Some(x) = col_at_or(grid, y, "changed.txt · +2 −0") else {
+    let Some(x) = col_at_or(grid, y, "M  changed.txt  +2 −0") else {
         return false;
     };
-    (0..11).all(|dx| grid.cell(x + dx, y).bold)
-        && (11..14).all(|dx| grid.cell(x + dx, y).dim)
-        && (14..16).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(115, 201, 145))
-        && (17..19).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(255, 93, 115))
+    grid.cell(x, y).fg == Colour::Rgb(255, 159, 67)
+        && (3..14).all(|dx| grid.cell(x + dx, y).bold)
+        && (16..18).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(115, 201, 145))
+        && (19..21).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(255, 93, 115))
 }
 
 #[test]
