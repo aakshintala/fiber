@@ -80,11 +80,9 @@ const LOW_MEDIUM_HIGH: &[&str] = &["low", "medium", "high"];
 const LOW_HIGH_MAX: &[&str] = &["low", "high", "max"];
 const LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const LOW_HIGH_XHIGH_MAX: &[&str] = &["low", "high", "xhigh", "max"];
 const LOW_MEDIUM_HIGH_MAX: &[&str] = &["low", "medium", "high", "max"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX: &[&str] =
     &["off", "minimal", "low", "medium", "high", "max"];
-const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
 const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["off", "minimal", "low", "medium", "high"];
@@ -117,8 +115,6 @@ const ANTHROPIC: Package = Package {
         ("claude-haiku-4-5-20251001", THINKING_BUDGET_DEFERRED),
         ("claude-opus-4-5", THINKING_BUDGET_DEFERRED),
         ("claude-opus-4-5-20251101", THINKING_BUDGET_DEFERRED),
-        ("claude-sonnet-4-5", THINKING_BUDGET_DEFERRED),
-        ("claude-sonnet-4-5-20250929", THINKING_BUDGET_DEFERRED),
         ("claude-fable-5", DEFERRED),
         ("claude-fable-5-1", DEFERRED),
         ("claude-haiku-5-5", DEFERRED),
@@ -154,12 +150,6 @@ const ANTHROPIC: Package = Package {
             OFF_MINIMAL_LOW_MEDIUM_HIGH,
             None,
         ),
-        ("claude-sonnet-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        (
-            "claude-sonnet-4-5-20250929",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH,
-            None,
-        ),
     ],
 };
 
@@ -182,7 +172,6 @@ const GEMINI: Package = Package {
     by_protocol: &[],
     by_model: &[
         ("gemini-3.1-flash-lite", GOOGLE_SEARCH),
-        ("gemini-3.1-flash-lite-preview", GOOGLE_SEARCH),
         ("gemini-3.1-pro-preview", GOOGLE_SEARCH),
         ("gemini-3.1-pro-preview-customtools", GOOGLE_SEARCH),
         ("gemini-3.5-flash", GOOGLE_SEARCH),
@@ -200,11 +189,6 @@ const GEMINI: Package = Package {
         ("gemini-3-flash-preview", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gemini-3.1-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gemini-3.1-flash-lite-image", MINIMAL_HIGH, None),
-        (
-            "gemini-3.1-flash-lite-preview",
-            MINIMAL_LOW_MEDIUM_HIGH,
-            None,
-        ),
         (
             "gemini-3.1-flash-live-preview",
             MINIMAL_LOW_MEDIUM_HIGH,
@@ -248,7 +232,6 @@ const OPENAI: Package = Package {
         ("gpt-4.1", OPENAI_SEARCH),
         ("gpt-4.1-mini", OPENAI_SEARCH),
         ("gpt-4o", OPENAI_SEARCH),
-        ("gpt-4o-2024-05-13", OPENAI_SEARCH),
         ("gpt-4o-2024-08-06", OPENAI_SEARCH),
         ("gpt-4o-2024-11-20", OPENAI_SEARCH),
         ("gpt-4o-mini", OPENAI_SEARCH),
@@ -274,7 +257,6 @@ const OPENAI: Package = Package {
         ("gpt-6-sol", OPENAI_SEARCH_DEFERRED),
         ("gpt-6.1-sol", OPENAI_SEARCH),
         ("o3", OPENAI_SEARCH),
-        ("o4-mini", OPENAI_SEARCH),
     ],
     thinking: &[
         ("gpt-5", MINIMAL_LOW_MEDIUM_HIGH, None),
@@ -283,7 +265,6 @@ const OPENAI: Package = Package {
         ("gpt-5-pro", HIGH_ONLY, None),
         ("gpt-5.1", OFF_LOW_MEDIUM_HIGH, None),
         ("gpt-5.2", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
-        ("gpt-5.2-chat-latest", MEDIUM_XHIGH, None),
         ("gpt-5.2-pro", MEDIUM_HIGH_XHIGH, None),
         ("gpt-5.3-codex", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
         ("gpt-5.3-codex-spark", LOW_MEDIUM_HIGH_XHIGH, None),
@@ -311,12 +292,8 @@ const OPENAI: Package = Package {
             None,
         ),
         ("gpt-realtime-2.1", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
-        ("o1", LOW_MEDIUM_HIGH, None),
-        ("o1-pro", LOW_MEDIUM_HIGH, None),
         ("o3", LOW_MEDIUM_HIGH, None),
-        ("o3-mini", LOW_MEDIUM_HIGH, None),
         ("o3-pro", LOW_MEDIUM_HIGH, None),
-        ("o4-mini", LOW_MEDIUM_HIGH, None),
     ],
 };
 
@@ -420,19 +397,6 @@ const OPENCODE_GO: Package = Package {
     ],
     by_model: &[],
     thinking: &[
-        // research/opencode-thinking/raw/go-deepseek-v4-flash.json (every
-        // level 200s).
-        (
-            "deepseek-v4-flash",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
-        // research/opencode-thinking/raw/go-deepseek-v4-flash-vision-exp.json
-        (
-            "deepseek-v4-flash-vision-exp",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
         // research/opencode-thinking/raw/go-deepseek-v4-pro.json (every
         // level 200s).
         (
@@ -458,7 +422,6 @@ const OPENCODE_GO: Package = Package {
         // https://docs.x.ai/developers/model-capabilities/text/reasoning:
         // `reasoning.effort` takes low, medium, high and xhigh (4.6 and
         // later); reasoning cannot be disabled, so no `off`.
-        ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
         // research/opencode-thinking/raw/go-hy3.json
         ("hy3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -472,12 +435,6 @@ const OPENCODE_GO: Package = Package {
         ("kimi-k3", LOW_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-longcat-2.0.json
         ("longcat-2.0", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-longcat-2.5-preview-free.json
-        (
-            "longcat-2.5-preview-free",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
         // research/opencode-thinking/raw/go-mimo-v2.5.json
         ("mimo-v2.5", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-mimo-v2.5-pro.json: upstream
@@ -487,9 +444,6 @@ const OPENCODE_GO: Package = Package {
         ("mimo-v2.6-flash", OFF_LOW_MEDIUM_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-mimo-v2.6-pro.json
         ("mimo-v2.6-pro", OFF_LOW_MEDIUM_HIGH_MAX, None),
-        // research/opencode-thinking/raw/go-minimax-m2.7.json (messages;
-        // completions is unsupported there).
-        ("minimax-m2.7", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-minimax-m3.json
         ("minimax-m3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-muse-spark-1.2-contributor.json:
@@ -511,14 +465,6 @@ const OPENCODE_GO: Package = Package {
         ("qwen3.8-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-qwen3.8-max.json
         ("qwen3.8-max", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-space-bunny.json
-        ("space-bunny", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-step-5-preview-free.json
-        (
-            "step-5-preview-free",
-            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
     ],
 };
 
@@ -594,19 +540,9 @@ const OPENCODE_ZEN: Package = Package {
         // thinking (`docs/model-routing.md`, "Thinking").
         ("claude-haiku-4-5", GATEWAY_THINKING_BUDGET),
         ("claude-opus-4-5", GATEWAY_THINKING_BUDGET),
-        ("claude-sonnet-4", GATEWAY_THINKING_BUDGET),
         ("claude-sonnet-4-5", GATEWAY_THINKING_BUDGET),
     ],
     thinking: &[
-        // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking:
-        // Claude Sonnet 4 is an earlier Claude 4 model, so it keeps manual
-        // budget thinking; the compat layer above carries the budget flag.
-        ("claude-sonnet-4", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        // research/opencode-thinking/raw/zen-deepseek-v4-flash.json:
-        // served by deepseek-v4.1-flash upstream, which supports only low,
-        // high, xhigh and max there (off, minimal and medium are rejected
-        // as unsupported).
-        ("deepseek-v4-flash", LOW_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-deepseek-v4-pro.json (every
         // level 200s).
         (

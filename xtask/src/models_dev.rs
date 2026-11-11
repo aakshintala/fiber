@@ -1018,8 +1018,9 @@ impl Parser<'_> {
         }
     }
 
-    /// One `[[correction]]` header: a fresh entry becomes current.
-    fn array_header(&mut self, entries: &mut Vec<RawEntry>) -> Result<(), String> {
+    /// One `[[correction]]` header: the caller pushes a fresh entry,
+    /// which becomes current.
+    fn array_header(&mut self) -> Result<(), String> {
         self.take("[[");
         self.skip_gap();
         let name = self.bare_key()?;
@@ -1030,14 +1031,11 @@ impl Parser<'_> {
         if name != "correction" {
             return self.fail(format!("names unknown entry `{name}`"));
         }
-        entries.push(RawEntry::default());
-        self.entry = entries.len();
-        self.fields = false;
         Ok(())
     }
 
     /// One `[correction.fields]` header: the current entry takes fields.
-    fn table_header(&mut self, entries: &mut Vec<RawEntry>) -> Result<(), String> {
+    fn table_header(&mut self, entries: &mut [RawEntry]) -> Result<(), String> {
         self.bump();
         self.skip_gap();
         let mut parts = vec![self.bare_key()?];
@@ -1107,7 +1105,7 @@ impl Parser<'_> {
     /// One `key = value` line: in the current entry, or in its fields
     /// after a `[correction.fields]` header. Before the first
     /// `[[correction]]` any key is an error.
-    fn key_value(&mut self, entries: &mut Vec<RawEntry>) -> Result<(), String> {
+    fn key_value(&mut self, entries: &mut [RawEntry]) -> Result<(), String> {
         let key = self.bare_key()?;
         self.skip_gap();
         self.eat(b'=', "`=`")?;
@@ -1150,7 +1148,11 @@ impl Parser<'_> {
                         current.fields = Some(fields);
                         return Ok(());
                     }
-                    _ => {
+                    Value::Null
+                    | Value::Bool(_)
+                    | Value::Number(_)
+                    | Value::String(_)
+                    | Value::Array(_) => {
                         current.fields_bad = true;
                         return Ok(());
                     }
@@ -1185,7 +1187,10 @@ pub(crate) fn parse_corrections(source: &str, text: &str) -> Result<Vec<Correcti
             break;
         }
         if parser.starts("[[") {
-            parser.array_header(&mut entries)?;
+            parser.array_header()?;
+            entries.push(RawEntry::default());
+            parser.entry = entries.len();
+            parser.fields = false;
         } else if parser.peek() == Some(b'[') {
             parser.table_header(&mut entries)?;
         } else {
