@@ -86,15 +86,13 @@ fn generated_model(output: &Output, id: &str) -> Option<Value> {
 
 /// Generates one package's file from one source's models.
 fn generate_one(package: &Package, models: &[(&str, Value)]) -> (Output, Vec<String>) {
-    let input = catalog(package.source, models);
-    let (mut outputs, left_out) = generate(&input, std::slice::from_ref(package)).unwrap();
-    assert_eq!(outputs.len(), 1);
-    (outputs.pop().unwrap(), left_out)
+    let (output, left_out, _) = generate_corrected(package, models, &[]);
+    (output, left_out)
 }
 
 /// The error generating one package's file gives.
 fn generate_err(package: &Package, input: &Value) -> String {
-    match generate(input, std::slice::from_ref(package)) {
+    match generate(input, std::slice::from_ref(package), &[]) {
         Err(error) => error,
         Ok(_) => panic!("generate unexpectedly succeeded"),
     }
@@ -288,6 +286,285 @@ fn deprecated_is_dropped_in_every_package() {
     }
 }
 
+/// Parses `text` as the corrections file, or panics.
+fn corrections(text: &str) -> Vec<Correction> {
+    parse_corrections("corrections", text).unwrap()
+}
+
+/// Generates one package's file with `corrections`, returning the
+/// output, the left-out lines and the surviving corrections.
+fn generate_corrected(
+    package: &Package,
+    models: &[(&str, Value)],
+    corrections: &[Correction],
+) -> (Output, Vec<String>, Vec<Correction>) {
+    let input = catalog(package.source, models);
+    let ((mut outputs, left_out), survivors) =
+        generate(&input, std::slice::from_ref(package), corrections).unwrap();
+    assert_eq!(outputs.len(), 1);
+    (outputs.pop().unwrap(), left_out, survivors)
+}
+
+/// The error generating one package's file with `corrections` gives.
+fn generate_corrected_err(package: &Package, input: &Value, corrections: &[Correction]) -> String {
+    match generate(input, std::slice::from_ref(package), corrections) {
+        Err(error) => error,
+        Ok(_) => panic!("generate unexpectedly succeeded"),
+    }
+}
+
+/// One correction entry overriding every derived field of `m`.
+fn full_correction() -> Vec<Correction> {
+    corrections(
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         name = \"Fixed\"\n\
+         protocol = \"openai-responses\"\n\
+         context_window = 2000\n\
+         max_output_tokens = 50\n\
+         input = [\"text\", \"image\"]\n\
+         cost = {input = 5, output = 6}\n",
+    )
+}
+
+#[test]
+fn a_correction_overrides_derived_fields_after_the_table() {
+    let mut package = fixed_package("s", "openai-completions");
+    package.every_model = r#"{"context_window":5}"#;
+    let (output, _, survivors) = generate_corrected(
+        &package,
+        &[("m", tool_model(json!({})))],
+        &full_correction(),
+    );
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(model["name"], "Fixed");
+    assert_eq!(model["protocol"], "openai-responses");
+    assert_eq!(model["context_window"], 2000);
+    assert_eq!(model["max_output_tokens"], 50);
+    assert_eq!(model["input"], json!(["text", "image"]));
+    assert_eq!(model["cost"], json!({"input": 5, "output": 6}));
+    assert_eq!(survivors.len(), 1);
+}
+
+#[test]
+fn a_correction_matching_derived_values_is_pruned() {
+    let package = fixed_package("s", "openai-completions");
+    let matching = corrections(
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         [correction.fields]\n\
+         protocol = \"openai-completions\"\n\
+         context_window = 1000\n\
+         max_output_tokens = 100\n\
+         input = [\"text\"]\n\
+         cost = {input = 1, output = 2}\n",
+    );
+    let (output, _, survivors) =
+        generate_corrected(&package, &[("m", tool_model(json!({})))], &matching);
+    assert!(survivors.is_empty());
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(model["context_window"], 1000);
+}
+
+#[test]
+fn a_correction_differing_in_one_field_is_kept() {
+    let package = fixed_package("s", "openai-completions");
+    let mut partial = full_correction();
+    partial[0]
+        .fields
+        .insert("context_window".to_owned(), json!(1000));
+    partial[0]
+        .fields
+        .insert("max_output_tokens".to_owned(), json!(100));
+    partial[0]
+        .fields
+        .insert("protocol".to_owned(), json!("openai-completions"));
+    partial[0].fields.insert("name".to_owned(), json!("M"));
+    partial[0].fields.remove("input");
+    partial[0].fields.remove("cost");
+    let (output, _, survivors) = generate_corrected(
+        &package,
+        &[("m", tool_model(json!({"name": "Other"})))],
+        &partial,
+    );
+    assert_eq!(survivors.len(), 1);
+    assert_eq!(generated_model(&output, "m").unwrap()["name"], "M");
+}
+
+#[test]
+fn a_correction_missing_upstream_is_rejected() {
+    let missing = "[[correction]]\n\
+                   package = \"t\"\n\
+                   model = \"m\"\n\
+                   source = \"https://vendor.example/m\"\n\
+                   [correction.fields]\n\
+                   name = \"Fixed\"\n";
+    assert_eq!(
+        parse_corrections("corrections", missing).unwrap_err(),
+        "corrections: correction 1 names no `upstream`"
+    );
+    let empty = missing.replace(
+        "source = \"https://vendor.example/m\"",
+        "source = \"https://vendor.example/m\"\nupstream = \"\"",
+    );
+    assert_eq!(
+        parse_corrections("corrections", &empty).unwrap_err(),
+        "corrections: correction 1 names no `upstream`"
+    );
+}
+
+#[test]
+fn a_correction_for_an_unknown_model_is_an_error() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    let mut ghost = full_correction();
+    ghost[0].model = "ghost".to_owned();
+    assert_eq!(
+        generate_corrected_err(&package, &input, &ghost),
+        "t: correction for `ghost` matches no generated model"
+    );
+}
+
+#[test]
+fn a_correction_for_a_left_out_model_is_an_error() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(
+        package.source,
+        &[("off", tool_model(json!({"tool_call": false})))],
+    );
+    let mut left_out = full_correction();
+    left_out[0].model = "off".to_owned();
+    assert_eq!(
+        generate_corrected_err(&package, &input, &left_out),
+        "t: correction for `off` matches no generated model"
+    );
+}
+
+#[test]
+fn a_correction_overriding_a_table_only_field_is_rejected() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    for field in [
+        "id",
+        "thinking_levels",
+        "thinking_default",
+        "compat",
+        "base_url",
+        "web_search",
+    ] {
+        let mut entry = full_correction();
+        entry[0].fields = Map::from_iter([(field.to_owned(), json!(1))]);
+        assert_eq!(
+            generate_corrected_err(&package, &input, &entry),
+            format!(
+                "providers/models-corrections.toml: correction for `t/m` overrides table-only field `{field}`"
+            )
+        );
+    }
+    let mut unknown = full_correction();
+    unknown[0].fields = Map::from_iter([("bogus".to_owned(), json!(1))]);
+    assert_eq!(
+        generate_corrected_err(&package, &input, &unknown),
+        "providers/models-corrections.toml: correction for `t/m` names unknown field `bogus`"
+    );
+}
+
+#[test]
+fn a_correction_for_codex_context_window_is_rejected() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    let mut package = package;
+    package.path = "providers/codex/providers/codex.json";
+    let mut pin = full_correction();
+    pin[0].package = "codex".to_owned();
+    pin[0].fields = Map::from_iter([("context_window".to_owned(), json!(1))]);
+    assert_eq!(
+        generate_corrected_err(&package, &input, &pin),
+        "providers/models-corrections.toml: correction for `codex/m` overrides the table-pinned `context_window`"
+    );
+}
+
+#[test]
+fn a_correction_for_an_unknown_package_is_rejected() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    let mut ghost = full_correction();
+    ghost[0].package = "ghost".to_owned();
+    assert_eq!(
+        generate_corrected_err(&package, &input, &ghost),
+        "providers/models-corrections.toml: correction for `ghost/m` names unknown package `ghost`"
+    );
+}
+
+#[test]
+fn a_second_correction_for_one_model_is_rejected() {
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    let mut twice = full_correction();
+    twice.push(twice[0].clone());
+    assert_eq!(
+        generate_corrected_err(&package, &input, &twice),
+        "providers/models-corrections.toml: correction for `t/m` appears twice"
+    );
+}
+
+#[test]
+fn corrections_with_wrong_types_are_rejected() {
+    assert_eq!(
+        parse_corrections("corrections", "[[correction]]\npackage = 3\n").unwrap_err(),
+        "corrections: correction 1 names a non-string `package`"
+    );
+    assert_eq!(
+        parse_corrections(
+            "corrections",
+            "[[correction]]\n\
+             package = \"t\"\n\
+             model = \"m\"\n\
+             source = \"https://vendor.example/m\"\n\
+             upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+             fields = \"x\"\n"
+        )
+        .unwrap_err(),
+        "corrections: correction 1 names a non-table `fields`"
+    );
+    let package = fixed_package("s", "openai-completions");
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    let mut entry = full_correction();
+    entry[0].fields = Map::from_iter([("context_window".to_owned(), json!("big"))]);
+    assert_eq!(
+        generate_corrected_err(&package, &input, &entry),
+        "providers/models-corrections.toml: correction for `t/m` sets `context_window` to a non-integer"
+    );
+}
+
+#[test]
+fn corrections_parse_both_fields_forms_and_reject_stray_tables() {
+    let inline = corrections(
+        "[[correction]]\n\
+         package = \"t\"\n\
+         model = \"m\"\n\
+         source = \"https://vendor.example/m\"\n\
+         upstream = \"https://github.com/models-dev/models.dev/pull/1\"\n\
+         fields = {name = \"Fixed\"}\n",
+    );
+    assert_eq!(inline[0].fields["name"], "Fixed");
+    assert_eq!(
+        parse_corrections("corrections", "key = 1\n").unwrap_err(),
+        "corrections: names a key outside any `[[correction]]`"
+    );
+    assert_eq!(
+        parse_corrections("corrections", "[other]\n").unwrap_err(),
+        "corrections: names unknown table `other`"
+    );
+}
+
 #[test]
 fn the_skip_list_drops_only_its_ids() {
     let mut package = fixed_package("s", "openai-responses");
@@ -433,7 +710,7 @@ fn a_gateway_model_inherits_the_vendor_row_for_its_exact_id() {
     let gateway = gateway_package("g");
     let model = tool_model(json!({}));
     let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m", model)])]);
-    let (outputs, _) = generate(&input, &[vendor, gateway]).unwrap();
+    let ((outputs, _), _) = generate(&input, &[vendor, gateway], &[]).unwrap();
     let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
     assert_eq!(model["thinking_levels"], json!(["low", "high"]));
     assert_eq!(model["thinking_default"], "low");
@@ -447,7 +724,7 @@ fn inheritance_matches_the_whole_id_only() {
     let model = tool_model(json!({}));
     let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m-extra", model)])]);
     assert_eq!(
-        match generate(&input, &[vendor, gateway]) {
+        match generate(&input, &[vendor, gateway], &[]) {
             Err(error) => error,
             Ok(_) => panic!("generate unexpectedly succeeded"),
         },
@@ -463,7 +740,7 @@ fn a_gateway_own_row_beats_the_vendor_row() {
     gateway.thinking = &[("m", &["high"], None)];
     let model = tool_model(json!({}));
     let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m", model)])]);
-    let (outputs, _) = generate(&input, &[vendor, gateway]).unwrap();
+    let ((outputs, _), _) = generate(&input, &[vendor, gateway], &[]).unwrap();
     let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
     assert_eq!(model["thinking_levels"], json!(["high"]));
     assert!(model.get("thinking_default").is_none());
@@ -482,7 +759,7 @@ fn codex_rows_never_reach_a_gateway() {
         ("v", &[("m", model.clone())]),
         ("g", &[("m", model)]),
     ]);
-    let (outputs, _) = generate(&input, &[codex, openai, gateway]).unwrap();
+    let ((outputs, _), _) = generate(&input, &[codex, openai, gateway], &[]).unwrap();
     let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
     assert_eq!(model["thinking_levels"], json!(["low", "high"]));
     assert!(model.get("thinking_default").is_none());
@@ -859,7 +1136,7 @@ fn a_reviewer_model_inside_the_list_passes() {
     let mut package = fixed_package("s", "p");
     package.provider = r#"{"name":"t","reviewer_model":"m"}"#;
     let input = catalog(package.source, &[("m", tool_model(json!({})))]);
-    let (outputs, _) = generate(&input, std::slice::from_ref(&package)).unwrap();
+    let ((outputs, _), _) = generate(&input, std::slice::from_ref(&package), &[]).unwrap();
     assert_eq!(outputs.len(), 1);
 }
 
@@ -898,11 +1175,13 @@ fn two_runs_give_byte_identical_output() {
         package.source,
         &[("b", tool_model(json!({}))), ("a", tool_model(json!({})))],
     );
-    let first = generate(&catalog, std::slice::from_ref(&package))
+    let first = generate(&catalog, std::slice::from_ref(&package), &[])
         .unwrap()
+        .0
         .0;
-    let second = generate(&catalog, std::slice::from_ref(&package))
+    let second = generate(&catalog, std::slice::from_ref(&package), &[])
         .unwrap()
+        .0
         .0;
     assert_eq!(first[0].text, second[0].text);
 }
@@ -1143,7 +1422,7 @@ fn zen_keeps_its_google_generative_ai_models() {
             ],
         ),
     ]);
-    let (outputs, left_out) = generate(&input, &[gemini, vendor, zen, go]).unwrap();
+    let ((outputs, left_out), _) = generate(&input, &[gemini, vendor, zen, go], &[]).unwrap();
     let output = output_for(&outputs, "opencode-zen.json");
     let gemini = generated_model(output, "gemini-3.8-flash").unwrap();
     assert_eq!(gemini["protocol"], "google-generative-ai");
