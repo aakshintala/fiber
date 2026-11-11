@@ -10,7 +10,7 @@
 use crate::support;
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write as _};
+use std::io::{BufRead, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::Child;
@@ -53,7 +53,105 @@ fn probe(
     }
 }
 
-fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
+/// The expiry-time session-log read keeps at most this many bytes from the
+/// end of the events log: a bounded tail read by seeking to the end, so
+/// the read's size never grows with the log.
+const SESSION_LOG_TAIL_CAP: usize = 64 * 1024;
+
+/// One line naming what one `fakes::matching` listing saw: pids mean the
+/// keeper is still pre-bind (it runs while the socket refuses), no match
+/// means the bind history is unobservable (no bind event exists in the
+/// seams). A failed listing names the `pgrep` step and claims nothing about
+/// the keeper.
+fn keeper_sample_line(listing: &std::io::Result<Vec<u32>>) -> String {
+    match listing {
+        Ok(pids) if !pids.is_empty() => {
+            format!("keeper alive (pids: {pids:?}); not yet bound")
+        }
+        Ok(_) => "keeper dead (no process under the keeper pattern); bind history unobservable"
+            .to_owned(),
+        Err(error) => format!("keeper listing failed: {error}; keeper state unknown"),
+    }
+}
+
+/// The tail of the session events log: at most `SESSION_LOG_TAIL_CAP` bytes
+/// from the end, complete lines only (a leading fragment cut by the window
+/// and a trailing fragment still being written both drop), each parsed as
+/// JSON. Missing, unreadable, non-UTF-8 or malformed input reports
+/// `unknown`: expiry evidence must never panic on the log.
+fn session_log_tail(read: &std::io::Result<Vec<u8>>) -> String {
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(_) => return "session log tail: unknown".to_owned(),
+    };
+    let start = bytes.len().saturating_sub(SESSION_LOG_TAIL_CAP);
+    let mut window = &bytes[start..];
+    if start > 0 {
+        match window.iter().position(|byte| *byte == b'\n') {
+            Some(end) => window = &window[end + 1..],
+            None => return "session log tail: (no complete lines)".to_owned(),
+        }
+    }
+    let text = match std::str::from_utf8(window) {
+        Ok(text) => text,
+        Err(_) => return "session log tail: unknown".to_owned(),
+    };
+    let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+    let mut lines = Vec::new();
+    for line in complete.lines() {
+        if serde_json::from_str::<Value>(line).is_err() {
+            return "session log tail: unknown".to_owned();
+        }
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        return "session log tail: (no complete lines)".to_owned();
+    }
+    format!("session log tail:\n{}", lines.join("\n"))
+}
+
+/// The session events log's last bytes, read bounded: at most
+/// `SESSION_LOG_TAIL_CAP` bytes from the end through one seek and one
+/// capped read, never the full file. Past the cap the window's leading
+/// fragment drops here, so [`session_log_tail`] sees the same complete
+/// lines the full read's window would have held. A missing or unreadable
+/// log is `Err`, which the tail renders as `unknown`.
+fn read_bounded_tail(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(SESSION_LOG_TAIL_CAP as u64);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    // At most the cap, even when the file grows past its metadata length
+    // between the two calls.
+    file.take(SESSION_LOG_TAIL_CAP as u64)
+        .read_to_end(&mut bytes)?;
+    if start > 0 {
+        if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes = bytes[end + 1..].to_vec();
+        } else {
+            bytes.clear();
+        }
+    }
+    Ok(bytes)
+}
+
+/// The expiry-time keeper sample: one `fakes::matching` listing under the
+/// session's keeper pattern plus one bounded tail read of the session
+/// events log, each run once on the expiry path, never in a loop. No
+/// exit-wait, no second wait, no sleep, no retry.
+fn keeper_state_at_expiry(pattern: &str, setup: &Setup, id: &str) -> String {
+    // One-shot sample spelling the fakes per-`pgrep` budget (2500 ms).
+    let listing = fakes::matching(pattern, std::time::Duration::from_millis(2_500));
+    let log = read_bounded_tail(&session_dir(setup, id).join("events.jsonl"));
+    format!(
+        "{}\n{}",
+        keeper_sample_line(&listing),
+        session_log_tail(&log)
+    )
+}
+
+fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf, keeper_state: &str) -> String {
     let connect_error = last_error.unwrap_or_else(|| "no connect error was observed".to_owned());
     let socket_state = match fs::metadata(path) {
         Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
@@ -61,12 +159,17 @@ fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
         Err(error) => format!("metadata error: {error}"),
     };
     format!(
-        "last connect error: {connect_error}; socket path {}: {socket_state}",
+        "last connect error: {connect_error}; socket path {}: {socket_state}\n{keeper_state}",
         path.display()
     )
 }
 
-fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
+pub(super) fn wait_for_refuse_only_socket(
+    deadline: Deadline,
+    path: PathBuf,
+    setup: &Setup,
+    id: &str,
+) {
     let last_error = Arc::new(Mutex::new(None));
     let error_slot = Arc::clone(&last_error);
     let target = path.clone();
@@ -82,6 +185,7 @@ fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone(),
             &path,
+            &keeper_state_at_expiry(&format!("keeper --id {id}"), setup, id),
         );
         panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
     }
@@ -332,7 +436,7 @@ fn crash_after(
     // The bind comes after the killed session released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(&fixture.id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, setup, &fixture.id);
     Crashed {
         job: started["payload"]["job_id"].as_str().unwrap().to_owned(),
         output: session_dir(setup, &fixture.id)
@@ -1017,25 +1121,33 @@ fn holds_open(pid: u32, path: &std::path::Path) -> bool {
 /// What the handover relay tells the test about the lines it forwards.
 enum RelayEvent {
     Identify {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     Handover {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     HandoverReply {
+        #[cfg(target_os = "linux")]
         raw: String,
+        #[cfg(target_os = "linux")]
         jobs: Vec<(String, String)>,
     },
     AdoptedHeld {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     AdoptDone {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     Output {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
     Exit {
+        #[cfg(target_os = "linux")]
         raw: String,
     },
 }
@@ -1053,6 +1165,7 @@ struct RelayCounts {
 }
 
 /// The running jobs a Handover reply carries, as job id and output path.
+#[cfg(target_os = "linux")]
 fn running_jobs(value: &Value) -> Vec<(String, String)> {
     value["handover"]["running"]
         .as_array()
@@ -1405,15 +1518,25 @@ fn forward_upstream(
         let Some((raw, value)) = parse_line(&line) else {
             continue;
         };
+        #[cfg(not(target_os = "linux"))]
+        drop(raw);
         if value.get("adopt_done").is_some() {
             counts.lock().unwrap().adopt_done += 1;
-            send_event(events, RelayEvent::AdoptDone { raw });
+            send_event(
+                events,
+                RelayEvent::AdoptDone {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         } else if value.get("handover").is_some() {
             counts.lock().unwrap().handover_reply += 1;
             send_event(
                 events,
                 RelayEvent::HandoverReply {
+                    #[cfg(target_os = "linux")]
                     raw,
+                    #[cfg(target_os = "linux")]
                     jobs: running_jobs(&value),
                 },
             );
@@ -1422,10 +1545,22 @@ fn forward_upstream(
             .and_then(|output| output.get("bytes"))
             .is_some_and(|bytes| bytes.as_str().is_some_and(|text| !text.is_empty()))
         {
-            send_event(events, RelayEvent::Output { raw });
+            send_event(
+                events,
+                RelayEvent::Output {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         } else if value.get("exit").is_some() {
             counts.lock().unwrap().exit += 1;
-            send_event(events, RelayEvent::Exit { raw });
+            send_event(
+                events,
+                RelayEvent::Exit {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         }
     }
 }
@@ -1466,9 +1601,17 @@ fn forward_session(
             }
             continue;
         };
+        #[cfg(not(target_os = "linux"))]
+        drop(raw);
         if value.get("adopted").is_some() {
             counts.lock().unwrap().adopted += 1;
-            send_event(events, RelayEvent::AdoptedHeld { raw });
+            send_event(
+                events,
+                RelayEvent::AdoptedHeld {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
             break line.clone();
         }
         if writer.write_all(&line).is_err() {
@@ -1476,13 +1619,25 @@ fn forward_session(
         }
         if value.get("identify").is_some() {
             counts.lock().unwrap().identify += 1;
-            send_event(events, RelayEvent::Identify { raw });
+            send_event(
+                events,
+                RelayEvent::Identify {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         } else if value
             .get("handover")
             .is_some_and(|handover| handover.is_boolean())
         {
             counts.lock().unwrap().handover += 1;
-            send_event(events, RelayEvent::Handover { raw });
+            send_event(
+                events,
+                RelayEvent::Handover {
+                    #[cfg(target_os = "linux")]
+                    raw,
+                },
+            );
         }
     };
     // Held until the test releases, holding no lock and no writer mutex:
@@ -1858,19 +2013,169 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
         &last,
     ));
     assert_eq!(last.lock().unwrap().as_deref(), Some("probe failure"));
-    let diagnostic = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    let alive =
+        "keeper alive (pids: [4242]); not yet bound\nsession log tail:\n{\"kind\":\"job_started\"}";
+    let diagnostic = timeout_diagnostic(last.into_inner().unwrap(), &path, alive);
     assert!(diagnostic.contains("socket path "), "{diagnostic}");
     assert!(diagnostic.contains(": absent"), "{diagnostic}");
     assert!(
         diagnostic.contains("last connect error: probe failure"),
         "{diagnostic}"
     );
+    assert!(diagnostic.contains("not yet bound"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("session log tail:\n{\"kind\":\"job_started\"}"),
+        "{diagnostic}"
+    );
+    let dead = "keeper dead (no process under the keeper pattern); bind history unobservable\nsession log tail: unknown";
     let last = Mutex::new(None);
-    let no_observation = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    let no_observation = timeout_diagnostic(last.into_inner().unwrap(), &path, dead);
     assert!(
         no_observation.contains("last connect error: no connect error was observed"),
         "{no_observation}"
     );
+    assert!(
+        no_observation.contains("bind history unobservable"),
+        "{no_observation}"
+    );
+    assert!(
+        no_observation.contains("session log tail: unknown"),
+        "{no_observation}"
+    );
+    // The sample renderer maps the listing to the honest reading: pids mean
+    // still pre-bind, no match means the bind history is unobservable, and a
+    // failed listing names itself and claims nothing about the keeper.
+    assert_eq!(
+        keeper_sample_line(&Ok(vec![7])),
+        "keeper alive (pids: [7]); not yet bound"
+    );
+    assert!(
+        keeper_sample_line(&Ok(Vec::new())).contains(
+            "keeper dead (no process under the keeper pattern); bind history unobservable"
+        ),
+    );
+    let listing_failed = keeper_sample_line(&Err(std::io::Error::other("pgrep hung")));
+    assert!(
+        listing_failed.contains("keeper listing failed: pgrep hung"),
+        "{listing_failed}"
+    );
+    // The tail window keeps at most 64 KiB from the end: below the cap the
+    // whole log renders, just above it the cut leading fragment drops.
+    let line = "{\"kind\":\"job_started\"}\n";
+    assert_eq!(
+        session_log_tail(&Ok(line.repeat(3).into_bytes())),
+        format!("session log tail:\n{}", line.repeat(3).trim_end())
+    );
+    let unit = format!("{{\"seq\":0,\"pad\":\"{pad}\"}}\n", pad = "x".repeat(45));
+    assert_eq!(unit.len(), 64);
+    let at_cap = unit.repeat(SESSION_LOG_TAIL_CAP / 64);
+    assert_eq!(at_cap.len(), SESSION_LOG_TAIL_CAP);
+    // At exactly the cap the whole log renders: nothing dropped and nothing
+    // read past the cap. Assert the cap by length and the content by its
+    // edges, without pinning all 1,024 generated lines to a count no doc
+    // promises. Failures report lengths and the first differing offset,
+    // never the whole ~64 KiB tail (`docs/testing.md`, "What a test asserts").
+    let rendered = session_log_tail(&Ok(at_cap.into_bytes()));
+    let header = "session log tail:\n";
+    let first_line = unit.trim_end();
+    assert_eq!(
+        rendered.len(),
+        header.len() + SESSION_LOG_TAIL_CAP - 1,
+        "at the cap the tail holds the whole log: lengths",
+    );
+    assert!(
+        rendered.contains("\"pad\":\""),
+        "at the cap the tail keeps JSON lines: rendered len {}",
+        rendered.len(),
+    );
+    {
+        let head = format!("{header}{first_line}");
+        let offset = rendered
+            .bytes()
+            .take(head.len())
+            .zip(head.bytes())
+            .position(|(got, want)| got != want)
+            .or_else(|| (rendered.len() < head.len()).then_some(rendered.len()));
+        assert!(
+            rendered.starts_with(head.as_str()),
+            "at the cap the tail keeps the first line: rendered len {}, head len {}, first diff at {offset:?}",
+            rendered.len(),
+            head.len(),
+        );
+    }
+    {
+        let last = first_line;
+        let start = rendered.len().saturating_sub(last.len());
+        let offset = rendered
+            .bytes()
+            .skip(start)
+            .zip(last.bytes())
+            .position(|(got, want)| got != want)
+            .or_else(|| (rendered.len() < last.len()).then_some(rendered.len()))
+            .map(|pos| start + pos);
+        assert!(
+            rendered.ends_with(last),
+            "at the cap the tail keeps the last line: rendered len {}, last len {}, first diff at {offset:?}",
+            rendered.len(),
+            last.len(),
+        );
+    }
+    let filler = "x".repeat(SESSION_LOG_TAIL_CAP + 1);
+    let cut = format!("{filler}\n{line}");
+    let rendered = session_log_tail(&Ok(cut.into_bytes()));
+    assert_eq!(rendered, format!("session log tail:\n{}", line.trim_end()));
+    // A trailing fragment still being written drops; a malformed line, a
+    // missing log, or non-UTF-8 bytes report unknown, never panic.
+    assert_eq!(
+        session_log_tail(&Ok(b"{\"a\":1}\n{\"b\":2".to_vec())),
+        "session log tail:\n{\"a\":1}"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(b"{\"a\":1}\nnot json\n".to_vec())),
+        "session log tail: unknown"
+    );
+    assert_eq!(
+        session_log_tail(&Err(std::io::Error::from(std::io::ErrorKind::NotFound))),
+        "session log tail: unknown"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(vec![0xff, b'\n'])),
+        "session log tail: unknown"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(Vec::new())),
+        "session log tail: (no complete lines)"
+    );
+    assert_eq!(
+        session_log_tail(&Ok(vec![b'x'; SESSION_LOG_TAIL_CAP + 1])),
+        "session log tail: (no complete lines)"
+    );
+    // The expiry read itself is bounded: a short log reads whole, a log
+    // past the cap reads only its tail, and a missing log is the error
+    // the tail renders as unknown.
+    let dir = setup.workspace();
+    let short = dir.join("short.jsonl");
+    fs::write(&short, b"{\"a\":1}\n").unwrap();
+    assert_eq!(read_bounded_tail(&short).unwrap(), b"{\"a\":1}\n");
+    assert!(read_bounded_tail(&dir.join("missing.jsonl")).is_err());
+    let big = dir.join("big.jsonl");
+    let filler = "z".repeat(SESSION_LOG_TAIL_CAP + 4096);
+    fs::write(&big, format!("{filler}\n{line}")).unwrap();
+    let tail = read_bounded_tail(&big).unwrap();
+    assert!(
+        tail.len() <= SESSION_LOG_TAIL_CAP,
+        "the expiry read stays within the cap: {}",
+        tail.len()
+    );
+    assert_eq!(
+        session_log_tail(&Ok(tail)),
+        format!("session log tail:\n{}", line.trim_end())
+    );
+    // Past the cap with no complete line at all, the read normalizes to
+    // empty, which renders as no complete lines rather than unknown.
+    let noeol = dir.join("noeol.jsonl");
+    fs::write(&noeol, vec![b'x'; SESSION_LOG_TAIL_CAP + 16]).unwrap();
+    assert_eq!(read_bounded_tail(&noeol).unwrap(), b"");
 }
 
 #[test]
@@ -2041,7 +2346,7 @@ fn keeper_bound_holds_job_in_bound_without_resume() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, &setup, id);
     // Inside the bound, with no resume: the keeper still runs and still
     // holds its job, and no ending is written yet.
     assert!(

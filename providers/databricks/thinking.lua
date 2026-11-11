@@ -38,7 +38,7 @@ return {
   ["gemini-3-7-flash"] = { levels = { "low", "medium", "high" }, default = "medium" },
   ["gemini-3-8-flash"] = { levels = { "low", "medium", "high" }, default = "medium" },
   ["gemini-3-flash"] = { levels = { "minimal", "low", "medium", "high" }, default = "low" },
-  ["gemini-4-argon"] = { levels = { "low", "medium", "high" }, default = "medium" },
+  ["gemini-4-argon"] = { levels = {  } },
   ["gemini-flash-latest"] = { levels = { "minimal", "low", "medium", "high" } },
   ["gemini-flash-lite-latest"] = { levels = { "minimal", "low", "medium", "high" } },
   ["gemma-4-26b-a4b"] = { levels = { "minimal", "high" } },

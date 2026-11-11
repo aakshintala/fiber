@@ -445,8 +445,10 @@ pub(crate) struct OverlayRow {
 
 /// Parses overlay `text` from `source`: each row holds `levels` and an
 /// optional `default`. Every level is a vocabulary name, a default sits
-/// inside its levels, levels are never empty, and each key normalizes
-/// with `databricks_model_key`. A normalized-key collision keeps the
+/// inside its levels, and each key normalizes with `databricks_model_key`.
+/// A row may name no levels only when it names no default: an empty row
+/// carrying a `default` fails as a default outside its levels.
+/// A normalized-key collision keeps the
 /// first row when both rows match and fails naming both file keys when
 /// they differ; a `gpt-5` or `gpt-5-*` key fails, as those rows keep the
 /// openai package's. A syntax error has no key to name, so it reports
@@ -487,11 +489,6 @@ fn parse_thinking_overlay(source: &str, text: &str) -> Result<Vec<OverlayRow>, S
                 ));
             };
             kept.push(canonical);
-        }
-        if kept.is_empty() {
-            return Err(format!(
-                "databricks thinking overlay: `{raw}` names no levels"
-            ));
         }
         let default = match row.get("default") {
             None | Some(Value::Null) => None,
