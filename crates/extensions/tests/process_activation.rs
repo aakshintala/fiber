@@ -857,8 +857,30 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     );
     assert_eq!(ack("model-ack.json")["kind"], "command_rejected");
     assert_eq!(ack("model-ack.json")["payload"]["code"], "closing");
-    assert_eq!(ack("delegate-ack.json")["kind"], "command_rejected");
-    assert_eq!(ack("delegate-ack.json")["payload"]["code"], "closing");
+    assert_eq!(ack("delegate-one.json")["kind"], "command_rejected");
+    assert_eq!(ack("delegate-one.json")["payload"]["code"], "closing");
+    assert_eq!(ack("delegate-two.json")["kind"], "command_rejected");
+    assert_eq!(ack("delegate-two.json")["payload"]["code"], "closing");
+
+    let drain = notice_envelope("s_proc", 1, "after-seal");
+    let Ok(Some(drain_event)) = Event::from_envelope(&drain) else {
+        panic!("the drain notice parses");
+    };
+    session.deliver_event(&drain_event, &drain);
+    let watcher_delegate = read_json_file(&markers.join("watch-delegate.json"), "watch delegate");
+    assert_eq!(watcher_delegate["kind"], "command_rejected");
+    assert_eq!(watcher_delegate["payload"]["code"], "invalid_arguments");
+    assert_eq!(
+        watcher_delegate["payload"]["message"],
+        "host.delegate: not available here"
+    );
+    let watcher_tool = read_json_file(&markers.join("watch-tool.json"), "watch tool");
+    assert_eq!(watcher_tool["kind"], "command_rejected");
+    assert_eq!(watcher_tool["payload"]["code"], "invalid_arguments");
+    assert_eq!(
+        watcher_tool["payload"]["message"],
+        "host.tool: called outside a running tool call"
+    );
 
     session.finish_processes(&CancelToken::new());
 }
@@ -891,6 +913,20 @@ fn delegate_pair_plan(markers: &Path) -> Value {
         &marker("delegate-two.json"),
     ));
     callback.push(json!({"send": {"id": "a-probe", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "probe-done"}}}));
+    let mut watcher = Vec::new();
+    watcher.extend(probe(
+        "watch-delegate-call",
+        "host.delegate",
+        json!([{"description": "watcher", "prompt": "watcher"}, {"timeout": 1000, "run": true}]),
+        &marker("watch-delegate.json"),
+    ));
+    watcher.extend(probe(
+        "watch-tool-call",
+        "host.tool",
+        json!(["inner", {}]),
+        &marker("watch-tool.json"),
+    ));
+    watcher.push(json!({"send": {"id": "a-watcher", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}}));
     let route = |name: &str| {
         json!([
             {"write_file": {"path": marker(name), "value": {"$ref": "req"}}},
@@ -906,6 +942,7 @@ fn delegate_pair_plan(markers: &Path) -> Value {
                 ], "else": [
                     {"if": {"path": "req.payload.registration", "equals": "delegate-call-one", "then": route("delegate-call-one.json"), "else": [
                         {"if": {"path": "req.payload.registration", "equals": "delegate-call-two", "then": route("delegate-call-two.json")}}
+                    ,{"if": {"path": "req.payload.registration", "equals": "w1", "then": watcher}}
                     ]}}
                 ]}}
             ]}}
@@ -919,6 +956,12 @@ fn delegate_pair_plan(markers: &Path) -> Value {
         plan.push(action.clone());
     }
     for action in register("fiber.tool", "t_inner", json!(["inner", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    for action in register("fiber.watch", "w1", json!([["notice"], watcher_spec()]))
         .as_array()
         .unwrap()
     {
