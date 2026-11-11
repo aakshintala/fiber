@@ -1403,10 +1403,35 @@ fn thinking_overlay_rejects_a_default_outside_its_levels() {
 }
 
 #[test]
-fn thinking_overlay_rejects_empty_levels() {
-    match parse_thinking_overlay("overlay.json", r#"{"m": {"levels": []}}"#) {
-        Err(error) => assert_eq!(error, "databricks thinking overlay: `m` names no levels"),
-        Ok(_) => panic!("overlay with empty levels unexpectedly succeeded"),
+fn thinking_overlay_accepts_empty_levels() {
+    // An overlay row may be explicitly empty: the model takes no levels,
+    // and the empty row still wins its match key over a vendor row.
+    let overlay = parse_thinking_overlay("overlay.json", r#"{"m": {"levels": []}}"#).unwrap();
+    assert_eq!(overlay.len(), 1);
+    assert_eq!(overlay[0].key, "m");
+    assert!(overlay[0].levels.is_empty());
+    assert!(overlay[0].default.is_none());
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low"], None)];
+    let output = merge_databricks_thinking(std::slice::from_ref(&vendor), &overlay).unwrap();
+    assert_eq!(output.models, 1);
+    assert!(
+        output.text.contains("  [\"m\"] = { levels = {  } },\n"),
+        "{}",
+        output.text
+    );
+}
+
+#[test]
+fn thinking_overlay_rejects_an_empty_row_with_a_default() {
+    // An explicitly empty row carrying a `default` fails: the default
+    // sits outside its (empty) levels.
+    match parse_thinking_overlay("overlay.json", r#"{"m": {"levels": [], "default": "low"}}"#) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names default `low` outside its levels"
+        ),
+        Ok(_) => panic!("overlay with an empty row carrying a default unexpectedly succeeded"),
     };
 }
 
