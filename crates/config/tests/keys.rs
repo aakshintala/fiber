@@ -184,6 +184,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
+            &["model_lists", "models_dev"],
+            json!(false),
+            json!("yes"),
+            BOOL,
+            false,
+        ),
+        (
             &["providers", "acme", "reviewer_model"],
             json!("fast-1"),
             json!(5),
@@ -559,7 +566,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
             "cache": {"lifetime": "1h", "warm_cap": 2, "warm_idle": false, "diagnostics": false},
             "diagnostics": {"level": "info"},
             "compaction": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
-            "model_lists": {"refresh_after": "24h"},
+            "model_lists": {"refresh_after": "24h", "models_dev": true},
             "quota": {"notice_at": 80},
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
@@ -671,6 +678,14 @@ fn parse_duration_pins_exact_seconds_for_every_unit() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn models_dev_defaults_to_enabled_and_can_be_disabled() {
+    let setup = Setup::new();
+    assert!(config::models_dev_enabled(&setup.load(&[]).unwrap()));
+    setup.write(&setup.global(), r#"{"model_lists":{"models_dev":false}}"#);
+    assert!(!config::models_dev_enabled(&setup.load(&[]).unwrap()));
 }
 
 #[test]
