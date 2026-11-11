@@ -2186,6 +2186,316 @@ fn home_arrows_focus_the_list_and_entry_bar() {
     );
 }
 
+/// Two live rows in the launch project and one live row in "other".
+fn two_projects(app: &mut App) {
+    linked(app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_cccccccccccccccc",
+        "other work",
+        "/o",
+        "other",
+        json!({"state": "idle"}),
+    ));
+}
+
+/// Focuses the home row of `session`.
+fn focus_session(app: &mut App, session: &str) {
+    let key = row_key(app, session);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+}
+
+#[test]
+fn shift_down_from_a_projects_middle_row_lands_on_the_next_projects_first_row() {
+    let mut app = home_with(80, 24, launch());
+    two_projects(&mut app);
+    drawn(&mut app);
+    focus_session(&mut app, "s_bbbbbbbbbbbbbbbb");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+}
+
+#[test]
+fn shift_keys_hold_at_the_first_and_last_project() {
+    let mut app = home_with(80, 24, launch());
+    two_projects(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+    focus_session(&mut app, "s_cccccccccccccccc");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+}
+
+#[test]
+fn shift_keys_keep_focus_with_one_project() {
+    let mut app = home_with(80, 24, launch());
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+}
+
+#[test]
+fn shift_down_lands_on_the_first_exited_row_with_no_live_rows() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    drawn(&mut app);
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+}
+
+#[test]
+fn shift_down_expands_a_more_collapsed_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [
+                exited_in("s_dddddddddddddddd", "second old", "/o", "other"),
+                exited_in("s_eeeeeeeeeeeeeeee", "third old", "/o", "other"),
+                exited_in("s_ffffffffffffffff", "fourth old", "/o", "other"),
+            ], "total": 4}),
+        ))
+        .is_empty()
+    );
+    drawn(&mut app);
+    let stops = app.all_list_stops();
+    assert!(
+        stops.iter().any(|stop| matches!(stop, Spot::More(_))),
+        "{stops:?}"
+    );
+    assert!(
+        !stops.contains(&Spot::Entry(row_key(&app, "s_ffffffffffffffff"))),
+        "{stops:?}"
+    );
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert!(
+        app.all_list_stops()
+            .contains(&Spot::Entry(row_key(&app, "s_cccccccccccccccc"))),
+    );
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert!(
+        app.all_list_stops()
+            .contains(&Spot::Entry(row_key(&app, "s_ffffffffffffffff"))),
+    );
+}
+
+#[test]
+fn shift_down_opens_an_archived_only_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    let archived = fanout
+        .iter()
+        .find(|line| is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's archived ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "filed work", "/o", "other")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(!app.home.sessions.is_archived_open("other"));
+    drawn(&mut app);
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert!(app.home.sessions.is_archived_open("other"));
+}
+
+#[test]
+fn shift_down_with_a_home_question_open_keeps_the_question() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    // The Delete key arrives as the delete edit and asks: Backspace
+    // archives a focused exited row at once, so it opens no question.
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    let before = question(&app);
+    assert!(before.contains("Delete old work"), "{before}");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert_eq!(question(&app), before);
+}
+
+#[test]
+fn shift_down_from_the_entry_bar_routes_on() {
+    let mut app = home_with(80, 24, launch());
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
 #[test]
 fn up_on_a_home_with_nothing_open_focuses_the_last_row_and_esc_drops_it() {
     let mut app = home_with(80, 24, launch());
@@ -3499,7 +3809,7 @@ fn the_foot_names_the_key_maps_bound_key() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3511,7 +3821,7 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -3523,7 +3833,7 @@ fn x_with_the_link_down_sends_nothing() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3664,7 +3974,7 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3715,7 +4025,7 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     assert!(!app.quit_open());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     assert!(app.input().expand().is_empty());
 }
@@ -3746,7 +4056,7 @@ fn esc_sends_nothing() {
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4067,7 +4377,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4204,7 +4514,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     // The notice carries the refusal's own code, not a default.
     assert!(app.notices().iter().any(|line| matches!(
@@ -4272,7 +4582,7 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4387,7 +4697,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4410,7 +4720,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5108,7 +5418,7 @@ fn the_foot_names_the_default_keys() {
     let app = home_with(80, 24, launch());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5127,7 +5437,19 @@ fn the_foot_bolds_each_key_and_dims_the_rest() {
         })
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(bold, ["Enter", "↑↓", "Delete", "Backspace", "F1", "Ctrl+C"]);
+    assert_eq!(
+        bold,
+        [
+            "Enter",
+            "↑↓",
+            "Shift+↑↓",
+            "Delete",
+            "Backspace",
+            "F1",
+            "Ctrl+C"
+        ]
+    );
+
     for span in &screen.foot.spans {
         if bold.contains(&span.content.to_string()) {
             assert!(
@@ -5169,7 +5491,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · x stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
     let screen = app.home_screen().expect("home draws");
     let bold: Vec<String> = screen
@@ -5183,7 +5505,10 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
         })
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(bold, ["Ctrl+O", "↑↓", "x", "Backspace", "F2", "Ctrl+C"]);
+    assert_eq!(
+        bold,
+        ["Ctrl+O", "↑↓", "Shift+↑↓", "x", "Backspace", "F2", "Ctrl+C"]
+    );
 }
 
 #[test]
@@ -5194,7 +5519,7 @@ fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · F7 stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5206,7 +5531,7 @@ fn the_foot_leaves_open_focused_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5218,7 +5543,7 @@ fn the_foot_leaves_delete_session_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5230,7 +5555,7 @@ fn the_foot_leaves_archive_session_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5243,7 +5568,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
+        "↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
@@ -5251,7 +5576,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Backspace archives an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Backspace archives an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("open_focused".to_owned(), json!([]));
@@ -5259,7 +5584,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Shift+↑↓ project · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("delete_session".to_owned(), json!([]));
@@ -5267,7 +5592,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5277,10 +5602,35 @@ fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     user.insert("open_focused".to_owned(), json!([]));
+    user.insert("focus_project".to_owned(), json!([]));
     user.insert("delete_session".to_owned(), json!([]));
     user.insert("archive_session".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(foot(&app), "↑↓ move · Ctrl+C twice to quit");
+}
+
+#[test]
+fn the_foot_leaves_focus_project_out_when_unbound() {
+    let mut app = home_with(80, 24, launch());
+    let mut user = serde_json::Map::new();
+    user.insert("focus_project".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_keeps_the_project_wording_on_rebound_keys() {
+    let mut app = home_with(80, 24, launch());
+    let mut user = serde_json::Map::new();
+    user.insert("focus_project".to_owned(), json!(["f9", "f10"]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
 }
 
 #[test]
@@ -5328,7 +5678,7 @@ fn the_foot_names_the_back_key_after_home_from_a_live_session() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → or Esc back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5342,7 +5692,7 @@ fn the_foot_names_the_rebound_back_key() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → or F5 back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5356,7 +5706,7 @@ fn the_foot_leaves_the_back_key_out_when_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5371,7 +5721,7 @@ fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -5407,7 +5757,7 @@ fn opening_a_row_then_closing_names_no_back_key() {
     assert!(app.on_home());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 

@@ -169,6 +169,7 @@ fn typing_narrows_the_rows_to_the_query() {
             "delete_session",
             "archive_session",
             "recall_prompt",
+            "focus_project",
             "next_request",
             "session_only"
         ]

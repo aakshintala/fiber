@@ -135,6 +135,7 @@ fn each_area_tab_shows_exactly_its_bindings_in_table_order() {
                 "toggle_ledgers",
                 "navigate",
                 "focus_next_prev",
+                "focus_project",
                 "open_focused",
                 "copy_focused",
                 "focus_area",

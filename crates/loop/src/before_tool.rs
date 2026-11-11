@@ -310,7 +310,9 @@ impl Loop {
 
 /// `Ready` for `prepared`: the recorded `request_id` and step kind, with
 /// `declared` and any rule offer rebuilt from the prepared call, so the
-/// person judges the call that will run.
+/// person judges the call that will run. The rebuilt request carries the
+/// prepared call's rewrite, so a resumed approval shows the resume's
+/// arguments.
 fn ready(prepared: Prepared, recorded: &PermissionRequested, state: Vec<StateLine>) -> Again {
     let step = match &recorded.step {
         AskStep::StandingAsk { standing_rule } => AskStep::StandingAsk {
@@ -321,11 +323,14 @@ fn ready(prepared: Prepared, recorded: &PermissionRequested, state: Vec<StateLin
             rule: crate::reviewer::rule_offer(&prepared.effects),
         },
     };
+    let (arguments, changed_by) = prepared.rewrite();
     let request = PermissionRequested {
         always_reviewed: prepared.effects.always_reviewed,
         request_id: recorded.request_id.clone(),
         declared: prepared.effects.declared.clone(),
         step,
+        arguments,
+        changed_by,
     };
     Again::Ready(prepared, request, state)
 }

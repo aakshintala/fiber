@@ -36,6 +36,8 @@ pub(super) fn encode(key: &Key) -> Option<String> {
         Key::AltA => "\x1ba".to_owned(),
         Key::AltUp => "\x1b[1;3A".to_owned(),
         Key::AltDown => "\x1b[1;3B".to_owned(),
+        Key::ShiftUp => "\x1b[1;2A".to_owned(),
+        Key::ShiftDown => "\x1b[1;2B".to_owned(),
         Key::AltX => "\x1bx".to_owned(),
         Key::AltP => "\x1bp".to_owned(),
         Key::AltR => "\x1br".to_owned(),

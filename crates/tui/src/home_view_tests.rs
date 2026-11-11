@@ -1459,21 +1459,31 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
 #[test]
 fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     use ratatui::style::Modifier;
-    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit";
+    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit";
     // Wide: the whole foot fits, centred, each key bold and the rest dim.
-    // The foot outgrew 160 columns with the archive part, so the
-    // fits case renders wider.
-    let app = home(200, 48);
-    let area = Rect::new(0, 0, 200, 48);
+    // The foot outgrew 160 columns with the archive part, then 200
+    // columns with the project part beside it, so the fits case renders
+    // wider still.
+
+    let app = home(220, 48);
+    let area = Rect::new(0, 0, 220, 48);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let frame = text(&buf);
     let row = frame.lines().nth(47).expect("foot row");
     assert!(row.contains(foot), "{row}");
     let start = row.find("Enter").expect("foot starts");
-    assert_eq!(start, (200 - crate::format::width(foot)) / 2);
+    assert_eq!(start, (220 - crate::format::width(foot)) / 2);
     let y = 47u16;
-    for key in ["Enter", "↑↓", "Delete", "Backspace", "F1", "Ctrl+C"] {
+    for key in [
+        "Enter",
+        "↑↓",
+        "Shift+↑↓",
+        "Delete",
+        "Backspace",
+        "F1",
+        "Ctrl+C",
+    ] {
         let at = row.find(key).unwrap_or_else(|| panic!("{key} shows"));
         let x = u16::try_from(row[..at].chars().count()).expect("foot x");
         for dx in 0..key.chars().count() {
@@ -4916,6 +4926,88 @@ fn home_logo_rect_values() {
     keys.set_graphics();
     keys.open_keys();
     assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
+}
+
+/// The focused home entry's row name.
+fn focused_name(app: &App) -> String {
+    let Some(crate::mouse::TargetId::Home(Spot::Entry(key))) = app.focused() else {
+        panic!("a focused row, got {:?}", app.focused())
+    };
+    app.home_screen()
+        .expect("home draws")
+        .list
+        .into_iter()
+        .find_map(|line| match line {
+            ListLine::Live { key: row, name, .. } if row == key => Some(name),
+            ListLine::Exited { key: row, name, .. } if row == key => Some(name),
+            ListLine::Live { .. }
+            | ListLine::Exited { .. }
+            | ListLine::Head { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::More { .. }
+            | ListLine::ArchivedHead { .. } => None,
+        })
+        .unwrap_or_else(|| panic!("row {key}"))
+}
+
+/// Draws `app` at 160x48 so list focus applies.
+fn draw_160x48(app: &mut App) {
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    app.drawn(&targets);
+}
+
+#[test]
+fn shift_arrows_jump_between_projects_first_rows() {
+    let mut app = home(160, 48);
+    app.on_line(hello());
+    // Three projects: two live rows in the launch project, one live
+    // row in each of the other two, in feed order.
+    for (id, name, project, workspace) in [
+        ("s_aaaaaaaaaaaaaaaa", "first work", "-w", "/w"),
+        ("s_bbbbbbbbbbbbbbbb", "second work", "-w", "/w"),
+        ("s_cccccccccccccccc", "other work", "other", "/o"),
+        ("s_dddddddddddddddd", "third work", "third", "/t"),
+    ] {
+        let mut state = live();
+        state["project"] = serde_json::json!(project);
+        state["workspace"] = serde_json::json!(workspace);
+        app.on_line(status(id, name, state));
+    }
+    draw_160x48(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    // Up from the entry bar to the middle of the first project.
+    for key in [Key::Up, Key::Up, Key::Up] {
+        assert_eq!(app.on_key(key, now), Effect::None);
+    }
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "second work");
+    // Shift+↓ lands on the second project's first row.
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "other work");
+    // Shift+↑ returns to the first project's first row.
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "first work");
+    // No wrap past the first project.
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "first work");
+    // Down to the last row, then no wrap past the last project.
+    for key in [Key::Down, Key::Down, Key::Down] {
+        assert_eq!(app.on_key(key, now), Effect::None);
+    }
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "third work");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "third work");
 }
 
 #[test]

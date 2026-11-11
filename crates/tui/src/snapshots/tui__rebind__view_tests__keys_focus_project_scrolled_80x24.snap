@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/rebind_view_tests.rs
+expression: frame
+---
+ Keys  /keys                                                         Esc returns
+  ↑                recall_prompt        Recall an earlier prompt from the
+                                        project of the session on screen
+  ←                focus_rail           Move focus from an empty input box into
+                                        the rail
+  Ctrl+R           search_prompts       Search those prompts
+  ⌥← ⌥→, Ctrl+←    move_word            Move by word
+  Ctrl+→, ⌥B ⌥F
+  ⌥Backspace,      delete_word          Delete a word
+  Ctrl+Backspace,
+  Ctrl+W
+  Ctrl+U           delete_to_line_start Delete to the start of the line
+  Ctrl+A Ctrl+E,   line_start_end       Start or end of the line
+  ⌘← ⌘→
+  Ctrl+G           open_in_editor       Open the draft, or a pasted token, in
+                                        $VISUAL or $EDITOR
+  Ctrl+V           paste_image          Paste an image
+  Ctrl+O           toggle_ledgers       Open or close the ledgers
+  Shift+Tab        navigate             Move focus from the input box into the
+                                        conversation
+  ↓ ↑, j k         focus_next_prev      Move focus to the next or previous item
+› Shift+↓ Shift+↑  focus_project        Move to the first row of the next or
+                                        previous project in the session list
+↑↓ move · Enter rebind · r reset · Delete unbind · Esc close

@@ -349,6 +349,18 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         area: "The conversation",
+        id: "focus_project",
+        when: "",
+        description: "Move to the first row of the next or previous project in the session list",
+        keys: "Shift+↓ Shift+↑",
+        other_paths: "click a row",
+        contexts: Contexts::CONVERSATION,
+        defaults: &["shift+down", "shift+up"],
+        events: &[Canon::Key(Key::ShiftDown), Canon::Key(Key::ShiftUp)],
+        default_events: &[Canon::Key(Key::ShiftDown), Canon::Key(Key::ShiftUp)],
+    },
+    Binding {
+        area: "The conversation",
         id: "open_focused",
         when: "",
         description: "Open the focused item",

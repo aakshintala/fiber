@@ -57,6 +57,8 @@ impl App {
             | Key::CtrlC
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR

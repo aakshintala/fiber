@@ -882,13 +882,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The watcher starts before `run`, and is the only reader from the
     // first frame to end of file.
-    let frames = watch(
-        &pair.main,
-        vec![
-            b"refused" as &[u8],
-            b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter" as &[u8],
-        ],
-    );
+    // The resized foot hint's pen, selected by the same depth production
+    // paints with: the dark page is the panel tint, the terminal default
+    // without colour (`docs/tui.md`, "Themes").
+    let foot_marker: &'static [u8] = match crate::look::depth(&|name| std::env::var(name).ok()) {
+        crate::look::Depth::NoColour => b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter",
+        crate::look::Depth::Ansi256 => b"\x1b[10;1H\x1b[1m\x1b[39;48;5;233mEnter",
+        crate::look::Depth::True => b"\x1b[10;1H\x1b[1m\x1b[39;48;2;12;12;17mEnter",
+    };
+    let frames = watch(&pair.main, vec![b"refused" as &[u8], foot_marker]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -932,7 +934,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     let wait = Deadline::after(DEADLINE);
     let foot = watched(&frames, "the foot hint on row 10", &wait);
     assert!(
-        foot.ends_with(b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter"),
+        foot.ends_with(foot_marker),
         "the foot starts with its cursor move, bold and first word: {foot:?}"
     );
     pair.main
@@ -2419,6 +2421,20 @@ const START: &[u8] =
 const RESTORE: &[u8] =
     b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
+/// Runs the terminal on a pty from `started`, for a launch carrying the
+/// person's `keys`: the pty pair, the exit code once it quits, and the
+/// watched pty chunks. The pty is 220 columns wide so the whole foot
+/// hint shows, naming the rebound key: the merged foot outgrew 200
+/// columns with the project and archive parts beside each other.
+#[track_caller]
+fn spawn_run_with_launch(
+    hub: UnixStream,
+    markers: Vec<&'static [u8]>,
+    started: super::Launch,
+) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
+    spawn_run_with_launch_at_height(hub, markers, started, 220, 12)
+}
+
 /// Runs the terminal at a height that leaves its home rows visible.
 #[track_caller]
 fn spawn_run_with_launch_at_height(
@@ -2464,8 +2480,7 @@ fn run_home_names_the_key_maps_bound_key() {
     let mut started = launch();
     started.keys = crate::KeysSetup { user: keys };
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (mut pair, finished, frames) =
-        spawn_run_with_launch_at_height(hub, vec![b"quit" as &[u8]], started, 200, 12);
+    let (mut pair, finished, frames) = spawn_run_with_launch(hub, vec![b"quit" as &[u8]], started);
     let first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     assert!(
         first.starts_with(START),

@@ -295,6 +295,9 @@ struct StreamedCall {
     id: String,
     name: String,
     arguments: String,
+    /// The call's `extra_content`, verbatim as the last delta carrying one
+    /// sent it: a gateway serving Gemini nests its thought signature there.
+    extra_content: Option<Value>,
 }
 
 /// What a reply has produced so far.
@@ -493,6 +496,12 @@ impl Decoder {
                 text: piece.to_owned(),
             }));
         }
+        // The call's `extra_content` rides beside its function; the last
+        // delta carrying one wins, kept verbatim for the carrier `finish`
+        // emits.
+        if let Some(extra) = call.get("extra_content") {
+            slot.extra_content = Some(extra.clone());
+        }
     }
 
     /// The reply, once `[DONE]` has arrived.
@@ -552,16 +561,27 @@ impl Decoder {
         }
         let mut calls: Vec<StreamedCall> = self.calls.into_values().collect();
         calls.sort_by_key(|c| c.position);
-        actions.extend(calls.into_iter().map(|call| {
+        actions.extend(calls.into_iter().flat_map(|call| {
+            // A call that carried `extra_content` is preceded by its
+            // carrier: an empty-text `Reasoning` holding the verbatim value,
+            // the way the native path keeps a call's signature
+            // (`google_generative_ai_decode.rs`).
+            let carrier = call.extra_content.map(|extra| {
+                ReplyAction::Reasoning(ReasoningCompleted {
+                    text: String::new(),
+                    provider_item: Some(json!({"extra_content": extra})),
+                })
+            });
             let arguments = args_value(call.arguments);
-            ReplyAction::ToolCall(ToolCallRequested {
+            let tool_call = ReplyAction::ToolCall(ToolCallRequested {
                 name: call.name,
                 arguments,
                 provider_id: Some(ProviderCallId(call.id)).filter(|id| !id.0.is_empty()),
                 repair: None,
                 ran_by: None,
                 provider_item: None,
-            })
+            });
+            carrier.into_iter().chain([tool_call])
         }));
         Ok(Reply {
             actions,

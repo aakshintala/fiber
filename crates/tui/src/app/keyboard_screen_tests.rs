@@ -218,7 +218,7 @@ fn reset_saves_no_entry_for_the_defaults() {
     let mut app = homed(Arc::clone(&fake));
     keyed(&mut app, &[("copy_focused", json!(["c"]))]);
     slash_keys(&mut app);
-    down(&mut app, 23);
+    down(&mut app, 24);
     assert_eq!(tap(&mut app, "r"), Effect::None);
     assert_eq!(
         fake.keys_saved(),
