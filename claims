@@ -300,3 +300,8 @@ crates/main/tests/screens/terminal.rs	fiber-4599	plan	2026-11-11T06:59:50Z	round
 crates/main/tests/screens/pty_sync_output.rs	fiber-4599	plan	2026-11-11T06:59:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/stream_closed_notice.rs	fiber-4599	plan	2026-11-11T06:59:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/tui.md	fiber-4599	plan	2026-11-11T06:59:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/home/prompt/snapshots	fiber-4599	plan	2026-11-11T07:02:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/snapshots	fiber-4599	plan	2026-11-11T07:02:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots	fiber-4599	plan	2026-11-11T07:02:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/snapshots	fiber-4599	plan	2026-11-11T07:02:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/screens/snapshots	fiber-4599	plan	2026-11-11T07:02:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
