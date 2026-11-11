@@ -317,3 +317,4 @@ crates/extensions/src/process/context.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Am
 crates/extensions/src/process/context/native.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4635	plan	2026-11-11T20:18:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/configuration.md	fiber-4635	plan	2026-11-11T20:18:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/login.rs	fiber-4644	grant	2026-11-11T20:19:12Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4644	
