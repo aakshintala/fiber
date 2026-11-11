@@ -13,7 +13,7 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers,
+    as_typed, layers, shown_value,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -371,7 +371,7 @@ fn the_view_opens_on_appearance_with_the_autosave_line_and_tab_bar() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30  project
+|  Rail width    30% of screen width  project
 |
 |  Theme         Default
 |
@@ -405,7 +405,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30  project
+|  Rail width    30% of screen width  project
 |
 |  Theme         Default
 |
@@ -463,7 +463,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Default model       a/b ›
 |
-|  Model list refresh  24h
+|  Model list refresh  24 h
 |
 |  Scoped models       a/b, c/d ›
 |
@@ -519,7 +519,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 | Appearance   Notifications   Models   Permissions   Sessions   Advanced
 |
-|› Compaction tokens      400000
+|› Compaction tokens      400k tokens
 |
 |  Repository extensions  none ›
 |
@@ -673,7 +673,7 @@ fn a_models_tab_pins_each_cell_style_by_meaning() {
     let value = cell_at(at_in(focused, "a/b"), focused);
     assert_eq!(value.fg, Role::Info.color());
     assert!(value.modifier.contains(Modifier::BOLD), "value not bold");
-    let plain_value = cell_at(at_in(plain_row, "24h"), plain_row);
+    let plain_value = cell_at(at_in(plain_row, "24 h"), plain_row);
     assert_eq!(plain_value.fg, Role::Info.color());
     assert!(
         !plain_value.modifier.contains(Modifier::BOLD),
@@ -1793,7 +1793,7 @@ fn a_refused_reset_says_why_and_leaves_the_row() {
     assert_eq!(settings.said, ["changed meanwhile"]);
     assert_eq!(
         row_of(&screen(&settings), "Rail width"),
-        "› Rail width 30 project"
+        "› Rail width 30% of screen width project"
     );
 }
 
@@ -2629,7 +2629,7 @@ fn choosing_a_theme_writes_the_global_tui_theme_queues_it_and_returns_to_the_tab
 |
 |  Hover         [x] On
 |
-|  Rail width    30  project
+|  Rail width    30% of screen width  project
 |
 |› Theme         Default
 |
@@ -2953,6 +2953,89 @@ fn the_lines_under_the_list_leave_the_controls_their_rows() {
     let layout = said_layout(12, 12);
     assert_eq!(layout.below.len(), 5);
     assert_eq!(layout.body, 3);
+}
+
+/// Every number row shows its unit in its row text, word for word as
+/// the `/settings` tables spell it; a file value outside a list reads
+/// with "(custom)" after it (`docs/tui.md`, `/settings`, "Controls").
+#[test]
+fn a_number_row_shows_its_unit_in_row_text() {
+    use SettingControl::{Number, Text};
+    let text = |key: &str, control: SettingControl, json: &str| {
+        let row = on(
+            SettingsTab::Advanced,
+            "label",
+            key,
+            value(json),
+            "default",
+            ANY,
+            control,
+        );
+        shown_value(&row).0
+    };
+    let number = |key: &str, json: &str| text(key, Number, json);
+    // Sliders: any value shows plain with its unit.
+    assert_eq!(number("tui.rail.width", "15"), "15% of screen width");
+    assert_eq!(number("tui.panel.width", "21"), "21% of screen width");
+    assert_eq!(number("quota.notice_at", "80"), "80% used");
+    assert_eq!(
+        number("compaction.window_fraction", "70"),
+        "70% of the context window"
+    );
+    assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
+    assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
+    assert_eq!(number("cache.warm_cap", "0"), "0 cache lifetimes");
+    assert_eq!(number("retry.attempts", "3"), "3 retries");
+    assert_eq!(number("retry.attempts", "1"), "1 retry");
+    // Token counts.
+    assert_eq!(number("compaction.tokens", "400000"), "400k tokens");
+    assert_eq!(number("compaction.tokens", "1000000"), "1M tokens");
+    assert_eq!(
+        number("compaction.tokens", "300000"),
+        "300k tokens (custom)"
+    );
+    assert_eq!(number("compaction.tokens", "1000"), "1k tokens (custom)");
+    assert_eq!(number("compaction.tokens", "999"), "999 tokens (custom)");
+    assert_eq!(number("compaction.tokens", "0"), "0 tokens (custom)");
+    // Dollars: zero reads "No limit".
+    assert_eq!(number("budget.usd", "10"), "$10");
+    assert_eq!(number("budget.usd", "0"), "No limit");
+    assert_eq!(number("budget.usd", "7"), "$7 (custom)");
+    assert_eq!(number("budget.usd", "10.5"), "$10.5 (custom)");
+    // Block counts, singular against plural.
+    assert_eq!(number("reviewer.block_limits.consecutive", "2"), "2 blocks");
+    assert_eq!(number("reviewer.block_limits.consecutive", "1"), "1 block");
+    assert_eq!(
+        number("reviewer.block_limits.consecutive", "4"),
+        "4 blocks (custom)"
+    );
+    assert_eq!(number("reviewer.block_limits.session", "20"), "20 blocks");
+    // Millisecond delays: half seconds, whole seconds, minutes, hours.
+    assert_eq!(number("retry.initial_delay_ms", "500"), "0.5 s");
+    assert_eq!(number("retry.initial_delay_ms", "1000"), "1 s");
+    assert_eq!(number("retry.initial_delay_ms", "999"), "0.999 s (custom)");
+    assert_eq!(number("retry.initial_delay_ms", "1500"), "1.5 s (custom)");
+    assert_eq!(number("retry.max_delay_ms", "10000"), "10 s");
+    assert_eq!(number("retry.max_delay_ms", "60000"), "1 min");
+    assert_eq!(number("retry.max_delay_ms", "300000"), "5 min");
+    assert_eq!(number("hub.idle_exit_ms", "300000"), "5 min");
+    assert_eq!(number("hub.idle_exit_ms", "1800000"), "30 min");
+    assert_eq!(number("session.idle_exit_ms", "3600000"), "1 h");
+    assert_eq!(number("session.idle_exit_ms", "7200000"), "2 h");
+    assert_eq!(number("hub.idle_exit_ms", "3540000"), "59 min (custom)");
+    assert_eq!(number("hub.idle_exit_ms", "86400000"), "24 h (custom)");
+    assert_eq!(number("retry.max_delay_ms", "0"), "0 min (custom)");
+    // Durations keep their unit word; off-list values read custom.
+    assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
+    assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
+    assert_eq!(
+        text("model_lists.refresh_after", Text, "\"90m\""),
+        "90 min (custom)"
+    );
+    assert_eq!(text("model_lists.refresh_after", Text, "\"soon\""), "soon");
+    // Anything else keeps its raw text with no unit.
+    assert_eq!(number("hub.port", "8080"), "8080");
+    assert_eq!(number("tui.rail.width", "\"wide\""), "wide");
 }
 
 #[test]
@@ -3537,7 +3620,7 @@ fn settings_search_escape_keeps_the_match_in_its_tab_and_closes_next() {
 |
 |  Hover          [x] On                                               Appearance
 |
-|  Rail width     30  project                                          Appearance
+|  Rail width     30% of screen width  project                         Appearance
 |
 |  Theme          Default                                              Appearance
 |
