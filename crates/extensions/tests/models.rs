@@ -773,6 +773,64 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
 }
 
 #[test]
+fn a_warm_cache_names_an_invalid_model_once() {
+    let setup = Setup::new();
+    // A data-file provider under a warm cache: the cached list stands
+    // in for the data file's at load and again in `add_lua`.
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["a"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    // One single-reason invalid model: no `context_window` draws one
+    // `model_invalid` notice, never two.
+    write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "bad", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let load_invalid: Vec<_> = load_notices
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+        .collect();
+    // The same cached list feeds admission in `add_lua`: the cache
+    // serves, so the Lua body never runs.
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    let lua_notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let lua_invalid: Vec<_> = lua_notices
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+        .collect();
+    assert_eq!(
+        load_invalid.len() + lua_invalid.len(),
+        1,
+        "one `model_invalid` per reason across load and `add_lua`: \
+         load {load_notices:?}, `add_lua` {lua_notices:?}"
+    );
+    assert!(load_invalid.is_empty(), "{load_notices:?}");
+    assert_eq!(lua_invalid.len(), 1, "{lua_notices:?}");
+    assert_eq!(lua_invalid[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(
+        lua_invalid[0].message,
+        "The model `acme/bad` declares no `context_window`."
+    );
+}
+
+#[test]
 fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     let list = json!([
         {"id": "bad", "protocol": "anthropic-messages",
