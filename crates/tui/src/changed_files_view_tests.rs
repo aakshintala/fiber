@@ -60,7 +60,7 @@ fn row(frame: &crate::swapped::Frame, at: usize) -> String {
 /// empty no-diff set and no local root: what the view shows before the
 /// numstat answer.
 fn list_frame(changes: &BTreeMap<String, (u64, u64)>, list: List) -> crate::swapped::Frame {
-    frame(changes, None, None, list, &BTreeSet::new(), None, None)
+    frame(changes, None, None, list, &BTreeSet::new(), None, None, 0)
 }
 
 /// The grouped list frame over `resolved` figures with the card's
@@ -78,6 +78,7 @@ fn resolved_frame(
         &BTreeSet::new(),
         None,
         None,
+        0,
     )
 }
 
@@ -120,20 +121,29 @@ fn app_with_files() -> App {
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
         panic!("opening the list sends its queries");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query plus the
-    // one tracking query, run when the view opens, in that order.
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
     assert_eq!(lines.len(), 2);
-    let request: serde_json::Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        numstat_command(&["src/a.rs", "src/b.rs"]),
+        tracking_command(&["src/a.rs", "src/b.rs"]),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        numstat_command(&["src/a.rs", "src/b.rs"])
-    );
-    let tracking: serde_json::Value = serde_json::from_str(&lines[1])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    assert_eq!(
-        tracking["args"]["command"],
-        tracking_command(&["src/a.rs", "src/b.rs"])
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
     app
 }
@@ -174,6 +184,9 @@ fn files_group_by_folder_in_path_order_with_top_level_under_dot_slash() {
         ("delegate/src/c.rs", 4, 0),
         ("src/a.rs", 5, 0),
     ]);
+    // `docs/tui.md`, "Swapped views" Changed files Folders promises this
+    // order: each folder in path order with its files under it in name
+    // order, top-level files under "./".
     assert_eq!(
         list_rows(&card, None, None),
         [
@@ -217,6 +230,7 @@ fn displayed_paths_strip_the_workspace_root_but_mapping_keeps_the_card_path() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
     assert_eq!(row(&frame, 0), "src/");
     assert_eq!(row(&frame, 1), "    D  a.rs  +4 −2");
@@ -243,6 +257,7 @@ fn displayed_paths_fall_back_to_the_viewed_workspace_without_a_local_root() {
         &BTreeSet::new(),
         None,
         Some(dir.path()),
+        0,
     );
     // A remote terminal has no local root to stat, so the letter stays
     // changed while the name shows workspace-relative.
@@ -263,6 +278,7 @@ fn a_path_outside_every_root_shows_whole() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
     assert_eq!(row(&frame, 0), "/elsewhere/");
     assert_eq!(row(&frame, 1), "    D  f.rs  +2 −1");
@@ -349,12 +365,15 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
-    assert_eq!(row(&lettered, 1), "    D  gone.rs  +2 −0");
+    // "staged.rs" (9) is widest: the shorter names pad to share the
+    // figures column.
+    assert_eq!(row(&lettered, 1), "    D  gone.rs    +2 −0");
     assert_eq!(lettered.rows[1][1].2, Ink::Role(Role::Removed));
-    assert_eq!(row(&lettered, 2), "    M  kept.rs  +1 −0");
+    assert_eq!(row(&lettered, 2), "    M  kept.rs    +1 −0");
     assert_eq!(lettered.rows[2][1].2, Ink::Role(Role::Attention));
-    assert_eq!(row(&lettered, 3), "    A  new.rs  +3 −0");
+    assert_eq!(row(&lettered, 3), "    A  new.rs     +3 −0");
     assert_eq!(lettered.rows[3][1].2, Ink::Role(Role::Added));
     assert_eq!(row(&lettered, 4), "    A  staged.rs  +5 −0");
     assert_eq!(lettered.rows[4][1].2, Ink::Role(Role::Added));
@@ -369,8 +388,9 @@ fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
-    assert_eq!(row(&restored, 1), "    M  gone.rs  +2 −0");
+    assert_eq!(row(&restored, 1), "    M  gone.rs    +2 −0");
 }
 
 #[test]
@@ -384,6 +404,7 @@ fn a_missing_file_without_a_local_root_stays_changed() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(row(&frame, 1), "    M  gone.rs  +2 −0");
 }
@@ -395,7 +416,7 @@ fn the_focused_name_draws_bold_accent_with_an_accent_gutter_mark() {
     let card = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
     let mut list = List::gutter_accent();
     list.select(2, 4, 24);
-    let accented = frame(&card, None, None, list, &BTreeSet::new(), None, None);
+    let accented = frame(&card, None, None, list, &BTreeSet::new(), None, None, 0);
     // The unfocused file row keeps its heading name.
     assert_eq!(accented.rows[1][2].2, Ink::Heading);
     assert_eq!(accented.rows[2][2].2, Ink::Bold(Role::Accent));
@@ -407,7 +428,7 @@ fn the_focused_name_draws_bold_accent_with_an_accent_gutter_mark() {
     // A plain gutter list keeps the uncoloured mark on the same row.
     let mut plain = List::gutter();
     plain.select(2, 4, 24);
-    let unaccented = frame(&card, None, None, plain, &BTreeSet::new(), None, None);
+    let unaccented = frame(&card, None, None, plain, &BTreeSet::new(), None, None, 0);
     assert_eq!(unaccented.rows[2][2].2, Ink::Heading);
     let mut buf = Buffer::empty(area);
     crate::swapped::render(&unaccented, area, &mut buf, &mut Vec::new());
@@ -427,6 +448,7 @@ fn a_blurred_accent_list_draws_no_accent_name_or_mark() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(frame.rows[1][2].2, Ink::Heading);
     let area = Rect::new(0, 0, 40, 8);
@@ -479,6 +501,26 @@ fn totals_count_files_not_folders_and_the_rule_spans_the_content() {
 }
 
 #[test]
+fn file_rows_pad_names_to_share_the_figures_column() {
+    // `docs/tui.md`, "Swapped views" Changed files promises file figures
+    // right-aligned in one column. With different name widths the figures
+    // must still start at the same column; without the shared name width
+    // the shorter name's figures sit left. Flipping to unpadded names
+    // fails here.
+    let card = changes(&[("src/a.rs", 4, 2), ("src/longer.rs", 1, 0)]);
+    let frame = list_frame(&card, List::default());
+    // "a.rs" (4) pads to "longer.rs" (9), so both figures start together.
+    assert_eq!(row(&frame, 1), "    M  a.rs       +4 −2");
+    assert_eq!(row(&frame, 2), "    M  longer.rs  +1 −0");
+    let figures_at = |at: usize| {
+        row(&frame, at)
+            .find('+')
+            .unwrap_or_else(|| panic!("figures in row {at}"))
+    };
+    assert_eq!(figures_at(1), figures_at(2));
+}
+
+#[test]
 fn the_list_footer_names_file_and_open_in_editor_with_bold_keys() {
     use crate::swapped::Ink;
     use ratatui::style::{Modifier, Style};
@@ -507,7 +549,7 @@ fn a_no_diff_row_stays_dim_with_no_changes_where_the_figures_go() {
     let card = changes(&[("src/a.rs", 4, 2)]);
     let mut no_diff = BTreeSet::new();
     no_diff.insert("src/a.rs".to_owned());
-    let dimmed = frame(&card, None, None, List::default(), &no_diff, None, None);
+    let dimmed = frame(&card, None, None, List::default(), &no_diff, None, None, 0);
     assert_eq!(row(&dimmed, 1), "    ·  a.rs  no changes");
     assert!(
         dimmed.rows[1]
@@ -518,7 +560,7 @@ fn a_no_diff_row_stays_dim_with_no_changes_where_the_figures_go() {
     // Focus marks the gutter but leaves the dim row alone.
     let mut list = List::gutter_accent();
     list.select(1, 3, 24);
-    let focused = frame(&card, None, None, list, &no_diff, None, None);
+    let focused = frame(&card, None, None, list, &no_diff, None, None, 0);
     assert!(
         focused.rows[1]
             .iter()
@@ -837,6 +879,39 @@ fn numstat_command_output_parses_and_resolves_against_git() {
 }
 
 #[test]
+fn tracking_command_counts_a_final_unterminated_line_as_one() {
+    // `issue-4592.md:70` requires one added line for an untracked file;
+    // `wc -l` reads 0 for `one` with no trailing newline, so the query
+    // uses `awk 'END{print NR}'`. Flipping back to `wc -l` fails here.
+    let dir = fakes::TempDir::new("tui-changed-files-unterminated");
+    let root = dir.path();
+    let setup = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    setup(&["init", "-q"]);
+    setup(&["config", "user.email", "fiber@example.invalid"]);
+    setup(&["config", "user.name", "Fiber test"]);
+    std::fs::write(root.join("one.txt"), "one")
+        .unwrap_or_else(|error| panic!("write one.txt: {error}"));
+    let tracked = shell_out(&tracking_command(&["one.txt"]), root);
+    let parsed = tracking(&tracked);
+    assert!(parsed.untracked.contains("one.txt"));
+    assert_eq!(parsed.counts.get("one.txt"), Some(&1u64));
+    let card = changes(&[("one.txt", 9, 9)]);
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    assert_eq!(resolved.figures.get("one.txt"), Some(&(1, 0)));
+}
+
+#[test]
 fn a_committed_file_reply_with_only_the_closing_line_reads_empty() {
     // The shell appends its closing "Exit code N." line to the
     // command's own output: stripped, the committed file's reply reads
@@ -898,6 +973,7 @@ fn no_exit_code_text_reaches_any_diff_frame() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert!(
         frame
@@ -1002,6 +1078,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(
         reading.title,
@@ -1022,6 +1099,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(row(&local_diff, 0), "src/a.rs  Open in editor ›");
     assert_eq!(row(&local_diff, 1), "+new");
@@ -1037,6 +1115,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(
         remote_diff.footer,
@@ -1050,6 +1129,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(row(&empty, 0), "src/a.rs  Open in editor ›");
     assert_eq!(
@@ -1073,6 +1153,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
                 &BTreeSet::new(),
                 None,
                 None,
+                0
             ),
             1
         ),
@@ -1091,10 +1172,50 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
             &BTreeSet::new(),
             None,
             None,
+            0
         )
         .below,
         ["Cut: the whole diff is in artifacts/full.diff"]
     );
+}
+
+#[test]
+fn open_in_editor_target_right_aligns_to_the_view_width() {
+    // `docs/tui.md`, "Swapped views" Changed files Hunks promises the
+    // editor target right-aligned. With a view width the gap pads the
+    // path row to that width; a fixed two-space gap leaves it short.
+    // Flipping back to the fixed gap fails here.
+    let changes = changes(&[("src/a.rs", 4, 2)]);
+    let diff = Diff::Lines {
+        lines: vec!["+new".to_owned()],
+        cut: None,
+    };
+    let wide = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        40,
+    );
+    let top = row(&wide, 0);
+    assert_eq!(crate::text::width(&top), 40);
+    assert!(top.starts_with("src/a.rs"));
+    assert!(top.ends_with("Open in editor ›"));
+    // A metrics width (0) keeps the old two-space gap.
+    let narrow = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(row(&narrow, 0), "src/a.rs  Open in editor ›");
 }
 
 #[test]
@@ -1117,6 +1238,7 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
         &BTreeSet::new(),
         None,
         None,
+        0,
     )
 }
 
@@ -1136,6 +1258,7 @@ fn the_diff_frame_shows_the_path_with_an_open_in_editor_target() {
         &BTreeSet::new(),
         None,
         None,
+        0,
     );
     assert_eq!(
         frame.rows[0],
@@ -1263,7 +1386,8 @@ fn answered_rows_show_git_figures_and_the_untracked_row_form() {
         ]
     );
     assert_eq!(row(&frame, 2), "src/");
-    assert_eq!(row(&frame, 3), "    M  a.rs  +7 −1");
+    // "a.rs" pads to "new.txt" (7), so its figures share the column.
+    assert_eq!(row(&frame, 3), "    M  a.rs     +7 −1");
     assert_eq!(frame.below, ["2 files  +10 −1"]);
 }
 
@@ -1281,7 +1405,10 @@ fn tracking_command_queries_each_listed_path_s_porcelain_state() {
         command.contains("status --porcelain=v1 --no-renames"),
         "{command}"
     );
-    assert!(command.contains("wc -l"), "{command}");
+    // `awk 'END{print NR}'` counts a final unterminated line, which
+    // `wc -l` misses (`issue-4592.md:70` requires one added line for it).
+    assert!(command.contains("awk 'END{print NR}'"), "{command}");
+    assert!(!command.contains("wc -l"), "{command}");
     // One query per view-open: a single shell line, no chaining.
     assert!(!command.contains("&&"), "{command}");
     assert_eq!(command.matches("git ").count(), 1, "{command}");
@@ -1319,6 +1446,11 @@ fn parse_tracking_rejects_garbage_records() {
         "untracked\t3\0",
         "untracked\tnew.txt\0",
         "untracked\t3\tnew.txt\0garbage",
+        // Staged-new and deleted records carry no count: a count with them
+        // rejects the whole answer. Flipping either guard to `true` accepts
+        // these and fails here.
+        "added\t3\tstaged.rs\0",
+        "deleted\t0\tgone.rs\0",
     ] {
         assert_eq!(parse_tracking(body), None, "{body:?}");
     }
@@ -1400,6 +1532,47 @@ fn resolve_without_tracking_keeps_card_rows_and_no_dim() {
 }
 
 #[test]
+fn resolve_without_an_answer_ignores_tracking() {
+    // No numstat answer yet: the rows keep the card's figures with no
+    // class, even when tracking names a class. Forcing `answered` to
+    // `true` folds the tracking and fails here.
+    let card = changes(&[("new.txt", 4, 1)]);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let resolved = resolve_figures(&card, None, &BTreeMap::new(), Some(&parsed), None, None);
+    assert!(!resolved.untracked.contains("new.txt"));
+    assert!(resolved.dim.is_empty());
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(4, 1)));
+}
+
+#[test]
+fn resolve_prefers_dim_when_tracking_is_silent_despite_local_counts() {
+    // The numstat answer omits the path and tracking does not call it
+    // untracked: it joins no-diff, even when a local line count exists.
+    // Forcing `untracked.contains` to `true` marks it untracked and fails.
+    let card = changes(&[("clean.rs", 0, 0)]);
+    let parsed = tracking("untracked\t3\tother.txt\0");
+    let mut lines = BTreeMap::new();
+    lines.insert("clean.rs".to_owned(), 3u64);
+    let resolved = resolve_figures(&card, Some(""), &lines, Some(&parsed), None, None);
+    assert!(!resolved.untracked.contains("clean.rs"));
+    assert!(resolved.dim.contains("clean.rs"));
+    assert_eq!(resolved.figures.get("clean.rs"), Some(&(0, 0)));
+}
+
+#[test]
+fn resolve_keeps_added_without_numstat_out_of_dim() {
+    // The numstat answer omits a staged-new path tracking calls added:
+    // it keeps the card's figures with `A`, outside no-diff. Forcing
+    // `added.contains` to `false` sends it to no-diff and fails here.
+    let card = changes(&[("staged.rs", 1, 1)]);
+    let parsed = tracking("added\t\tstaged.rs\0");
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    assert!(resolved.added.contains("staged.rs"));
+    assert!(!resolved.dim.contains("staged.rs"));
+    assert_eq!(resolved.figures.get("staged.rs"), Some(&(1, 1)));
+}
+
+#[test]
 fn staged_added_draws_a_with_numstat_figures() {
     use crate::swapped::Ink;
     use crate::theme::Role;
@@ -1449,6 +1622,7 @@ fn deleted_with_a_row_draws_d_even_when_present() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
     assert_eq!(row(&frame, 1), "    D  gone.rs  +0 −2");
     assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Removed));
@@ -1468,6 +1642,7 @@ fn rows_show_m_until_answers_arrive() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
     assert_eq!(row(&unanswered, 1), "    M  gone.rs  +2 −0");
     // The same missing path with an answer draws D.
@@ -1480,6 +1655,7 @@ fn rows_show_m_until_answers_arrive() {
         &BTreeSet::new(),
         Some(dir.path()),
         None,
+        0,
     );
     assert_eq!(row(&answered, 1), "    D  gone.rs  +2 −0");
 }

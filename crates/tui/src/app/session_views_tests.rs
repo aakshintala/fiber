@@ -1025,24 +1025,33 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends its queries, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query plus the
-    // one tracking query, run when the view opens, in that order.
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
     assert_eq!(lines.len(), 2);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        crate::changed_files_view::numstat_command(&paths),
+        crate::changed_files_view::tracking_command(&paths),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
-    );
-    let tracking: Value = serde_json::from_str(&lines[1])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    assert_eq!(
-        tracking["args"]["command"],
-        crate::changed_files_view::tracking_command(&paths)
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
 }
 
@@ -1054,8 +1063,10 @@ fn the_totals_row_opens_every_changed_file_in_grouped_order() {
     let shown = screen(&app, 160, 40).0;
     assert!(shown.contains("Changed files"), "{shown}");
     let frame = app.session_view_screen(0).expect("changed-files frame");
-    // The folder row, the seven file rows in name order, then the rule
-    // above the totals.
+    // `docs/tui.md`, "Swapped views" Changed files Folders promises this
+    // order: one folder row with its files under it in name order, then
+    // the rule above the totals. The count follows: one folder, seven
+    // files, one rule.
     assert_eq!(frame.rows.len(), 9);
     let rows: Vec<String> = frame
         .rows
@@ -1301,24 +1312,33 @@ fn a_panel_file_rank_past_the_end_opens_the_list_sending_the_view_open_queries()
     let Effect::Send(lines) = effect else {
         panic!("a rank past the end sends the view-open queries, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query plus the
-    // one tracking query, run when the view opens, in that order.
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
     assert_eq!(lines.len(), 2);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        crate::changed_files_view::numstat_command(&paths),
+        crate::changed_files_view::tracking_command(&paths),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
-    );
-    let tracking: Value = serde_json::from_str(&lines[1])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    assert_eq!(
-        tracking["args"]["command"],
-        crate::changed_files_view::tracking_command(&paths)
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
     assert!(app.session_view_open());
     assert!(screen(&app, 160, 40).0.contains("Changed files"));
@@ -1340,24 +1360,33 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query plus the
-    // one tracking query, run when the view opens, in that order.
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
     assert_eq!(lines.len(), 2);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        crate::changed_files_view::numstat_command(&paths),
+        crate::changed_files_view::tracking_command(&paths),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
-    );
-    let tracking: Value = serde_json::from_str(&lines[1])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    assert_eq!(
-        tracking["args"]["command"],
-        crate::changed_files_view::tracking_command(&paths)
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
     assert!(screen(&app, 100, 30).0.contains("Changed files"));
 }
@@ -2598,8 +2627,20 @@ fn the_matching_numstat_answer_shows_git_figures_in_the_rows() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // In no promised order: find the numstat query by its command.
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    let request: Value = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .find(|req: &Value| {
+            req["args"]["command"] == crate::changed_files_view::numstat_command(&paths)
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {lines:?}"));
     let shown = screen(&app, 120, 35).0;
     assert!(shown.contains("    M  file-0.rs  +2 −0"), "{shown}");
     app.on_line(accepted_figures(
@@ -2628,8 +2669,20 @@ fn a_rejected_numstat_query_keeps_the_card_figures() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // In no promised order: find the numstat query by its command.
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    let request: Value = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .find(|req: &Value| {
+            req["args"]["command"] == crate::changed_files_view::numstat_command(&paths)
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {lines:?}"));
     app.on_line(rejected_diff(
         SESSION,
         request["id"].as_str().unwrap_or_default(),
@@ -2673,25 +2726,51 @@ fn open_figures(app: &mut App, width: u16, height: u16) -> (String, String) {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends its queries, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views": one numstat query plus the one
-    // tracking query, run when the view opens, in that order.
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
     assert_eq!(lines.len(), 2);
-    let numstat: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    let tracking: Value = serde_json::from_str(&lines[1])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
-    assert_eq!(
-        numstat["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
-    );
-    assert_eq!(
-        tracking["args"]["command"],
-        crate::changed_files_view::tracking_command(&paths)
-    );
+    let requests: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .collect();
+    let numstat = requests
+        .iter()
+        .find(|req| req["args"]["command"] == crate::changed_files_view::numstat_command(&paths))
+        .unwrap_or_else(|| panic!("one request is the numstat query: {requests:?}"))
+        .clone();
+    let tracking = requests
+        .iter()
+        .find(|req| req["args"]["command"] == crate::changed_files_view::tracking_command(&paths))
+        .unwrap_or_else(|| panic!("one request is the tracking query: {requests:?}"))
+        .clone();
+    {
+        let mut got: Vec<String> = requests
+            .iter()
+            .map(|req| {
+                req["args"]["command"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
+        got.sort();
+        let mut want = vec![
+            crate::changed_files_view::numstat_command(&paths),
+            crate::changed_files_view::tracking_command(&paths),
+        ];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "the view-open sends the numstat and the tracking"
+        );
+    }
     (
         numstat["id"].as_str().unwrap_or_default().to_owned(),
         tracking["id"].as_str().unwrap_or_default().to_owned(),
@@ -3321,9 +3400,20 @@ fn a_remote_numstat_answer_matches_hub_absolute_paths_by_the_viewed_workspace() 
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
         panic!("opening the list sends the numstat query");
     };
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises the
+    // numstat query plus the tracking line counts; in no promised order,
+    // so find the numstat query by its command.
     assert_eq!(lines.len(), 2);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let request: Value = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .find(|req: &Value| {
+            req["args"]["command"]
+                == crate::changed_files_view::numstat_command(&["/w/src/file-0.rs"])
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {lines:?}"));
     app.on_line(accepted_figures(
         request["id"].as_str().unwrap_or_default(),
         "2\t0\tsrc/file-0.rs\nExit code 0.\n",
@@ -3346,11 +3436,32 @@ fn a_remote_reported_deletion_draws_d_without_a_local_root() {
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
         panic!("opening the list sends its queries");
     };
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises the
+    // numstat query plus the tracking line counts; in no promised order,
+    // so find each by its command.
     assert_eq!(lines.len(), 2);
-    let numstat: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    let tracking: Value = serde_json::from_str(&lines[1])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let requests: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .collect();
+    let numstat = requests
+        .iter()
+        .find(|req| {
+            req["args"]["command"]
+                == crate::changed_files_view::numstat_command(&["/w/src/file-0.rs"])
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {requests:?}"))
+        .clone();
+    let tracking = requests
+        .iter()
+        .find(|req| {
+            req["args"]["command"]
+                == crate::changed_files_view::tracking_command(&["/w/src/file-0.rs"])
+        })
+        .unwrap_or_else(|| panic!("one request is the tracking query: {requests:?}"))
+        .clone();
     app.on_line(accepted_figures(
         numstat["id"].as_str().unwrap_or_default(),
         "2\t0\tsrc/file-0.rs\nExit code 0.\n",
@@ -3853,6 +3964,50 @@ fn a_tracking_refusal_settles_its_tag_and_keeps_the_card_figures() {
     // Without tracking no class applies: the row stays card and M.
     let shown = screen(&app, 120, 35).0;
     assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_tracking_answer_ended_by_a_signal_keeps_the_card_figures() {
+    // `answered_tracking` rejects a signalled run, as with numstat:
+    // flipping `||` to `&&` accepts the signalled tracking and fails here.
+    // The numstat answer omits the file, so the presence read draws `D`:
+    // an accepted tracking would draw `A` instead.
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t1\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        Some("SIGKILL"),
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
+    assert!(!shown.contains("    A  file-0.rs"), "{shown}");
+}
+
+#[test]
+fn a_refusal_for_another_command_keeps_the_tracking_query_pending() {
+    // `session_views_refused` clears only the matching tracking tag:
+    // flipping `==` to `!=` clears it on the wrong id and fails here.
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (_, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(rejected_diff(SESSION, "c_other", "wrong command"));
+    assert_eq!(
+        app.outbox.waiting(&tracking_id),
+        Some(Waiting::Figures),
+        "the tracking query stays pending after another command's refusal"
+    );
 }
 
 #[test]

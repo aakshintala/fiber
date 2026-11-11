@@ -3,7 +3,7 @@ source: crates/tui/src/changed_files_view_tests.rs
 expression: screen(&app_with_diff())
 ---
   Changed files › src/a.rs · diff against HEAD  diff against HEAD    Esc returns
- src/a.rs  Open in editor ›
+ src/a.rs                                                       Open in editor ›
    @@ -1 +1 @@
  1 -old
  1 +new

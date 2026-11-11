@@ -685,6 +685,7 @@ impl App {
                     &self.session_views.no_diff,
                     workspace,
                     viewed.as_deref(),
+                    width,
                 ))
             }
             Open::ReleaseNotes(list) => {

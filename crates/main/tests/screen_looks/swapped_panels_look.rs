@@ -196,15 +196,6 @@ fn is_focused_row(grid: &Grid, y: u16, needle: &str) -> bool {
     is_focused_label(grid, y, needle)
 }
 
-/// The lines the editor script recorded, or empty when it has not run.
-fn argv_lines(path: &std::path::Path) -> Vec<String> {
-    fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
-
 /// The `/tools` row for `notes_save`: its text from the name on.
 fn tool_row(grid: &Grid) -> Option<(u16, String)> {
     let y = find_row(grid, " notes_save · full · ")?;
@@ -818,13 +809,14 @@ fn the_changed_files_list_groups_folders_with_letters_figures_totals_and_focus()
     );
     config(&setup, json!({"reviewer": {"model": "scripted/r.json"}}));
     let mut run = turned(&setup);
-    let grid = run.wait_screen("the changed files card", |grid| {
+    run.wait_screen("the changed files card", |grid| {
         panel_item_at(grid, "one.rs").is_some()
     });
     // The card sums Fiber's own writes: twelve lines plus three; the
-    // totals row opens the Changed files list.
-    let (x, total_y) = panel_item_at(&grid, "+15").expect("the card totals row");
-    click(&mut run, x, total_y);
+    // totals row opens the Changed files list (`docs/testing/screens.md`,
+    // "Screens": the frame-locked helper finds the target in the frame it
+    // acts on).
+    run.click_where("the card totals row", |grid| panel_item_at(grid, "+15"));
     let grid = run.wait_screen("the grouped list", |grid| {
         grid.rows[0].contains("Changed files")
             && list_row(grid, "./").is_some()
@@ -833,8 +825,9 @@ fn the_changed_files_list_groups_folders_with_letters_figures_totals_and_focus()
             && list_row(grid, "one.rs").is_some_and(|y| grid.rows[usize::from(y)].contains("+12"))
             && list_row(grid, "2 files").is_some()
     });
-    // Folders lead their files in path order: "./" holds the top-level
-    // file, "src/" the nested one.
+    // `docs/tui.md`, "Swapped views" Changed files Folders promises this
+    // order: folders in path order with their files under them in name
+    // order ("./" holds the top-level file, "src/" the nested one).
     let dot = list_row_with(&grid, "./");
     let top = list_row_with(&grid, "top.txt");
     let src = list_row_with(&grid, "src/");
@@ -850,8 +843,9 @@ fn the_changed_files_list_groups_folders_with_letters_figures_totals_and_focus()
         contents(&grid)
     );
     // settled: the wait above matched the nested file row's figures.
+    // "one.rs" (6) pads to "top.txt" (7), so its figures share the column.
     assert!(
-        list_text(&grid, one).starts_with("M  one.rs  +12 −0"),
+        list_text(&grid, one).starts_with("M  one.rs   +12 −0"),
         "{}",
         contents(&grid)
     );
@@ -900,13 +894,17 @@ fn the_changed_files_committed_file_stays_dim_with_no_exit_code() {
     );
     config(&setup, json!({"reviewer": {"model": "scripted/r.json"}}));
     let mut run = turned(&setup);
-    let grid = run.wait_screen("the changed files card", |grid| {
+    run.wait_screen("the changed files card", |grid| {
         panel_item_at(grid, "f.txt").is_some()
     });
-    let (_, y) = panel_item_at(&grid, "f.txt").unwrap();
-    let x = col_at(&grid, y + 1, "+2");
-    // The totals row opens the Changed files list.
-    click(&mut run, x, y + 1);
+    // The totals row opens the Changed files list (`docs/testing/screens.md`,
+    // "Screens": the frame-locked helper finds the target in the frame it
+    // acts on).
+    run.click_where("the totals row", |grid| {
+        let (_, y) = panel_item_at(grid, "f.txt")?;
+        let x = col_at_or(grid, y + 1, "+2")?;
+        Some((x, y + 1))
+    });
     // The undone file reads dim without being chosen: the figures
     // answer omits it and tracking does not call it untracked.
     let grid = run.wait_screen("the dim no-diff row", |grid| {
@@ -960,15 +958,27 @@ fn the_changed_files_open_in_editor_click_runs_the_same_path_as_ctrl_g() {
         ]}),
     );
     config(&setup, json!({}));
-    // The editor records its arguments (`+N`, the path) and exits at
-    // once, so the binary's reread answers from the unchanged file.
+    // The editor records its arguments (`+N`, the path) and appends a line
+    // to the file it is given, so the binary's reread shows the appended
+    // hunk: that screen is the editor-return signal, and the test reads the
+    // recorded arguments only after it, never polling the file while the
+    // editor may still run (`docs/testing.md`, "Waits and timeouts").
+    // (`docs/testing/screens.md`, "Screens": a read outside a wait follows
+    // the wait that settled its cells.)
     let editor = workspace.join("editor.sh");
     let argv = workspace.join("argv");
-    fs::write(
-        &editor,
-        format!("printf '%s\\n' \"$@\" >> \"{}\"\n", argv.display()),
-    )
-    .unwrap();
+    let write_editor = |marker: &str| {
+        fs::write(
+            &editor,
+            format!(
+                "printf '%s\\n' \"$@\" >> \"{}\"\nprintf '{}\\n' >> \"$2\"\n",
+                argv.display(),
+                marker
+            ),
+        )
+        .unwrap();
+    };
+    write_editor("call baz1(a);");
     let editor_cmd = format!("/bin/sh {}", editor.display());
     let env = [
         ("EDITOR", editor_cmd.as_str()),
@@ -981,13 +991,17 @@ fn the_changed_files_open_in_editor_click_runs_the_same_path_as_ctrl_g() {
     let from = run.output().len();
     run.write(b"go\r");
     run.turn_finished(from);
-    let grid = run.wait_screen("the changed files card", |grid| {
+    run.wait_screen("the changed files card", |grid| {
         panel_item_at(grid, "f.txt").is_some()
     });
-    let (_, y) = panel_item_at(&grid, "f.txt").unwrap();
-    let x = col_at(&grid, y + 1, "+1");
-    // The totals row opens the Changed files list.
-    click(&mut run, x, y + 1);
+    // The totals row opens the Changed files list (`docs/testing/screens.md`,
+    // "Screens": the frame-locked helper finds the target in the frame it
+    // acts on).
+    run.click_where("the totals row", |grid| {
+        let (_, y) = panel_item_at(grid, "f.txt")?;
+        let x = col_at_or(grid, y + 1, "+1")?;
+        Some((x, y + 1))
+    });
     run.wait_screen("the file row", |grid| {
         grid.rows[0].contains("Changed files") && list_row(grid, "f.txt").is_some()
     });
@@ -1003,23 +1017,41 @@ fn the_changed_files_open_in_editor_click_runs_the_same_path_as_ctrl_g() {
     run.click_where("the Open in editor target", |grid| {
         grid.text_at("Open in editor ›")
     });
+    // The appended hunk proves the click's editor exited and the view
+    // reread: the recorded arguments are settled, so read them directly.
+    // settled: the wait above matched the click's appended hunk.
+    run.wait_screen("the click's edited hunk", |grid| {
+        grid.rows[0].contains("Changed files") && find_row(grid, "+call baz1(a);").is_some()
+    });
     let wanted = vec![
         "+1".to_owned(),
         workspace.join("f.txt").display().to_string(),
     ];
-    let recorded = argv.clone();
-    fakes::wait_until("the click's editor arguments", setup.deadline, move || {
-        argv_lines(&recorded) == wanted
-    });
+    let recorded: Vec<String> = fs::read_to_string(&argv)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(recorded, wanted, "the click runs the editor at +1");
+    // The second run appends a distinct line, so its return has its own
+    // signal. Rewriting the script after the first return is safe: the
+    // first editor has exited, as its hunk proves.
     fs::write(&argv, "").unwrap();
-    let wanted = vec![
-        "+1".to_owned(),
-        workspace.join("f.txt").display().to_string(),
-    ];
+    write_editor("call baz2(a);");
     run.write(b"\x07");
-    fakes::wait_until("the Ctrl+G editor arguments", setup.deadline, move || {
-        argv_lines(&argv) == wanted
+    // settled: the wait below matched the Ctrl+G appended hunk.
+    run.wait_screen("the Ctrl+G edited hunk", |grid| {
+        grid.rows[0].contains("Changed files") && find_row(grid, "+call baz2(a);").is_some()
     });
+    let recorded: Vec<String> = fs::read_to_string(&argv)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        recorded, wanted,
+        "Ctrl+G runs the same editor path as the click"
+    );
     // Back in the list, as the editor-return reread proves, before
     // quitting from the conversation.
     run.write(b"\x1b[D");

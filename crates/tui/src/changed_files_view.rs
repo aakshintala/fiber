@@ -131,8 +131,11 @@ pub(crate) fn tracking_command(paths: &[&str]) -> String {
         .map(|path| format!("'{}'", path.replace('\'', "'\\''")))
         .collect();
     let each = quoted.join(" ");
+    // `awk 'END{print NR}'` counts lines with semantics that include a
+    // final unterminated line (`issue-4592.md:70` requires one added
+    // line for it): `wc -l` counts newline characters, so it reads 0.
     format!(
-        "for p in {each}; do s=$(git --no-optional-locks status --porcelain=v1 --no-renames -- \"$p\" 2>/dev/null | head -c 2); case \"$s\" in '??'*) c=$(wc -l < \"$p\" 2>/dev/null | tr -d '[:space:]'); printf 'untracked\\t%s\\t%s\\0' \"$c\" \"$p\";; A*) printf 'added\\t\\t%s\\0' \"$p\";; *D*) printf 'deleted\\t\\t%s\\0' \"$p\";; esac; done"
+        "for p in {each}; do s=$(git --no-optional-locks status --porcelain=v1 --no-renames -- \"$p\" 2>/dev/null | head -c 2); case \"$s\" in '??'*) c=$(awk 'END{{print NR}}' < \"$p\" 2>/dev/null | tr -d '[:space:]'); printf 'untracked\\t%s\\t%s\\0' \"$c\" \"$p\";; A*) printf 'added\\t\\t%s\\0' \"$p\";; *D*) printf 'deleted\\t\\t%s\\0' \"$p\";; esac; done"
     )
 }
 
@@ -563,6 +566,10 @@ fn display_figures(
 /// no-diff path stays listed with "no changes" dim. Ctrl+G edits the
 /// shown file on a local terminal, and fetches the hub file to edit on
 /// a remote one: either way the footer keeps the hint.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the frame reads the figures, the chosen diff, the list, the no-diff set, both workspace roots and the view width for the editor target"
+)]
 pub(crate) fn frame(
     changes: &BTreeMap<String, (u64, u64)>,
     figures: Option<&ResolvedFigures>,
@@ -571,9 +578,10 @@ pub(crate) fn frame(
     no_diff: &BTreeSet<String>,
     root: Option<&std::path::Path>,
     viewed: Option<&std::path::Path>,
+    width: u16,
 ) -> Frame {
     if let Some((path, diff)) = chosen {
-        return diff_frame(path, diff, list);
+        return diff_frame(path, diff, list, width);
     }
     // Until the figures answer arrives the rows show the card's figures
     // with M: the presence read stays off, so nothing draws D early.
@@ -594,8 +602,19 @@ pub(crate) fn frame(
     };
     let presence = if answered { root } else { None };
     let plan = list_rows(changes, root, viewed);
-    // The figures column's widths: every figured row right-aligns its
-    // counts in them, and the totals reuse them below.
+    // The name column's width: every file row pads its name to it, so
+    // rows with different filename widths still place their figures at
+    // the same columns (`issue-4592.md:70` right-aligns the figures in
+    // one column). The figures column's widths: every figured row
+    // right-aligns its counts in them, and the totals reuse them below.
+    let mut name_w = 0;
+    for row in &plan {
+        let ListRow::File(path) = row else {
+            continue;
+        };
+        let shown = display_path(path, root, viewed);
+        name_w = name_w.max(crate::text::width(&safe_line(name_of(shown))));
+    }
     let mut added_w = 0;
     let mut removed_w = 0;
     for row in &plan {
@@ -640,6 +659,7 @@ pub(crate) fn frame(
                     viewed,
                     presence,
                     at == list.selected() && list.is_accent(),
+                    name_w,
                     added_w,
                     removed_w,
                 );
@@ -692,15 +712,21 @@ fn file_row(
     viewed: Option<&std::path::Path>,
     presence: Option<&std::path::Path>,
     focused: bool,
+    name_w: usize,
     added_w: usize,
     removed_w: usize,
 ) -> Vec<(String, Option<Spot>, Ink)> {
     let shown = display_path(path, root, viewed);
+    let raw_name = safe_line(name_of(shown));
+    let padded_name = {
+        let pad = name_w.saturating_sub(crate::text::width(&raw_name));
+        format!("{raw_name}{}", " ".repeat(pad))
+    };
     if no_diff.contains(path) {
         return vec![
             ("    ".to_owned(), None, Ink::Muted),
             ("·  ".to_owned(), None, Ink::Muted),
-            (safe_line(name_of(shown)), None, Ink::Muted),
+            (padded_name, None, Ink::Muted),
             ("  ".to_owned(), None, Ink::Muted),
             ("no changes".to_owned(), None, Ink::Muted),
         ];
@@ -721,7 +747,7 @@ fn file_row(
     vec![
         ("    ".to_owned(), None, Ink::Plain),
         (letter, None, letter_ink),
-        (safe_line(name_of(shown)), None, name_ink),
+        (padded_name, None, name_ink),
         ("  ".to_owned(), None, Ink::Plain),
         (
             format!("{:>added_w$}", format!("+{added}")),
@@ -757,8 +783,10 @@ fn footer_spans() -> Vec<Span> {
 
 /// The current diff frame, with its file in the title. Above the
 /// hunks, the path row names the file bold with the editor target in
-/// `secondary`: a click on it runs the same editor path as Ctrl+G.
-fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
+/// `secondary` right-aligned to the view width: a click on it runs the
+/// same editor path as Ctrl+G (`docs/tui.md`, "Swapped views" Changed
+/// files Hunks).
+fn diff_frame(path: &str, diff: &Diff, list: List, width: u16) -> Frame {
     let (rows, below) = match diff {
         Diff::Reading => (
             vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
@@ -790,11 +818,21 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
             Vec::new(),
         ),
     };
+    // Right-align the target to the view width (`issue-4592.md:75`):
+    // the gap pads the path row to the width, with at least two spaces
+    // so a zero width (a metrics call, not a draw) keeps the old gap.
+    let target = "Open in editor ›";
+    let gap = {
+        let gap_w = usize::from(width)
+            .saturating_sub(crate::text::width(&safe_line(path)) + crate::text::width(target))
+            .max(2);
+        " ".repeat(gap_w)
+    };
     let mut framed = vec![vec![
         (safe_line(path), None, Ink::Heading),
-        ("  ".to_owned(), None, Ink::Plain),
+        (gap, None, Ink::Plain),
         (
-            "Open in editor ›".to_owned(),
+            target.to_owned(),
             Some(Spot::Cell(0, 1)),
             Ink::Role(crate::theme::Role::Secondary),
         ),
