@@ -312,3 +312,6 @@ research/opencode-thinking/raw	fiber-4644	plan	2026-11-11T18:44:20Z	roundhouse-7
 scripts/test-journey-report	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-3928	plan	2026-11-11T20:06:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/package.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/process/context.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/process/context/native.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
