@@ -644,16 +644,20 @@ fn arrows_move_only_between_the_rows_that_take_a_key() {
             8,
             &takes
         ),
-        [2, 5, 5, 2, 1, 1]
+        [2, 5, 1, 5, 2, 1]
     );
     let mut list = List::default();
     list.select(1, 8, 8);
     assert!(list.key_over(&Key::Down, 8, 8, &takes));
     assert!(!list.key_over(&Key::Enter, 8, 8, &takes));
+    // Past the last take ↓ wraps to the first.
     list.select(5, 8, 8);
-    assert!(!list.key_over(&Key::Down, 8, 8, &takes));
+    assert!(list.key_over(&Key::Down, 8, 8, &takes));
+    assert_eq!(list.selected(), 1);
+    // Past the first take ↑ wraps to the last.
     list.select(1, 8, 8);
-    assert!(!list.key_over(&Key::Up, 8, 8, &takes));
+    assert!(list.key_over(&Key::Up, 8, 8, &takes));
+    assert_eq!(list.selected(), 5);
 }
 
 #[test]
