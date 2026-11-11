@@ -459,6 +459,14 @@ pub enum CommandResult {
     Subscribe {
         /// The last durable line sent before the stream goes live.
         last_seq: crate::Seq,
+        /// The missing workspace path, when the hub replays the log of
+        /// a session whose workspace is gone and cannot be made again:
+        /// the terminal opens it read only (`docs/invocation.md`,
+        /// "Lifecycle"). Old results omit it, which reads as a live
+        /// open; the hub omits it for live sessions, so the live shape
+        /// stays byte-identical.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_gone: Option<String>,
     },
     /// For `quota`.
     Quota {
