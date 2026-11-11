@@ -3669,6 +3669,41 @@ fn backspace_on_a_focused_live_row_does_nothing() {
 }
 
 #[test]
+fn backspace_on_a_focused_exited_row_with_the_link_down_sends_nothing() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    // The link drops with the exited row focused: with nowhere to send,
+    // Backspace must not queue an archive behind the outage.
+    app.disconnected();
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
+fn backspace_on_a_focused_unreadable_exited_row_sends_nothing() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    let mut envelope = status("s_aaaaaaaaaaaaaaaa");
+    if let crate::link::Line::Session(status) = &mut envelope {
+        status.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(envelope);
+    // The row exits after its status stopped parsing: still unreadable,
+    // so Backspace must not archive what the terminal cannot read.
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    drawn(&mut app);
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
 fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     let mut app = home_with(80, 24, launch());
     two_rows(&mut app);

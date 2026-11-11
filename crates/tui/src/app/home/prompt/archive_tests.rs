@@ -492,3 +492,383 @@ fn repeat_while_running_keeps_the_first_command() {
         State::Stopping { .. }
     ));
 }
+
+const C: &str = "s_cccccccccccccccc";
+
+#[test]
+fn a_stale_stop_answer_is_ignored() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let lines = start(&mut app, &[A], &[A]);
+    assert_eq!(closes(&lines).len(), 1);
+    // A superseded command's stop answers late, while this one still
+    // stops: its generation no longer runs, so the fold claims nothing,
+    // settles nothing and notices nothing.
+    let earlier = generation(&app).wrapping_sub(1);
+    app.outbox.wait(
+        "c_stale",
+        Waiting::ArchiveStop {
+            generation: earlier,
+            session: SessionId(A.to_owned()),
+        },
+    );
+    let out = fold_lines(&mut app, rejected("c_stale", "io_failed", "Late."));
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(app.notice(), None);
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Stopping { .. }
+    ));
+    assert!(app.outbox.waiting("c_stale").is_some());
+}
+
+#[test]
+fn three_exits_send_one_archive_after_the_last() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    app.on_line(live(C, "third work"));
+    let lines = start(&mut app, &[A, B, C], &[A, B, C]);
+    assert_eq!(closes(&lines).len(), 3);
+    // The first two exits retire a stop each but send no archive yet:
+    // the archive waits for every held stop, so retiring on a middle
+    // exit would send it early.
+    assert!(archives(&fold_lines(&mut app, left(B, "exited"))).is_empty());
+    assert!(archives(&fold_lines(&mut app, left(C, "exited"))).is_empty());
+    // The last exit sends exactly one archive line, for the target alone.
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let archived = archives(&out);
+    assert_eq!(archived.len(), 1, "{out:?}");
+    assert_eq!(archived[0]["args"], json!({"session": A}));
+}
+
+#[test]
+fn one_exit_keeps_only_the_other_sessions_close() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let lines = start(&mut app, &[A, B], &[A, B]);
+    assert_eq!(closes(&lines).len(), 2);
+    // The exited stop's close retires with it; the still-waiting
+    // session's close stays, so a later quit resumes nothing stopped.
+    let out = fold_lines(&mut app, left(B, "exited"));
+    assert!(archives(&out).is_empty());
+    assert_eq!(app.closing_sessions(), [A.to_owned()]);
+}
+
+#[test]
+fn a_stale_archive_answer_is_ignored() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let _lines = start(&mut app, &[A], &[A]);
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let archived = archives(&out);
+    assert_eq!(archived.len(), 1);
+    // A superseded command's archive answers while this one archives:
+    // its generation no longer runs, so the fold removes nothing,
+    // refetches nothing and leaves the running archive waiting.
+    let earlier = generation(&app).wrapping_sub(1);
+    app.outbox.wait("c_stale", Waiting::ArchiveFinal(earlier));
+    let out = fold_lines(&mut app, accepted("c_stale", json!({"archived": true})));
+    assert!(out.is_empty(), "{out:?}");
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Archiving { .. }
+    ));
+    assert!(app.home.sessions.row(&SessionId(A.to_owned())).is_some());
+}
+
+#[test]
+fn a_dropped_link_between_the_last_exit_and_the_archive_send_is_uncertain() {
+    let mut app = attached();
+    let lines = start(&mut app, &[A], &[A]);
+    assert_eq!(closes(&lines).len(), 1);
+    // The link drops after the last exit retires but before the archive
+    // goes out: with nowhere to send it, the command ends in the archive
+    // uncertainty instead of archiving blind.
+    app.outbox.link = crate::app::Link::Down;
+    let out = fold_lines(&mut app, left(A, "exited"));
+    assert!(archives(&out).is_empty(), "{out:?}");
+    assert_eq!(app.notice(), Some("Archive status unknown"));
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn accepted_archive_removes_the_target_row_and_keeps_the_survivor() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let _lines = start(&mut app, &[A, B], &[A, B]);
+    let out = fold_lines(&mut app, left(B, "exited"));
+    assert!(archives(&out).is_empty());
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let archived = archives(&out);
+    assert_eq!(archived.len(), 1);
+    let id = archived[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("archive id"))
+        .to_owned();
+    let out = fold_lines(&mut app, accepted(&id, json!({"archived": true})));
+    // The archived target's row is gone, the cascade survivor stays, and
+    // the totals refetch: archiving some other id would keep the target
+    // while still refetching.
+    assert!(
+        app.home.sessions.row(&SessionId(A.to_owned())).is_none(),
+        "the target row is removed"
+    );
+    assert!(
+        app.home.sessions.row(&SessionId(B.to_owned())).is_some(),
+        "the cascade survivor stays"
+    );
+    assert!(
+        out.iter().any(|line| line["command"] == "recent"),
+        "{out:?}"
+    );
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn a_link_loss_drops_a_live_parked_close() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    // A quit close parked for the live session, as the quit question's
+    // closes do: it is no command stop, so the link loss drops it with
+    // the waiting stops instead of retaining it.
+    app.park_closing(SessionId(B.to_owned()), "c_quit".to_owned());
+    let _lines = start(&mut app, &[A], &[A]);
+    app.disconnected();
+    assert_eq!(app.notice(), Some("Stop status unknown"));
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    assert!(app.closing_sessions().is_empty());
+}
+
+#[test]
+fn a_link_loss_keeps_an_exited_parked_close() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    app.park_closing(SessionId(B.to_owned()), "c_quit".to_owned());
+    // The parked session exits on its own, with no command running: its
+    // close stays parked, and the feed marks it left.
+    let _ = fold_lines(&mut app, left(B, "exited"));
+    let _lines = start(&mut app, &[A, B], &[A]);
+    app.disconnected();
+    // The stopped session's close stays, so a later quit never resumes
+    // it; the still-waiting stop's close goes with the lost link.
+    assert_eq!(app.notice(), Some("Stop status unknown"));
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    assert_eq!(app.closing_sessions(), [B.to_owned()]);
+}
+
+#[test]
+fn a_finished_archive_keeps_no_close() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let _lines = start(&mut app, &[A, B], &[A, B]);
+    let out = fold_lines(&mut app, left(B, "exited"));
+    assert!(archives(&out).is_empty());
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let archived = archives(&out);
+    assert_eq!(archived.len(), 1);
+    let id = archived[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("archive id"))
+        .to_owned();
+    let _out = fold_lines(&mut app, accepted(&id, json!({"archived": true})));
+    // The finished command's closes retire with it: keeping the
+    // target's close would resume a stopped session on quit.
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    assert!(app.closing_sessions().is_empty());
+}
+
+#[test]
+fn reset_during_discovery_drops_the_command_silently() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    // The connection drops and resets with the discovery unanswered: the
+    // command never started, so its tag settles with no notice and the
+    // state returns to Idle.
+    app.disconnected();
+    app.home_reset();
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    assert_eq!(app.outbox.waiting(&command), None);
+}
+
+#[test]
+fn accepted_archive_refetches_the_targets_project_page() {
+    // The attached target lives in project `-w`. Its first status
+    // already put one scoped ask for `-w` in flight; answer it here so
+    // the asks below are the archive's own. The setup keeps the live
+    // fold's lines instead of using `attached`, which drops them.
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    let live_out: Vec<Value> = app
+        .on_line(live(A, "old work"))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    app.attach(SessionId(A.to_owned()));
+    let live_scoped = live_out
+        .iter()
+        .find(|line| {
+            line["command"] == "recent"
+                && line
+                    .get("args")
+                    .and_then(|args| args.get("project"))
+                    .and_then(Value::as_str)
+                    == Some("-w")
+        })
+        .unwrap_or_else(|| panic!("the live scoped ask: {live_out:?}"));
+    let live_id = live_scoped["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("live scoped ask id: {live_scoped:?}"));
+    let quiet: Vec<Value> = app
+        .on_line(accepted(live_id, json!({"sessions": [], "total": 0})))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        quiet.is_empty(),
+        "a clean scoped answer sends no follow-up: {quiet:?}"
+    );
+    let _lines = start(&mut app, &[A], &[A]);
+    let out = fold_lines(&mut app, left(A, "exited"));
+    // The exit's project refresh goes out while the archive waits; answer
+    // it here so the accept below re-asks the project's page itself.
+    for line in out.iter().filter(|line| line["command"] == "recent") {
+        let id = line["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("exit scoped ask id: {out:?}"));
+        let quiet: Vec<Value> = app
+            .on_line(accepted(id, json!({"sessions": [], "total": 0})))
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect();
+        assert!(
+            quiet.is_empty(),
+            "a clean scoped answer sends no follow-up: {quiet:?}"
+        );
+    }
+    let archived = archives(&out);
+    assert_eq!(archived.len(), 1);
+    let id = archived[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("archive id"))
+        .to_owned();
+    let lines: Vec<Value> = app
+        .on_line(accepted(&id, json!({"archived": true})))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    // The accepted archive refills the unscoped page and the archived
+    // target's own project page. A `None` project sends no scoped ask
+    // and an empty one is dropped by `scoped_first`, so either mutant
+    // fails the scoped assertion while the unscoped refresh holds; a
+    // wrong project asks for a page this terminal never shows.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args") == Some(&json!({}))),
+        "the unscoped page refreshes: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line["command"] == "recent"
+            && line
+                .get("args")
+                .and_then(|args| args.get("project"))
+                .and_then(Value::as_str)
+                == Some("-w")),
+        "the archived target's project page refreshes: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line["command"] == "recent"
+            && line
+                .get("args")
+                .and_then(|args| args.get("project"))
+                .and_then(Value::as_str)
+                .is_some_and(|project| project != "-w")),
+        "no other project's page refreshes on accept: {lines:?}"
+    );
+}
+
+/// Drives the first command to its refused stop, so the next `/archive`
+/// runs as generation 2 and no tag reads 1 by luck.
+fn attached_second_command() -> App {
+    let mut app = attached();
+    let lines = start(&mut app, &[A], &[A]);
+    let died = closes(&lines);
+    assert_eq!(died.len(), 1);
+    let close = died[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("close id"))
+        .to_owned();
+    let out = fold_lines(&mut app, rejected(&close, "session_held", "Busy."));
+    assert!(archives(&out).is_empty(), "{out:?}");
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    // The first answer went home: re-attach for the second command.
+    app.attach(SessionId(A.to_owned()));
+    app
+}
+
+#[test]
+fn reset_during_the_second_commands_discovery_settles_its_tag() {
+    let mut app = attached_second_command();
+    let command = discovery(&mut app);
+    assert_eq!(generation(&app), 2);
+    app.home_reset();
+    assert_eq!(app.outbox.waiting(&command), None);
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn an_unsent_archive_of_the_second_command_settles_it() {
+    let mut app = attached_second_command();
+    let _lines = start(&mut app, &[A], &[A]);
+    assert_eq!(generation(&app), 2);
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let archived = archives(&out);
+    assert_eq!(archived.len(), 1);
+    let id = archived[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.home_unsent(&[out[0].to_string()]);
+    assert_eq!(app.notice(), Some("Archive status unknown"));
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn an_unsent_stop_of_the_second_command_is_uncertain() {
+    let mut app = attached_second_command();
+    let lines = start(&mut app, &[A], &[A]);
+    assert_eq!(generation(&app), 2);
+    let died = closes(&lines);
+    assert_eq!(died.len(), 1);
+    app.home_unsent(&[died[0].to_string()]);
+    assert_eq!(app.notice(), Some("Stop status unknown"));
+    assert!(matches!(
+        app.home.questions.archive_command.state,
+        State::Idle
+    ));
+}
