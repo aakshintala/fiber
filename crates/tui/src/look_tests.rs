@@ -134,16 +134,11 @@ fn dark_at_256_known_entries() {
     // The dark theme at 256 colours, role by role: the terminal's own
     // colours stay the default, every other role its nearest xterm entry.
     let look = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
-    for role in [
-        Role::Text,
-        Role::Muted,
-        Role::CodeText,
-        Role::Operator,
-        Role::Background,
-    ] {
+    for role in [Role::Text, Role::Muted, Role::CodeText, Role::Operator] {
         assert_eq!(look.colour(role), Color::Reset, "{}", role.name());
     }
     let table = [
+        (Role::Background, 233),
         (Role::Accent, 75),
         (Role::Heading, 215),
         (Role::Success, 75),
@@ -181,7 +176,7 @@ fn dark_at_256_known_entries() {
         (Role::Match, 58),
         (Role::MatchCurrent, 215),
     ];
-    assert_eq!(table.len(), ROLES - 5);
+    assert_eq!(table.len(), ROLES - 4);
     for (role, index) in table {
         assert_eq!(look.colour(role), Color::Indexed(index), "{}", role.name());
     }
@@ -189,10 +184,11 @@ fn dark_at_256_known_entries() {
 
 #[test]
 fn the_defaults_stay_the_default_at_every_depth() {
-    // In the dark theme `text`, `code_text`, `operator` and `background`
-    // are the terminal's own colours and `muted` is dim over the default
+    // In the dark theme `text`, `code_text` and `operator` are the
+    // terminal's own colours and `muted` is dim over the default
     // foreground, so they stay the default at every depth (`docs/tui.md`,
-    // "Themes").
+    // "Themes"). The page paints on the panel tint instead
+    // (`docs/tui.md:2985`).
     let depths: [&[(&str, &str)]; 3] = [
         &[("COLORTERM", "truecolor")],
         &[("TERM", "xterm-256color")],
@@ -200,14 +196,23 @@ fn the_defaults_stay_the_default_at_every_depth() {
     ];
     for (nth, vars) in depths.into_iter().enumerate() {
         let look = look(ThemeSetting::Dark, vars);
-        for role in [
-            Role::Text,
-            Role::CodeText,
-            Role::Operator,
-            Role::Muted,
-            Role::Background,
-        ] {
+        for role in [Role::Text, Role::CodeText, Role::Operator, Role::Muted] {
             assert_eq!(look.colour(role), Color::Reset, "{} {vars:?}", role.name());
+        }
+        if nth == 0 {
+            assert_eq!(
+                look.colour(Role::Background),
+                Color::Rgb(0x0c, 0x0c, 0x11),
+                "{vars:?}"
+            );
+        } else if nth == 1 {
+            assert_eq!(
+                look.colour(Role::Background),
+                Color::Indexed(233),
+                "{vars:?}"
+            );
+        } else {
+            assert_eq!(look.colour(Role::Background), Color::Reset, "{vars:?}");
         }
         if nth < 2 {
             assert_ne!(look.colour(Role::Accent), Color::Reset, "{vars:?}");
@@ -333,7 +338,8 @@ fn paint_resolves_markers_to_the_theme() {
     ]);
     look.paint(&mut buf);
     assert_eq!(buf[(0, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
-    assert_eq!(buf[(0, 0)].bg, Color::Reset);
+    // The dark page paints on the panel tint (`docs/tui.md:2985`).
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x0c, 0x0c, 0x11));
     // With colour, an edge keeps its half block.
     assert_eq!(buf[(1, 0)].symbol(), "▄");
     assert_eq!(buf[(1, 0)].fg, Color::Rgb(0x1a, 0x1a, 0x22));
@@ -586,7 +592,10 @@ fn new_with_dark_light_follow_and_a_file() {
     let colour = |look: &Look, role| look.colour(role);
     let dark = look(ThemeSetting::Dark, &vars);
     let light = look(ThemeSetting::Light, &vars);
-    assert_eq!(colour(&dark, Role::Background), Color::Reset);
+    assert_eq!(
+        colour(&dark, Role::Background),
+        Color::Rgb(0x0c, 0x0c, 0x11)
+    );
     assert_eq!(
         colour(&light, Role::Background),
         Color::Rgb(0xff, 0xff, 0xff)
@@ -707,9 +716,15 @@ fn the_light_page_is_231_and_every_tint_stays_visible() {
     {
         assert_ne!(light.colour(role), Color::Indexed(231), "{}", role.name());
     }
-    // The dark page stays the terminal's own background at 256 colours.
+    // The dark page paints on the panel tint: at 256 colours both take
+    // the same entry (`docs/tui.md:2985`).
     let dark = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
-    assert_eq!(dark.colour(Role::Background), Color::Reset);
+    assert_eq!(dark.colour(Role::Background), Color::Indexed(233));
+    assert_eq!(
+        dark.colour(Role::Background),
+        dark.colour(Role::Panel),
+        "background and panel share one entry"
+    );
 }
 
 #[test]
@@ -731,7 +746,7 @@ fn only_a_tint_at_231_remaps_on_a_white_page() {
 }
 
 #[test]
-fn a_nonwhite_or_default_page_keeps_the_old_mapping() {
+fn a_nonwhite_page_keeps_the_old_mapping() {
     let ansi = [("TERM", "xterm-256color")];
     // `#fefefe` is not exactly white: the page takes its grey nearest,
     // and a cube tint at 231 is left alone without the exception.
@@ -751,11 +766,12 @@ fn a_nonwhite_or_default_page_keeps_the_old_mapping() {
         coloured.colour(Role::Background),
         Color::Indexed(ansi256((0x10, 0x10, 0x17), GREY))
     );
-    // A terminal-default page stays the default.
+    // The dark page paints on the panel tint (`docs/tui.md:2985`), and a
+    // file theme that leaves it out keeps its base's page.
     let dark = look(ThemeSetting::Dark, &ansi);
-    assert_eq!(dark.colour(Role::Background), Color::Reset);
+    assert_eq!(dark.colour(Role::Background), Color::Indexed(233));
     let terminal = look(file("dark", &[("accent", "#ffffff")]), &ansi);
-    assert_eq!(terminal.colour(Role::Background), Color::Reset);
+    assert_eq!(terminal.colour(Role::Background), Color::Indexed(233));
 }
 
 #[test]
@@ -904,9 +920,9 @@ fn logo_tint_reads_the_roles_over_the_page_background() {
             (0x6e, 0xaa, 0xfe),
         ]
     );
-    // The dark background is the terminal's: the reported dark
-    // appearance backs the image with black.
-    assert_eq!(background, (0, 0, 0));
+    // The dark background is the panel tint: it backs the image with
+    // the page (`docs/tui.md:2985`).
+    assert_eq!(background, (0x0c, 0x0c, 0x11));
     let (tint, background) = look(ThemeSetting::Light, &[("COLORTERM", "truecolor")])
         .logo_tint()
         .expect("light truecolour tints the logo");
@@ -922,7 +938,7 @@ fn logo_tint_keeps_rgb_at_256_colours() {
         .logo_tint()
         .expect("dark 256-colour tints the logo");
     assert_eq!(tint.wave, (0x6e, 0xaa, 0xfe));
-    assert_eq!(background, (0, 0, 0));
+    assert_eq!(background, (0x0c, 0x0c, 0x11));
 }
 
 // Without colour there is no tint: the pixel logo stays.
@@ -939,13 +955,13 @@ fn logo_tint_is_none_without_colour() {
 }
 
 // Following the terminal re-tints on its reported appearance: dark
-// backs black, light backs white.
+// backs the panel tint, light backs white.
 #[test]
 fn logo_tint_follows_the_reported_appearance() {
     let mut followed = look(ThemeSetting::Follow, &[("COLORTERM", "truecolor")]);
     assert_eq!(
         followed.logo_tint().map(|(_, background)| background),
-        Some((0, 0, 0))
+        Some((0x0c, 0x0c, 0x11))
     );
     assert!(followed.appearance(crate::look::Appearance::Light));
     assert_eq!(
