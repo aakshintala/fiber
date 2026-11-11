@@ -341,3 +341,4 @@ crates/loop/tests/reload.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-
 crates/main/src/reload.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
 crates/main/src/reload_tests.rs	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
 docs/events.md	fiber-4315	plan	2026-11-11T15:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4547
+docs/tools.md	fiber-4617	plan	2026-11-11T15:05:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
