@@ -323,3 +323,5 @@ crates/provider/src/google_generative_ai_request.rs	fiber-4611	plan	2026-11-11T1
 crates/loop/src/conversation.rs	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/loop.md	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/events.md	fiber-4611	plan	2026-11-11T12:15:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/changed_files_view.rs	fiber-4592	plan	2026-11-11T12:26:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/changed_files_view_tests.rs	fiber-4592	plan	2026-11-11T12:26:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
