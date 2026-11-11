@@ -29,6 +29,8 @@ const SECONDARY: Colour = Colour::Rgb(179, 157, 219);
 const COMPACTION: Colour = Colour::Rgb(31, 26, 46);
 /// A turn card's background in truecolour.
 const TURN: Colour = Colour::Rgb(16, 16, 23);
+/// The dark page: the panel tint (`docs/tui.md:2985`).
+const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
 /// The scripted turn: a read past the compaction, the note, then done with
 /// the usage that sizes the band after.
@@ -100,7 +102,7 @@ fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
         return None;
     }
     // The content row sits on the compaction tint; half-block edges over
-    // the default background wrap it above and below.
+    // the page's panel tint wrap it above and below.
     if !(left..=right).all(|col| grid.cell(col as u16, band).bg == COMPACTION) {
         return None;
     }
@@ -108,7 +110,7 @@ fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     if !edges.iter().all(|(row, want)| {
         (left..=right).all(|col| {
             let cell = grid.cell(col as u16, *row);
-            cell.symbol.as_str() == *want && cell.fg == COMPACTION && cell.bg == Colour::Default
+            cell.symbol.as_str() == *want && cell.fg == COMPACTION && cell.bg == PAGE
         })
     }) {
         return None;
@@ -208,13 +210,13 @@ fn the_compaction_band_matches_the_doc() {
     for col in left..=right {
         assert_eq!(grid.cell(col, band).bg, COMPACTION, "col {col}");
     }
-    // Half-block edges over the default background, above and below.
+    // Half-block edges over the page's panel tint, above and below.
     for (row, want) in [(band - 1, "▄"), (band + 1, "▀")] {
         for col in left..=right {
             let cell = grid.cell(col, row);
             assert_eq!(cell.symbol.as_str(), want, "col {col}");
             assert_eq!(cell.fg, COMPACTION, "col {col}");
-            assert_eq!(cell.bg, Colour::Default, "col {col}");
+            assert_eq!(cell.bg, PAGE, "col {col}");
         }
     }
     // The card above the band and a second card below it both sit on
