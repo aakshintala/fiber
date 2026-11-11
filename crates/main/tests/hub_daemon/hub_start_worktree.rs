@@ -735,9 +735,8 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
 /// Asserts no line arrives within `bound`: the read times out rather
 /// than closing, so the stream holds no live tail.
 fn assert_silent(client: &Socket, bound: std::time::Duration) {
-    let wait = Deadline::after(bound).start_wait();
     let mut read = client.read.lock().unwrap();
-    match support::read_line_through(&mut read, &wait, "the live tail") {
+    match support::read_line(&mut read, Deadline::after(bound), "the live tail") {
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
         other => panic!("the tail stays silent: {other:?}"),
     }
