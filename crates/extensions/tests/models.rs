@@ -767,9 +767,173 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
         providers.resolve("acme/bad").unwrap_err(),
         Error::UnknownModel { .. }
     ));
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+}
+
+#[test]
+fn a_warm_cache_names_an_invalid_model_once() {
+    let setup = Setup::new();
+    // A data-file provider under a warm cache: the cached list stands
+    // in for the data file's at load and again in `add_lua`.
+    // The load reports each `model_invalid` once per reason; a later
+    // admission reports only invalid the load did not report
+    // (`docs/model-routing.md`, "Model discovery").
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["a"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    // One single-reason invalid model: no `context_window` draws one
+    // `model_invalid` notice, never two.
+    write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "bad", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let load_invalid: Vec<_> = load_notices
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+        .collect();
+    // The same cached list feeds admission in `add_lua`: the cache
+    // serves, so the Lua body never runs, and the load-emitted
+    // identity stays suppressed there.
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    let lua_notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let lua_invalid: Vec<_> = lua_notices
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+        .collect();
+    assert_eq!(
+        load_invalid.len() + lua_invalid.len(),
+        1,
+        "one `model_invalid` per reason across load and `add_lua`: \
+         load {load_notices:?}, `add_lua` {lua_notices:?}"
+    );
+    assert_eq!(load_invalid.len(), 1, "{load_notices:?}");
+    assert!(lua_invalid.is_empty(), "{lua_notices:?}");
+    assert_eq!(load_invalid[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(
+        load_invalid[0].message,
+        "The model `acme/bad` declares no `context_window`."
+    );
+}
+
+#[test]
+fn a_disabled_process_package_warm_cache_names_an_invalid_model_once() {
+    fakes::within(
+        "Providers::load_enabled",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        || {
+            let setup = Setup::new();
+            // A disabled process package: its provider data still loads,
+            // but no `add_lua` ever follows, so the load's notice is the
+            // only one. The load reports each `model_invalid` once per
+            // reason (`docs/model-routing.md`, "Model discovery").
+            let mut m = manifest("acme");
+            m["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+            let source = setup.source("acme", &m, &[provider("acme", &["a"])]);
+            install(&setup.home(), &source, "0.1.0").unwrap();
+            write_model_cache(
+                &setup.home(),
+                "acme",
+                &json!([{"id": "bad", "protocol": "openai-responses",
+                         "base_url": "http://127.0.0.1:1/v1"}]),
+            )
+            .unwrap();
+            let configuration = config(&setup, &["extensions.acme.enabled=false"]);
+            let (providers, notices) =
+                Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(matches!(
+                providers.resolve("acme/bad").unwrap_err(),
+                Error::UnknownModel { .. }
+            ));
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+            assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+            assert_eq!(
+                notices[0].message,
+                "The model `acme/bad` declares no `context_window`."
+            );
+        },
+    );
+}
+
+#[test]
+fn add_lua_suppresses_only_the_invalid_the_load_reported() {
+    let setup = Setup::new();
+    // Static data with one invalid model: the load emits its notice and
+    // records its identity. A later admission reports only invalid the
+    // load did not report (`docs/model-routing.md`, "Model discovery").
+    let data = json!({ "name": "acme", "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": [
+        {"id": "bad", "protocol": "openai-responses",
+         "base_url": "http://127.0.0.1:1/v1"},
+        {"id": "ok", "protocol": "openai-responses",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
+    ]});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(load_notices.len(), 1, "{load_notices:?}");
+    assert_eq!(load_notices[0].code, ErrorCode::ModelInvalid);
+    // `models()` repeats the load-reported invalid beside a new invalid
+    // with another reason: only the new one is reported.
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        &[
+            "{ { id = \"bad\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\" }, ",
+            "{ id = \"bad2\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000, extra_body = { tools = 1 } }, ",
+            "{ id = \"ok\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } }",
+        ]
+        .concat(),
+    );
+    let lua_notices = providers.add_lua(
+        "acme",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/bad2").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let lua_invalid: Vec<_> = lua_notices
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ModelInvalid)
+        .collect();
+    assert_eq!(lua_invalid.len(), 1, "{lua_notices:?}");
+    assert_eq!(
+        lua_invalid[0].message,
+        "The model `acme/bad2` names `tools` in its `extra_body`, a field Fiber builds itself."
+    );
+    assert_ne!(lua_invalid[0].message, load_notices[0].message);
 }
 
 #[test]
