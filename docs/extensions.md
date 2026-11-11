@@ -192,7 +192,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 > | Call | Bytes positions |
 > |---|---|
 > | `host.http` | `opts.body`; the result's `body` |
-| `host.oauth.poll` | `body` |
+> | `host.oauth.poll` | `body` |
 > | `host.exec` | `opts.input`; the result's `stdout` and `stderr` |
 > | `host.fs.read` | its result |
 > | `host.fs.write` | the contents argument |
