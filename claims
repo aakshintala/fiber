@@ -357,3 +357,16 @@ docs/tui.md	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aa
 docs/extensions.md	fiber-2720	plan	2026-11-11T16:46:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/log/Cargo.toml	fiber-4628	plan	2026-11-11T16:46:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/Cargo.toml	fiber-4628	plan	2026-11-11T16:46:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/model_picker_tests.rs	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_attached_80x24.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_filtered.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_filtered_empty.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_logged_out_fresh_home.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_long_list_scrolls_to_the_selection.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_marking.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_no_models.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_on_home.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_reading.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__model_picker__view_tests__model_picker_scoped_with_the_toggle_line.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/screens/snapshots/screens__journeys__model_picker_by_name.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/screens/snapshots/screens__journeys__model_picker_open.snap	fiber-4612	plan	2026-11-11T16:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
