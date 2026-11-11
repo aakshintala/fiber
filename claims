@@ -331,3 +331,8 @@ crates/cli/src/models_tests.rs	fiber-4609	plan	2026-11-11T16:55:23Z	Amoghs-MacBo
 scripts/install-shells	fiber-4660	plan	2026-11-11T17:10:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4660	plan	2026-11-11T17:10:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/install-shells:.github/workflows/ci.yml:docs/ci.md	fiber-4660	grant	2026-11-11T17:19:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4660	
+providers/opencode/providers/opencode-go.json	fiber-4644	plan	2026-11-11T18:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/opencode/providers/opencode-zen.json	fiber-4644	plan	2026-11-11T18:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_table.rs	fiber-4644	plan	2026-11-11T18:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/models_dev.rs	fiber-4644	plan	2026-11-11T18:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/models-dev.json	fiber-4644	plan	2026-11-11T18:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
