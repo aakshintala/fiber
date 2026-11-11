@@ -89,7 +89,8 @@ installed, not built into the binary. Installing Fiber installs every
 first-party provider, and a person may remove any of them. How extensions
 arrive and stay current is `docs/extensions.md`.
 
-A first-party provider is one Fiber can probe and re-record. There are eleven:
+A first-party provider is one Fiber can probe and re-record. There are ten, and an eleventh,
+Azure, is not built yet:
 
 | Provider | Protocols | Credential |
 |---|---|---|

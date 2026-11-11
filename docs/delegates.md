@@ -517,6 +517,8 @@ session messages directly and the parent would drop out of the path.
 
 ### Claude Code
 
+**Not built yet: see #545.**
+
 | What | How |
 |---|---|
 | Start | `claude -p --output-format stream-json --verbose --input-format stream-json --session-id <uuid> --model <model> --effort <effort> --permission-mode auto` |
@@ -548,6 +550,8 @@ Probed on Claude Code 2.1.284:
   The value with an API key was not probed.
 
 ### cursor-agent
+
+**Not built yet: see #546.**
 
 | What | How |
 |---|---|
