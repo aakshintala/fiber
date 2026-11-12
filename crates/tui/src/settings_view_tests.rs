@@ -3506,6 +3506,41 @@ fn settings_search_matches_letter_activation_and_slash_empty_query() {
 }
 
 #[test]
+fn emptied_query_closes_typed_search() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "the");
+    assert!(settings.search.is_some());
+
+    press(
+        &mut settings,
+        &fake,
+        &[Key::Backspace, Key::Backspace, Key::Backspace],
+    );
+
+    assert_search_closed(&settings);
+}
+
+#[test]
+fn emptied_query_closes_seeded_search() {
+    let fake = Fake::new(rows());
+    let mut settings = open(&fake);
+    one(&mut settings, &fake, Key::Char('r'));
+    assert_eq!(query_of(&settings), "r");
+
+    one(&mut settings, &fake, Key::Backspace);
+
+    assert_search_closed(&settings);
+}
+
+fn assert_search_closed(settings: &Settings) {
+    assert!(settings.search.is_none());
+    assert_eq!(settings.tab, SettingsTab::Appearance);
+    let shown = screen(settings);
+    assert!(shown.contains("Appearance   Notifications"), "{shown}");
+    assert!(shown.contains("› Hover"), "{shown}");
+}
+
+#[test]
 fn settings_search_matches_case_insensitively_and_by_substring_with_backspace_and_paste() {
     let fake = Fake::new(rows());
     for query in ["REVIEWER", "eviewer"] {
