@@ -178,3 +178,6 @@ crates/contract/src/events.rs	fiber-4260	grant	2026-11-12T01:03:57Z	Amoghs-MacBo
 crates/jobs/src/timing_tests.rs	fiber-4260	grant	2026-11-12T01:39:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/jobs/src/error.rs	fiber-4260	grant	2026-11-12T03:45:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/jobs/src/error_tests.rs	fiber-4260	grant	2026-11-12T03:45:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
+crates/tui/src/settings_view.rs	fiber-4589	plan	2026-11-12T04:07:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/settings_view_tests.rs	fiber-4589	plan	2026-11-12T04:07:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4589	plan	2026-11-12T04:07:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
