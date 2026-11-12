@@ -72,10 +72,35 @@ pub fn model_lists(
     run: config::Runner<'_>,
     clock: &dyn contract::clock::Clock,
 ) -> Result<(Providers, Config, Vec<Notice>), ModelListsError> {
-    let (providers, config, mut notices, unconfigured) =
-        model_lists_apart(home, workspace, read, load, run, clock)?;
-    notices.extend(unconfigured);
+    let fetch = default_models_dev_fetch();
+    model_lists_with_fetch(home, workspace, read, load, run, clock, &fetch)
+}
+
+fn model_lists_with_fetch(
+    home: &Path,
+    workspace: &Path,
+    read: ModelLists,
+    load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
+    clock: &dyn contract::clock::Clock,
+    fetch: &extensions::models_dev::Fetch,
+) -> Result<(Providers, Config, Vec<Notice>), ModelListsError> {
+    let (mut providers, config, mut notices, lookup) =
+        lists_before_fill_with_fetch(home, workspace, read, load, run, clock, fetch)?;
+    notices.extend(providers.fill_placeholders(&config, &lookup)?);
+    providers.forget_lua();
     Ok((providers, config, notices))
+}
+
+fn default_models_dev_fetch() -> extensions::models_dev::Fetch {
+    #[cfg(not(test))]
+    {
+        extensions::models_dev::live_fetch()
+    }
+    #[cfg(test)]
+    {
+        std::sync::Arc::new(|_| Err("network disabled in tests".to_owned()))
+    }
 }
 
 /// [`model_lists`] with the [`Notice`]s of each model the placeholder fill
@@ -161,6 +186,31 @@ fn lists_before_fill(
     ),
     ModelListsError,
 > {
+    let fetch = default_models_dev_fetch();
+    lists_before_fill_with_fetch(home, workspace, read, load, run, clock, &fetch)
+}
+
+#[allow(
+    clippy::type_complexity,
+    reason = "the shared read prefix: four values both the apart and grouped reads map in one step"
+)]
+fn lists_before_fill_with_fetch(
+    home: &Path,
+    workspace: &Path,
+    read: ModelLists,
+    load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
+    clock: &dyn contract::clock::Clock,
+    fetch: &extensions::models_dev::Fetch,
+) -> Result<
+    (
+        Providers,
+        Config,
+        Vec<Notice>,
+        impl Fn(&str) -> Option<String> + use<>,
+    ),
+    ModelListsError,
+> {
     let (mut providers, config, mut notices) =
         crate::models::providers_and_config(home, workspace).map_err(ModelListsError::Load)?;
     // The cached lists serve every cached copy an installed extension
@@ -185,8 +235,29 @@ fn lists_before_fill(
                 run,
                 &lookup,
             );
+            if check_age {
+                extensions::models_dev::refresh_if_due(
+                    home,
+                    config::models_dev_enabled(&config),
+                    max_age,
+                    clock.wall(),
+                    fetch,
+                );
+            } else {
+                extensions::models_dev::refresh_forced(
+                    home,
+                    config::models_dev_enabled(&config),
+                    clock.wall(),
+                    fetch,
+                );
+            }
         }
     }
+    notices.extend(extensions::models_dev::apply(
+        home,
+        config::models_dev_enabled(&config),
+        &mut providers,
+    ));
     providers.retain_credentialed(&config);
     Ok((providers, config, notices, lookup))
 }

@@ -3,6 +3,7 @@
 //! field in the per-package table (`docs/model-routing.md`, "What a
 //! provider extension declares").
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -802,7 +803,49 @@ pub(crate) fn generate(
                 stem(package)
             ));
         }
+        let mut pins = BTreeMap::<String, Vec<String>>::new();
+        for (id, model) in &generated {
+            let protocol = protocol_of(package, models.get(id).unwrap_or(&Value::Null), id);
+            let mut fields = BTreeSet::new();
+            for text in [
+                Some(package.every_model),
+                package
+                    .by_protocol
+                    .iter()
+                    .find(|entry| entry.0 == protocol)
+                    .map(|entry| entry.1),
+                package
+                    .by_model
+                    .iter()
+                    .find(|entry| entry.0 == id)
+                    .map(|entry| entry.1),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                fields.extend(layer(package, text)?.keys().cloned());
+            }
+            for (index, correction) in corrections.iter().enumerate() {
+                if !pruned.contains(&index)
+                    && names_package(package, &correction.package)
+                    && correction.model == *id
+                {
+                    fields.extend(correction.fields.keys().cloned());
+                }
+            }
+            fields.retain(|field| model.contains_key(field));
+            if !fields.is_empty() {
+                pins.insert(id.clone(), fields.into_iter().collect());
+            }
+        }
         let mut file = provider_layer;
+        file.insert(
+            "models_dev".to_owned(),
+            serde_json::json!({
+                "source": package.source,
+                "pins": pins,
+            }),
+        );
         file.insert(
             "models".to_owned(),
             Value::Array(
