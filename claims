@@ -94,7 +94,6 @@ crates/tui/src/model_picker_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	r
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4700	plan	2026-11-12T06:25:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
-crates/main/tests/screens/call_view.rs	fiber-4723	plan	2026-11-12T07:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/model_lists.rs:75-77	fiber-4635	plan	2026-11-12T07:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
 crates/cli/src/model_lists.rs:80-81	fiber-4635	plan	2026-11-12T07:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
 crates/cli/src/model_lists.rs:162-163	fiber-4635	plan	2026-11-12T07:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
