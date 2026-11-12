@@ -601,20 +601,34 @@ impl App {
             .retain(|(session, _)| !sessions.contains(session));
     }
 
+    /// The ids of `generation`'s tags of one kind, in send order:
+    /// `generation_of` reads the generation off a tag of that kind.
+    /// Both `/delete` and `/archive` fold through this one helper so
+    /// their tag collectors cannot drift apart.
+    pub(super) fn command_tag_ids(
+        &self,
+        generation: u64,
+        generation_of: impl Fn(&Waiting) -> Option<u64>,
+    ) -> Vec<String> {
+        self.outbox
+            .tags()
+            .filter(|(_, tag)| generation_of(tag) == Some(generation))
+            .map(|(id, _)| id.to_owned())
+            .collect()
+    }
+
     /// The ids of the running command's tags of one kind, in send order:
     /// `generation_of` reads the generation off a tag of that kind, and
     /// only the running command's generation counts.
     fn delete_tag_ids(&self, generation_of: impl Fn(&Waiting) -> Option<u64>) -> Vec<String> {
         let running = self.home.questions.delete_command.generation;
-        self.outbox
-            .tags()
-            .filter(|(_, tag)| generation_of(tag) == Some(running))
-            .map(|(id, _)| id.to_owned())
-            .collect()
+        self.command_tag_ids(running, generation_of)
     }
 
     /// The row's sanitized title, or its id without one, for notices.
-    fn delete_display(&self, id: &SessionId) -> String {
+    /// Shared with `/archive`, whose stop-refused notice names the same
+    /// row text.
+    pub(super) fn delete_display(&self, id: &SessionId) -> String {
         self.home
             .sessions
             .row(id)
@@ -655,7 +669,10 @@ fn stop_generation(tag: &Waiting) -> Option<u64> {
 /// is a unique subset of it in the preview's relative order. Anything
 /// else is malformed: the caller shows the invalid-preview notice, and
 /// the invalid detail never reaches a person.
-fn validated_sets(result: &Value, target: &SessionId) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
+pub(super) fn validated_sets(
+    result: &Value,
+    target: &SessionId,
+) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
     let sessions = result.get("sessions").and_then(Value::as_array)?;
     if sessions.is_empty() {
         return None;

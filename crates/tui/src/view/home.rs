@@ -321,6 +321,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 .push(Span::styled(format!("  exited · {count}"), dim)),
             ListLine::Exited {
                 key,
+                stop,
                 glyph,
                 name,
                 id,
@@ -329,6 +330,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 age,
             } => {
                 row.spot = Some(Spot::Entry(*key));
+                row.stop = *stop;
                 row.left
                     .push(Span::styled(format!("   {glyph} {name}"), dim));
                 let mut segments = vec![id.clone()];
