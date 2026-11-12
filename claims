@@ -204,8 +204,6 @@ crates/tui/src/screen.rs:161-161	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse
 crates/tui/src/screen_tests.rs:574-575	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/tests/draw_jig.rs	fiber-4719	plan	2026-11-12T08:30:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/support/mod.rs	fiber-4726	plan	2026-11-12T08:38:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/reload_tests.rs	fiber-4734	plan	2026-11-12T08:46:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/reload_tests.rs	fiber-4734	plan	2026-11-12T08:46:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/check	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/leak-scan	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/fakes/src/lib.rs	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -367,3 +365,5 @@ crates/extensions/src/host/resolve.rs	fiber-4673	plan	2026-11-12T09:44:36Z	round
 crates/hub/src/fake.rs	fiber-4716	plan	2026-11-12T09:51:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/prune.rs	fiber-4673	plan	2026-11-12T09:57:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/offer_tests.rs	fiber-4735	plan	2026-11-12T10:02:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/loop/src/reload_tests.rs:611-612	fiber-4734	plan	2026-11-12T10:11:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4734-reload-cancel	
+crates/main/src/reload_tests.rs:541-542	fiber-4734	plan	2026-11-12T10:11:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4734-reload-cancel	
