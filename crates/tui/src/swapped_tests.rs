@@ -6,13 +6,44 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::{
-    Chrome, Frame, Ink, Inline, List, Spot, about, compact, render, rows_height,
-    wheel_targets_window, wheel_window,
+    Chrome, Frame, Ink, Inline, List, Spot, about, compact, render, rows_height, step_target,
+    wheel_targets_window, wheel_window, wrap_cursor, wrap_step,
 };
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::rows::Join;
 use crate::theme::Role;
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn wrap_step_handles_empty_single_and_both_directions() {
+    assert_eq!(wrap_step(7, 0, 1), 7);
+    assert_eq!(wrap_step(0, 1, 1), 0);
+    assert_eq!(wrap_step(0, 1, -1), 0);
+    assert_eq!(wrap_step(0, 4, -1), 3);
+    assert_eq!(wrap_step(3, 4, 1), 0);
+    assert_eq!(wrap_step(1, 4, 6), 3);
+    assert_eq!(wrap_step(1, 4, -6), 3);
+}
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn wrap_cursor_wraps_and_keeps_empty_rows() {
+    assert_eq!(wrap_cursor::<usize>(&[], 3, true), 3);
+    assert_eq!(wrap_cursor(&[2, 5, 9], 2, false), 9);
+    assert_eq!(wrap_cursor(&[2, 5, 9], 9, true), 2);
+}
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn step_target_wraps_sparse_targets_and_keeps_empty() {
+    assert_eq!(step_target(&[], 4, true), 4);
+    assert_eq!(step_target(&[2], 2, true), 2);
+    assert_eq!(step_target(&[1, 4, 8], 8, true), 1);
+    assert_eq!(step_target(&[1, 4, 8], 1, false), 8);
+    assert_eq!(step_target(&[1, 4, 8], 4, true), 8);
+    assert_eq!(step_target(&[1, 4, 8], 4, false), 1);
+}
 
 /// A list after pressing `keys` over `rows` rows shown `height` at a time.
 fn pressed(keys: &[Key], rows: usize, height: usize) -> List {

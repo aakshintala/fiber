@@ -150,6 +150,10 @@ fn the_receipt_names_the_reason_the_job_and_the_file() {
         extension: None,
         description: "echo hi".into(),
         output_path: "j_1.log".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     };
     let path = Path::new("/tmp/j_1.log");
     let output = receipt(&started, path, &MoveReason::StartedInBackground, None);
@@ -376,6 +380,7 @@ fn hand_off_with_timeout(
             timeout_at,
             move_at: None,
             members: Some(members),
+            identity: None,
             pgid: 99,
             hosted: None,
             listing: None,
@@ -1064,6 +1069,10 @@ fn a_terminal_receipt_says_how_to_type_and_carries_the_output_so_far() {
         extension: None,
         description: "python3".into(),
         output_path: "j_1.log".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     };
     let path = Path::new("/tmp/j_1.log");
     let reason = MoveReason::StartedInBackground;
@@ -1097,6 +1106,10 @@ fn the_receipt_gains_the_spills_extra_line() {
         extension: None,
         description: "echo hi".into(),
         output_path: "j_1.log".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     };
     let path = Path::new("/tmp/j_1.log");
     let plain = receipt(&started, path, &MoveReason::StartedInBackground, None);
@@ -1125,6 +1138,10 @@ fn the_deadline_closes_the_receipt_after_the_spill_line() {
         extension: None,
         description: "echo hi".into(),
         output_path: "j_1.log".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     };
     let path = Path::new("/tmp/j_1.log");
     let plain = receipt(&started, path, &MoveReason::StartedInBackground, None);

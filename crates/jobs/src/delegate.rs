@@ -2,6 +2,7 @@
 //! and folding how it ended (`docs/delegates.md`).
 
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +14,7 @@ use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Point};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, JobId, SessionId};
+use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 pub(crate) mod fork;
 pub(crate) mod group;
@@ -31,6 +33,26 @@ use run::Runner;
 
 use crate::error::JobsError;
 use crate::registry::{Registry, mint_job_id};
+
+fn process_identity_cleanup(child: &mut Child, source: std::io::Error) -> std::io::Error {
+    let cleanup = match support::group::signal(child.id(), Signal::KILL) {
+        Ok(()) => child.wait().map(|_| ()),
+        Err(group_error) => child
+            .kill()
+            .and_then(|()| child.wait().map(|_| ()))
+            .map_err(|child_error| {
+                std::io::Error::other(format!(
+                    "group kill failed ({group_error}); child cleanup failed ({child_error})"
+                ))
+            }),
+    };
+    match cleanup {
+        Ok(()) => source,
+        Err(cleanup) => {
+            std::io::Error::other(format!("{source}; child cleanup failed ({cleanup})"))
+        }
+    }
+}
 
 /// Starts a Fiber delegate: a child `fiber session` that runs the prompt
 /// as a job and exits when its run ends (`docs/delegates.md`, "The
@@ -588,9 +610,17 @@ impl DelegateWiring {
                     self.registry.timing().cloned(),
                 );
                 let runner = runner.with_worktree(worktree_run);
-                let (child, listing) = match runner.spawn(&self.launch, &launched) {
+                let (mut child, listing) = match runner.spawn(&self.launch, &launched) {
                     Ok(started) => started,
                     Err(source) => {
+                        runner.end_worktree();
+                        return Err(JobsError::SpawnFailed { source });
+                    }
+                };
+                let identity = match run::process_identity(child.id()) {
+                    Ok(identity) => identity,
+                    Err(source) => {
+                        let source = process_identity_cleanup(&mut child, source);
                         runner.end_worktree();
                         return Err(JobsError::SpawnFailed { source });
                     }
@@ -615,6 +645,10 @@ impl DelegateWiring {
                         extension: Some(extension.to_owned()),
                         description: description.clone(),
                         output_path: output_path.clone(),
+
+                        pgid: Some(identity.pgid),
+                        start_time: Some(identity.start_time),
+                        kind: Some(contract::events::JobKind::Job),
                     };
                     let finish = self.registry.open_extension_started(
                         job_id.clone(),
@@ -622,6 +656,7 @@ impl DelegateWiring {
                         description,
                         output_path.clone(),
                         stop,
+                        identity,
                         delegate.clone(),
                     );
                     (started, finish)
@@ -632,6 +667,7 @@ impl DelegateWiring {
                         description,
                         output_path.clone(),
                         stop,
+                        identity,
                         delegate.clone(),
                     )
                 };

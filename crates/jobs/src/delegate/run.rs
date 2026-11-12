@@ -141,6 +141,16 @@ pub enum Watched {
     Closed,
 }
 
+/// Reads the identity recorded with every process job started by a delegate.
+pub(crate) fn process_identity(pid: u32) -> io::Result<contract::jobs::JobIdentity> {
+    let start_time = support::group::start_time(pid)
+        .ok_or_else(|| io::Error::other("cannot read child start time"))?;
+    Ok(contract::jobs::JobIdentity {
+        pgid: pid,
+        start_time,
+    })
+}
+
 /// A shared, idempotent release of the parent's worktree lock.
 #[derive(Clone)]
 pub struct WorktreeGuard(Arc<WorktreeHold>);

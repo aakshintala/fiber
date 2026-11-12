@@ -419,7 +419,6 @@ impl Package {
             browser,
             model: Mutex::new(None),
             delegate: Mutex::new(None),
-            tool_runner: Mutex::new(None),
             secrets: manifest.secrets.clone(),
             host_script,
             session: Mutex::new(session),

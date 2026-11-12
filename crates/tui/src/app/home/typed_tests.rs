@@ -593,7 +593,8 @@ fn a_late_listing_keeps_a_focused_recent() {
 }
 
 #[test]
-fn arrows_walk_completions_then_recents_and_clamp() {
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn arrows_walk_completions_then_recents_and_wrap() {
     let mut typed = Typed::new();
     let mut ids = mint();
     type_text(&mut typed, "/");
@@ -606,6 +607,8 @@ fn arrows_walk_completions_then_recents_and_clamp() {
     typed.move_focus(true, 2);
     assert_eq!(typed.focus(), &Focus::Recent(1));
     typed.move_focus(true, 2);
+    assert_eq!(typed.focus(), &Focus::Completion("a1".to_owned()));
+    typed.move_focus(false, 2);
     assert_eq!(typed.focus(), &Focus::Recent(1));
     typed.move_focus(false, 2);
     assert_eq!(typed.focus(), &Focus::Recent(0));
@@ -614,7 +617,7 @@ fn arrows_walk_completions_then_recents_and_clamp() {
     typed.move_focus(false, 2);
     assert_eq!(typed.focus(), &Focus::Completion("a1".to_owned()));
     typed.move_focus(false, 2);
-    assert_eq!(typed.focus(), &Focus::Completion("a1".to_owned()));
+    assert_eq!(typed.focus(), &Focus::Recent(1));
 }
 
 #[test]

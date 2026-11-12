@@ -133,7 +133,7 @@ impl Typed {
 
     /// Moves focus one row: through the completions, then the recents.
     /// Down from nothing focuses the first row; up from nothing stays
-    /// above the list; both ends clamp.
+    /// above the list; the rows wrap at either end.
     pub(super) fn move_focus(&mut self, down: bool, recents: usize) {
         let completions = self.completions();
         let total = completions.len().saturating_add(recents);
@@ -159,11 +159,7 @@ impl Typed {
             self.focus = Focus::Nothing;
             return;
         };
-        let next = if down {
-            at.saturating_add(1).min(total.saturating_sub(1))
-        } else {
-            at.saturating_sub(1)
-        };
+        let next = crate::swapped::wrap_step(at, total, if down { 1 } else { -1 });
         self.focus = Self::row_focus(next, &completions);
     }
 

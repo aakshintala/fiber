@@ -590,6 +590,9 @@ impl Orphans {
     /// a later run a crash cut short is still owed its orphaned end.
     pub(crate) fn fold(&mut self, event: &Event) {
         if let Event::JobStarted(job) = event {
+            if job.kind == Some(contract::events::JobKind::Detached) {
+                return;
+            }
             self.started.push(job.job_id.clone());
             self.settled.remove(&job.job_id);
         } else if let Event::JobCompleted(job) = event {

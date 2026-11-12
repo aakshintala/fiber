@@ -171,6 +171,6 @@ pub(crate) fn handler_keys(call: &str, args: &[Value]) -> Vec<String> {
 }
 
 mod decode;
-mod dispatch;
+pub(crate) mod dispatch;
 
 pub(crate) use decode::{DecodedCall, decode_host};
