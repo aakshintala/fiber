@@ -27,10 +27,7 @@ crates/extensions/src/models_dev.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-
 crates/extensions/src/providers.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/parts.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/models.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/support/hub_start.rs	fiber-4756	plan	2026-11-12T15:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/leak-scan	fiber-4754	plan	2026-11-12T15:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/providers/databricks.rs	fiber-4756	plan	2026-11-12T15:23:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing.md	fiber-4756	plan	2026-11-12T15:23:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/lua/schedule_tests.rs:1406-1407	fiber-4731	plan	2026-11-12T15:31:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4731-shell-quote	
 crates/extensions/src/lua/schedule_tests.rs:1411-1418	fiber-4731	plan	2026-11-12T15:31:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4731-shell-quote	
 crates/extensions/src/lua/schedule_tests.rs:1434-1436	fiber-4731	plan	2026-11-12T15:31:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4731-shell-quote	
@@ -108,14 +105,5 @@ docs/testing.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/hom
 docs/workflow.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/Cargo.toml	fiber-4755	plan	2026-11-12T16:27:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 Cargo.lock	fiber-4755	plan	2026-11-12T16:27:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/commands/import.rs:518-525	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/extension_host/extension_project.rs:154-154	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/extension_host/extension_project.rs:227-227	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/providers/models.rs:124-124	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/support/journey.rs:359-359	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/support/journey.rs:400-400	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/support/mod.rs:340-340	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/support/mod.rs:378-378	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
-crates/main/tests/support/mod.rs:414-414	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
 crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4582	plan	2026-11-12T16:48:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4582	plan	2026-11-12T16:48:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
