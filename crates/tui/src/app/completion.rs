@@ -469,6 +469,7 @@ impl App {
         let theme = !self.slash_open() && self.completion.files.is_none();
         let chosen = names.get(self.completion.selected).cloned();
         match key {
+            Key::Up if names.is_empty() => {}
             Key::Up => {
                 self.completion.selected = self
                     .completion
@@ -476,6 +477,7 @@ impl App {
                     .checked_sub(1)
                     .unwrap_or(names.len() - 1);
             }
+            Key::Down if names.is_empty() => {}
             Key::Down => {
                 self.completion.selected = (self.completion.selected + 1) % names.len();
             }

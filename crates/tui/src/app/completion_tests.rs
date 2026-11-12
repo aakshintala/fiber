@@ -630,6 +630,9 @@ fn an_empty_slash_list_shows_no_matches() {
     assert_eq!(completions.selected, None);
     assert_eq!(completions.lines(), ["no matches"]);
     assert!(matches!(completions.rows, Rows::Message(_)));
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.completions().expect("panel remains").selected, None);
 }
 
 /// The structured `@` panel: the windowed paths and the query behind

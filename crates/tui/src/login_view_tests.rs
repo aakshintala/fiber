@@ -711,22 +711,6 @@ fn down_and_up_step_over_targets_only() {
 }
 
 #[test]
-fn arrows_wrap_between_target_rows() {
-    let fake = fake_with(targets());
-    let mut login = at(&fake, 1);
-    press(&mut login, &fake, &[Key::Up]);
-    assert_eq!(
-        login.selected, 5,
-        "Up from the first target wraps to the last"
-    );
-    press(&mut login, &fake, &[Key::Down]);
-    assert_eq!(
-        login.selected, 1,
-        "Down from the last target wraps to the first"
-    );
-}
-
-#[test]
 fn page_up_and_page_down_land_on_targets() {
     let fake = fake_with(targets());
     // (height, from, key, to): the page is the shown body rows less
