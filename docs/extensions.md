@@ -309,6 +309,8 @@ fiber.watch(kinds, { timeout, run })
 fiber.command(name, { description, timeout, run })
 ```
 
+`fiber.harness` is not built yet: see #545.
+
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
 A tool's `effects` is a table, `{ effects, paths?, reversible, hosts? }` as
@@ -1852,6 +1854,8 @@ names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
 `cursor-agent`, `hooks`, `init`, `memory`, `export` and `codemode` are short names for
 `github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
 the name it registers (`docs/delegates.md`, "Harness extensions").
+`azure`, `claude` and `cursor-agent` are not built yet: see #224, #545 and
+#546.
 A short name also names the extension's directories in Fiber home
 (`docs/state.md`, "What each part holds").
 
@@ -1979,8 +1983,8 @@ start ("Loading, and cost when nothing is loaded").
 
 ### A fresh install
 
-A fresh install has every first-party extension: the eleven providers,
-the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`), `export` and `codemode` ("Code mode"). They arrive in the release's extensions archive, which `install.sh`
+A fresh install has every first-party extension: the ten built providers,
+the Claude Code and cursor-agent harnesses (not built yet: see #545 and #546), `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`), `export` and `codemode` ("Code mode"). They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and

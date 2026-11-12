@@ -95,7 +95,8 @@ installed, not built into the binary. Installing Fiber installs every
 first-party provider, and a person may remove any of them. How extensions
 arrive and stay current is `docs/extensions.md`.
 
-A first-party provider is one Fiber can probe and re-record. There are eleven:
+A first-party provider is one Fiber can probe and re-record. There are ten, and an eleventh,
+Azure, is not built yet:
 
 | Provider | Protocols | Credential |
 |---|---|---|
@@ -109,7 +110,7 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 | muse (the Meta Model API) | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | AWS Bedrock | `anthropic-messages` for Claude and `bedrock-converse` for other models, both with AWS framing | Bedrock API key, or SigV4 through `sign()` |
 | Google Vertex | `anthropic-messages` for Claude, `google-generative-ai` for Gemini | token from `credential()` |
-| Azure | `openai-completions`, `openai-responses`; `anthropic-messages` for Foundry Claude | `api-key` header, or token from `credential()` |
+| Azure (not built yet: see #224) | `openai-completions`, `openai-responses`; `anthropic-messages` for Foundry Claude | `api-key` header, or token from `credential()` |
 
 The protocols are the ones each provider serves and Fiber speaks for it. A
 package's shipped models may use only some of them, and a model on another
