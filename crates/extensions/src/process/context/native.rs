@@ -11,7 +11,6 @@ use crate::host::admission::CallbackContext;
 
 use super::{
     ConfigScope, DataScope, HostOperation, NativeHostServices, ProcessContext, ProcessHostServices,
-    ToolCall,
 };
 
 mod oauth;
@@ -268,9 +267,14 @@ impl NativeHostServices {
         callback: &CallbackContext,
         name: &str,
         arguments: Value,
-        cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let runner = support::lock(&self.tool_runner).clone();
+        if callback.tool_anchor().is_none() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.tool: called outside a running tool call".to_owned(),
+            ));
+        }
+        let runner = callback.inner_calls.clone();
         let Some(runner) = runner else {
             return Err((
                 contract::ErrorCode::InvalidArguments,
@@ -278,16 +282,7 @@ impl NativeHostServices {
             ));
         };
         let completed = runner
-            .run(
-                &ToolCall {
-                    extension: context.extension.clone(),
-                    name: name.to_owned(),
-                    arguments,
-                    ran_by: callback.ran_by().unwrap_or("a timer").to_owned(),
-                    deadline: callback.deadline,
-                },
-                cancel,
-            )
+            .run(&context.extension, name, arguments)
             .map_err(|message| (contract::ErrorCode::InvalidArguments, message))?;
         crate::host::tool::outcome(&completed)
             .map(Some)
@@ -309,6 +304,12 @@ impl NativeHostServices {
         request: contract::model::HostModelRequest,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        if !callback.model_permitted() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.model: not available here".to_owned(),
+            ));
+        }
         let model = support::lock(&self.model).clone();
         let Some(model) = model else {
             return Err((
@@ -370,8 +371,15 @@ impl NativeHostServices {
         callback: &CallbackContext,
         arguments: Map<String, Value>,
         timeout: Duration,
-        _run: bool,
+        run: bool,
+        host_call: &super::super::requests::HostCallHandle,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        if !callback.delegate_permitted() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.delegate: not available here".to_owned(),
+            ));
+        }
         let delegate = support::lock(&self.delegate).clone();
         let Some(delegate) = delegate else {
             return Err((
@@ -379,15 +387,24 @@ impl NativeHostServices {
                 "host.delegate: the session is closing".to_owned(),
             ));
         };
-        let _ = (callback, timeout);
         let mut bound: Option<contract::JobId> = None;
         let mut bind = |id: &contract::JobId| {
             bound = Some(id.clone());
+            host_call.bind_delegate(id.clone(), timeout, run);
         };
-        let id = delegate
-            .start(&context.extension, &arguments, &mut bind)
-            .map_err(|rejection| (rejection.code, rejection.message))?;
-        drop(bound);
+        let id = match delegate.start(&context.extension, &arguments, &mut bind) {
+            Ok(id) => id,
+            Err(rejection) => {
+                if let Some(id) = bound {
+                    host_call.unbind_delegate(&id);
+                }
+                return Err((rejection.code, rejection.message));
+            }
+        };
+        if callback.cancel.is_cancelled() {
+            delegate.cancel(std::slice::from_ref(&id));
+            host_call.unbind_delegate(&id);
+        }
         Ok(Some(Value::String(id.0.clone())))
     }
 
@@ -776,6 +793,7 @@ impl ProcessHostServices for NativeHostServices {
         context: &ProcessContext,
         callback: &CallbackContext,
         operation: HostOperation,
+        host_call: &super::super::requests::HostCallHandle,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         match operation {
@@ -830,14 +848,14 @@ impl ProcessHostServices for NativeHostServices {
                 Ok(None)
             }
             HostOperation::Tool { name, arguments } => {
-                self.tool(context, callback, &name, arguments, cancel)
+                self.tool(context, callback, &name, arguments)
             }
             HostOperation::Model { request } => self.model(context, callback, request, cancel),
             HostOperation::Delegate {
                 arguments,
                 timeout,
                 run,
-            } => self.delegate(context, callback, arguments, timeout, run),
+            } => self.delegate(context, callback, arguments, timeout, run, host_call),
             HostOperation::OAuthCallback { port, path } => {
                 self.oauth_callback(context, callback, port, path.as_deref(), cancel)
             }

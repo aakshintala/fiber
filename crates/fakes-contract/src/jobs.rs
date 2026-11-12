@@ -1,7 +1,7 @@
 //! A [`contract::jobs::Jobs`] whose files live in a directory a test chooses.
 //! Each completion is delivered on a channel so a test can wait for it.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
@@ -12,7 +12,9 @@ use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Class, Event, JobCompleted, JobLine, JobStarted};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening, UsageTap};
+use contract::jobs::{
+    End, Foreground, JobIdentity, Jobs, Lines, OpenError, Opened, Opening, UsageTap,
+};
 use contract::tool::Cancel;
 
 use crate::deadline::Deadline;
@@ -235,6 +237,11 @@ impl FakeJobs {
         deadline.recv(&lock(&self.completed_rx)).ok()
     }
 
+    /// Number of completion callbacks recorded so far.
+    pub fn end_count(&self) -> usize {
+        lock(&self.inner).ended.len()
+    }
+
     /// How many times `stop_delegates` ran: the loop calls it once per
     /// turn that ends `budget_exceeded`.
     pub fn stop_delegates_calls(&self) -> usize {
@@ -343,8 +350,16 @@ impl Jobs for FakeJobs {
         let mut inner = lock(&self.inner);
         inner.next = inner.next.wrapping_add(1);
         let id = format!("j_{:016x}", inner.next);
-        let path = self.dir.join(format!("{id}.log"));
-        let file = match File::create(&path) {
+        let detached = opening.detached.is_some();
+        let path = opening
+            .detached
+            .clone()
+            .unwrap_or_else(|| self.dir.join(format!("{id}.log")));
+        let file = match if detached {
+            OpenOptions::new().append(true).open(&path)
+        } else {
+            File::create(&path)
+        } {
             Ok(file) => file,
             Err(source) => return Err(OpenError { path, source }),
         };
@@ -354,7 +369,18 @@ impl Jobs for FakeJobs {
             tool: Some(opening.tool),
             extension: None,
             description: opening.description,
-            output_path: format!("{id}.log"),
+            output_path: if detached {
+                path.to_string_lossy().into_owned()
+            } else {
+                format!("{id}.log")
+            },
+            pgid: opening.identity.map(|identity| identity.pgid),
+            start_time: opening.identity.map(|identity| identity.start_time),
+            kind: Some(if opening.detached.is_some() {
+                contract::events::JobKind::Detached
+            } else {
+                contract::events::JobKind::Job
+            }),
         };
         inner.started.push(started.clone());
         inner
@@ -474,6 +500,19 @@ impl Jobs for FakeJobs {
             .iter()
             .map(|started| started.job_id.clone())
             .filter(|id| !inner.ended.contains(id))
+            .collect()
+    }
+
+    fn owned_identities(&self) -> Vec<JobIdentity> {
+        lock(&self.inner)
+            .started
+            .iter()
+            .filter_map(|started| {
+                Some(JobIdentity {
+                    pgid: started.pgid?,
+                    start_time: started.start_time?,
+                })
+            })
             .collect()
     }
 

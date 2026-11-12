@@ -1478,6 +1478,10 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
             extension: None,
             description: "resumed".into(),
             output_path: format!("artifacts/{job}.log"),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         }),
         action: Some(action.clone()),
     };

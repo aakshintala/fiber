@@ -84,6 +84,19 @@ fn first_run_picker_has_no_choice_until_explicit_navigation() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn arrows_wrap_over_model_stops_only() {
+    let mut picker = ModelPicker::default();
+    picker.catalogue.models = catalogue();
+    picker.open(Mode::Choose, None);
+    picker.open.as_mut().unwrap().selected = 4;
+    picker.move_row(1);
+    assert_eq!(picker.focus(), Some(super::install::Stop::Model(0)));
+    picker.move_row(-1);
+    assert_eq!(picker.focus(), Some(super::install::Stop::Model(4)));
+}
+
+#[test]
 fn rows_group_by_provider_in_catalogue_order() {
     let models = catalogue();
     assert_eq!(visible(&models, &[], false), [0, 1, 2, 3, 4]);
@@ -353,7 +366,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
     // The selected last row answered away: the selection clamps to the
     // new last row.
     let mut picker = open_over(catalogue());
-    picker.move_row(10);
+    picker.move_row(4);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
     let mut models = catalogue();
     models.pop();

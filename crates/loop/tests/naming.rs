@@ -131,6 +131,10 @@ fn a_naming_call_with_job_lines_writes_its_name_last() {
             extension: None,
             description: "a job".into(),
             output_path: "artifacts/j_1.out".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         }),
         contract::jobs::JobRecord::Completed(contract::events::JobCompleted {
             job_id: contract::JobId("j_1".into()),

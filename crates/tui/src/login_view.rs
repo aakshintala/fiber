@@ -716,19 +716,11 @@ impl Login {
         }
         let before = self.selected;
         if *key == Key::Up {
-            // The nearest target above, clamped at the first.
-            self.selected = targets
-                .iter()
-                .copied()
-                .rfind(|at| *at < before)
-                .unwrap_or(before);
+            // The nearest target above, wrapping to the last.
+            self.selected = crate::swapped::step_target(&targets, before, false);
         } else if *key == Key::Down {
-            // The nearest target below, clamped at the last.
-            self.selected = targets
-                .iter()
-                .copied()
-                .find(|at| *at > before)
-                .unwrap_or(before);
+            // The nearest target below, wrapping to the first.
+            self.selected = crate::swapped::step_target(&targets, before, true);
         } else {
             // A page is the shown body rows less one, at least one.
             let page = shown_body_rows(ctx.height).saturating_sub(1).max(1);
@@ -1207,12 +1199,12 @@ impl Login {
         if *key == Key::Down {
             choices.cursor = Some(match choices.cursor {
                 None => 0,
-                Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
+                Some(at) => crate::swapped::wrap_step(at, choices.models.len(), 1),
             });
         } else if *key == Key::Up {
             choices.cursor = Some(match choices.cursor {
                 None => choices.models.len().saturating_sub(1),
-                Some(at) => at.saturating_sub(1),
+                Some(at) => crate::swapped::wrap_step(at, choices.models.len(), -1),
             });
         } else if *key == Key::Enter {
             let pick = choices

@@ -127,6 +127,15 @@ pub enum JobsError {
         /// The unknown job's id.
         id: JobId,
     },
+    /// The detached process identity needs review before a stop can signal it.
+    #[error(
+        "The detached process identity for job `{}` is no longer confirmed. Retry the stop to request review.",
+        id.0
+    )]
+    StopNeedsReview {
+        /// The detached job's id.
+        id: JobId,
+    },
     /// The job is not a delegate.
     #[error("Job `{}` is not a delegate.", id.0)]
     NotDelegate {
@@ -316,6 +325,7 @@ impl JobsError {
             Self::ExtensionStartsClosed => ErrorCode::Closing,
             Self::MessageEmpty => ErrorCode::InvalidArguments,
             Self::UnknownJob { .. } => ErrorCode::InvalidArguments,
+            Self::StopNeedsReview { .. } => ErrorCode::InvalidArguments,
             Self::NotDelegate { .. } => ErrorCode::InvalidArguments,
             Self::SteerClosing { .. } => ErrorCode::Closing,
             Self::SteerRefused { failure, .. } => failure.code.clone(),
