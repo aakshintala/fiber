@@ -259,3 +259,5 @@ crates/main/tests/support/mod.rs	fiber-4726	plan	2026-11-12T08:38:50Z	Amoghs-Mac
 docs/mcp.md:193-195	fiber-4683	plan	2026-11-12T08:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 docs/mcp.md:264-265	fiber-4683	plan	2026-11-12T08:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 docs/tools.md:1692-1693	fiber-4683	plan	2026-11-12T08:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
+crates/main/src/reload_tests.rs	fiber-4734	plan	2026-11-12T08:46:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/reload_tests.rs	fiber-4734	plan	2026-11-12T08:46:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
