@@ -702,6 +702,14 @@ fn generate_model(
     Ok(generated)
 }
 
+/// Whether `id` names a catalog model left out specifically for deprecation.
+fn reference_was_deprecated(package: &Package, id: &str, models: &Map<String, Value>) -> bool {
+    package.drop_deprecated
+        && models
+            .get(id)
+            .is_some_and(|model| callable(model) && deprecated(package, model))
+}
+
 /// Every package's file from `catalog` (full or trimmed), plus one line
 /// per left-out model. Models are sorted by id, keys are sorted, and
 /// numbers keep models.dev's spelling. `corrections` apply over the
@@ -748,24 +756,38 @@ pub(crate) fn generate(
         }
         for id in package.only.iter().copied() {
             if !generated.iter().any(|model| model.0 == id) {
-                return Err(format!(
-                    "{}: only entry for `{id}` matches no generated model",
-                    stem(package)
-                ));
+                if reference_was_deprecated(package, id, &models) {
+                    left_out.push(format!(
+                        "models-dev: {}/{id} only entry skipped because the model is deprecated",
+                        stem(package)
+                    ));
+                } else {
+                    return Err(format!(
+                        "{}: only entry for `{id}` matches no generated model",
+                        stem(package)
+                    ));
+                }
             }
         }
-        for id in package
+        for (id, table) in package
             .protocol_overrides
             .iter()
-            .map(|entry| entry.0)
-            .chain(package.by_model.iter().map(|entry| entry.0))
-            .chain(package.thinking.iter().map(|entry| entry.0))
+            .map(|entry| (entry.0, "protocol_overrides"))
+            .chain(package.by_model.iter().map(|entry| (entry.0, "by_model")))
+            .chain(package.thinking.iter().map(|entry| (entry.0, "thinking")))
         {
             if !generated.iter().any(|model| model.0 == id) {
-                return Err(format!(
-                    "{}: table entry for `{id}` matches no generated model",
-                    stem(package)
-                ));
+                if reference_was_deprecated(package, id, &models) {
+                    left_out.push(format!(
+                        "models-dev: {}/{id} {table} entry skipped because the model is deprecated",
+                        stem(package)
+                    ));
+                } else {
+                    return Err(format!(
+                        "{}: table entry for `{id}` matches no generated model",
+                        stem(package)
+                    ));
+                }
             }
         }
         for (index, correction) in corrections.iter().enumerate() {
@@ -776,6 +798,13 @@ pub(crate) fn generate(
                 .iter_mut()
                 .find(|built| built.0 == correction.model)
             else {
+                if reference_was_deprecated(package, &correction.model, &models) {
+                    left_out.push(format!(
+                        "models-dev: {}/{} correction entry skipped because the model is deprecated",
+                        stem(package), correction.model
+                    ));
+                    continue;
+                }
                 return Err(format!(
                     "{}: correction for `{}` matches no generated model",
                     stem(package),
