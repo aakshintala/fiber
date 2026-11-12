@@ -3122,11 +3122,11 @@ fn picker_keys_move_choose_and_close() {
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
-    // The selection clamps to the list.
+    // The selection wraps at either end.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
-    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));

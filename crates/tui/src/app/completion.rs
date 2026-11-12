@@ -469,13 +469,13 @@ impl App {
         let theme = !self.slash_open() && self.completion.files.is_none();
         let chosen = names.get(self.completion.selected).cloned();
         match key {
-            Key::Up => self.completion.selected = self.completion.selected.saturating_sub(1),
+            Key::Up => {
+                self.completion.selected =
+                    crate::swapped::wrap_step(self.completion.selected, names.len(), -1);
+            }
             Key::Down => {
-                self.completion.selected = self
-                    .completion
-                    .selected
-                    .saturating_add(1)
-                    .min(names.len().saturating_sub(1));
+                self.completion.selected =
+                    crate::swapped::wrap_step(self.completion.selected, names.len(), 1);
             }
             Key::Esc => {
                 if theme {
