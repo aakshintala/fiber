@@ -427,3 +427,6 @@ crates/extensions/src/lua/host_calls.rs	fiber-4691	plan	2026-11-12T18:50:46Z	Amo
 crates/extensions/tests/lua_tools.rs	fiber-4691	plan	2026-11-12T18:50:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks/door_tests.rs	fiber-4691	plan	2026-11-12T18:50:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/inner_calls.rs	fiber-4691	plan	2026-11-12T18:50:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/hub_command.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/settings.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/settings_view.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
