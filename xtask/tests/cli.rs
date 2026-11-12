@@ -2505,6 +2505,15 @@ fn flake_classify_missing_flags_and_unreadable_files_are_errors() {
 }
 
 #[test]
+fn journey_streak_cli_dispatches_input_output() {
+    let dir = TempDir::new("journey-streak-cli");
+    let input = r#"[{"databaseId":2,"event":"push","headBranch":"main","conclusion":"failure"}]"#;
+    let (code, output) = xtask(&dir, &["journey-streak", "select"], &[], input);
+    assert_eq!(code, 0);
+    assert_eq!(output.trim(), "2");
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TempDir::new("xtask-unknown");
     assert_eq!(
