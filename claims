@@ -266,3 +266,4 @@ crates/tui/src/event_loop_tests.rs:71-72	fiber-4700	plan	2026-11-12T08:09:58Z	ro
 crates/tui/src/event_loop_tests.rs:504-505	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/screen.rs:161-161	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/screen_tests.rs:574-575	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
+crates/tui/src/view/offer_tests.rs	fiber-4735	plan	2026-11-12T08:11:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
