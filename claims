@@ -427,3 +427,4 @@ crates/tui/src/event_loop_reconnect_tests.rs	fiber-4746	plan	2026-11-12T19:29:33
 crates/tui/src/lib_motion_tests.rs	fiber-4746	plan	2026-11-12T19:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/main.rs	fiber-4746	plan	2026-11-12T19:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4746	plan	2026-11-12T19:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/hooks.rs	fiber-4691	plan	2026-11-12T19:43:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
