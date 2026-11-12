@@ -265,3 +265,4 @@ xtask/src/main.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/h
 xtask/tests/cli.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/journey_streak.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
 xtask/src/journey_streak_tests.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
+docs/architecture.md	fiber-4628	plan	2026-11-12T01:03:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
