@@ -15,9 +15,9 @@ mod common;
 use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
-use common::{Setup, pair, script_provider, write};
+use common::{Setup, pair, script_provider, thread_parked_at, write};
 use config::{Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -27,25 +27,6 @@ use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::json;
-
-// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
-/// The thread parked at `at`: exactly one thread waits there.
-#[track_caller]
-fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
-    let mark = clock
-        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
-    let threads = mark.threads();
-    assert_eq!(
-        threads.len(),
-        1,
-        "only one thread parks at {at:?}: {threads:?}"
-    );
-    match threads.into_iter().next() {
-        Some(id) => id,
-        None => panic!("one parked thread"),
-    }
-}
 
 fn provider_file(lua: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
     let dir = fakes::TempDir::new("lazy-provider");
