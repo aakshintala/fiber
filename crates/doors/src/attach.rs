@@ -403,7 +403,9 @@ pub(crate) fn classify_output(kind: &EventKind) -> OutputKind {
         | EventKind::JobLine
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
-        | EventKind::JobsPendingNotified => OutputKind::Other,
+        | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound => OutputKind::Other,
     }
 }
 

@@ -4,5 +4,10 @@
     "env": "OPENROUTER_API_KEY"
   },
   "reviewer_model": "anthropic/claude-sonnet-5.5",
+  "models_dev": {
+    "split_source": true,
+    "source_aliases": {},
+    "pins": {}
+  },
   "models": []
 }

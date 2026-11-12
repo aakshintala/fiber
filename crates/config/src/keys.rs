@@ -360,6 +360,17 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
+        "model_lists.models_dev",
+        Bool,
+        NO,
+        Some("true"),
+        tabbed(
+            SettingsTab::Models,
+            "Live model details",
+            "Whether Fiber fetches models.dev to fill in model details under the model list refresh age rule.",
+        ),
+    ),
+    key(
         "model",
         Model,
         YES,
@@ -1331,6 +1342,13 @@ pub fn refresh_after(config: &crate::Config) -> Duration {
         .get("model_lists.refresh_after", None)
         .and_then(|(value, _)| value.as_str().and_then(parse_duration))
         .unwrap_or(Duration::from_secs(86_400))
+}
+
+/// Whether live models.dev details are enabled; the default is true.
+pub fn models_dev_enabled(config: &crate::Config) -> bool {
+    config
+        .get("model_lists.models_dev", None)
+        .is_some_and(|(value, _)| value == true)
 }
 
 /// Whether the diagnostic logs record at the `debug` level

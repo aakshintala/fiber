@@ -238,7 +238,9 @@ a breaking change.
   or the overflow rule applies.
 - `cancelled` means a person cancelled the turn while the note was being
   written, by the note request or a `before_compaction` hook. The
-  turn completes `interrupted` and the context stays as it was.
+  turn completes `interrupted` and the context stays as it was. Cancellation
+  while the post-note `session_start` hook runs also ends the compaction as
+  `cancelled`.
 
 ### Resume
 

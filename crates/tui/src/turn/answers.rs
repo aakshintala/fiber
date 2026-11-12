@@ -317,6 +317,8 @@ pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => false,

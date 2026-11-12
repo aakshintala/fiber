@@ -91,6 +91,8 @@ impl Pages {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => return,

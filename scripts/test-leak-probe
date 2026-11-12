@@ -114,6 +114,13 @@ if ! grep -Fq "leaked process $pid:" "$scan_err"; then
   cat "$scan_err" >&2
   exit 1
 fi
+if ! grep -Fq "test: main::leak_probe::the_shell_tool_leak_is_named_by_pid" "$scan_err"; then
+  echo "scripts/test-leak-probe: leak-scan did not attribute leaked process $pid:" >&2
+  cat "$scan_err" >&2
+  exit 1
+fi
+grep -F "leaked process $pid:" "$scan_err"
+grep -F "test: main::leak_probe::the_shell_tool_leak_is_named_by_pid" "$scan_err"
 
 touch "$probe_dir/stop"
 if require_gone "$pid" 10; then

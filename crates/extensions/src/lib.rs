@@ -61,6 +61,7 @@ pub(crate) fn login_wait_recorded(extension: &str) {
 mod lua_cost;
 mod lua_provider;
 mod manage;
+pub mod models_dev;
 mod oauth;
 mod package;
 #[cfg(test)]

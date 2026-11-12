@@ -424,6 +424,7 @@ impl Setup {
             .current_dir(self.root.path())
             .env_clear()
             .envs(fakes::check_run())
+            .envs(fakes::nextest_identity())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
