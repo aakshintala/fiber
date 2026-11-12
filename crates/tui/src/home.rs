@@ -573,6 +573,11 @@ pub(crate) struct Sessions {
     /// The last row of the unscoped `recent` pages: `page_recent` sends
     /// its id as `before`. Scoped folds and pages never move it.
     unscoped_last: Option<SessionId>,
+    /// The keepers the hub's feed counted, in id order: `None` until the
+    /// first `keepers` line arrives, so no feed reads as no keepers the
+    /// way an old hub's silence does. The close-all question counts and
+    /// stops exactly this set.
+    pub(crate) keepers: Option<Vec<SessionId>>,
 }
 
 /// One project's live sessions and loaded exited sessions, in display order.
@@ -1276,16 +1281,28 @@ pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
 }
 
 /// The close-all question's count line: how many live top-level sessions
-/// it counted, of them how many work, and how many are also open
-/// elsewhere. The overlay draws it under its title (`docs/tui.md`,
-/// "Quit").
-pub(crate) fn close_all_count(sessions: usize, working: usize, elsewhere: usize) -> String {
+/// it counted, of them how many work, how many are also open
+/// elsewhere, and how many keepers of gone sessions it counted. The
+/// overlay draws it under its title (`docs/tui.md`, "Quit"). No
+/// keepers keeps today's string.
+pub(crate) fn close_all_count(
+    sessions: usize,
+    working: usize,
+    elsewhere: usize,
+    keepers: usize,
+) -> String {
     let sessions = if sessions == 1 {
         "1 session".to_owned()
     } else {
         format!("{sessions} sessions")
     };
-    format!("{sessions}, {working} working, {elsewhere} open elsewhere")
+    let mut line = format!("{sessions}, {working} working, {elsewhere} open elsewhere");
+    match keepers {
+        0 => {}
+        1 => line.push_str(", 1 keeper"),
+        _ => line.push_str(&format!(", {keepers} keepers")),
+    }
+    line
 }
 
 /// A resume line on exit: the session's id and the command resuming
@@ -1347,6 +1364,17 @@ pub(crate) fn title(row: &Row) -> String {
     } else {
         crate::text::controls_to_space(&row.name)
     }
+}
+
+/// Whether `id` has a session socket's shape: `s_` plus sixteen
+/// lowercase hex digits, the minted id form the hub counts and stops.
+pub(crate) fn valid_session_id(id: &str) -> bool {
+    id.strip_prefix("s_").is_some_and(|hex| {
+        hex.len() == 16
+            && hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 /// The sessions a hub refusal names: every `s_` and 16 lowercase hex

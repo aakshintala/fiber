@@ -2434,7 +2434,7 @@ so it does not redraw the screen as it does in some terminal programs.
 
 The key map docks at the bottom, full width, in the overlay frame ("Look",
 "Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
-binding by area, with its other paths." and the counts ("39 actions, 27 with
+binding by area, with its other paths." and the counts ("40 actions, 28 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type
@@ -2514,10 +2514,10 @@ character. An uppercase letter means Shift and that letter, and Shift on a
 character that is not a letter is dropped. `+` alone, or after a modifier as in `ctrl++`,
 is the plus key.
 
-Six actions have ordered variants: `move_word` (left, right),
+Seven actions have ordered variants: `move_word` (left, right),
 `line_start_end` (start, end), `focus_next_prev` (next, prev),
-`search_next_prev` (next, prev), `select_steering` (up, down) and
-`rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
+`focus_project` (next, prev), `search_next_prev` (next, prev),
+`select_steering` (up, down) and `rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
 in that order, so `["ctrl+b", "ctrl+f", "alt+b", "alt+f"]` gives `move_word`
 two keys each way. A list whose length is not a multiple of the number of
 variants is invalid, and `[]` unbinds the action. A group identical to an
@@ -2599,7 +2599,7 @@ later release still applies.
 | `/sandbox [on|off]` | Turns the session sandbox on or off (`docs/sandbox.md`, "The rule"): `on` confines the session's shell calls until `/reload`, `off` leaves them reviewed as with the sandbox off. |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
-| `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
+| `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session and no keeper it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
 | `/archive` | Stops the session and its cascade as `/delete` does, then archives that one session and goes home, asking nothing ("The session list"). |
 | `/delete` | Asks before stopping the session and its cascade, then deletes the exact confirmed set permanently; it never retries a refusal ("The session list"). |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report also carries the shapes of the last 20 painted frames with the scroll state that produced each one — per cell its width class, style and whether it is blank, plus the frame geometry, never glyphs — captured on every frame with no flag set in advance, so a redraw bug arrives with its evidence; before the first frame it says no frames were captured. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
@@ -2779,7 +2779,7 @@ list: "↑↓ move · Enter delete · Esc close".
   Delete opens nothing, and Enter does nothing and leaves the question
   open. If the session left while the question showed, Enter sends nothing
   and closes it.
-- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere, 1 keeper" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt, and the keepers of sessions that are gone, `docs/tools.md`, "The keeper"), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and each of those keepers its stop, as `fiber stop` does (`docs/invocation.md`), and leaves the terminal on home; Esc closes the question. With no live session and no keeper it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
+- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere, 1 keeper" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt, and the keepers of gone sessions the hub's feed names, `docs/tools.md`, "The keeper"), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and the hub a command stopping each of those keepers, as `fiber stop` stops them (`docs/invocation.md`), and leaves the terminal on home; Esc closes the question. With no live session and no keeper it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
 
 ### Getting the person's attention
 

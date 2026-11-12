@@ -4184,3 +4184,141 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     // nothing more.
     client.assert_no_more("the cut command");
 }
+
+/// The session directory `SID`'s log lives in.
+fn session_dir(temp: &Temp) -> PathBuf {
+    temp.events(SID).parent().unwrap().to_path_buf()
+}
+
+#[test]
+fn a_missing_plain_workspace_with_an_exited_log_is_readable_gone() {
+    // A plain directory records no repository, so a missing workspace
+    // cannot be made again: an exited log for it reads from the log
+    // (`docs/invocation.md`, "Lifecycle").
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    temp.append("fiber_exited");
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_eq!(
+        super::gone_readable(&temp.dir, &sid()),
+        Some((session_dir(&temp), workspace))
+    );
+}
+
+#[test]
+fn a_live_log_is_not_readable_gone() {
+    // The log does not end in `fiber_exited`: a live session attaches
+    // as before, even with its workspace deleted.
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
+fn a_present_workspace_is_not_readable_gone() {
+    // The workspace is still there: the session resumes as before.
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
+fn a_worktree_whose_repository_exists_is_not_readable_gone() {
+    // The repository still exists, so the missing workspace is made
+    // again: the session resumes as before.
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    temp.worktree_log(
+        false,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    fs::create_dir_all(&repository).unwrap();
+    temp.append("fiber_exited");
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
+fn a_present_worktree_workspace_is_not_readable_gone() {
+    // The workspace is still there: the session resumes in it, wherever
+    // its recorded repository is.
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    temp.worktree_log(
+        true,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    temp.append("fiber_exited");
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
+fn a_worktree_whose_repository_is_gone_names_the_repository() {
+    // Both the workspace and its recorded repository are gone: the
+    // workspace cannot be made again, and the refusal names the
+    // repository, as the resume guard does.
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    temp.worktree_log(
+        false,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    temp.append("fiber_exited");
+    assert_eq!(
+        super::gone_readable(&temp.dir, &sid()),
+        Some((session_dir(&temp), repository))
+    );
+}
+
+#[test]
+fn a_corrupt_first_line_is_not_readable_gone() {
+    // The workspace cannot be read from the log: nothing reports it.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    temp.log("not json");
+    temp.append("fiber_exited");
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
+fn a_missing_log_is_not_readable_gone() {
+    // Another session's log does not answer for this one.
+    let temp = Temp::new();
+    temp.log("not json");
+    fs::remove_dir_all(temp.events(SID).parent().unwrap()).unwrap();
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}
+
+#[test]
+fn an_archived_log_is_readable_gone() {
+    // Archiving appends the `archived` marker after the exit, so an
+    // archived-final log still reads from the log: the replay emits no
+    // status, so nothing unarchives it, and the guard still refuses to
+    // resume it (`docs/invocation.md`, "Lifecycle").
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    temp.append("fiber_exited");
+    temp.append("archived");
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_eq!(
+        super::gone_readable(&temp.dir, &sid()),
+        Some((session_dir(&temp), workspace))
+    );
+}
+
+#[test]
+fn a_delegate_is_not_readable_gone() {
+    // Delegates resume only through their parent: the delegate branch
+    // owns them, even with the workspace gone.
+    let temp = Temp::new();
+    let workspace =
+        temp.delegate_log(json!({"session_id": "s_1111111111111111", "delegate_id": "j_1"}));
+    temp.append("fiber_exited");
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_eq!(super::gone_readable(&temp.dir, &sid()), None);
+}

@@ -756,6 +756,7 @@ impl App {
             }
             Key::F1 => self.open_keymap(),
             Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab => Effect::None,
+            Key::ShiftUp | Key::ShiftDown => Effect::None,
             Key::BackTab if self.completions().is_none() => self.navigate(),
             Key::BackTab => Effect::None,
             Key::AltA => self.next_request(),
@@ -1937,6 +1938,7 @@ impl App {
                 }
                 Vec::new()
             }
+            HubEventKind::Keepers => Vec::new(),
             HubEventKind::DeviceChanged
             | HubEventKind::SessionLeft
             | HubEventKind::SessionDeleted

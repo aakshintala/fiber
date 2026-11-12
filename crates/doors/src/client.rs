@@ -745,7 +745,10 @@ fn subscribe(
         conn.gate.clock.as_ref(),
         &Event::CommandAccepted(CommandAccepted {
             command_id: id,
-            result: last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }),
+            result: last_seq.map(|last_seq| CommandResult::Subscribe {
+                last_seq,
+                workspace_gone: None,
+            }),
         }),
     );
     if write_line(&mut direct, &accepted).is_err() {
@@ -1416,7 +1419,10 @@ fn settle_response(
             gate.clock.as_ref(),
             &Event::CommandAccepted(CommandAccepted {
                 command_id: id,
-                result: last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }),
+                result: last_seq.map(|last_seq| CommandResult::Subscribe {
+                    last_seq,
+                    workspace_gone: None,
+                }),
             }),
         )];
         if let Err(rejection) = result {

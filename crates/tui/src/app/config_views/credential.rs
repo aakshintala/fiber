@@ -95,6 +95,8 @@ impl Picker {
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR

@@ -53,8 +53,9 @@ pub(crate) const STOP_WITHIN: Duration =
 /// service step runs and the close is awaited after it. Only a transport
 /// failure, where no answer arrives at all, skips the service step.
 enum Answered {
-    /// The hub accepted with its confirmed-closed count.
-    Stopped(u64),
+    /// The hub accepted with its confirmed-closed counts: sessions, then
+    /// keepers. An old hub omits the keeper count, which reads as zero.
+    Stopped { sessions: u64, keepers: u64 },
     /// The hub refused: the service still stops and the close is awaited,
     /// then this failure is what the command reports.
     Rejected(Failure),
@@ -137,13 +138,9 @@ pub(crate) fn run_remote(
     // a stalled one never replaces a survivor rejection.
     let deadline = clock.now() + STOP_WITHIN;
     match exchange_stop(&stream, deadline, clock)? {
-        Answered::Stopped(stopped) => {
+        Answered::Stopped { sessions, keepers } => {
             wait_for_close(&stream, deadline, clock)?;
-            report(
-                out,
-                &format!("Stopped {stopped} sessions and the hub."),
-                false,
-            )
+            report(out, &stopped_line(sessions, keepers), false)
         }
         Answered::Rejected(rejection) => {
             // A stalled close never replaces the survivor rejection.
@@ -215,9 +212,12 @@ fn with_answer(
         Keep(Failure),
     }
     let marked = match answered {
-        Answered::Stopped(0) if started => AfterAnswer::Report(NOTHING_RUNNING.to_owned()),
-        Answered::Stopped(stopped) => {
-            AfterAnswer::Report(format!("Stopped {stopped} sessions and the hub."))
+        Answered::Stopped {
+            sessions: 0,
+            keepers: 0,
+        } if started => AfterAnswer::Report(NOTHING_RUNNING.to_owned()),
+        Answered::Stopped { sessions, keepers } => {
+            AfterAnswer::Report(stopped_line(sessions, keepers))
         }
         Answered::Rejected(rejection) => AfterAnswer::Keep(rejection),
     };
@@ -309,7 +309,10 @@ fn exchange_stop(
                 return Ok(None);
             };
             match answered {
-                Ok(result) => Ok(Some(Answered::Stopped(sessions_stopped(&result)?))),
+                Ok(result) => Ok(Some(Answered::Stopped {
+                    sessions: sessions_stopped(&result)?,
+                    keepers: keepers_stopped(&result)?,
+                })),
                 Err(rejection) => Ok(Some(Answered::Rejected(rejection))),
             }
         },
@@ -362,6 +365,27 @@ fn sessions_stopped(result: &Value) -> Result<u64, CliError> {
         .get("sessions_stopped")
         .and_then(Value::as_u64)
         .ok_or(CliError::StopCountMissing)
+}
+
+/// The confirmed-stopped keeper count: absent on old hubs, which reads
+/// as zero (`docs/events.md`, `command_accepted`, the `stop` row). A
+/// present count that is not a number is missing, as for sessions.
+fn keepers_stopped(result: &Value) -> Result<u64, CliError> {
+    match result.get("keepers_stopped") {
+        None => Ok(0),
+        Some(count) => count.as_u64().ok_or(CliError::StopCountMissing),
+    }
+}
+
+/// The stop's first line: the sessions part always prints, and the keeper
+/// part only when keepers stopped, so zero keepers print byte-identical to
+/// today (`docs/invocation.md`, "Commands and flags").
+fn stopped_line(sessions: u64, keepers: u64) -> String {
+    match keepers {
+        0 => format!("Stopped {sessions} sessions and the hub."),
+        1 => format!("Stopped {sessions} sessions, 1 keeper and the hub."),
+        _ => format!("Stopped {sessions} sessions, {keepers} keepers and the hub."),
+    }
 }
 
 /// The stop exchange's deadline failure.

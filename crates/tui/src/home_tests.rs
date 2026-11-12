@@ -1352,6 +1352,18 @@ fn status_left_and_remove_leave_every_stored_total_untouched() {
 }
 
 #[test]
+fn keeper_ids_hold_sixteen_lowercase_hex_digits() {
+    // `docs/tui.md`, "Quit": the feed names session ids; anything else
+    // never lands in the counted set.
+    assert!(crate::home::valid_session_id("s_cccccccccccccccc"));
+    assert!(!crate::home::valid_session_id("s_ccccccccccccccc"));
+    assert!(!crate::home::valid_session_id("s_ccccccccccccccccc"));
+    assert!(!crate::home::valid_session_id("s_CCCCCCCCCCCCCCCC"));
+    assert!(!crate::home::valid_session_id("c_cccccccccccccccc"));
+    assert!(!crate::home::valid_session_id(""));
+}
+
+#[test]
 fn archived_scoped_reconciles_an_exited_row_into_the_archived_map() {
     let mut sessions = Sessions::default();
     sessions.recent(

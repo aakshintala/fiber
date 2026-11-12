@@ -179,7 +179,11 @@ pub enum ToKeeper {
     },
     /// The session has durably written this call's job ending.
     Confirmed(String),
-    /// A normal session shutdown, rather than a crash.
+    /// A normal session shutdown, rather than a crash. `Shutdown(true)`
+    /// is the frozen keeper-stop line: `fiber stop` and `/close all`
+    /// deliver exactly `{"shutdown":true}` on a keeper's crashed-socket,
+    /// so a newer Fiber stops any older keeper. The encoding never
+    /// changes; a new stop shape would strand older keepers.
     Shutdown(bool),
     /// A resuming session asks which session this keeper holds. It changes
     /// nothing: the keeper answers [`FromKeeper::Identity`].

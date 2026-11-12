@@ -217,6 +217,8 @@ impl Form {
             | Key::CtrlL
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX => {}
         }
         Some(PanelKey::Handled)

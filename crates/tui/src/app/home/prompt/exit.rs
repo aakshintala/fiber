@@ -4,12 +4,13 @@
 
 use serde_json::Value;
 
-use super::super::super::{App, Effect, Phase, Sent, session_line};
+use super::super::super::{App, Effect, Phase, Sent, hub_line, session_line};
 use super::{Ask, Prompt};
 use crate::home::{QuitChoice, Spot, State};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use contract::ErrorCode;
+use contract::commands::hub::{HubCommand, StopKeepers};
 use contract::commands::{CloseArgs, Command, SubscribeLevel};
 use contract::{CommandId, SessionId};
 
@@ -40,25 +41,30 @@ impl App {
         Some((working.len(), self.elsewhere(&working)))
     }
 
-    /// The close-all question, while open: the sessions, working and
-    /// elsewhere counts fixed when it opened. The overlay never
-    /// live-updates; Enter closes the counted sessions still live.
-    pub(crate) fn close_all_question(&self) -> Option<(usize, usize, usize)> {
+    /// The close-all question, while open: the sessions, working,
+    /// elsewhere and keeper counts fixed when it opened. The overlay
+    /// never live-updates; Enter closes the counted sessions still live
+    /// and stops the counted keepers still present.
+    pub(crate) fn close_all_question(&self) -> Option<(usize, usize, usize, usize)> {
         match self.home.questions.prompt() {
-            Some(Prompt::CloseAll { sessions, counts }) => {
-                Some((sessions.len(), counts.0, counts.1))
-            }
+            Some(Prompt::CloseAll {
+                sessions, counts, ..
+            }) => Some((sessions.len(), counts.0, counts.1, counts.2)),
             _ => None,
         }
     }
 
     /// `/close all`, on home or over a session: asks to close every live
-    /// top-level session now, after one question. With no live session it
-    /// says so and opens nothing; with the link down it opens nothing and
-    /// keeps the draft. It never sends a line: Enter does that.
+    /// top-level session and stop every keeper the feed counted, after
+    /// one question. With no live session and no keeper it says so and
+    /// opens nothing; with the link down it opens nothing and keeps the
+    /// draft. It never sends a line: Enter does that. The counts are the
+    /// folded feed sets, never a fresh probe: the terminal does no
+    /// socket I/O.
     pub(crate) fn ask_close_all(&mut self) -> Effect {
         let sessions = self.live_sessions();
-        if sessions.is_empty() {
+        let keepers = self.home.sessions.keepers.clone().unwrap_or_default();
+        if sessions.is_empty() && keepers.is_empty() {
             self.notices.push(
                 ErrorCode::SessionNotFound,
                 "No sessions to close.".to_owned(),
@@ -72,9 +78,14 @@ impl App {
         let counts = (
             sessions.iter().filter(|id| working.contains(id)).count(),
             self.elsewhere(&sessions),
+            keepers.len(),
         );
         self.close_delete_prompt();
-        self.home.questions.prompt = Some(Prompt::CloseAll { sessions, counts });
+        self.home.questions.prompt = Some(Prompt::CloseAll {
+            sessions,
+            counts,
+            keepers,
+        });
         Effect::None
     }
 
@@ -256,6 +267,8 @@ impl App {
             | Key::CtrlC
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -315,29 +328,57 @@ impl App {
 
     /// Enter in the close-all question: `close` with `now` each counted
     /// session still live, with a `summary` subscribe first where this
-    /// connection holds nothing. The set is the sessions the overlay
-    /// counted: one that left while it showed is skipped, and one that
-    /// went live after it opened keeps running. With the link down, or
-    /// nothing still live, it closes the question and sends nothing: the
-    /// terminal stays open on home either way.
+    /// connection holds nothing, and one `stop_keepers` hub command for
+    /// the counted keepers. The sets are the sessions and keepers the
+    /// overlay counted: one that left while it showed is skipped, and
+    /// one that went live after it opened keeps running. With the link
+    /// down it closes the question and sends nothing. The terminal stays
+    /// open on home either way: nothing exits until every sent line is
+    /// answered or unsent.
     fn confirm_close_all(&mut self) -> Effect {
-        let open: Vec<SessionId> = match self.home.questions.prompt() {
-            Some(Prompt::CloseAll { sessions, .. }) => sessions.clone(),
-            _ => return Effect::None,
-        };
-        let live = self.live_sessions();
-        let close: Vec<SessionId> = open.into_iter().filter(|id| live.contains(id)).collect();
-        if close.is_empty() || !self.outbox.is_up() {
+        let (open, open_keepers): (Vec<SessionId>, Vec<SessionId>) =
+            match self.home.questions.prompt() {
+                Some(Prompt::CloseAll {
+                    sessions, keepers, ..
+                }) => (sessions.clone(), keepers.clone()),
+                _ => return Effect::None,
+            };
+        if !self.outbox.is_up() {
             self.close_prompt();
             return Effect::None;
         }
-        let (lines, pairs) = self.close_lines(&close);
+        let live = self.live_sessions();
+        let close: Vec<SessionId> = open.into_iter().filter(|id| live.contains(id)).collect();
+        let (mut lines, pairs) = self.close_lines(&close);
         for (session, id) in pairs {
             self.home
                 .questions
                 .asks
                 .insert(id.0.clone(), Ask::Stop(session));
             self.outbox.wait(&id.0, super::super::super::Waiting::Stop);
+        }
+        if !open_keepers.is_empty() {
+            let id = CommandId(support::mint("c_"));
+            let sent = Sent {
+                line: hub_line(
+                    &id,
+                    HubCommand::StopKeepers(StopKeepers {
+                        keepers: open_keepers.clone(),
+                    }),
+                ),
+                id: id.clone(),
+            };
+            self.home
+                .questions
+                .asks
+                .insert(sent.id.0.clone(), Ask::Keepers);
+            self.outbox
+                .wait(&sent.id.0, super::super::super::Waiting::Stop);
+            lines.push(sent);
+        }
+        if lines.is_empty() {
+            self.close_prompt();
+            return Effect::None;
         }
         self.close_prompt();
         self.draft.clear();

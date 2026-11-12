@@ -2217,7 +2217,8 @@ fn a_subscribe_result_names_the_last_fold_line() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
         CommandResult::Subscribe {
-            last_seq: crate::Seq(41)
+            last_seq: crate::Seq(41),
+            workspace_gone: None,
         }
     );
     let Some(Event::CommandAccepted(accepted)) =
@@ -2226,6 +2227,31 @@ fn a_subscribe_result_names_the_last_fold_line() {
         panic!("not an acceptance");
     };
     assert_eq!(accepted.result, None);
+    // A result omitting the missing path reads as a live open, and a
+    // live open stays byte-identical on the wire: the path is absent,
+    // never null (`docs/invocation.md`, "Lifecycle").
+    let written = serde_json::to_value(result_of(
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    ))
+    .unwrap();
+    assert!(
+        written["result"].get("workspace_gone").is_none(),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_subscribe_result_carries_the_missing_workspace_path() {
+    // The hub names the missing workspace when it replays the log of a
+    // session whose workspace is gone (`docs/invocation.md`,
+    // "Lifecycle"); the terminal opens that accept read only.
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"last_seq": 41, "workspace_gone": "/w"}})),
+        CommandResult::Subscribe {
+            last_seq: crate::Seq(41),
+            workspace_gone: Some("/w".into()),
+        }
+    );
 }
 
 #[test]
@@ -2593,9 +2619,44 @@ fn a_credential_switch_result_writes_and_reads_only_its_provider() {
 }
 
 #[test]
+fn a_stop_result_with_keepers_writes_both_counts_and_reads_an_old_shape_as_zero() {
+    // `docs/invocation.md`, "Commands and flags": `stop` answers both counts.
+    // Old hubs omit `keepers_stopped`, which reads as zero.
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+        keepers_stopped: 2,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3, "keepers_stopped": 2})
+    );
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"sessions_stopped": 3}})),
+        CommandResult::Stop {
+            sessions_stopped: 3,
+            keepers_stopped: 0,
+        }
+    );
+}
+
+#[test]
+fn a_stop_result_without_keepers_omits_the_keeper_count() {
+    // Zero keepers stay byte-identical to the old shape on the wire.
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+        keepers_stopped: 0,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3})
+    );
+}
+
+#[test]
 fn a_sessions_stopped_result_round_trips_as_stop() {
     let result = CommandResult::Stop {
         sessions_stopped: 3,
+        keepers_stopped: 0,
     };
     assert_eq!(
         serde_json::to_value(&result).unwrap(),

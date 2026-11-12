@@ -70,7 +70,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends eight lines of its own, only on a connection to the hub and
+The hub sends nine lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -89,6 +89,10 @@ is about the hub or names its session in the payload:
 - `session_left`, on the feed when a session's process ends: `payload` holds
   `session_id` (string) and `how`, `exited` or `crashed`, a closed set
   (`docs/invocation.md`, "The hub").
+- `keepers`, on the feed when the hub's keeper set changes, and once to every
+  new feed subscriber: `payload` holds `keepers` (array of session ids, in id
+  order), every keeper-held `run/` entry the hub's probe confirms, empty when
+  none.
 - `session_deleted`, on the feed when a session is deleted: `payload` holds
   `session_id` (string) and `project` (string), the project's key, the name
   of its `projects/<key>/` directory. It carries no `seq`, and a new
@@ -1544,7 +1548,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`, with optional `resets_at` (integer, milliseconds since the epoch) where the provider reports a reset time), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
 | `credentials` | `provider` (string), the provider a `credential` command would switch now; `credentials`, an array of its credential labels, sorted; `credential` (string, optional), the label it uses now, absent for a scripted session or a provider the session has not used |
 | `credential` | `provider` (string), the provider the switch applies to (`docs/invocation.md`) |
-| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
+| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary`; `workspace_gone` (string), the missing workspace or repository path, present only when the hub replays the log of a session whose workspace is gone and cannot be made again (`docs/invocation.md`, "Lifecycle") |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `lines` (array of integers), the byte offset in the file where each line of `text` starts; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `offered_file` | `text` (string), the file's full UTF-8 text |
@@ -1567,7 +1571,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
-| `stop` | `sessions_stopped` (integer, the sessions that confirmed closed), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
+| `stop` | `sessions_stopped` (integer, the sessions that confirmed closed) and `keepers_stopped` (integer, the keepers that confirmed stopped; absent on old hubs and read as zero), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
+| `stop_keepers` | `keepers_stopped` (integer, the keepers that confirmed stopped), over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `call` | `value` (any JSON value, absent when the call returns nothing), what the Lua call returns (`docs/extensions.md`, "Process extensions") |
 
@@ -1585,6 +1590,19 @@ A workspace move to the folder the session is already in answers:
 ```json
 {"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
 ```
+
+## Hub feed
+
+#### `keepers`
+
+Ephemeral. The hub feed's keeper set, for a client that counts the keepers
+of gone sessions: every keeper-held `run/` entry the hub's probe confirms,
+in id order, empty when none. Written when the set changes, and once to every
+new feed subscriber; the latest wins.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `keepers` | array of strings | yes | the keeper-held session ids, in id order; empty when none |
 
 ## Resume
 

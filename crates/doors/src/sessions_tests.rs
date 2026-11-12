@@ -1543,3 +1543,221 @@ fn session_entries_propagates_a_non_not_found_error() {
     let error = session_entries(dir.path()).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
 }
+
+#[test]
+fn probe_marks_an_answering_peer_a_session() {
+    let home = Home::new();
+    // One ack line: the probe reads the first line, then closes, so a
+    // two-line peer would race the close with a broken pipe.
+    let peer = Peer::new(&home, ID, |command, stream| {
+        writeln!(stream, "{}", ack(command)).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Session)]
+    );
+    peer.subscribed(&deadline);
+    peer.ended(&deadline);
+}
+
+#[test]
+fn probe_marks_an_accept_drop_peer_keeper_or_gone() {
+    let home = Home::new();
+    // A keeper reads the probe's line, drops it and closes: read, then
+    // shut down with no answer, like the crashed-socket reader.
+    let peer = Peer::new(&home, ID, |_, stream| {
+        stream.shutdown(std::net::Shutdown::Both).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
+    );
+    peer.subscribed(&deadline);
+    peer.ended(&deadline);
+}
+
+/// A reset peer reads as gone without waiting: the reset is an error, not
+/// a silent socket, so the probe answers at once instead of parking to its
+/// bound. Linux-only: macOS delivers a reset as EOF, which reads as gone
+/// through the no-data arm without tripping the error arm.
+#[cfg(target_os = "linux")]
+#[test]
+fn probe_marks_a_reset_peer_keeper_or_gone_without_waiting() {
+    let home = Home::new();
+    let listener = home.listener(ID);
+    let (reset_tx, reset) = mpsc::channel();
+    thread::spawn(move || {
+        let wall = Deadline::after(fakes::deadline::WAIT);
+        listener.set_nonblocking(true).unwrap();
+        let (stream, _) = loop {
+            assert!(
+                !wall.left().is_zero(),
+                "the probe connects within the deadline"
+            );
+            let mut fds = [PollFd::new(&listener, PollFlags::IN)];
+            let bound = rustix::event::Timespec::try_from(wall.left()).unwrap();
+            rustix::event::poll(&mut fds, Some(&bound)).unwrap();
+            // Readiness can race a reset before the accept: poll again
+            // while the deadline holds it.
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(error) => panic!("accepting the probe: {error}"),
+            }
+        };
+        // macOS inherits the listener's nonblocking mode; peer I/O must
+        // block up to its socket timeout, not fail before the client writes.
+        stream.set_nonblocking(false).unwrap();
+        let timeout = wall.left().max(Duration::from_millis(1));
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        // The probe's subscribe synchronizes the reset: the peer answers
+        // nothing after it, so the reset is the first thing the probe's
+        // read can see and no partial line races it.
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let command: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(command["command"], "subscribe");
+        // Dropping a linger-zero socket resets the connection, as in
+        // hub's reset_loopback: the probe's next read fails outright.
+        rustix::net::sockopt::set_socket_linger(&stream, Some(Duration::ZERO)).unwrap();
+        drop(stream);
+        reset_tx.send(()).unwrap_or(());
+    });
+    let wall = Deadline::after(fakes::deadline::WAIT);
+    let (done_tx, done_rx) = mpsc::channel();
+    let path = home.temp.path().to_owned();
+    let clock = home.clock.clone();
+    thread::spawn(move || {
+        done_tx.send(classify_sockets(&path, clock)).unwrap();
+    });
+    // The reset fails the read outright, so the probe answers without
+    // waiting out its bound. A mutant that waits out every error instead
+    // sees the reset's error readiness and reads the same failure again,
+    // parking past the wall deadline and failing here.
+    wall.recv_or_fail(&reset, "the peer resets its socket");
+    assert_eq!(
+        wall.recv_or_fail(&done_rx, "the probe past its reset peer")
+            .unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
+    );
+}
+
+/// An overlong first line is no silent socket: the probe answers at
+/// once instead of parking to its bound. The line cap is the only
+/// failing read a probe can see without waiting (a reset reads as EOF
+/// once its bytes are consumed), so this pins the error arm a
+/// wait-everything mutant would park.
+#[test]
+fn probe_marks_an_overlong_line_keeper_or_gone_without_waiting() {
+    let home = Home::new();
+    let listener = home.listener(ID);
+    thread::spawn(move || {
+        // The probe always connects to its own listing: a blocking
+        // accept needs no bound.
+        let (mut stream, _) = listener.accept().unwrap();
+        // Read the probe's subscribe first, so the overlong line is the
+        // first thing the probe's read can see and no partial write races it.
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        // No newline: the probe's read fails outright at the cap, so
+        // the error answers without the bound moving. Hold the socket
+        // open past the write, so a wait-everything mutant parks instead
+        // of reading a close. Tolerate the probe closing mid-write: it
+        // answers as soon as it has read past the cap.
+        let payload = vec![b'x'; MAX_LINE + 8];
+        stream.write_all(&payload).unwrap_or(());
+        // Hold the socket open past the write: closing it would read
+        // as EOF instead of the cap error. Loop the park so a
+        // spurious wakeup cannot close it either.
+        loop {
+            thread::park();
+        }
+    });
+    let wall = Deadline::after(fakes::deadline::WAIT);
+    let (done_tx, done_rx) = mpsc::channel();
+    let path = home.temp.path().to_owned();
+    let clock = home.clock.clone();
+    thread::spawn(move || {
+        done_tx.send(classify_sockets(&path, clock)).unwrap();
+    });
+    // No clock move: the error answers at once. A mutant that waits
+    // out every error instead parks here past the wall deadline and fails.
+    assert_eq!(
+        wall.recv_or_fail(&done_rx, "the probe past its overlong peer")
+            .unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::KeeperOrGone)]
+    );
+}
+
+#[test]
+fn probe_marks_an_accept_never_answer_peer_gone_only_past_its_bound() {
+    let home = Home::new();
+    // Accepts and reads the probe's subscribe, then never answers: the
+    // probe waits out its fake-clock bound instead of counting it.
+    let mut held = Peer::hold(&home, ID, false);
+    let wall = Deadline::after(fakes::deadline::WAIT);
+    let (done_tx, done_rx) = mpsc::channel();
+    let path = home.temp.path().to_owned();
+    let clock = home.clock.clone();
+    thread::spawn(move || {
+        done_tx.send(classify_sockets(&path, clock)).unwrap();
+    });
+    // Short of the bound the probe is still parked: nothing returns.
+    let bound = home.clock.now() + PROBE_DEADLINE;
+    home.clock.advance_when_parked(
+        Some(bound),
+        None,
+        PROBE_DEADLINE
+            .checked_sub(Duration::from_millis(500))
+            .unwrap(),
+        &wall,
+    );
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the probe answered short of its bound"
+    );
+    // On the bound the accept reads as gone, never counted.
+    home.clock
+        .advance_when_parked(Some(bound), None, Duration::from_millis(500), &wall);
+    assert_eq!(
+        wall.recv_or_fail(&done_rx, "the probe past its bound")
+            .unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Gone)]
+    );
+    held.release();
+    held.ended(&wall);
+}
+
+#[test]
+fn probe_marks_a_stale_socket_file_gone() {
+    let home = Home::new();
+    let stale = home.listener(ID);
+    drop(stale);
+    assert_eq!(
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Gone)]
+    );
+}
+
+#[test]
+fn probe_skips_the_hub_entry() {
+    let home = Home::new();
+    fs::create_dir_all(home.run()).unwrap();
+    fs::write(home.run().join("hub"), b"not a session socket").unwrap();
+    let peer = Peer::new(&home, ID, |command, stream| {
+        writeln!(stream, "{}", ack(command)).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAIT);
+    assert_eq!(
+        classify_sockets(home.temp.path(), home.clock.clone()).unwrap(),
+        vec![(SessionId(ID.into()), SocketClass::Session)]
+    );
+    peer.subscribed(&deadline);
+    peer.ended(&deadline);
+}

@@ -37,8 +37,8 @@ const STOP_CHOICES: [(&str, &str, QuitChoice); 2] = [
 /// does. A click on a choice does what its key does. Returns the drawn
 /// slab, empty when the question is not open.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
-    if let Some((sessions, working, elsewhere)) = app.close_all_question() {
-        return draw_close_all(area, buf, targets, sessions, working, elsewhere);
+    if let Some((sessions, working, elsewhere, keepers)) = app.close_all_question() {
+        return draw_close_all(area, buf, targets, sessions, working, elsewhere, keepers);
     }
     if let Some((name, working, elsewhere)) = app.stop_question() {
         return draw_stop(area, buf, targets, &name, working, elsewhere);
@@ -58,9 +58,9 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
 }
 
 /// Draws the close-all question over `area`: the title, the frozen
-/// count of live, working and elsewhere sessions, the two choices with
-/// Enter's focused, and what the mouse does. A click on a choice does
-/// what its key does.
+/// count of live, working and elsewhere sessions and of keepers, the
+/// two choices with Enter's focused, and what the mouse does. A click
+/// on a choice does what its key does.
 fn draw_close_all(
     area: Rect,
     buf: &mut Buffer,
@@ -68,13 +68,14 @@ fn draw_close_all(
     sessions: usize,
     working: usize,
     elsewhere: usize,
+    keepers: usize,
 ) -> Rect {
     draw_question(
         area,
         buf,
         targets,
         "Close all",
-        close_all_count(sessions, working, elsewhere),
+        close_all_count(sessions, working, elsewhere, keepers),
         &CLOSE_ALL_CHOICES,
         "click a choice",
     )
