@@ -1224,12 +1224,42 @@ fn deprecated_table_references_are_skipped_but_absent_ids_fail() {
     )
     .unwrap();
     assert_eq!(outputs[0].models, 0);
-    assert!(notes.iter().any(|line| line.contains("correction")));
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old correction entry skipped because the model is deprecated"
+    }));
 
     let input = catalog(package.source, &[("m", tool_model(json!({})))]);
     assert_eq!(
         generate_err(&package, &input),
         "t: table entry for `old` matches no generated model"
+    );
+}
+
+#[test]
+fn the_checked_in_snapshot_skips_a_deprecated_table_reference() {
+    let snapshot: Value = serde_json::from_str(include_str!("../tests/models-dev.json")).unwrap();
+    let mut package = fixed_package("anthropic", "anthropic-messages");
+    package.drop_deprecated = true;
+    package.by_model = &[("claude-haiku-4-5", r#"{"x":1}"#)];
+    let id = "claude-haiku-4-5";
+
+    let mut deprecated_snapshot = snapshot.clone();
+    deprecated_snapshot[package.source]["models"][id]["status"] = json!("deprecated");
+    let ((outputs, notes), _) =
+        generate(&deprecated_snapshot, std::slice::from_ref(&package), &[]).unwrap();
+    assert!(generated_model(&outputs[0], id).is_none());
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/claude-haiku-4-5 by_model entry skipped because the model is deprecated"
+    }));
+
+    let mut missing_snapshot = snapshot;
+    missing_snapshot[package.source]["models"]
+        .as_object_mut()
+        .unwrap()
+        .remove(id);
+    assert_eq!(
+        generate_err(&package, &missing_snapshot),
+        "t: table entry for `claude-haiku-4-5` matches no generated model"
     );
 }
 
