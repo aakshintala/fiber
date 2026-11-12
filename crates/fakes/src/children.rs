@@ -215,7 +215,7 @@ fn block_of(ready: &Path) -> PathBuf {
 }
 
 fn quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    crate::shell_quote(path)
 }
 
 /// Runs `command` in its own process group and collects its output: the
