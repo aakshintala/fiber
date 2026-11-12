@@ -231,28 +231,8 @@ impl DelegateMessage {
             let identity = match super::super::run::process_identity(child.id()) {
                 Ok(identity) => identity,
                 Err(source) => {
-                    // debt: keep the two identity-cleanup paths duplicated unless a shared helper saves lines; extract when a third caller needs this cleanup.
-                    let cleanup = match support::group::signal(
-                        child.id(),
-                        rustix::process::Signal::KILL,
-                    ) {
-                        Ok(()) => child.wait().map(|_| ()),
-                        Err(group_error) => child
-                            .kill()
-                            .and_then(|()| child.wait().map(|_| ()))
-                            .map_err(|child_error| {
-                                std::io::Error::other(format!(
-                                    "group kill failed ({group_error}); child cleanup failed ({child_error})"
-                                ))
-                            }),
-                    };
+                    let source = crate::delegate::process_identity_cleanup(&mut child, source);
                     runner.end_worktree();
-                    let source = match cleanup {
-                        Ok(()) => source,
-                        Err(cleanup) => std::io::Error::other(format!(
-                            "{source}; child cleanup failed ({cleanup})"
-                        )),
-                    };
                     return Err(StartFailed::Spawn(source));
                 }
             };

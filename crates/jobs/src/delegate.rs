@@ -2,6 +2,7 @@
 //! and folding how it ended (`docs/delegates.md`).
 
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,6 +33,26 @@ use run::Runner;
 
 use crate::error::JobsError;
 use crate::registry::{Registry, mint_job_id};
+
+fn process_identity_cleanup(child: &mut Child, source: std::io::Error) -> std::io::Error {
+    let cleanup = match support::group::signal(child.id(), Signal::KILL) {
+        Ok(()) => child.wait().map(|_| ()),
+        Err(group_error) => child
+            .kill()
+            .and_then(|()| child.wait().map(|_| ()))
+            .map_err(|child_error| {
+                std::io::Error::other(format!(
+                    "group kill failed ({group_error}); child cleanup failed ({child_error})"
+                ))
+            }),
+    };
+    match cleanup {
+        Ok(()) => source,
+        Err(cleanup) => {
+            std::io::Error::other(format!("{source}; child cleanup failed ({cleanup})"))
+        }
+    }
+}
 
 /// Starts a Fiber delegate: a child `fiber session` that runs the prompt
 /// as a job and exits when its run ends (`docs/delegates.md`, "The
@@ -599,24 +620,8 @@ impl DelegateWiring {
                 let identity = match run::process_identity(child.id()) {
                     Ok(identity) => identity,
                     Err(source) => {
-                        let cleanup = match support::group::signal(child.id(), Signal::KILL) {
-                            Ok(()) => child.wait().map(|_| ()),
-                            Err(group_error) => child
-                                .kill()
-                                .and_then(|()| child.wait().map(|_| ()))
-                                .map_err(|child_error| {
-                                    std::io::Error::other(format!(
-                                        "group kill failed ({group_error}); child cleanup failed ({child_error})"
-                                    ))
-                                }),
-                        };
+                        let source = process_identity_cleanup(&mut child, source);
                         runner.end_worktree();
-                        let source = match cleanup {
-                            Ok(()) => source,
-                            Err(cleanup) => std::io::Error::other(format!(
-                                "{source}; child cleanup failed ({cleanup})"
-                            )),
-                        };
                         return Err(JobsError::SpawnFailed { source });
                     }
                 };
