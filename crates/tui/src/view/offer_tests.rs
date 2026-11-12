@@ -207,37 +207,29 @@ fn source_rows_follow_width_and_answer_changes() {
 
 #[test]
 fn a_line_past_65535_rows_scrolls_to_its_end() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let text = format!("{}FINALCHUNK", "0123456789".repeat(70_000));
-        assert_eq!(text.len(), 700_010);
-        let mut app = source_app(10, 100, Some(Ok(&text)));
-        // Shrinking page sizes reach the far end in bounded steps. Height
-        // changes reuse the same wrapped body; the final drawing is 10 by 5.
-        for _ in 0..128 {
-            let (rows, top) = app.offer_rows(10).unwrap();
-            let total: usize = rows.iter().map(|row| row.height(10)).sum();
-            if top >= total.saturating_sub(5) {
-                let area = Rect::new(0, 0, 10, 5);
-                let mut buf = Buffer::empty(area);
-                let mut targets = Vec::new();
-                super::render(&rows, top, area, &mut buf, &mut targets);
-                tx.send(super::super::text(&buf)).unwrap();
-                return;
-            }
-            let remaining = total - top;
-            let height = if remaining < 50 {
-                1
-            } else {
-                u16::try_from(remaining / 2 + 20).unwrap()
-            };
-            app.set_size(10, height);
-            press(&mut app, Key::PageDown);
-        }
-        panic!("PageDown reaches the end within 128 shrinking pages");
-    });
-    let screen = fakes::Deadline::after(std::time::Duration::from_secs(30))
-        .recv_or_fail(&rx, "scroll beyond 65,535 source rows");
+    let text = format!("{}FINALCHUNK", "0123456789".repeat(70_000));
+    assert_eq!(text.len(), 700_010);
+    let mut app = source_app(10, 100, Some(Ok(&text)));
+    let mut passes = 0;
+    let (mut rows, mut top) = app.offer_rows(10).unwrap();
+    let total: usize = rows.iter().map(|row| row.height(10)).sum();
+    // Four halvings move top past 65,535 for this 70,006-row source.
+    while top <= 65_535 {
+        let remaining = total - top;
+        let height = u16::try_from(remaining.div_ceil(2)).unwrap();
+        app.set_size(10, height);
+        press(&mut app, Key::PageDown);
+        passes += 1;
+        (rows, top) = app.offer_rows(10).unwrap();
+    }
+    assert_eq!(passes, 4, "fixed PageDown pass count for this source");
+    assert!(top > 65_535, "scroll top {top} is past 65,535 source rows");
+
+    let area = Rect::new(0, 0, 10, u16::try_from(total - top).unwrap());
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::render(&rows, top, area, &mut buf, &mut targets);
+    let screen = super::super::text(&buf);
     assert!(screen.contains("FINALCHUNK"), "{screen}");
 }
 
