@@ -61,10 +61,6 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
     }
 }
 
-fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\"'\"'"))
-}
-
 #[test]
 fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
     const SIZE: usize = 1_048_577;
@@ -82,7 +78,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
     let input = setup.workspace().join("input.bin");
     fs::write(&input, &fixture).unwrap();
     let script = setup.workspace().join("print.sh");
-    fs::write(&script, format!("cat {}\n", shell_quote(&input))).unwrap();
+    fs::write(&script, format!("cat {}\n", fakes::shell_quote(&input))).unwrap();
 
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
@@ -105,7 +101,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
     assert_eq!(sub["kind"], "command_accepted", "{sub}");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
 
-    let shell_command = format!("/bin/sh {}", shell_quote(&script));
+    let shell_command = format!("/bin/sh {}", fakes::shell_quote(&script));
     let line = json!({
         "id": "c_big",
         "command": "shell",
