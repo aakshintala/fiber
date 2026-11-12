@@ -266,3 +266,4 @@ xtask/tests/cli.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/
 xtask/src/journey_streak.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
 xtask/src/journey_streak_tests.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
 docs/architecture.md	fiber-4628	plan	2026-11-12T01:03:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/events.rs	fiber-4260	grant	2026-11-12T01:03:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
