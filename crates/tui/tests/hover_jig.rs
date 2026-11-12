@@ -16,6 +16,8 @@ mod jig;
 
 use std::process::Output;
 
+use fakes::WHOLE_SUBSYSTEM_WITHIN as WAIT;
+
 /// Reports per case in this test: the jig defaults to 20,000, which takes
 /// minutes in debug, so the test passes an explicit shorter count. Twenty
 /// reports run the exchange in about 0.9 s alone, so at five times that
@@ -46,7 +48,7 @@ fn reports_that_are_not_a_number_are_a_usage_error() {
         "hover",
         &[arg.as_str(), "160", "48", "many"],
         "the hover jig finished",
-        fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN),
+        fakes::Deadline::after(WAIT),
     );
     assert_usage(&out);
 }
@@ -60,7 +62,7 @@ fn zero_reports_are_a_usage_error() {
         "hover",
         &[arg.as_str(), "160", "48", "0"],
         "the hover jig finished",
-        fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN),
+        fakes::Deadline::after(WAIT),
     );
     assert_usage(&out);
 }
@@ -72,7 +74,7 @@ fn it_measures_the_four_cases_at_the_given_report_count() {
         "hover",
         &[arg.as_str(), "160", "48", REPORTS],
         "the hover jig finished",
-        fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN),
+        fakes::Deadline::after(WAIT),
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
