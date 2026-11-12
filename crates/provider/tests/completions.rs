@@ -2508,7 +2508,7 @@ fn an_opencode_go_completions_request_sends_store_false() {
     // The endpoint's compat comes from the generated opencode-go file's
     // completions entry, not from a hand-set flag, so the capture fails
     // when the table stops declaring store:false there.
-    let model = generated_opencode_go_model("deepseek-v4-flash");
+    let model = generated_opencode_go_model("beam-free");
     assert_eq!(model["protocol"], "openai-completions");
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let endpoint = Endpoint {
