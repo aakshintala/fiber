@@ -941,7 +941,7 @@ fn the_changed_files_committed_file_stays_dim_with_no_exit_code() {
 #[test]
 fn the_changed_files_open_in_editor_click_runs_the_same_path_as_ctrl_g() {
     let setup = Setup::new();
-    let workspace = setup.workspace();
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
     git(&workspace, &["init"]);
     git(&workspace, &["config", "user.email", "test@fiber.dev"]);
     git(&workspace, &["config", "user.name", "fiber test"]);
