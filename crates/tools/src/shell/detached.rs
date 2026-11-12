@@ -71,7 +71,7 @@ struct StopState {
 }
 
 impl StopControl {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             stop: Mutex::new(StopState::default()),
             parker: Arc::new(Parker::new()),
@@ -217,6 +217,42 @@ pub(super) fn system_spawner() -> Spawner {
 /// Moves a detached supervisor to its thread. If that thread cannot start,
 /// the caller keeps the `End`, kills the group and reports one failure
 /// synchronously rather than leaving a running row that has no supervisor to stop it.
+pub(super) struct Restored {
+    pub pgid: u32,
+    pub control: Arc<StopControl>,
+}
+
+/// Starts a childless supervisor for a process group admitted from the
+/// session log. Failure reports one indeterminate End without signalling.
+pub(super) fn track_restored(
+    opened: Opened,
+    restored: Restored,
+    clock: Arc<dyn Clock>,
+    spawner: &Spawner,
+) -> Result<(), io::Error> {
+    restored.control.subscribe(clock.as_ref());
+    let supervisor = Arc::new(Mutex::new(Some(RestoredSupervisor {
+        opened,
+        restored,
+        clock,
+    })));
+    let thread_supervisor = Arc::clone(&supervisor);
+    let task: Task = Box::new(move || {
+        if let Some(supervisor) = support::lock(&thread_supervisor).take() {
+            supervise_restored(supervisor);
+        }
+    });
+    match spawner(task) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Some(supervisor) = support::lock(&supervisor).take() {
+                supervisor.fail_indeterminate();
+            }
+            Err(error)
+        }
+    }
+}
+
 pub(super) fn track(
     opened: Opened,
     started: Started,
@@ -243,6 +279,98 @@ pub(super) fn track(
             }
             Err(error)
         }
+    }
+}
+
+struct RestoredSupervisor {
+    opened: Opened,
+    restored: Restored,
+    clock: Arc<dyn Clock>,
+}
+
+impl RestoredSupervisor {
+    fn report_cancelled(self) {
+        let completed = JobCompleted {
+            job_id: self.opened.started.job_id.clone(),
+            status: Outcome::Cancelled,
+            error: None,
+            process: None,
+            output_tail: super::background::output_tail(&self.opened.path),
+            notice: None,
+            changed_by: None,
+            protected_paths: None,
+        };
+        (self.opened.end.0)(completed);
+    }
+
+    fn fail_indeterminate(self) {
+        (self.opened.end.0)(failed(
+            self.opened.started.job_id,
+            &self.opened.path,
+            ShellError::Indeterminate,
+        ));
+    }
+
+    fn fail_signal(self, source: io::Error) {
+        (self.opened.end.0)(failed(
+            self.opened.started.job_id,
+            &self.opened.path,
+            ShellError::NotStarted { source },
+        ));
+    }
+}
+
+/// Watches a restored group without a child handle. A spontaneous
+/// disappearance has no observable exit status; an approved stop is
+/// cancelled after the group disappears.
+fn supervise_restored(supervisor: RestoredSupervisor) {
+    let pgid = supervisor.restored.pgid;
+    let control = Arc::clone(&supervisor.restored.control);
+    let mut cancelled = false;
+    let mut term_deadline = None;
+    let mut drain_deadline = None;
+    loop {
+        let seen = control.parker.generation();
+        if let Some(result) = control.take_stop() {
+            match result {
+                Ok(()) => {
+                    cancelled = true;
+                    let now = supervisor.clock.now();
+                    term_deadline = Some(now.checked_add(support::group::GRACE).unwrap_or(now));
+                }
+                Err(source) => {
+                    supervisor.fail_signal(source);
+                    return;
+                }
+            }
+        }
+        if !support::group::alive(pgid) {
+            if cancelled {
+                supervisor.report_cancelled();
+            } else {
+                supervisor.fail_indeterminate();
+            }
+            return;
+        }
+        let now = supervisor.clock.now();
+        if term_deadline.is_some_and(|deadline| now >= deadline) {
+            term_deadline = None;
+            if let Err(error) = support::group::signal(pgid, Signal::KILL) {
+                supervisor.fail_signal(io::Error::from(error));
+                return;
+            }
+            drain_deadline = Some(now.checked_add(support::group::DRAIN).unwrap_or(now));
+        }
+        if drain_deadline.is_some_and(|deadline| now >= deadline && support::group::alive(pgid)) {
+            supervisor.fail_indeterminate();
+            return;
+        }
+        control.parker.park_polled(
+            supervisor.clock.as_ref(),
+            term_deadline.or(drain_deadline),
+            Some(support::group::GROUP_POLL),
+            seen,
+        );
     }
 }
 
