@@ -2847,6 +2847,10 @@ fn sessions_default_listing_omits_active() {
     );
     hub.feed.start();
     assert!(session.await_subscribed(1, DEADLINE));
+    let feed = Arc::clone(&hub.feed);
+    crate::testkit::await_true("the hub consumed the live session status", move || {
+        feed.status_of(live).is_some()
+    });
     let mut client = Client::connect(&hub);
     client.hello();
     // Missing `active` and `active: false` both list without activity.
@@ -2905,6 +2909,10 @@ fn sessions_rejects_a_misshaped_active_arg() {
     hub.feed.start();
     assert!(kept_session.await_subscribed(1, DEADLINE));
     assert!(dropped_session.await_subscribed(1, DEADLINE));
+    let feed = Arc::clone(&hub.feed);
+    crate::testkit::await_true("the hub consumed both live session statuses", move || {
+        feed.status_of(kept).is_some() && feed.status_of(dropped).is_some()
+    });
     for (id, args) in [
         ("c_1", json!({"active": "yes"})),
         ("c_2", json!({"active": Value::Null})),
@@ -3016,6 +3024,10 @@ fn sessions_entries_carry_the_last_line_ts_never_since_or_row_ts() {
     );
     hub.feed.start();
     assert!(session.await_subscribed(1, DEADLINE));
+    let feed = Arc::clone(&hub.feed);
+    crate::testkit::await_true("the hub consumed the live session status", move || {
+        feed.status_of(live).is_some()
+    });
     let mut client = Client::connect(&hub);
     client.hello();
     client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
