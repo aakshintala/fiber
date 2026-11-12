@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
+use contract::clock::Wake;
 use contract::events::{CallStatus, Event, ExtensionReason};
+use contract::extension::ExtensionDoor;
 use contract::hook::{AfterToolCall, Hooks};
 use contract::tool::{Answered, Ask, Asking, InnerCalls};
 use extensions::{
@@ -104,6 +106,89 @@ fn process_provider_handles_inspect_without_calls_and_dispatch_models() {
 
 /// How long a test waits for the fixture's files before failing.
 const WAIT: Duration = Duration::from_secs(20);
+
+struct CancelWake(std::sync::mpsc::Sender<()>);
+
+impl Wake for CancelWake {
+    fn wake(&self) {
+        let _sent = self.0.send(());
+    }
+}
+
+#[test]
+fn process_command_inner_call_timeout_cancels_wait() {
+    let env = Env::new("fiber-process-command-timeout");
+    let request_path = env.marker("request.json");
+    let mut steps = vec![json!({"read": {}})];
+    steps.extend(
+        register(
+            "fiber.command",
+            "command-registration",
+            json!(["probe", {"description": "Probe", "timeout": 100, "run": true}]),
+        )
+        .as_array()
+        .unwrap()
+        .clone(),
+    );
+    steps.push(json!({"send": {"id": "ready", "command": "ready"}}));
+    steps.push(
+        json!({"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}}),
+    );
+    steps.push(json!({"write_file": {"path": request_path, "value": {"$ref": "request"}}}));
+    steps.push(json!({"send": {"id": "inner-tool", "command": "call", "args": {
+        "call": "host.tool", "args": ["read", {}], "request_id": {"$ref": "request.payload.request_id"}
+    }}}));
+    steps.push(json!({"read_until": {"path": "payload.command_id", "equals": "inner-tool", "as": "tool_answer"}}));
+    steps.push(json!({"loop": [{"read": {}}]}));
+    env.install_process(
+        "command-timeout",
+        &json!({"commands": {"probe": {"description": "Probe"}}}),
+        &json!(steps),
+    );
+
+    let clock = FakeClock::new();
+    let session = env.load_with_clock(&env.config(), ExtensionReason::New, 0, Arc::clone(&clock));
+    let (send, inbox) = std::sync::mpsc::channel();
+    session.deliver_to(send);
+    let release = session
+        .command(
+            &contract::CommandId("command-invocation".into()),
+            "probe",
+            "",
+        )
+        .unwrap();
+    release();
+    let request = read_json_file(&request_path, "command callback request");
+    assert_eq!(request["payload"]["key"], "run");
+    let contract::inbox::Delivery::InnerCall(inner) =
+        Deadline::after(WAIT).recv_or_fail(&inbox, "process command inner tool")
+    else {
+        panic!("expected an inner tool call");
+    };
+    (inner.taken)();
+
+    let until = clock.origin() + Duration::from_millis(100);
+    let parked = clock
+        .mark_parked(until, Deadline::after(WAIT))
+        .expect("the process command callback parks on its declared timeout");
+    assert_eq!(
+        parked.threads().len(),
+        1,
+        "only the callback timeout waiter is parked"
+    );
+    let (woke, woken) = std::sync::mpsc::channel();
+    let wake: Arc<dyn Wake> = Arc::new(CancelWake(woke));
+    inner.cancel.subscribe(Arc::downgrade(&wake));
+    clock.advance_when_parked(
+        Some(until),
+        parked.threads().first().copied(),
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
+    Deadline::after(WAIT).recv_or_fail(&woken, "the process command cancellation");
+    assert!(inner.cancel.is_cancelled());
+    session.finish_processes(&CancelToken::new());
+}
 
 /// A Fiber home and workspace in a temporary directory.
 struct Env {
