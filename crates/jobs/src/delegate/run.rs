@@ -110,6 +110,8 @@ fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
         | Kind::DelegateFinished
         | Kind::JobCompleted
         | Kind::JobsPendingNotified
+        | Kind::KeeperStarted
+        | Kind::KeeperBound
         | Kind::CommandAccepted
         | Kind::CommandRejected
         | Kind::Unknown(_) => None,

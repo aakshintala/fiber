@@ -2647,6 +2647,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_)
@@ -2726,6 +2728,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => Folded::Nothing,
