@@ -229,9 +229,8 @@ impl Tool for ProcessTool {
         self.output(returned)
     }
 
-    /// Runs `run` behind the runtime as [`Tool::run`] does. A process
-    /// callback has no inner-call runner yet, so the runner is the model's
-    /// path alone and the call runs anyway.
+    /// Runs `run` behind the runtime as [`Tool::run`] does, forwarding the
+    /// asking tool's inner-call runner to the process callback.
     fn run_asking(
         &self,
         arguments: &Map<String, Value>,

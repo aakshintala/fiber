@@ -106,6 +106,10 @@ fn run_for(
             extension: None,
             description: format!("job {job}"),
             output_path: format!("artifacts/{job}.log"),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         },
         path: output.clone(),
         file,

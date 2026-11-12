@@ -162,7 +162,9 @@ impl Drop for Scope {
 
 /// The start a lock probe never runs: the probed resume names an unknown
 /// job, so the registry answers before any start.
-fn no_start(_: &crate::registry::runs::Resumable) -> Result<(Stop, ()), String> {
+fn no_start(
+    _: &crate::registry::runs::Resumable,
+) -> Result<(Stop, contract::jobs::JobIdentity, ()), String> {
     panic!("an unknown job starts nothing")
 }
 
@@ -880,6 +882,7 @@ fn registration_is_not_timed() {
         "scan".into(),
         "sessions/s_child/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started("j_child"),
     );
     drop(opened.end);

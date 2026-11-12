@@ -751,6 +751,10 @@ fn started_line(id: &str) -> contract::jobs::JobRecord {
         extension: None,
         description: "npm test".into(),
         output_path: format!("artifacts/{id}.log"),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     })
 }
 

@@ -31,7 +31,10 @@ fn command(id: &str) -> CommandId {
 
 fn handler(value: Value) -> ProcessInvoke {
     Arc::new(
-        move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+        move |_args: Value,
+              _scope: Option<CredentialFor>,
+              _cancel: &dyn Cancel,
+              _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
             Ok(Some(value.clone()))
         },
     )
@@ -40,7 +43,10 @@ fn handler(value: Value) -> ProcessInvoke {
 fn failing(message: &str) -> ProcessInvoke {
     let message = message.to_owned();
     Arc::new(
-        move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+        move |_args: Value,
+              _scope: Option<CredentialFor>,
+              _cancel: &dyn Cancel,
+              _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
             Err(Error::Lua {
                 extension: "fiber.test/proc".to_owned(),
                 message: message.clone(),
@@ -214,7 +220,10 @@ fn process_hook_dispatch_applies_decode() {
         command("c2"),
         "run".to_owned(),
         FunctionTarget::Process(Arc::new(
-            |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None),
+            |_args: Value,
+             _scope: Option<CredentialFor>,
+             _cancel: &dyn Cancel,
+             _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| Ok(None),
         )),
     );
     assert!(
@@ -240,7 +249,10 @@ fn process_tool_run_returns_handler_value() {
         command("c2"),
         "run".to_owned(),
         FunctionTarget::Process(Arc::new(
-            |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None),
+            |_args: Value,
+             _scope: Option<CredentialFor>,
+             _cancel: &dyn Cancel,
+             _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| Ok(None),
         )),
     );
     assert_eq!(
@@ -270,6 +282,49 @@ fn process_tool_run_asking_runs_without_runner() {
             .unwrap(),
         Some(json!({"content": "hi"}))
     );
+}
+
+/// A process tool invocation receives the runner owned by its outer call.
+#[test]
+fn process_tool_runner_threading() {
+    struct Runner;
+    impl contract::tool::InnerCalls for Runner {
+        fn run(
+            &self,
+            _extension: &str,
+            _name: &str,
+            _arguments: Value,
+        ) -> Result<Box<contract::events::ToolCallCompleted>, String> {
+            Err("the threading test does not run inner calls".to_owned())
+        }
+    }
+
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let seen: Arc<Mutex<Option<Arc<dyn contract::tool::InnerCalls>>>> = Arc::new(Mutex::new(None));
+    let invoke: ProcessInvoke = {
+        let seen = Arc::clone(&seen);
+        Arc::new(move |_args, _scope, _cancel, inner_calls| {
+            *seen.lock().unwrap() = inner_calls;
+            Ok(Some(json!({"ran": true})))
+        })
+    };
+    let made = runtime.register_function(
+        "fiber.test/proc",
+        command("runner"),
+        "run".to_owned(),
+        FunctionTarget::Process(invoke),
+    );
+    let runner: Arc<dyn contract::tool::InnerCalls> = Arc::new(Runner);
+    let cancel = support::cancel::Token::new();
+    assert_eq!(
+        runtime
+            .tool_run_asking(&made, json!({}), None, &cancel, Some(Arc::clone(&runner)))
+            .unwrap(),
+        Some(json!({"ran": true}))
+    );
+    let carried = seen.lock().unwrap().clone().expect("runner is forwarded");
+    assert!(Arc::ptr_eq(&carried, &runner));
 }
 
 /// Computed callbacks resolve like `run`: an effects function and a search
@@ -412,7 +467,10 @@ fn process_watcher_push_and_drain() {
     let counting: ProcessInvoke = {
         let ran = Arc::clone(&ran);
         Arc::new(
-            move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+            move |_args: Value,
+                  _scope: Option<CredentialFor>,
+                  _cancel: &dyn Cancel,
+                  _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 ran.store(true, Ordering::SeqCst);
                 Ok(Some(json!({})))
             },
@@ -484,7 +542,12 @@ fn process_command_none_answer_completes() {
         "fiber.test/proc",
         command("c1"),
         "run",
-        Arc::new(|_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None)),
+        Arc::new(
+            |_args: Value,
+             _scope: Option<CredentialFor>,
+             _cancel: &dyn Cancel,
+             _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| Ok(None),
+        ),
     );
     let queued = runtime.queue_command(&none, command("q"), "go").unwrap();
     queued.release();
@@ -507,7 +570,10 @@ fn process_dispatch_carries_the_invocation_scope() {
             command("c1"),
             "run",
             Arc::new(
-                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                move |_args: Value,
+                      scope: Option<CredentialFor>,
+                      _cancel: &dyn Cancel,
+                      _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                     seen.lock().unwrap().push(scope);
                     Ok(Some(json!(true)))
                 },
@@ -543,7 +609,10 @@ fn concurrent_process_dispatches_keep_their_own_scope() {
             command("c1"),
             "run",
             Arc::new(
-                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                move |_args: Value,
+                      scope: Option<CredentialFor>,
+                      _cancel: &dyn Cancel,
+                      _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                     let label = match &scope {
                         Some(CredentialFor::Stored(pair)) => pair.label.clone(),
                         Some(CredentialFor::Login(_)) => "login".to_owned(),
@@ -596,7 +665,10 @@ fn process_queued_command_releases_unscoped() {
             command("c1"),
             "run",
             Arc::new(
-                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                move |_args: Value,
+                      scope: Option<CredentialFor>,
+                      _cancel: &dyn Cancel,
+                      _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                     seen.lock().unwrap().push(scope.is_some());
                     Ok(Some(json!(true)))
                 },

@@ -60,9 +60,10 @@ pub(crate) struct CallbackContext {
     /// runs a provider's `credential()` sets it, carrying the session's
     /// pair; every other callback holds no provider credential.
     pub credential: Option<CredentialFor>,
+    /// The inner-call runner owned by this callback, when it is a tool call.
+    pub inner_calls: Option<std::sync::Arc<dyn contract::tool::InnerCalls>>,
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl CallbackContext {
     /// A call made while the entry script runs, before `ready`.
     pub(crate) fn entry(extension: &str) -> Self {
@@ -73,6 +74,7 @@ impl CallbackContext {
             cancel: support::cancel::Token::new(),
             state_call: None,
             credential: None,
+            inner_calls: None,
         }
     }
 
@@ -85,6 +87,7 @@ impl CallbackContext {
             cancel: support::cancel::Token::new(),
             state_call: None,
             credential: None,
+            inner_calls: None,
         }
     }
 
@@ -109,7 +112,17 @@ impl CallbackContext {
             cancel,
             state_call,
             credential,
+            inner_calls: None,
         }
+    }
+
+    /// Carries the outer tool call's inner-call runner into this callback.
+    pub(crate) fn with_inner_calls(
+        mut self,
+        inner_calls: Option<std::sync::Arc<dyn contract::tool::InnerCalls>>,
+    ) -> Self {
+        self.inner_calls = inner_calls;
+        self
     }
 
     /// Whether a registration call may run here: only while the entry
