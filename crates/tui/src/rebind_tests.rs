@@ -81,23 +81,23 @@ fn select(screen: &mut KeysScreen, keys: &Keyset, at: usize) {
 }
 
 #[test]
-fn moving_clamps_at_both_ends() {
+fn moving_wraps_at_both_ends() {
     let keys = keys();
     let mut screen = keys_screen();
     assert!(matches!(
         press(&mut screen, &keys, &["up"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), first_line(&keys, 0));
+    assert_eq!(
+        selected(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(1))
+    );
     select(&mut screen, &keys, BINDINGS.len().saturating_sub(1));
     assert!(matches!(
         press(&mut screen, &keys, &["down"]),
         Outcome::Nothing
     ));
-    assert_eq!(
-        selected(&screen, &keys),
-        first_line(&keys, BINDINGS.len().saturating_sub(1))
-    );
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 0));
 }
 
 /// PageUp and PageDown move (`docs/tui.md`, "Bindings"); the step is the whole
