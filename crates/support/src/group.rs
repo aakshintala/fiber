@@ -97,7 +97,7 @@ pub fn start_time(pid: u32) -> Option<u64> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let close = stat.rfind(')')?;
         let fields: Vec<_> = stat.get(close + 2..)?.split_ascii_whitespace().collect();
-        return fields.get(19)?.parse().ok();
+        fields.get(19)?.parse().ok()
     }
     #[cfg(target_os = "macos")]
     {
