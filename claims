@@ -243,3 +243,4 @@ providers/opencode/providers/opencode-go.json	fiber-4709	plan	2026-11-12T13:33:2
 providers/opencode/providers/opencode-zen.json	fiber-4709	plan	2026-11-12T13:33:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/keeper_child_tests.rs	fiber-4726	plan	2026-11-12T13:54:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/tests/models-dev.json	fiber-4709	plan	2026-11-12T14:04:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/models_dev.rs	fiber-4709	plan	2026-11-12T14:11:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
