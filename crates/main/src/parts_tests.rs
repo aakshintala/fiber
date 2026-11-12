@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use contract::clock::Clock;
 use fakes::Deadline;
 use serde_json::json;
 
@@ -29,8 +30,13 @@ fn session_start_spawns_a_due_catalog_fetch() {
         Ok(bytes.clone())
     });
 
-    let handle = start_catalog_refresh(home.clone(), &config, std::time::SystemTime::now(), fetch)
-        .expect("a missing catalog is due at session start");
+    let handle = start_catalog_refresh(
+        home.clone(),
+        &config,
+        fakes::clock::FakeClock::new().wall(),
+        fetch,
+    )
+    .expect("a missing catalog is due at session start");
     fakes::within(
         "session-start catalog refresh",
         Deadline::after(Duration::from_secs(10)),
