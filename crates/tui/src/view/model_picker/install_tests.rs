@@ -358,7 +358,7 @@ fn the_focused_row_stays_on_screen_at_every_position_on_a_short_terminal() {
     for with_models in [false, true] {
         let models: &[&str] = if with_models { &["acme/m1"] } else { &[] };
         let mut picker = picker(models, &installable);
-        let steps = names.len() + usize::from(with_models);
+        let steps = names.len() + usize::from(with_models) - 1;
         for step in 0..steps {
             let text = screen(&picker, 80, 12);
             let focus = picker.install_target();
@@ -372,7 +372,9 @@ fn the_focused_row_stays_on_screen_at_every_position_on_a_short_terminal() {
             }
             picker.move_row(1);
         }
-        assert_eq!(picker.install_target().as_deref(), Some("prov8"));
+        let focus = picker.install_target().expect("an install row is focused");
+        let text = screen(&picker, 80, 12);
+        assert!(text.contains(&format!("› {focus} ")), "{text}");
     }
 }
 

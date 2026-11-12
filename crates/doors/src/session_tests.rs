@@ -2227,6 +2227,9 @@ fn run_sends_the_jobs_ends_to_the_loops_inbox() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = job.started.job_id.clone();

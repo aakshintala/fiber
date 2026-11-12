@@ -94,6 +94,24 @@ fn wheel_clamps_a_leaving_focus_to_the_window() {
     );
 }
 
+#[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn arrows_wrap_between_target_rows() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    logout.key(&Key::Up, &context);
+    assert_eq!(
+        logout.selected, 30,
+        "Up from the first target wraps to last"
+    );
+    logout.key(&Key::Down, &context);
+    assert_eq!(
+        logout.selected, 1,
+        "Down from the last target wraps to first"
+    );
+}
+
 /// Ordinary arrow keys still move one target after wheel movement, and
 /// the wheeled top survives while both targets remain visible.
 #[test]
