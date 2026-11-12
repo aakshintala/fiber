@@ -117,6 +117,45 @@ pub fn model_cache_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigEr
     cache_file(home, provider)
 }
 
+/// The live models.dev catalog cache, separate from provider model lists.
+pub fn models_dev_cache_file(home: &Path) -> Result<PathBuf, ConfigError> {
+    Ok(home.join("cache/models.dev/api.json"))
+}
+
+/// The lock held while replacing the models.dev catalog cache.
+pub fn models_dev_lock_file(home: &Path) -> Result<PathBuf, ConfigError> {
+    Ok(home.join("cache/models.dev/api.lock"))
+}
+
+/// Age of the catalog cache, or `None` when it is missing.
+pub fn models_dev_age(home: &Path, now: SystemTime) -> Result<Option<Duration>, ConfigError> {
+    let file = models_dev_cache_file(home)?;
+    let metadata = match fs::metadata(&file) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(ConfigError::Io { file, source }),
+    };
+    let modified = metadata.modified().map_err(|source| ConfigError::Io {
+        file: file.clone(),
+        source,
+    })?;
+    Ok(Some(now.duration_since(modified).unwrap_or(Duration::ZERO)))
+}
+
+/// Read the catalog bytes; a missing or unreadable copy is no copy.
+pub fn read_models_dev(home: &Path) -> Result<Option<Vec<u8>>, ConfigError> {
+    let file = models_dev_cache_file(home)?;
+    match fs::read(file) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Atomically replace the raw catalog bytes.
+pub fn write_models_dev(home: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
+    write_atomic(&models_dev_cache_file(home)?, bytes, 0o600)
+}
+
 fn cache_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {
     if !one_file_name(provider) {
         return Err(ConfigError::WrongType {

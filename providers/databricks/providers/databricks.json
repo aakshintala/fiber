@@ -1,5 +1,11 @@
 {
   "name": "databricks",
+  "models_dev": {
+    "strip_prefix": "databricks-",
+    "sources": ["anthropic", "google", "google-vertex", "meta", "openai"],
+    "source_aliases": {},
+    "pins": {}
+  },
   "credential": {
     "env": "DATABRICKS_TOKEN"
   },
