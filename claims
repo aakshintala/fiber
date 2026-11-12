@@ -204,16 +204,6 @@ crates/tui/src/view/model_picker/install_tests.rs:375-375	fiber-4619	plan	2026-1
 crates/tui/src/view/model_picker_tests.rs:2299-2301	fiber-4619	plan	2026-11-12T10:41:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
 crates/tui/src/view/request_tests.rs:241-241	fiber-4619	plan	2026-11-12T10:41:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
 crates/tui/src/view/request_tests.rs:262-262	fiber-4619	plan	2026-11-12T10:41:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
-crates/loop/src/reviewer_tests.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/review_jig.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/reviewer_eval.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/support/review.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/support/review_sweep.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/testing/fakes.md	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/events.jsonl	fiber-4699	grant	2026-11-12T11:26:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-eval-cases	
-crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	grant	2026-11-12T11:26:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-eval-cases	
 crates/tui/src/swapped.rs	fiber-4619	plan	2026-11-12T11:49:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/swapped_tests.rs	fiber-4619	plan	2026-11-12T11:49:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/settings_view.rs	fiber-4582	plan	2026-11-12T12:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
