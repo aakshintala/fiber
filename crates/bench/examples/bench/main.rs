@@ -293,6 +293,12 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
 /// One workload's samples, by metric id.
 type Metrics = BTreeMap<&'static str, Vec<Value>>;
 
+/// Samples and liveness for one side of one workload row.
+struct SideMeasurement {
+    alive: bool,
+    samples: Metrics,
+}
+
 /// One side's run: the selection it walks follows its `args`, and its
 /// failures, metrics and counts land in its own result file.
 struct Pass {
@@ -432,8 +438,7 @@ fn measure_side(
     each: u32,
     n: u32,
     calls: u32,
-    alive: &mut bool,
-    samples: &mut Metrics,
+    row: &mut SideMeasurement,
     measure: &mut impl FnMut(
         Side,
         &'static idle::Workload,
@@ -462,14 +467,14 @@ fn measure_side(
     match result {
         Ok(values) => {
             for (id, sample) in values {
-                samples.entry(id).or_default().push(sample);
+                row.samples.entry(id).or_default().push(sample);
             }
         }
         Err(err) => {
             pass.failures
                 .push(format!("{}, run {n}: {err}", workload.name));
-            *alive = false;
-            samples.clear();
+            row.alive = false;
+            row.samples.clear();
         }
     }
 }
@@ -532,10 +537,14 @@ fn measure_all(
             .is_some_and(|names| names.contains(&workload.name));
         // Both selections share the run counts, so the head tuple's runs
         // is each side's run count.
-        let mut head_samples: Metrics = BTreeMap::new();
-        let mut base_samples: Metrics = BTreeMap::new();
-        let mut head_alive = true;
-        let mut base_alive = paired;
+        let mut head_row = SideMeasurement {
+            alive: true,
+            samples: BTreeMap::new(),
+        };
+        let mut base_row = SideMeasurement {
+            alive: paired,
+            samples: BTreeMap::new(),
+        };
         // A sampled row times one sample per call, alternating the sides
         // per sample; every other row times one run per call. The row's
         // nominal run count still labels its metrics below.
@@ -545,44 +554,30 @@ fn measure_all(
             (repeats, runs)
         };
         for n in 1..=calls {
-            if head_alive {
-                measure_side(
-                    head,
-                    workload,
-                    each,
-                    n,
-                    calls,
-                    &mut head_alive,
-                    &mut head_samples,
-                    &mut measure,
-                );
+            if head_row.alive {
+                measure_side(head, workload, each, n, calls, &mut head_row, &mut measure);
             }
-            if base_alive && let Some(base) = base.as_mut() {
-                measure_side(
-                    base,
-                    workload,
-                    each,
-                    n,
-                    calls,
-                    &mut base_alive,
-                    &mut base_samples,
-                    &mut measure,
-                );
+            if base_row.alive
+                && let Some(base) = base.as_mut()
+            {
+                measure_side(base, workload, each, n, calls, &mut base_row, &mut measure);
             }
         }
         // A metric is recorded only when every call of its side's row
         // produced it, as the single-side run did.
-        if head_alive {
-            for id in head_samples.keys() {
+        if head_row.alive {
+            for id in head_row.samples.keys() {
                 head.metric_runs.insert(id, runs);
             }
-            head.metrics.extend(head_samples);
+            head.metrics.extend(head_row.samples);
         }
-        if base_alive && let Some(base) = base.as_mut() {
-            for id in base_samples.keys() {
+        if base_row.alive
+            && let Some(base) = base.as_mut()
+        {
+            for id in base_row.samples.keys() {
                 base.metric_runs.insert(id, runs);
             }
-            base.metrics.extend(base_samples);
+            base.metrics.extend(base_row.samples);
         }
     }
 }
