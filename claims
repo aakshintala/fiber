@@ -246,8 +246,6 @@ docs/permissions.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:
 docs/testing/fakes.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/notes.rs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/check-docs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/fakes/src/lib.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/support/mod.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -257,8 +255,6 @@ crates/tui/src/screen.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-pl
 crates/tui/src/screen_tests.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/main.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4700	plan	2026-11-12T06:25:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/lib.rs:327-327	fiber-4671	plan	2026-11-12T06:34:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4671-notes-cache-key	
-docs/prompt-cache.md:352-353	fiber-4671	plan	2026-11-12T06:34:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4671-notes-cache-key	
 crates/main/src/reload_tests.rs	fiber-4674	plan	2026-11-12T06:41:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
