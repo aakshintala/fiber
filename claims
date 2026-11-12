@@ -256,3 +256,4 @@ crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-4699	plan	2026-11-12T05
 crates/main/tests/support/review_sweep.rs	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/permissions.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/fakes.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell/command_tests.rs	fiber-4260	grant	2026-11-12T05:57:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
