@@ -2250,6 +2250,114 @@ fn restore_failures_record_nothing_and_leave_the_id_free() {
     drop(ok.end);
 }
 
+fn detached_started(id: &str, path: &std::path::Path) -> contract::events::JobStarted {
+    contract::events::JobStarted {
+        job_id: JobId(id.into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "sleep 60".into(),
+        output_path: path.to_string_lossy().into_owned(),
+        pgid: None,
+        start_time: None,
+        kind: Some(contract::events::JobKind::Detached),
+    }
+}
+
+#[test]
+fn restore_detached_appends_existing_file_without_a_second_start() {
+    let dir = TempDir::new("fiber-jobs-restore-detached");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("d_1_0.log");
+    std::fs::write(&path, b"kept\\n").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let recorder = Arc::new(Recorder::default());
+    let registry = Registry::new(dir.path().join("artifacts"), clock, recorder.clone());
+    let opened = registry
+        .restore_detached(
+            detached_started("j_detached", &path),
+            &root,
+            Stop(Box::new(|| {})),
+        )
+        .unwrap();
+    opened.file.sync_all().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"kept\\n");
+    assert_eq!(opened.started.job_id, JobId("j_detached".into()));
+    assert!(
+        recorder.events().is_empty(),
+        "restore writes no job_started"
+    );
+    assert!(registry.list_text().contains("j_detached detached running"));
+    drop(opened.end);
+}
+
+#[test]
+fn restore_detached_rejects_paths_outside_root_or_without_an_existing_file() {
+    let dir = TempDir::new("fiber-jobs-restore-detached-path");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let external = dir.path().join("outside.log");
+    std::fs::write(&external, b"untouched").unwrap();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("x.log"), b"nested").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    );
+    for (id, path) in [
+        ("j_outside", external.clone()),
+        ("j_nested", nested.join("x.log")),
+        ("j_missing", root.join("missing.log")),
+        ("j_root", root.to_path_buf()),
+    ] {
+        let result = registry.restore_detached(
+            detached_started(id, &path),
+            &root,
+            Stop(Box::new(|| panic!("restore must not signal"))),
+        );
+        assert!(result.is_err(), "{} was admitted", path.display());
+        assert!(!registry.contains(id), "failed restore recorded {id}");
+    }
+    assert_eq!(std::fs::read(&external).unwrap(), b"untouched");
+    assert_eq!(registry.list_text(), "No jobs.\n");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_detached_rejects_a_symlink_log_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("fiber-jobs-restore-detached-symlink");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let target = dir.path().join("outside.log");
+    std::fs::write(&target, b"unchanged").unwrap();
+    let path = root.join("d_link.log");
+    symlink(&target, &path).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    );
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_calls = Arc::clone(&calls);
+    let result = registry.restore_detached(
+        detached_started("j_symlink", &path),
+        &root,
+        Stop(Box::new(move || {
+            stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })),
+    );
+    assert!(result.is_err(), "symlink logs are not admitted");
+    assert!(!registry.contains("j_symlink"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+}
+
 #[test]
 fn restore_refuses_a_job_already_recorded() {
     let (dir, registry) = world();
