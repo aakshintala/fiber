@@ -263,7 +263,7 @@ cancelled or skipped selected leg before downloading anything (an empty list
 with a true marker is a complete empty result): a leg whose tests failed but
 whose list was written still feeds the collate, which fails closed only when
 no readable list feeds it: no list at all, or an existing-but-empty list with
-a `false` marker that does not feed when no other list feeds it. The reporter files for the legs it
+a `false` marker, which does not feed when no other readable list exists. The reporter files for the legs it
 has. It then looks
 up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,

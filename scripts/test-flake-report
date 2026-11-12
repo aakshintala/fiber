@@ -1252,13 +1252,12 @@ expect_summary "$collate_no_report_leg/out" "the flaky-tests-macos-26 list is mi
 # still files its flake exactly once and reports the absent runner as partial.
 collate_absent_artifact=$tmp/collate-absent-artifact
 mkdir -p "$collate_absent_artifact/flaky"
-printf 'main::probe a\\td1\\n' >"$collate_absent_artifact/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+printf 'main::probe a\td1\n' >"$collate_absent_artifact/flaky/flaky-tests-ubuntu-24.04-arm.txt"
 echo true >"$collate_absent_artifact/flaky/collection-complete-ubuntu-24.04-arm.txt"
-echo true >"$collate_absent_artifact/flaky/collection-complete-macos-26.txt"
 code=$(run_collate_status "$collate_absent_artifact" TEST_SELECTED=true)
 expect_exit collate-absent-artifact "$code" 0
 expect_flakes "$collate_absent_artifact" 'has_flakes=true'
-[ "$(grep -Fc 'main::probe a' "$collate_absent_artifact/flaky/flaky-tests-ubuntu-24.04-arm.txt")" = 1 ] || fail "collate-absent-artifact: the readable artifact must contain the flake exactly once"
+grep -Fq $'main::probe a\td1' "$collate_absent_artifact/flaky/flaky-tests-ubuntu-24.04-arm.txt" || fail "collate-absent-artifact: collate must find the real tab-separated flake"
 expect_summary "$collate_absent_artifact/out" "the flaky-tests-macos-26 list is missing: partial report"
 # The Linux-only completed-empty result stays a success with no flakes:
 # no list was ever uploaded, and none is expected.

@@ -655,8 +655,8 @@ jobs:
             ${{ runner.temp }}/flaky/collection-complete-${{ matrix.runner }}.txt
           if-no-files-found: ignore
       # The leg's final list, after both record steps above. flake_decide
-      # downloads this leg's artifact only when this output is true; a
-      # missing artifact then fails that job.
+      # downloads this leg's artifact only when this output is true; the
+      # collate reports a missing artifact as partial when another list feeds it.
       - name: Report whether this leg found flakes
         id: has_flakes
         if: always()
