@@ -257,3 +257,5 @@ crates/main/tests/support/review_sweep.rs	fiber-4699	plan	2026-11-12T05:57:35Z	r
 docs/permissions.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/fakes.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tools/src/shell/command_tests.rs	fiber-4260	grant	2026-11-12T05:57:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
+crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
