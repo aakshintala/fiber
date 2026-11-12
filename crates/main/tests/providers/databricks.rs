@@ -1007,10 +1007,8 @@ fn two_services_without_endpoints_group_into_one_notice() {
     assert_eq!(listed, ["databricks/databricks-gpt-6-sol"], "{listed:?}");
 }
 
-/// A warm model cache names the endpoint-less service once: the first ask
-/// persists the marked omission, and a later ask turn carries exactly one
-/// `model_omitted` notice event for it — the cache admission drains the
-/// mark silently and only the Lua admission emits
+/// A warm model cache names the endpoint-less service once: the load reports
+/// the marked omission, and `add_lua` repeats none of it
 /// (`docs/model-routing.md`, "Model discovery").
 #[test]
 fn a_warm_cache_names_the_omission_once_on_a_later_ask() {
@@ -1090,6 +1088,85 @@ fn a_warm_cache_names_the_omission_once_on_a_later_ask() {
     support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
     assert_eq!(ask.text_completed(), "Hello.");
     assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
+}
+
+/// A disabled process package has no Lua discovery path, but its warm cache
+/// still reports the marked service during load (`docs/model-routing.md`, "Model discovery").
+#[test]
+fn a_disabled_process_package_warm_cache_names_the_omission_once() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let to = setup.root.path().join("pkg-databricks-disabled");
+    support::package::copy_package("databricks", &to, "https://", "http://");
+    let manifest_path = to.join("extension.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    support::install_with_retry(
+        &setup.home(),
+        setup.deadline.start_wait(),
+        &extensions::Request::Path(to),
+        "0.1.0",
+        None,
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "extensions": {"github.com/aakshintala/fiber/providers/databricks": {"enabled": false}}
+        }),
+    );
+    let server_url = server.url();
+    let host = server_url.strip_prefix("http://").unwrap();
+    let base = "http://{workspace}/ai-gateway";
+    config::write_model_cache(&setup.home(), "databricks", &json!([
+        {"id":"databricks-claude-opus-5", "protocol":"anthropic-messages", "base_url":format!("{base}/anthropic/v1"), "context_window":200000},
+        {"id":"databricks-gpt-6-sol", "protocol":"openai-responses", "base_url":format!("{base}/codex/v1"), "context_window":400000},
+        {"id":"databricks-glm-5.3", "protocol":"openai-completions", "base_url":format!("{base}/mlflow/v1"), "context_window":200000, "omit_reason":"no serving endpoint with a matching name"}
+    ])).unwrap();
+    let ask = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(host),
+    );
+    assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
+    let notices: Vec<_> = ask
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    // The load emits one notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "model_omitted");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The model `databricks/databricks-glm-5.3` was left out of the model list: no serving endpoint with a matching name."
+    );
+    assert_eq!(
+        notices[0]["payload"]["extension"],
+        "github.com/aakshintala/fiber/providers/databricks"
+    );
+    let rest: Vec<Value> = ask
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "notice")
+        .cloned()
+        .collect();
+    support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
+    assert_eq!(ask.text_completed(), "Hello.");
+    let requests = server.requests();
+    let model = find_request(&requests, "/ai-gateway/codex/v1/responses");
+    assert_eq!(tags_header(model), json!({"source":"fiber"}));
+    for request in &requests {
+        assert_fingerprint(request, "authorization", "Bearer dapi-test");
+    }
+    assert!(
+        !requests
+            .iter()
+            .any(|request| DISCOVERY_PATHS.contains(&request.path.as_str())),
+        "{requests:?}"
+    );
 }
 
 /// Every service backed by an endpoint turns with no omission line in the

@@ -80,6 +80,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("extensions/hooks/init.lua", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),
     ("providers/bedrock/providers/bedrock.json", "extensions"),
+    (
+        "providers/databricks/providers/databricks.json",
+        "extensions",
+    ),
     ("providers/codex/providers/codex.json", "extensions"),
     ("providers/gemini/providers/gemini.json", "extensions"),
     ("providers/muse/providers/muse.json", "extensions"),

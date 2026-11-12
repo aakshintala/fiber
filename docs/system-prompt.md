@@ -15,7 +15,7 @@ What varies by project or by day is kept out of the system prompt:
 - The **system prompt** holds Fiber's instructions, the tools' guidelines,
   the model's name and addendum, extension texts and the person's own
   additions. It is part of the
-  preamble, so it is built only at start, resume, `reload` and a model switch.
+  preamble, so it is built only at start, resume, `reload`, `/sandbox` and a model switch.
 - The **opening message** holds the environment, the project's instruction
   files, extension sections and the skills listing. It is the first message of the conversation,
   written to the session log once and rendered from the log after that.
@@ -52,7 +52,7 @@ A person replaces or extends the system prompt with files in Fiber home:
 
 | File | Effect |
 |---|---|
-| `SYSTEM.md` | Replaces Fiber's text. Tool guidelines, the session section and extension texts still follow. |
+| `SYSTEM.md` | Replaces Fiber's text. An empty or whitespace-only file counts as absent. Tool guidelines, the session section and extension texts still follow. |
 | `APPEND_SYSTEM.md` | Appended at the end. |
 
 Each can sit at the top of Fiber home or under `projects/<key>/`

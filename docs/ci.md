@@ -257,9 +257,13 @@ single-file integration binary keeps `Flaky tests: <binary>`. The retry is nexte
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
-artifact, failing closed on a missing artifact, a false or missing
-per-producer completion marker, or a cancelled or skipped selected leg
-(an empty list with a true marker is a complete empty result), then looks
+artifact, failing closed on a missing artifact or a cancelled or skipped
+selected leg (an empty list with a true marker is a complete empty
+result): a leg whose tests failed but whose list was written still feeds
+the collate, which fails closed only when no readable list feeds it: no
+list at all, or an existing-but-empty list with a `false` marker that does
+not feed when no other list feeds it. The reporter files for the legs it
+has. It then looks
 up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,
 fetches only those endpoints, and runs
@@ -668,8 +672,12 @@ match and every build recompiles the dependencies.
 After the backstop passes on `main`, and in the nightly before it publishes,
 the journey suite drives that commit's release binary through the paths a
 person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
-comments on the open one. It never blocks a merge, and it is not part of the
-gate. In the nightly, a failure reports and does not stop the publish.
+comments on the open one. The selector considers at most 20 prior runs, newest first. After two or more consecutive failures of the same
+journey, the comment appends `Streak: <n> consecutive failures since
+<first-sha>.`, counting this run and using the full SHA of the first failing
+commit; incomplete history keeps the plain sighting. It never blocks a merge,
+and it is not part of the gate. In the nightly, a failure reports and does
+not stop the publish.
 
 ## Toolchain
 

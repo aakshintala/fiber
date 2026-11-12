@@ -76,6 +76,46 @@ fn models_diagnostic_records_read_completion_and_queued_start() {
 }
 
 #[test]
+fn a_stale_read_republishes_the_fetched_model_field_after_cached_publish() {
+    let read: ReadModels = Arc::new(|refresh| {
+        let name = match refresh {
+            Refresh::Cached => "cached catalog",
+            Refresh::Stale => "fetched catalog",
+            Refresh::Every => "forced catalog",
+        };
+        Ok(Catalogue {
+            models: vec![crate::catalogue::ModelEntry {
+                reference: "acme/m".to_owned(),
+                provider: "acme".to_owned(),
+                id: "m".to_owned(),
+                name: Some(name.to_owned()),
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+                price: None,
+            }],
+            ..Default::default()
+        })
+    });
+    let mut reader = Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+
+    reader.ask(Refresh::Cached, &tx);
+    let Input::Models(Ok(first)) = next(&rx, &Deadline::after(DEADLINE)) else {
+        panic!("cached catalogue read did not answer");
+    };
+    assert_eq!(first.models[0].name.as_deref(), Some("cached catalog"));
+    reader.done(&tx);
+
+    reader.ask(Refresh::Stale, &tx);
+    let Input::Models(Ok(updated)) = next(&rx, &Deadline::after(DEADLINE)) else {
+        panic!("stale catalogue read did not answer");
+    };
+    assert_eq!(updated.models[0].name.as_deref(), Some("fetched catalog"));
+}
+
+#[test]
 fn a_default_catalogue_has_no_logged_out_providers() {
     assert!(Catalogue::default().logged_out.is_empty());
 }

@@ -492,6 +492,84 @@
       "web_search": "web_search_20250305"
     }
   ],
+  "models_dev": {
+    "pins": {
+      "claude-fable-5": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-fable-5-1": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-haiku-4-5": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-haiku-4-5-20251001": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-haiku-5-5": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-opus-4-5": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-opus-4-5-20251101": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-opus-4-6": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-opus-4-7": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-opus-4-8": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-opus-5": [
+        "web_search"
+      ],
+      "claude-opus-5-5": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-sonnet-4-5": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-sonnet-4-5-20250929": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-sonnet-4-6": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-sonnet-5": [
+        "deferred_tools",
+        "web_search"
+      ],
+      "claude-sonnet-5-5": [
+        "deferred_tools",
+        "web_search"
+      ]
+    },
+    "source": "anthropic"
+  },
   "name": "anthropic",
   "reviewer_model": "claude-sonnet-5-5"
 }

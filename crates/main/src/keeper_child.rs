@@ -26,6 +26,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Appends one takeover marker to the held log. A failed append stops the
+/// log like any other failed write, and the takeover carries on: the error
+/// is bound to a name and dropped because the log is already stopped, and
+/// the keeper's next durable append reports it through the path it already
+/// has.
+fn append_marker(log: &Log, event: contract::events::Event) {
+    if let Err(error) = log
+        .append(&event, None, None)
+        .map_err(|error| io::Error::other(error.to_string()))
+    {
+        // The log is already stopped, and the next durable append reports it.
+        drop(error);
+    }
+}
+
 /// How long after a crash the keeper holds its jobs before stopping them
 /// shutdown-style (`docs/tools.md`, "The keeper").
 const KEEPER_BOUND: Duration = Duration::from_secs(7_200);
@@ -123,6 +138,13 @@ struct Hooks {
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
     held: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs after a takeover opens the log and before it appends its start
+    /// record, so a test fails that append.
+    #[allow(clippy::type_complexity, reason = "the hook takes the just-opened log")]
+    before_start_append: Option<Box<dyn Fn(&Log) + Send + Sync>>,
+    /// Runs after a takeover appends its start record and before it binds,
+    /// so a test lands keeper death in that window.
+    before_bind: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs after a candidate registered and before it contends for the log,
     /// so a test lands the last job's exit in that window.
     registered: Option<Box<dyn Fn() + Send + Sync>>,
@@ -243,6 +265,10 @@ impl Runtime {
                         &format!("keeper {}", std::process::id()),
                     ) {
                         Ok(held) => {
+                            #[cfg(test)]
+                            if let Some(hook) = &self.hooks.before_start_append {
+                                hook(&held);
+                            }
                             let completed = log::read(&dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *lock(&self.logged) = completed
@@ -255,6 +281,14 @@ impl Runtime {
                                         .map(str::to_owned)
                                 })
                                 .collect();
+                            append_marker(
+                                &held,
+                                contract::events::Event::KeeperStarted(contract::events::Empty {}),
+                            );
+                            #[cfg(test)]
+                            if let Some(pause) = &self.hooks.before_bind {
+                                pause();
+                            }
                             let (socket, listener) = doors::bind(&self.home, &dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *log = Some(HeldLog {
@@ -262,6 +296,14 @@ impl Runtime {
                                 log: held,
                             });
                             self.listen(socket, listener);
+                            if let Some(log) = log.as_ref() {
+                                append_marker(
+                                    &log.log,
+                                    contract::events::Event::KeeperBound(
+                                        contract::events::Empty {},
+                                    ),
+                                );
+                            }
                             self.files()?;
                             #[cfg(test)]
                             if let Some(held) = &self.hooks.held {
