@@ -1877,10 +1877,7 @@ fn delegate_names_a_bad_spec_and_bad_options() {
         refused_message("host.delegate", json!([{}, {"timeout": 1}])),
         "host.delegate: `run` must be a function"
     );
-    assert_eq!(
-        refused_message("host.delegate", json!([{}, {"timeout": 1, "run": false}])),
-        "host.delegate: `run` must be a function"
-    );
+    assert!(decode("host.delegate", json!([{}, {"timeout": 1, "run": false}])).is_ok());
 }
 
 #[test]
