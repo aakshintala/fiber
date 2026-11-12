@@ -23,7 +23,7 @@ use rustix::process::Signal;
 
 use super::{
     Error, GROUP_POLL, alive, detach, kill_every_group, live, refused, signal, signal_name,
-    signal_process, spawn,
+    signal_process, spawn, start_time,
 };
 
 /// How long a test waits on a child before it fails.
@@ -59,6 +59,56 @@ fn reap(mut child: std::process::Child) -> std::process::ExitStatus {
         .recv(&waited)
         .expect("the child answered")
         .expect("the wait succeeded")
+}
+
+#[test]
+fn start_time_composes_seconds_and_microseconds() {
+    let seconds = 3_u64;
+    let microseconds = 5_u64;
+    assert_eq!(
+        super::compose_start_time(seconds, microseconds),
+        (seconds << 32) + microseconds
+    );
+}
+
+#[test]
+fn start_time_is_stable_for_the_callers_process() {
+    let pid = std::process::id();
+    let first = start_time(pid).expect("own process has a start time");
+    let second = start_time(pid).expect("own process has a start time");
+    assert_eq!(first, second);
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let fields: Vec<_> = stat
+            .split_once(") ")
+            .unwrap()
+            .1
+            .split_ascii_whitespace()
+            .collect();
+        assert_eq!(first, fields[19].parse::<u64>().unwrap());
+    }
+}
+
+#[test]
+fn start_time_is_absent_for_a_reaped_process_and_refused_ids() {
+    let child = sleep();
+    let pid = child.id();
+    let watchdog = Watchdog::group(pid);
+    assert!(
+        start_time(pid).is_some(),
+        "the live child's identity is readable"
+    );
+    kill_group(pid, "KILL").unwrap();
+    reap(child);
+    assert!(
+        !alive(pid),
+        "the child is reaped before probing its identity"
+    );
+    assert_eq!(start_time(pid), None);
+    assert_eq!(start_time(0), None);
+    assert_eq!(start_time(1), None);
+    watchdog.stand_down(Deadline::after(DEADLINE));
 }
 
 #[test]

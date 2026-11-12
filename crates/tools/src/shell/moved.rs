@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::Event;
-use contract::jobs::Input;
+use contract::jobs::{Input, JobIdentity};
 use contract::tool::Cancel;
 
 use super::command::{Finished, MovePolicy, MoveReason};
@@ -58,7 +58,12 @@ impl Moved {
         self.progress.pgid
     }
 
-    /// The command's terminal input, once; `None` for a command on pipes.
+    /// Identity captured while the spawned leader was still observable.
+    pub(crate) fn identity(&self) -> Option<JobIdentity> {
+        self.progress.identity
+    }
+
+    /// The command's terminal input, once; `None` for commands on pipes.
     pub(crate) fn take_input(&self) -> Option<Input> {
         lock(&self.progress.shared.inner).input.take()
     }

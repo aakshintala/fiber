@@ -1,6 +1,7 @@
 //! The shell tool (`docs/tools.md`, "Shell"): run a command, bound its output,
 //! and stop its process group on timeout or cancel.
 
+use std::collections::HashMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -10,7 +11,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 use contract::diag::Timing;
 use contract::emit::Emit;
-use contract::jobs::Jobs;
+use contract::jobs::{JobIdentity, JobRecord, Jobs, Opened, Opening, Stop};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect, Failure, Process};
 use contract::tool::{Ask, Bound, Cancel, Effects, Output, Tool};
@@ -49,13 +50,14 @@ mod cwd;
 mod entry;
 mod gh_owner;
 mod git;
+mod kill;
 mod matches;
 mod syntax;
 mod wrap;
 
 mod sed;
 
-use classify::{classify, review_when_confined};
+use classify::{classify_with_owned, review_when_confined};
 use command::{Finished, SandboxApply, StopKind};
 use sandbox::protected::{ProtectedPaths, Report as ProtectedReport};
 
@@ -127,6 +129,11 @@ pub struct Shell {
     /// "Background jobs"). `None` in a session that offers no detached
     /// commands, such as the driver shell.
     detached: Option<PathBuf>,
+    /// The just-launched detached process data waiting for its registry row,
+    /// keyed by the unique live leader pid.
+    detached_started: Arc<Mutex<HashMap<u32, detached::Started>>>,
+    /// The supervisor thread spawner, shared by clones.
+    detached_spawner: detached::Spawner,
     /// The person's own commands run with no foreground timeout: a `!` or
     /// `!!` command and the `shell` driver command run until they exit,
     /// until `cancel` stops them, or until the session shuts down. The
@@ -160,6 +167,8 @@ impl Shell {
             spill_wrap: None,
             protection: None,
             detached: None,
+            detached_started: Arc::new(Mutex::new(HashMap::new())),
+            detached_spawner: detached::system_spawner(),
             no_timeout: false,
             host: None,
         }
@@ -293,6 +302,112 @@ impl Shell {
         support::lock(&self.sandbox).clone()
     }
 
+    /// Uses a failing or controlled supervisor spawner in unit tests.
+    #[cfg(test)]
+    pub(crate) fn with_detached_spawner(mut self, spawner: detached::Spawner) -> Self {
+        self.detached_spawner = spawner;
+        self
+    }
+
+    /// Hands a registry-owned detached `End` and its reaper channel to the
+    /// one supervisor thread.
+    fn track_detached(&self, opened: Opened, pgid: u32) -> Result<(), std::io::Error> {
+        let started = support::lock(&self.detached_started)
+            .remove(&pgid)
+            .ok_or_else(|| std::io::Error::other("the detached launch was not pending"))?;
+        detached::track(
+            opened,
+            started,
+            Arc::clone(&self.clock),
+            &self.detached_spawner,
+        )
+    }
+
+    /// Kills the child if registry admission failed; the independent reaper
+    /// still owns and waits for its `Child`.
+    fn abort_detached(&self, pgid: u32) {
+        if let Some(started) = support::lock(&self.detached_started).remove(&pgid) {
+            detached::abort(started);
+        }
+    }
+
+    /// Sends a parsed bare `kill` only while every target is still a
+    /// confirmed session-owned leader. The second identity read is adjacent
+    /// to each signal; anything doubtful fails closed instead of spawning a
+    /// shell command whose target could have been reused.
+    fn run_owned_kill(&self, command: &str, parsed: &kill::Parsed) -> Output {
+        if !parsed
+            .targets
+            .iter()
+            .all(|target| self.owns_live_leader(target.pgid))
+        {
+            return errored(ShellError::NotStarted {
+                source: std::io::Error::other(
+                    "the process identity changed before the signal; nothing was signalled",
+                ),
+            });
+        }
+        for target in &parsed.targets {
+            if !self.owns_live_leader(target.pgid) {
+                return errored(ShellError::NotStarted {
+                    source: std::io::Error::other(
+                        "the process identity changed before the next signal; no further target was signalled",
+                    ),
+                });
+            }
+            if let kill::SignalChoice::Some(signal) = parsed.signal {
+                let result = if target.group {
+                    support::group::signal(target.pgid, signal)
+                } else {
+                    support::group::signal_process(target.pgid, signal)
+                };
+                if let Err(error) = result {
+                    return errored(ShellError::NotStarted {
+                        source: std::io::Error::from(error),
+                    });
+                }
+            }
+        }
+        assemble(
+            None,
+            Finished {
+                output: command::Kept::Whole(Vec::new()),
+                status: Some(ExitStatus::from_raw(0)),
+                stop: None,
+                indeterminate: false,
+                held_open: false,
+                sent_signal: false,
+                capped: false,
+                flooded: false,
+            },
+            None,
+            Some(command),
+        )
+    }
+
+    /// Session process groups whose recorded leader identity still matches.
+    /// `Jobs::owned_identities` returns a snapshot, so the registry lock is
+    /// released before any process probe.
+    fn confirmed_owned_pgids(&self) -> Vec<u32> {
+        self.jobs
+            .as_ref()
+            .map(|jobs| jobs.owned_identities())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|identity| confirmed_identity(*identity))
+            .map(|identity| identity.pgid)
+            .collect()
+    }
+
+    /// Whether the current leader still proves the recorded job identity.
+    fn owns_live_leader(&self, pgid: u32) -> bool {
+        self.jobs.as_ref().is_some_and(|jobs| {
+            jobs.owned_identities()
+                .into_iter()
+                .any(|identity| identity.pgid == pgid && confirmed_identity(identity))
+        })
+    }
+
     /// Wraps a spill's file in a test's own writer.
     #[cfg(test)]
     pub(crate) fn with_spill_writer(self, wrap: spill::Wrap) -> Self {
@@ -317,7 +432,7 @@ impl Tool for Shell {
                  `timeout_ms` defaults to 600000, or to 300000 for a monitor. `timeout_ms` is at least 1. \
                  A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
                  and standard error are one stream, except in a monitor, whose standard error goes to its own file. \
-                 A call with `detach` set starts a command that outlives the session."
+                 Stop your own process with `jobs stop`, not `kill`. A call with `detach` set starts a command that outlives the session."
                 .to_owned();
         let settings = self.selected();
         if settings.enabled && sandbox::check_available(&settings, &self.workspace).is_ok() {
@@ -365,7 +480,7 @@ impl Tool for Shell {
                     },
                     "detach": {
                         "type": ["boolean", "null"],
-                        "description": "Start the command in its own session, outside the OS sandbox, and return its process ID and output-log path at once. Fiber never stops it, and it is not a job. It is always reviewed. It takes no `timeout_ms` and cannot be combined with `run_in_background`, `tty` or `monitor`."
+                        "description": "Start the command in its own session, outside the OS sandbox, and record it as a detached session job. Return its job id and output-log path; stop it with `jobs stop`. Session shutdown does not stop it. It is always reviewed. It takes no `timeout_ms` and cannot be combined with `run_in_background`, `tty` or `monitor`."
                     }
                 },
                 "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined", "detach"],
@@ -402,8 +517,19 @@ impl Tool for Shell {
             Ok(parsed) => {
                 unconfined = parsed.unconfined;
                 detach = parsed.detach;
-                let entries = support::lock(&self.read_only);
-                classify(&parsed.command, &self.workspace, &parsed.workdir, &entries)
+                let entries = support::lock(&self.read_only).clone();
+                let owned_alive = if kill::targets(&parsed.command).is_some() {
+                    self.confirmed_owned_pgids()
+                } else {
+                    Vec::new()
+                };
+                classify_with_owned(
+                    &parsed.command,
+                    &self.workspace,
+                    &parsed.workdir,
+                    &entries,
+                    &owned_alive,
+                )
             }
             Err(_) => classify::executes(None, None),
         };
@@ -568,32 +694,72 @@ impl Shell {
             None => parsed.command.clone(),
         };
         let program = shell_program();
-        // A detached call starts in its own session and returns the receipt
-        // at once. It never reaches the sandbox, the protection guard or the
-        // job list below: it is not confined, not a job, and never stopped.
+        // A detached call starts in its own session, records its identity
+        // in this session's registry and returns the stoppable receipt. It
+        // still never reaches the sandbox or protected-path transaction.
         if parsed.detach {
             let Some(dir) = self.detached.as_deref() else {
                 return errored(ShellError::NoDetach);
             };
-            return match detached::launch(
-                dir,
-                std::process::id(),
-                program,
-                &command,
-                &parsed.workdir,
-            ) {
-                Ok(started) => {
-                    let mut output = Output {
-                        content: vec![ContentPart::Text {
-                            text: detached::receipt(&started),
-                        }],
-                        ..Output::default()
-                    };
-                    output.details = Some(details(&parsed.command, None));
-                    output
-                }
-                Err(source) => errored(ShellError::NotStarted { source }),
+            let Some(jobs) = self.jobs.as_ref() else {
+                return errored(ShellError::NoJobs);
             };
+            let started =
+                match detached::launch(dir, std::process::id(), program, &command, &parsed.workdir)
+                {
+                    Ok(started) => started,
+                    Err(source) => return errored(ShellError::NotStarted { source }),
+                };
+            let pgid = started.pid;
+            let identity = started.identity;
+            let log = started.log.clone();
+            let stop_control = Arc::clone(&started.control);
+            let mut pending = support::lock(&self.detached_started);
+            if pending.contains_key(&pgid) {
+                drop(pending);
+                detached::abort(started);
+                return errored(ShellError::NotStarted {
+                    source: std::io::Error::other("the detached process id is already pending"),
+                });
+            }
+            pending.insert(pgid, started);
+            drop(pending);
+            let stop = Stop(Box::new(move || stop_control.request_stop(pgid)));
+            let opened = match jobs.open(Opening {
+                tool: "shell".to_owned(),
+                description: background::description_of(&parsed.command),
+                stop,
+                input: None,
+                lines: false,
+                identity: Some(identity),
+                detached: Some(log.clone()),
+            }) {
+                Ok(opened) => opened,
+                Err(error) => {
+                    self.abort_detached(pgid);
+                    return errored(ShellError::NotStarted {
+                        source: std::io::Error::other(error),
+                    });
+                }
+            };
+            let started_row = opened.started.clone();
+            let receipt = detached::receipt(&log, &started_row.job_id.0);
+            if let Err(source) = self.track_detached(opened, pgid) {
+                return errored(ShellError::NotStarted { source });
+            }
+            let mut output = Output {
+                content: vec![ContentPart::Text { text: receipt }],
+                jobs: vec![JobRecord::Started(started_row)],
+                ..Output::default()
+            };
+            output.details = Some(details(&parsed.command, None));
+            return output;
+        }
+        if effects
+            .is_some_and(|effects| effects.declared.effects.is_empty() && !effects.always_reviewed)
+            && let Some(parsed_kill) = kill::parse(&parsed.command)
+        {
+            return self.run_owned_kill(&parsed.command, &parsed_kill);
         }
         let policy = match (&self.jobs, parsed.mode) {
             (None, _) => command::MovePolicy::Stay,
@@ -849,6 +1015,12 @@ impl Limit {
             }
         }
     }
+}
+
+fn confirmed_identity(identity: JobIdentity) -> bool {
+    support::group::alive(identity.pgid)
+        && support::group::pid_alive(identity.pgid)
+        && support::group::start_time(identity.pgid) == Some(identity.start_time)
 }
 
 fn parse(

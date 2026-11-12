@@ -869,6 +869,10 @@ fn handover_end_releases_client_maps() {
             extension: None,
             description: "job j_one".into(),
             output_path: "artifacts/j_one.log".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         },
         path: output_path.clone(),
         file,

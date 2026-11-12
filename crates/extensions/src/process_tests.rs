@@ -1550,7 +1550,7 @@ fn positional_references_share_the_generation_triple() {
     let positional = registry.set_handler(
         &CommandId("c1".to_owned()),
         "1",
-        Shared::new(|_, _, _| Ok(Some(json!({"positional": true})))),
+        Shared::new(|_, _, _, _| Ok(Some(json!({"positional": true})))),
     );
     assert_eq!(positional.command, CommandId("c1".to_owned()));
     assert_eq!(positional.key, "1");
@@ -1675,6 +1675,7 @@ impl super::process::context::ProcessHostServices for FakeServices {
         _context: &super::process::context::ProcessContext,
         callback: &crate::host::admission::CallbackContext,
         operation: super::process::context::HostOperation,
+        _host_call: &super::process::requests::HostCallHandle,
         _cancel: &dyn contract::tool::Cancel,
     ) -> Result<Option<Value>, (ErrorCode, String)> {
         support::lock(&self.calls).push((
@@ -3931,7 +3932,6 @@ fn process_http_records_the_calling_extension() {
         browser: std::sync::Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
@@ -3960,6 +3960,7 @@ fn process_http_records_the_calling_extension() {
         &context,
         &callback,
         operation,
+        &super::process::requests::HostCallHandle::detached(),
         &support::cancel::Token::new(),
     )
     .expect("the request succeeds");
@@ -4013,7 +4014,6 @@ fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
         browser: std::sync::Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
@@ -4050,6 +4050,7 @@ fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
         &context,
         &callback,
         operation,
+        &super::process::requests::HostCallHandle::detached(),
         &support::cancel::Token::new(),
     )
     .expect("the request succeeds");
@@ -4100,7 +4101,6 @@ fn process_http_in_a_sign_callback_stays_silent() {
         browser: std::sync::Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
@@ -4137,6 +4137,7 @@ fn process_http_in_a_sign_callback_stays_silent() {
         &context,
         &callback,
         operation,
+        &super::process::requests::HostCallHandle::detached(),
         &support::cancel::Token::new(),
     )
     .expect("the request succeeds");
@@ -4158,7 +4159,6 @@ fn process_http_without_a_sink_stays_silent() {
         browser: std::sync::Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
@@ -4187,6 +4187,7 @@ fn process_http_without_a_sink_stays_silent() {
         &context,
         &callback,
         operation,
+        &super::process::requests::HostCallHandle::detached(),
         &support::cancel::Token::new(),
     )
     .expect("the request succeeds");
@@ -4214,7 +4215,6 @@ fn process_http_scripted_requests_stay_silent() {
         browser: std::sync::Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: Some(script),
         session: std::sync::Mutex::new(None),
@@ -4243,6 +4243,7 @@ fn process_http_scripted_requests_stay_silent() {
         &context,
         &callback,
         operation,
+        &super::process::requests::HostCallHandle::detached(),
         &support::cancel::Token::new(),
     )
     .expect("the script answers");
@@ -4263,7 +4264,6 @@ fn process_http_never_sent_records_nothing() {
         browser: std::sync::Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
@@ -4292,6 +4292,7 @@ fn process_http_never_sent_records_nothing() {
         &context,
         &callback,
         operation,
+        &super::process::requests::HostCallHandle::detached(),
         &support::cancel::Token::new(),
     ) else {
         panic!("the malformed URL fails");
@@ -4314,12 +4315,240 @@ fn production_services(
         browser: Arc::new(ClosedBrowser),
         model: std::sync::Mutex::new(None),
         delegate: std::sync::Mutex::new(None),
-        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
         diagnostics: None,
     })
+}
+
+#[derive(Default)]
+struct InnerCallRecords(Mutex<Vec<(String, String, Value)>>);
+
+impl contract::tool::InnerCalls for InnerCallRecords {
+    fn run(
+        &self,
+        extension: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Box<contract::events::ToolCallCompleted>, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((extension.to_owned(), name.to_owned(), arguments));
+        Ok(Box::new(contract::events::ToolCallCompleted {
+            status: contract::events::CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: Vec::new(),
+            details: None,
+            artifact: None,
+            kept: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            hosts_surfaced: Vec::new(),
+            provider_item: None,
+            loaded: None,
+            protected_paths: None,
+        }))
+    }
+}
+
+/// A process tool callback uses its own runner and refuses calls without an anchor.
+#[test]
+fn process_tool_runner_threading() {
+    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use crate::host::admission::CallbackContext;
+
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let deadline = Some(clock.now() + Duration::from_secs(10));
+    let services = NativeHostServices {
+        runtime: Runtime::new(Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: Mutex::new(None),
+        delegate: Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: Mutex::new(None),
+        diagnostics: None,
+    };
+    let context = ProcessContext {
+        run: ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("tool-runner".to_owned()),
+        "tool parent".to_owned(),
+        deadline,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let runner = Arc::new(InnerCallRecords::default());
+    let callback = callback.with_inner_calls(Some(
+        Arc::clone(&runner) as Arc<dyn contract::tool::InnerCalls>
+    ));
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        HostOperation::Tool {
+            name: "read".to_owned(),
+            arguments: json!({"path": "README.md"}),
+        },
+        &super::process::requests::HostCallHandle::detached(),
+        &callback.cancel,
+    )
+    .expect("the inner tool completes");
+    assert_eq!(answer.unwrap()["status"], "completed");
+    assert_eq!(
+        *runner.0.lock().unwrap(),
+        vec![(
+            "fiber.test/proc".to_owned(),
+            "read".to_owned(),
+            json!({"path": "README.md"})
+        )]
+    );
+    assert_eq!(callback.ran_by(), Some("tool parent"));
+    assert_eq!(callback.deadline, deadline);
+
+    let anchorless = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("tool-runner-no-anchor".to_owned()),
+        "watcher 3".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    )
+    .with_inner_calls(Some(
+        Arc::clone(&runner) as Arc<dyn contract::tool::InnerCalls>
+    ));
+    let Err((code, message)) = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &anchorless,
+        HostOperation::Tool {
+            name: "read".to_owned(),
+            arguments: json!({}),
+        },
+        &super::process::requests::HostCallHandle::detached(),
+        &anchorless.cancel,
+    ) else {
+        panic!("an anchorless callback cannot make an inner call");
+    };
+    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert_eq!(message, "host.tool: called outside a running tool call");
+    // `docs/extensions.md`, "Running a tool": host.tool records one inner call.
+    assert_eq!(runner.0.lock().unwrap().len(), 1);
+}
+
+/// Process host-call admission matches the shared Lua callback policy.
+#[test]
+fn process_admission_parity() {
+    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use crate::host::admission::CallbackContext;
+
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let services = NativeHostServices {
+        runtime: Runtime::new(Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: Mutex::new(None),
+        delegate: Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: Mutex::new(None),
+        diagnostics: None,
+    };
+    let context = ProcessContext {
+        run: ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let request = || contract::model::HostModelRequest {
+        model: "test/model".to_owned(),
+        system: None,
+        messages: Vec::new(),
+        max_tokens: 1,
+    };
+    let cases = [
+        ("tool task", true, true),
+        ("command run", true, true),
+        ("hook turn_end", true, true),
+        ("watcher 3", true, false),
+        ("delegate child", true, true),
+        ("provider p.sign", false, false),
+        ("search web", false, false),
+        ("tool task effects", false, false),
+    ];
+
+    for (index, (ran_by, model_allowed, delegate_allowed)) in cases.into_iter().enumerate() {
+        let callback = CallbackContext::request(
+            "fiber.test/proc",
+            contract::RequestId(format!("admission-{index}")),
+            ran_by.to_owned(),
+            None,
+            support::cancel::Token::new(),
+            None,
+            None,
+        );
+        for (operation, allowed, name, expected) in [
+            (
+                HostOperation::Model { request: request() },
+                model_allowed,
+                "host.model",
+                "host.model: not available here",
+            ),
+            (
+                HostOperation::Delegate {
+                    arguments: serde_json::Map::new(),
+                    timeout: Duration::from_secs(1),
+                    run: false,
+                },
+                delegate_allowed,
+                "host.delegate",
+                "host.delegate: not available here",
+            ),
+        ] {
+            let result = super::process::context::ProcessHostServices::perform(
+                &services,
+                &context,
+                &callback,
+                operation,
+                &super::process::requests::HostCallHandle::detached(),
+                &support::cancel::Token::new(),
+            );
+            let Err((code, message)) = result else {
+                panic!("{name} without a service must not succeed");
+            };
+            if allowed {
+                assert_eq!(code, ErrorCode::Closing, "{ran_by}: {name}");
+            } else {
+                assert_eq!(code, ErrorCode::InvalidArguments, "{ran_by}: {name}");
+                assert_eq!(message, expected, "{ran_by}: {name}");
+            }
+        }
+    }
 }
 
 /// A hook delivery commits its state writes on success: the set joins
@@ -6475,7 +6704,8 @@ fn rebound_runs_replace_stale_references() {
         Arc::new(
             move |_args: Value,
                   scope: Option<crate::lua::CredentialFor>,
-                  _cancel: &dyn contract::tool::Cancel| {
+                  _cancel: &dyn contract::tool::Cancel,
+                  _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 *seen_handler.lock().unwrap() = scope;
                 Ok(Some(
                     json!({"token": "tok-rebound", "expires_at": FRESH_EXPIRES}),
@@ -6729,4 +6959,370 @@ fn set_reason_moves_only_a_session_run() {
         panic!("a call run hellos without a session");
     };
     assert_eq!(hello.reason, contract::events::CallReason::Call);
+}
+
+enum ProcessDelegateAnswer {
+    Started(contract::JobId),
+    FailedAfterBind(contract::JobId, contract::shapes::Failure),
+}
+
+struct ProcessBindingDelegate {
+    answer: std::sync::Mutex<ProcessDelegateAnswer>,
+    cancels: std::sync::Mutex<Vec<contract::JobId>>,
+}
+
+impl contract::extension::HostDelegate for ProcessBindingDelegate {
+    fn start(
+        &self,
+        _extension: &str,
+        _arguments: &serde_json::Map<String, Value>,
+        bind: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, contract::shapes::Failure> {
+        match &*self.answer.lock().unwrap() {
+            ProcessDelegateAnswer::Started(id) => {
+                bind(id);
+                Ok(id.clone())
+            }
+            ProcessDelegateAnswer::FailedAfterBind(id, failure) => {
+                bind(id);
+                Err(failure.clone())
+            }
+        }
+    }
+
+    fn retain(&self, _loaded: &[String]) -> usize {
+        0
+    }
+
+    fn cancel(&self, ids: &[contract::JobId]) -> usize {
+        self.cancels.lock().unwrap().extend_from_slice(ids);
+        ids.len()
+    }
+}
+
+fn process_delegate_services(
+    delegate: Arc<dyn contract::extension::HostDelegate>,
+) -> (
+    Arc<super::process::context::NativeHostServices>,
+    super::process::context::ProcessContext,
+) {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let services = Arc::new(super::process::context::NativeHostServices {
+        runtime: Runtime::new(Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: Mutex::new(None),
+        delegate: Mutex::new(Some(delegate)),
+        secrets: Vec::new(),
+        host_script: None,
+        session: Mutex::new(None),
+        diagnostics: None,
+    });
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    (services, context)
+}
+
+fn process_job_completed(id: contract::JobId) -> contract::events::JobCompleted {
+    contract::events::JobCompleted {
+        job_id: id,
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    }
+}
+
+/// A process delegate binds before start returns, retains its timeout and
+/// run flag for completion routing, unbinds failures, and cancels an
+/// abandoned start held inside the bind window.
+#[test]
+fn process_delegate_bind() {
+    use super::process::context::{HostOperation, ProcessHostServices};
+    use super::process::requests::{HostCallHandle, Table};
+    use crate::host::admission::CallbackContext;
+
+    let started_id = contract::JobId("j_process_bound".to_owned());
+    let delegate = Arc::new(ProcessBindingDelegate {
+        answer: std::sync::Mutex::new(ProcessDelegateAnswer::Started(started_id.clone())),
+        cancels: std::sync::Mutex::new(Vec::new()),
+    });
+    let (services, context) = process_delegate_services(delegate.clone());
+    let table = Arc::new(Table::new());
+    let host_call = HostCallHandle::new(
+        contract::CommandId("host-call-run".to_owned()),
+        Arc::clone(&table),
+    );
+    let callback = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("r_delegate".to_owned()),
+        "tool process-tool".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let operation = |run| HostOperation::Delegate {
+        arguments: serde_json::Map::new(),
+        timeout: Duration::from_millis(250),
+        run,
+    };
+    let answer = ProcessHostServices::perform(
+        services.as_ref(),
+        &context,
+        &callback,
+        operation(true),
+        &host_call,
+        &callback.cancel,
+    )
+    .expect("delegate start succeeds");
+    assert_eq!(answer, Some(Value::String(started_id.0.clone())));
+    let route = table
+        .finish_delegate(&process_job_completed(started_id.clone()))
+        .expect("the completion has a process binding");
+    assert_eq!(
+        route.handle,
+        contract::CommandId("host-call-run".to_owned())
+    );
+    assert_eq!(route.timeout, Duration::from_millis(250));
+    assert!(route.run);
+
+    let failed_id = contract::JobId("j_process_failed".to_owned());
+    *delegate.answer.lock().unwrap() = ProcessDelegateAnswer::FailedAfterBind(
+        failed_id.clone(),
+        contract::shapes::Failure {
+            code: ErrorCode::DepthExceeded,
+            message: "depth exceeded".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        },
+    );
+    let failure = ProcessHostServices::perform(
+        services.as_ref(),
+        &context,
+        &callback,
+        operation(true),
+        &host_call,
+        &callback.cancel,
+    )
+    .expect_err("a service start failure is preserved");
+    assert_eq!(failure.0, ErrorCode::DepthExceeded);
+    assert_eq!(failure.1, "depth exceeded");
+    assert!(
+        table
+            .finish_delegate(&process_job_completed(failed_id))
+            .is_none()
+    );
+
+    let race_id = contract::JobId("j_process_abandoned".to_owned());
+    *delegate.answer.lock().unwrap() = ProcessDelegateAnswer::Started(race_id.clone());
+    let race_table = Arc::new(Table::new());
+    let (entered, release) = race_table.pause_next_delegate_bind();
+    let race_host_call = HostCallHandle::new(
+        contract::CommandId("host-call-abandoned".to_owned()),
+        Arc::clone(&race_table),
+    );
+    let race_callback = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("r_abandoned".to_owned()),
+        "tool process-tool".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn({
+        let services = Arc::clone(&services);
+        let context = context.clone();
+        let callback = race_callback.clone();
+        move || {
+            let answer = ProcessHostServices::perform(
+                services.as_ref(),
+                &context,
+                &callback,
+                operation(true),
+                &race_host_call,
+                &callback.cancel,
+            );
+            done.send(answer)
+                .expect("the test receives the delegate answer");
+        }
+    });
+    fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&entered)
+        .expect("the delegate reaches the forced bind pause");
+    race_callback.cancel.cancel();
+    release
+        .send(())
+        .expect("the delegate bind pause is waiting");
+    let answer = fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&result)
+        .expect("the abandoned delegate start returns");
+    assert_eq!(answer, Ok(Some(Value::String(race_id.0.clone()))));
+    assert_eq!(*delegate.cancels.lock().unwrap(), vec![race_id.clone()]);
+    assert!(
+        race_table
+            .finish_delegate(&process_job_completed(race_id))
+            .is_none()
+    );
+}
+
+/// Delegate run failures use the same notice reporting path as process
+/// callback dispatch, preserving the extension identity for the session.
+#[test]
+fn process_delegate_run_failure_notice() {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let runtime = Runtime::new(clock);
+    let emitted = Arc::new(ProcessUsageEmitter::default());
+    runtime.set_emit(emitted.clone());
+
+    super::process::calls::dispatch::report_delegate_run_failure(
+        &runtime,
+        "fiber.test/proc",
+        &super::Error::Case("callback returned an error".to_owned()),
+    );
+
+    let events = emitted.0.lock().unwrap();
+    // `docs/extensions.md`, `Host calls`: a run that raises emits `hook_failed`.
+    let [contract::events::Event::Notice(notice)] = events.as_slice() else {
+        panic!("the run failure emits one notice: {events:?}");
+    };
+    assert_eq!(notice.code, ErrorCode::HookFailed);
+    assert_eq!(notice.extension.as_deref(), Some("fiber.test/proc"));
+    assert_eq!(
+        notice.message,
+        "The delegate `run` failed, so its result was dropped: callback returned an error"
+    );
+}
+
+struct ProcessUsageModel;
+
+impl contract::model::HostModel for ProcessUsageModel {
+    fn call(
+        &self,
+        _extension: &str,
+        _request: contract::model::HostModelRequest,
+        bound: contract::model::Bound,
+    ) -> Result<contract::model::HostModelReply, contract::shapes::Failure> {
+        (bound.lines)(contract::events::UsageRecorded {
+            generation_id: contract::GenerationId("g_process_model".to_owned()),
+            model: "test/model".to_owned(),
+            tokens: contract::shapes::Tokens {
+                input: 1,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 1,
+            },
+            input_bytes: 2,
+            input_media: None,
+            web_searches: None,
+            cost: None,
+            subscription: None,
+            extension: None,
+            origin_session_id: None,
+            warming: None,
+            reviewer: None,
+        });
+        Ok(contract::model::HostModelReply {
+            text: "routed".to_owned(),
+            tokens: contract::shapes::Tokens {
+                input: 1,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 1,
+            },
+            cost: None,
+        })
+    }
+}
+
+#[derive(Default)]
+struct ProcessUsageEmitter(std::sync::Mutex<Vec<contract::events::Event>>);
+
+impl contract::emit::Emit for ProcessUsageEmitter {
+    fn emit(&self, event: &contract::events::Event) {
+        self.0.lock().unwrap().push(event.clone());
+    }
+}
+
+/// Process host.model usage lines carry the calling extension's identity.
+#[test]
+fn process_model_usage_attribution() {
+    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use super::process::requests::HostCallHandle;
+    use crate::host::admission::CallbackContext;
+
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let runtime = Runtime::new(Arc::clone(&clock));
+    let emitted = Arc::new(ProcessUsageEmitter::default());
+    runtime.set_emit(emitted.clone());
+    let services = NativeHostServices {
+        runtime,
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: Mutex::new(Some(Arc::new(ProcessUsageModel))),
+        delegate: Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: Mutex::new(None),
+        diagnostics: None,
+    };
+    let context = ProcessContext {
+        run: ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("r_model_usage".to_owned()),
+        "tool process-tool".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        HostOperation::Model {
+            request: contract::model::HostModelRequest {
+                model: "test/model".to_owned(),
+                system: None,
+                messages: Vec::new(),
+                max_tokens: 1,
+            },
+        },
+        &HostCallHandle::detached(),
+        &callback.cancel,
+    )
+    .expect("the host model answers");
+    assert_eq!(answer.unwrap()["text"], "routed");
+    let events = emitted.0.lock().unwrap();
+    // `docs/extensions.md`, `Host calls`: host.model writes `usage_recorded`.
+    let [contract::events::Event::UsageRecorded(record)] = events.as_slice() else {
+        panic!("one usage event is attributed: {events:?}");
+    };
+    assert_eq!(record.extension.as_deref(), Some("fiber.test/proc"));
 }
