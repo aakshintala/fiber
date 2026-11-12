@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use common::{Setup, go_module, install_lua};
+use common::{Setup, go_module, install_lua, thread_parked_at};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -29,25 +29,6 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, NoLock, ProviderServer, Recorder, Response};
 use serde_json::{Map, Value, json};
-
-// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
-/// The thread parked at `at`: exactly one thread waits there.
-#[track_caller]
-fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
-    let mark = clock
-        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
-    let threads = mark.threads();
-    assert_eq!(
-        threads.len(),
-        1,
-        "only one thread parks at {at:?}: {threads:?}"
-    );
-    match threads.into_iter().next() {
-        Some(id) => id,
-        None => panic!("one parked thread"),
-    }
-}
 
 /// An extension named `fiber.test/<short>` with the entry script `init`.
 fn extension(dir: &Path, short: &str, init: &str, clock: Arc<FakeClock>) -> Arc<LuaExtension> {
