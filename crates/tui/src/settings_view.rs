@@ -1069,7 +1069,7 @@ impl Settings {
     }
 
     /// Runs `edit` on the query; when its text changed, the first result
-    /// takes the focus.
+    /// takes the focus, unless the query is emptied and the search closes.
     fn mutate_query(&mut self, ctx: &Ctx<'_>, edit: impl FnOnce(&mut Draft)) {
         let changed = match &mut self.search {
             Some(search) => {
@@ -1080,9 +1080,17 @@ impl Settings {
             None => false,
         };
         if changed {
-            self.said.clear();
-            self.focus = None;
-            self.place(ctx);
+            if self
+                .search
+                .as_ref()
+                .is_some_and(|search| search.query.is_empty())
+            {
+                self.clear_search(ctx);
+            } else {
+                self.said.clear();
+                self.focus = None;
+                self.place(ctx);
+            }
         }
     }
 

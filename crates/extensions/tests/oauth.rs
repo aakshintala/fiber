@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::{Setup, write};
+use common::{Setup, thread_parked_at, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -449,25 +449,6 @@ fn get(port: u16, request: &str) -> String {
         stream.read_to_string(&mut reply).unwrap();
         reply
     })
-}
-
-// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
-/// The thread parked at `at`: exactly one thread waits there.
-#[track_caller]
-fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
-    let mark = clock
-        .mark_parked(at, fakes::Deadline::after(WAIT))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
-    let threads = mark.threads();
-    assert_eq!(
-        threads.len(),
-        1,
-        "only one thread parks at {at:?}: {threads:?}"
-    );
-    match threads.into_iter().next() {
-        Some(id) => id,
-        None => panic!("one parked thread"),
-    }
 }
 
 /// Waits until `callers` callers wait past `deadline` and `threads` extension
