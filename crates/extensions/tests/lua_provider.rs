@@ -15,7 +15,7 @@ mod common;
 use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use common::{Setup, pair, script_provider, thread_parked_at, write};
 use config::{Secret, store_secret};

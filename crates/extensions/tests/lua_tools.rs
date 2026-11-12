@@ -14,7 +14,7 @@ use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{Setup, go_module, install_lua, thread_parked_at};
 use config::{Config, ProjectKey, Sources};
