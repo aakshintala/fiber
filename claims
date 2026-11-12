@@ -299,3 +299,5 @@ crates/jobs/src/delegate/message/resume.rs	fiber-4260	plan	2026-11-12T00:26:49Z	
 .github/workflows/release.yml	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/main.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/tests/cli.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/journey_streak.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
+xtask/src/journey_streak_tests.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
