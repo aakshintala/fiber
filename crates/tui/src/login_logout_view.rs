@@ -3,7 +3,6 @@
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-use crate::format;
 use crate::view::overlay;
 
 /// A heading's group.
@@ -104,12 +103,4 @@ pub(super) fn blank_row() -> overlay::Row {
         targets: Vec::new(),
         barred: false,
     }
-}
-
-/// One plain row per wrapped line of `text`.
-pub(super) fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
-    format::wrap(text, inner.max(1))
-        .into_iter()
-        .map(|row| text_row(row, style))
-        .collect()
 }

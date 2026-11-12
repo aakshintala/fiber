@@ -14,7 +14,6 @@ use crate::format;
 use crate::keys::Key;
 use crate::login_logout_view::{
     Group, Item, blank_row, build, shown_body_rows as shared_shown_body_rows, text_row,
-    wrapped_rows,
 };
 use crate::mouse::{Target, TargetId};
 use crate::settings_view::{Act, Ctx};
@@ -89,6 +88,11 @@ impl Logout {
                     .position(|item| matches!(item, Item::Target(_)))
             })
             .unwrap_or(0);
+    }
+
+    fn rebuild_items(&mut self) {
+        let provider_rows: Vec<bool> = self.rows.iter().map(is_provider).collect();
+        self.items = build(&provider_rows);
     }
 
     /// The selected row.
@@ -248,7 +252,7 @@ impl Logout {
                 match ctx.seam.logout_rows() {
                     Ok(rows) => {
                         self.rows = rows;
-                        self.items = build(&self.rows.iter().map(is_provider).collect::<Vec<_>>());
+                        self.rebuild_items();
                         self.refocus();
                         self.said = vec![line];
                     }
@@ -258,7 +262,7 @@ impl Logout {
                         self.rows.retain(|kept| {
                             kept.name() != row.name() || kept.label() != row.label()
                         });
-                        self.items = build(&self.rows.iter().map(is_provider).collect::<Vec<_>>());
+                        self.rebuild_items();
                         self.refocus();
                         self.said = vec![line, error.message];
                     }
@@ -272,6 +276,7 @@ impl Logout {
     }
 
     /// The target rows' indices in display order.
+    // debt: keep the projection local until navigation state is shared; revisit with that state.
     fn target_rows(&self) -> Vec<usize> {
         self.items
             .iter()
@@ -310,6 +315,14 @@ impl Logout {
 /// Logout's list body rows, retaining the test module's existing helper seam.
 fn shown_body_rows(height: usize) -> usize {
     shared_shown_body_rows(height, false)
+}
+
+/// One plain row per wrapped line of `text`.
+fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
+    format::wrap(text, inner.max(1))
+        .into_iter()
+        .map(|row| text_row(row, style))
+        .collect()
 }
 
 /// Whether the row lists under Providers: a provider's label, stored or

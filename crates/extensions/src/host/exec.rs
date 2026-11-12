@@ -3,6 +3,7 @@
 //! (`docs/tools.md`, "Shell"). Each stream is read whole into its own
 //! buffer on its own reader thread, bounded by the extension's memory cap.
 
+// debt: 800-line ceiling, split supervision when it owns a stable state boundary.
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -155,6 +156,7 @@ fn bump(inner: &mut Inner, shared: &Shared) {
     shared.cv.notify_all();
 }
 
+// debt: resolver cases remain here until resolve_tests.rs is authorized.
 #[cfg(test)]
 pub(crate) use super::resolve::resolve_in_package;
 

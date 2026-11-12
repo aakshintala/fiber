@@ -374,8 +374,8 @@ fn confirm(
     .map(drop)
 }
 
-/// The typed core behind [`send_delete`]: sends `delete` for `id` and
-/// reads until its answer, skipping every other line.
+/// Sends `delete` for `id` and reads until its answer, skipping every
+/// other line.
 pub(super) fn delete_value(
     read: &mut BufReader<UnixStream>,
     command_id: &str,
