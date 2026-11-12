@@ -238,7 +238,7 @@ fn form_submit_tab_with_answers_skipped_and_note() {
 #[test]
 fn form_scrolled_to_the_cursor_at_40x10() {
     let mut app = asking(four_long_options(), 40, 10);
-    for _ in 0..6 {
+    for _ in 0..4 {
         press(&mut app, &[Key::Down]);
     }
     let (shown, targets) = screen(&app, 40, 10);
@@ -259,7 +259,7 @@ fn form_scrolled_to_the_cursor_at_40x10() {
         Some(Rect::new(3, 1, 37, 2))
     );
     // Back up to the first option, the header shows again.
-    for _ in 0..6 {
+    for _ in 0..4 {
         press(&mut app, &[Key::Up]);
     }
     let (shown, _) = screen(&app, 40, 10);

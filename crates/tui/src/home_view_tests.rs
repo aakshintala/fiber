@@ -4224,7 +4224,7 @@ fn a_short_screen_keeps_the_focused_recent_drawn() {
     answer(&mut app, &sent[0].0, &refs, "/");
     // Past the 30 completions to the first recent.
     let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..31 {
+    for _ in 0..30 {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     let shown = screen(&app, 80, 10);

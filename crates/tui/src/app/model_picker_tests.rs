@@ -494,24 +494,25 @@ fn esc_closes_it_sending_nothing() {
 }
 
 #[test]
-fn arrows_move_rows_and_chips_clamped() {
+fn arrows_wrap_rows_and_clamp_chips() {
     let mut app = home();
     app.on_models(Ok(three()));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
-    // Rows clamp at both ends.
+    // Rows wrap at both ends.
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
-    // Chips clamp at both ends, and mark the row touched.
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    // Back on the first model, chip edits still clamp at both ends and
+    // mark the row touched.
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     assert_eq!(chip(&app), Some("high".to_owned()));
     app.on_edit(Edit::Right);
     assert_eq!(chip(&app), Some("high".to_owned()));
@@ -549,8 +550,8 @@ fn headings_are_not_stops() {
             Some("acme/m1".to_owned()),
             Some("acme/m2".to_owned()),
             Some("zeta/z1".to_owned()),
-            Some("zeta/z1".to_owned()),
-            Some("zeta/z1".to_owned()),
+            Some("acme/m1".to_owned()),
+            Some("acme/m2".to_owned()),
         ]
     );
 }
@@ -3066,7 +3067,7 @@ fn thinking_shows_the_current_row_outside_a_partial_scope() {
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
 }
 
 #[test]
@@ -3131,7 +3132,7 @@ fn scoped_models_opens_marking_over_every_model() {
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     assert_eq!(
         app.model_picker_view().map(|view| view.footer),
         Some(vec![
