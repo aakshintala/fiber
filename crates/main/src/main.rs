@@ -79,6 +79,9 @@ mod test_support;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;
+#[cfg(test)]
+#[path = "tui_silent_exit_tests.rs"]
+mod tui_silent_exit_tests;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
@@ -586,26 +589,6 @@ fn tui_exit(code: i32, stderr: &mut impl Write) -> i32 {
     )
     .unwrap_or(());
     code
-}
-
-#[cfg(test)]
-#[test]
-fn tui_nonzero_exit_reports_stderr() {
-    let mut stderr = Vec::new();
-    assert_eq!(tui_exit(1, &mut stderr), 1);
-    assert_eq!(
-        String::from_utf8(stderr).unwrap_or_default(),
-        "fiber: terminal could not continue (TUI exit status 1)\n"
-    );
-
-    for signal_status in [129, 130, 143] {
-        let mut stderr = Vec::new();
-        assert_eq!(tui_exit(signal_status, &mut stderr), signal_status);
-        assert!(
-            stderr.is_empty(),
-            "signal status {signal_status}: {stderr:?}"
-        );
-    }
 }
 
 /// The signal registration an entry point runs: its [`read_signals::Register`].

@@ -590,10 +590,9 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
 #[test]
 fn ctrl_c_once_on_empty_box() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    let (tx, rx) = mpsc::channel();
+    let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
     assert!(lp.app.hint(), "the first Ctrl+C arms the documented quit");
-    drop(tx);
 }
 
 #[test]
@@ -1043,15 +1042,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
 #[test]
 fn run_returns_one_when_the_tty_cannot_be_set_up() {
     // `/dev/null` is no terminal: `term::setup` fails before any frame,
-    // so `run` returns 1 without reading the hub or drawing. The thread
-    // plus [`DEADLINE`] keeps a regression hanging the suite into a
-    // failure instead.
+    // so `run` returns its setup error without reading the hub or drawing.
+    // The thread plus [`DEADLINE`] keeps a regression hanging the suite into
+    // a failure instead.
     let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("open /dev/null: {err}"));
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(
+            let result = super::run(
                 tty,
                 launch(),
                 Box::new(|| Err(io::Error::other("unused"))),
@@ -1059,15 +1058,18 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
                 None,
-            )
-            .unwrap_or_else(|error| panic!("run: {error}"));
-            done.send(code).unwrap_or(());
+            );
+            done.send(result).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let code = Deadline::after(DEADLINE)
+    let result = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    assert_eq!(code, 1);
+    let error = result.unwrap_err();
+    assert!(
+        error.to_string().contains("terminal") && !error.to_string().contains("could not continue"),
+        "the returned error keeps the setup cause: {error}"
+    );
 }
 
 #[test]
