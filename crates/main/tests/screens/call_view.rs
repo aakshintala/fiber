@@ -247,11 +247,10 @@ fn a_cut_shell_call_pages_to_the_end_with_both_markers() {
     // Following pages to the end: the resume marker draws at the tail.
     // (The head page's end marker pages out of the three-page window, as
     // scrolling back up shows.)
-    let grid = run.wait_screen("the call's view", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("── the model's view resumes ──"))
+    let grid = run.wait_screen("the settled call view", |grid| {
+        settled_call_view(&grid.rows)
     });
+
     assert_view_chrome(&grid, "Shell", "awk", true);
     assert_snapshot!("call_view_open", snapshot_text(&setup, &grid, &[]));
     // Search stays scoped to the view: the tail hit counts once, and
@@ -383,6 +382,47 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Whether the resume marker and tail have reached their snapshot rows.
+/// The wait checks each asserted row property before the grid read
+/// (`docs/testing/screens.md`, grid-read rule).
+fn settled_call_view(rows: &[String]) -> bool {
+    rows.get(1)
+        .is_some_and(|row| row.contains("── the model's view resumes ──"))
+        && rows.get(38).is_some_and(|row| row.contains("TAIL"))
+}
+
+#[test]
+fn settled_call_view_rejects_unsettled_and_accepts_settled_rows() {
+    let mut unsettled = vec![String::new(); 39];
+    unsettled[0] = "Shell awk".to_owned();
+    unsettled[1] = "463 output".to_owned();
+    unsettled[2] = "── the model's view resumes ──".to_owned();
+    unsettled[38] = "TAIL output".to_owned();
+    let mut settled = vec![String::new(); 39];
+    settled[0] = "Shell awk".to_owned();
+    settled[1] = "── the model's view resumes ──".to_owned();
+    settled[37] = "499 output".to_owned();
+    settled[38] = "TAIL output".to_owned();
+    let mut misplaced_tail = settled.clone();
+    misplaced_tail[37] = "TAIL output".to_owned();
+    misplaced_tail[38] = "499 output".to_owned();
+    assert!(
+        unsettled
+            .iter()
+            .any(|row| row.contains("── the model's view resumes ──"))
+    );
+    assert!(
+        settled
+            .iter()
+            .any(|row| row.contains("── the model's view resumes ──"))
+    );
+    assert!(!settled_call_view(&unsettled));
+    assert!(!settled_call_view(&misplaced_tail));
+    assert!(settled_call_view(&settled));
+    assert!(!settled_call_view(&settled[..3]));
+    assert!(!settled_call_view(&settled[1..]));
 }
 
 /// The tail the view paged to, the footer and the top row, with the
