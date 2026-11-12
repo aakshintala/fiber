@@ -501,6 +501,12 @@ pub struct TuiVm {
     /// reads back.
     #[cfg(test)]
     last_http_bound: Cell<Option<Duration>>,
+    #[cfg(test)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "test-only stub seam holds the whole perform closure type"
+    )]
+    focus_perform_stub: Option<Rc<dyn Fn(&crate::host::HttpRequest) -> crate::host::Reply>>,
     /// Set by a timeout: the VM answers nothing until the caller drops it
     /// (`docs/tui.md`, "When an extension fails").
     off: bool,
@@ -755,6 +761,8 @@ impl TuiVm {
             focus_rejections: Cell::new(skipped_focus),
             #[cfg(test)]
             last_http_bound: Cell::new(None),
+            #[cfg(test)]
+            focus_perform_stub: None,
             off: false,
         })
     }
@@ -830,6 +838,14 @@ impl TuiVm {
     #[cfg(test)]
     pub(crate) fn last_http_bound(&self) -> Option<Duration> {
         self.last_http_bound.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_focus_perform_stub(
+        &mut self,
+        stub: impl Fn(&crate::host::HttpRequest) -> crate::host::Reply + 'static,
+    ) {
+        self.focus_perform_stub = Some(Rc::new(stub));
     }
 
     /// The Lua state, for tests to register host callbacks against.
@@ -971,13 +987,17 @@ impl TuiVm {
             };
             #[cfg(test)]
             self.last_http_bound.set(request.timeout);
-            let result = crate::host::perform(&request);
-            args = crate::host::resume_values(
-                &self.lua,
-                &self.clock,
-                crate::host::Reply::Http(result),
-            )
-            .map_err(lua_error)?;
+            let reply = {
+                #[cfg(test)]
+                if let Some(stub) = &self.focus_perform_stub {
+                    stub(&request)
+                } else {
+                    crate::host::Reply::Http(crate::host::perform(&request))
+                }
+                #[cfg(not(test))]
+                crate::host::Reply::Http(crate::host::perform(&request))
+            };
+            args = crate::host::resume_values(&self.lua, &self.clock, reply).map_err(lua_error)?;
         }
     }
 

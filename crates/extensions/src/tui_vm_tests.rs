@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2018,33 +2019,56 @@ fn focus_http_bound_pins_the_computed_form() {
 }
 
 #[test]
-fn focus_near_deadline_hang_ends_in_timeout() {
-    use fakes::{ProviderServer, Response};
-    let source = "fiber.on_focus({ timeout = 100, run = function(input) ticked() host.http({url = 'URL'}) end })";
-    let clock = FakeClock::new();
-    let server = ProviderServer::start_responding({
-        let clock = Arc::clone(&clock);
-        move |_| {
-            // On request arrival the provider moves the fake past the
-            // deadline; the held response never answers.
-            tick(&clock, 30 * MS);
-            Response::status(200, "late")
+fn focus_http_bound_caps_a_near_deadline_request() {
+    // RULING-2720-15 bound proof: single-threaded and fake-clock-only. The
+    // clock moves only inside `ticked`, once the handler has started; no
+    // thread is spawned and no real transfer happens. The callback declares
+    // 2000 ms and the yield declares a 2000 ms request timeout, but the
+    // drive caps the transfer at the time left to the deadline plus the 1 s
+    // grace: min(2000, 10 + 1000) = 1010. A forwarder would record the
+    // declared 2000.
+    let (clock, mut vm) = vm(
+        "fiber.on_focus({ timeout = 2000, run = function(input) ticked() \
+         host.http({url = 'http://example.test', timeout = 2000}) end })",
+    );
+    let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+    vm.set_focus_perform_stub({
+        let requests = Rc::clone(&requests);
+        move |request| {
+            requests.borrow_mut().push(request.timeout);
+            crate::host::Reply::Http(Ok((200, b"ok".to_vec())))
         }
-    })
-    .expect("the server starts");
-    server.hold();
-    let url = server.url();
-    let script = source.replace("URL", &url);
-    let loader_clock: Arc<dyn contract::clock::Clock> = clock.clone();
-    let mut vm = TuiVm::load("test", &script, loader_clock).expect("the script loads");
-    // The yield fires 90 ms in, so the recorded bound is 100 ms; the
-    // provider advances past the deadline while the transfer waits, and
-    // the post-perform check trips the timeout with no wall-clock timing asserted.
-    let result = focus_advancing(&mut vm, clock, 90 * MS);
+    });
+    focus_advancing(&mut vm, clock, 1990 * MS).expect("a before-deadline yield answers");
+    assert_eq!(vm.last_http_bound(), Some(1010 * MS));
+    assert_eq!(*requests.borrow(), vec![Some(1010 * MS)]);
+}
+
+#[test]
+fn focus_past_deadline_yield_trips_before_perform() {
+    // RULING-2720-15 trip proof: single-threaded and fake-clock-only.
+    // `ticked` moves the clock past the deadline before the `http` yield,
+    // so the post-resume check trips first: no bound is recorded and the
+    // stub never runs. That order is the fail-closed pin: a past-deadline
+    // yield is never acted on. No thread is spawned and no real transfer
+    // happens.
+    let (clock, mut vm) = vm(
+        "fiber.on_focus({ timeout = 100, run = function(input) ticked() \
+         host.http({url = 'http://example.test', timeout = 2000}) end })",
+    );
+    let calls = Rc::new(std::cell::RefCell::new(0));
+    vm.set_focus_perform_stub({
+        let calls = Rc::clone(&calls);
+        move |_| {
+            *calls.borrow_mut() += 1;
+            crate::host::Reply::Http(Ok((200, b"ok".to_vec())))
+        }
+    });
+    let result = focus_advancing(&mut vm, clock, 150 * MS);
     assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
-    assert_eq!(vm.last_http_bound(), Some(100 * MS));
-    assert_eq!(server.requests().len(), 1);
-    let later = vm.run_focus(Some("s1"));
+    assert_eq!(vm.last_http_bound(), None);
+    assert_eq!(*calls.borrow(), 0);
+    let later = focus(&mut vm);
     assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
 }
 

@@ -3875,6 +3875,31 @@ fn command_unknown_name_is_not_handled() {
     assert!(renderer.take_pending().is_empty());
 }
 
+#[test]
+fn kitty_binding_and_fallback_dispatch_through_composite() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "keys",
+        None,
+        Some(
+            "fiber.key('shift+enter', {timeout=100, run=function() seen='kitty' return true end})\n\
+             fiber.key('enter', {timeout=100, run=function() seen='fallback' return true end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        renderer.run_key(&ctx(None), "shift+enter", false),
+        KeyOutcome::Handled
+    );
+    assert_eq!(
+        renderer.run_key(&ctx(None), "enter", false),
+        KeyOutcome::Handled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
 /// A focus handler that is `body`, timeout 100 ms.
 fn focus_source(body: &str) -> String {
     format!("fiber.on_focus({{ timeout = 100, run = function(input) {body} end }})")
