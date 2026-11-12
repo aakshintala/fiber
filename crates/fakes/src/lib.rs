@@ -97,6 +97,20 @@ pub fn nextest_identity() -> impl Iterator<Item = (&'static str, std::ffi::OsStr
 }
 
 #[cfg(test)]
+mod shell_quote_tests {
+    use std::path::Path;
+
+    #[test]
+    fn quotes_paths_with_spaces_and_single_quotes() {
+        assert_eq!(
+            super::shell_quote(Path::new("/tmp/a path")),
+            "'/tmp/a path'"
+        );
+        assert_eq!(super::shell_quote(Path::new("/tmp/a'b")), "'/tmp/a'\\''b'");
+    }
+}
+
+#[cfg(test)]
 mod nextest_identity_tests {
     #[test]
     fn preserves_nextest_identity_variables() {
