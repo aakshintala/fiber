@@ -811,6 +811,10 @@ fills it, and the declared variable when one exists.
   `: OPENROUTER PROCESSING` comment lines to the stream.
 - On Databricks, `gemini-4-argon` rejects `reasoning_effort` with a 400
   while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
+- On Databricks, open-weight chat services reject `max_completion_tokens`
+  with a 400 and take `max_tokens`, while the GPT and Gemini services on
+  the same route take `max_completion_tokens`
+  (`research/databricks-gateway-probe`).
 - A gateway serving Gemini returns a tool call's `extra_content` (such as
   `extra_content.google.thought_signature`) on the call; the last delta
   carrying one wins. Fiber decodes each such call with its carrier
@@ -852,12 +856,16 @@ models work only through its Anthropic route, because its default route rejects
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. A
 `gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
-carries `compat.gemini` on the protocol already chosen. Two Claude rows
-differ per model, as probed through the gateway: the `claude-sonnet-4-5`
-rows carry no `deferred_tools`, because the gateway rejects their deferred
-load; and `claude-opus-4-1` carries `compat.no_strict`, because the gateway
-rejects the `strict` key on it, even as `false`, so its tools are sent with
-no `strict` key at all. All of that is data.
+carries `compat.gemini` on the protocol already chosen. A service whose
+catalog row's `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`
+carries `compat.max_tokens`, so its output limit goes in `max_tokens`.
+Two Claude rows differ per model, as probed through the gateway: the
+`claude-sonnet-4-5` rows carry no `deferred_tools`, because the gateway
+rejects their deferred load; and `claude-opus-4-1` carries
+`compat.no_strict`, because the gateway rejects the `strict` key on it,
+even as `false`, so its tools are sent with no `strict` key at all. The
+returned list holds one entry per service, sorted by id. All of that is
+data.
 
 ### Model discovery
 
