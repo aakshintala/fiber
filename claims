@@ -254,8 +254,6 @@ scripts/test-leak-scan	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus
 scripts/test-leak-probe	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/leak_probe.rs	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/panel/quota_tests.rs:9-10	fiber-4733	plan	2026-11-12T08:52:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4733-quota-sent	
-crates/tui/src/app/panel/quota_tests.rs:270-300	fiber-4733	plan	2026-11-12T08:52:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4733-quota-sent	
 crates/fakes/src/finished.rs	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/fakes/src/within.rs	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
