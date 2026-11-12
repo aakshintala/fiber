@@ -6369,3 +6369,40 @@ fn click_steering_replacement_draws_its_ranges() {
         u16::try_from("qzx-steer".len()).expect("a short test span")
     );
 }
+
+/// A read-only attach draws the one-row bar at the 60x12 harness width:
+/// the missing path plus the note, in place of the input box.
+#[test]
+fn read_only_bar() {
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "run it"));
+    app.set_unwritable(contract::SessionId(S_A.to_owned()), "/w".to_owned());
+    let shown = screen(&app);
+    assert!(
+        shown.contains("`/w` no longer exists. Read only."),
+        "the full path-plus-note bar: {shown}"
+    );
+    insta::assert_snapshot!("read_only_bar", shown);
+}
+
+/// A read-only attach at a narrow width draws the path-truncated branch:
+/// the head cut to the row, without the note.
+#[test]
+fn read_only_bar_narrow() {
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "run it"));
+    let path = "/w/a/very/long/workspace/path/that/does/not/fit";
+    app.set_unwritable(contract::SessionId(S_A.to_owned()), path.to_owned());
+    let shown = sized(&mut app, 40, HEIGHT);
+    assert!(
+        !shown.contains("Read only."),
+        "the truncated branch drops the note: {shown}"
+    );
+    assert!(
+        shown.contains("`/w/a/very/long"),
+        "the cut head keeps its start: {shown}"
+    );
+    insta::assert_snapshot!("read_only_bar_narrow", shown);
+}

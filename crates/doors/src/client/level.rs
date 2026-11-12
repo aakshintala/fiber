@@ -163,9 +163,10 @@ pub(super) fn change(
                 conn.gate.clock.as_ref(),
                 &Event::CommandAccepted(CommandAccepted {
                     command_id: id.clone(),
-                    result: watcher
-                        .last_seq()
-                        .map(|last_seq| CommandResult::Subscribe { last_seq }),
+                    result: watcher.last_seq().map(|last_seq| CommandResult::Subscribe {
+                        last_seq,
+                        workspace_gone: None,
+                    }),
                 }),
             );
             (watcher, injector, 0, ack, Vec::new())
