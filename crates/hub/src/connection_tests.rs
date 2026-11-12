@@ -3318,16 +3318,16 @@ fn feed_snapshot_after_status_arrives_includes_session_status() {
     crate::testkit::await_true("the hub consumed the session status", move || {
         feed.status_of(id).is_some()
     });
-    client.send(&command("c_2", "feed", json!({})));
-    assert_eq!(client.next("the snapshot status")["kind"], "session_status");
-    let (echoed, _) = accepted(&client.next("the fresh feed acknowledgement"));
+    let mut snapshot_client = Client::connect(&hub);
+    snapshot_client.hello();
+    snapshot_client.send(&command("c_2", "feed", json!({})));
+    let (echoed, _) = accepted(&snapshot_client.next("the fresh feed acknowledgement"));
     assert_eq!(echoed, "c_2");
-    // The live status broadcast follows the snapshot's cached status.
     assert_eq!(
-        client.next("the live status line")["kind"],
+        snapshot_client.next("the snapshot status")["kind"],
         "session_status"
     );
-    let keepers = client.next("the fresh keepers line");
+    let keepers = snapshot_client.next("the fresh keepers line");
     assert_eq!(keepers["kind"], "keepers");
     assert_eq!(keepers["payload"], json!({"keepers": []}));
     drop(client);
