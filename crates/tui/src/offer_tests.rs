@@ -333,9 +333,19 @@ fn down_stops_at_send() {
 }
 
 #[test]
-fn up_stops_at_the_first_item() {
+fn arrows_wrap_between_items_and_send() {
+    let mut offer = holding(2);
+    assert_eq!(press(&mut offer, &Key::Up, 40), Some(OfferKey::Handled));
+    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Send));
+    assert_eq!(press(&mut offer, &Key::Down, 40), Some(OfferKey::Handled));
+    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Source));
+}
+
+#[test]
+fn up_wraps_to_send_and_down_returns_to_the_first_item() {
     let mut offer = holding(2);
     press(&mut offer, &Key::Up, 40);
+    press(&mut offer, &Key::Down, 40);
     offer.on_edit(&Edit::Right);
     assert_eq!(decisions(&mut offer), json!(["never", "skip"]));
 }
@@ -503,7 +513,7 @@ fn moving_up_scrolls_back() {
 }
 
 #[test]
-fn moving_at_the_top_row_with_zero_height_moves_top_past_it() {
+fn wrapping_to_send_with_zero_height_moves_top_to_send() {
     let mut offer = holding(1);
     for _ in 0..3 {
         press(&mut offer, &Key::PageDown, 0);
@@ -511,11 +521,11 @@ fn moving_at_the_top_row_with_zero_height_moves_top_past_it() {
     assert_eq!(top(&offer), 3);
 
     press(&mut offer, &Key::Up, 0);
-    assert_eq!(top(&offer), 2);
+    assert_eq!(top(&offer), 10, "the wrapped cursor is the Send row");
 }
 
 #[test]
-fn moving_above_top_with_zero_height_moves_top_to_the_cursor() {
+fn wrapping_to_send_from_above_with_zero_height_moves_top_to_send() {
     let mut offer = holding(1);
     for _ in 0..4 {
         press(&mut offer, &Key::PageDown, 0);
@@ -523,7 +533,7 @@ fn moving_above_top_with_zero_height_moves_top_to_the_cursor() {
     assert_eq!(top(&offer), 4);
 
     press(&mut offer, &Key::Up, 0);
-    assert_eq!(top(&offer), 2);
+    assert_eq!(top(&offer), 10, "the wrapped cursor is the Send row");
 }
 
 #[test]

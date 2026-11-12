@@ -280,8 +280,8 @@ impl Offer {
         let page = height.saturating_sub(1).max(1);
         match key {
             Key::Esc | Key::F1 | Key::AltA | Key::CtrlC => return None,
-            Key::Up => held.cursor = held.cursor.saturating_sub(1),
-            Key::Down => held.cursor = held.cursor.saturating_add(1).min(send),
+            Key::Up => held.cursor = held.cursor.checked_sub(1).unwrap_or(send),
+            Key::Down => held.cursor = (held.cursor + 1) % (send + 1),
             Key::Enter if held.cursor == send => return Some(OfferKey::Send),
             Key::Enter => return Some(OfferKey::Source),
             Key::PageUp => {
