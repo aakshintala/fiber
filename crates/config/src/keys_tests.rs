@@ -322,6 +322,14 @@ fn settings_metadata_tabs_follow_key_classification() {
             assert!(!path.contains('*'), "`{path}` has a `*`, so no tab");
         }
     }
+    assert_eq!(tab_of("hub.port"), None, "hub.port has no Settings tab");
+    assert_eq!(
+        KEYS.iter()
+            .find(|key| key.path == "hub.port")
+            .and_then(|key| key.metadata.tab),
+        None,
+        "hub.port stays untabbed in schema metadata"
+    );
     for key in KEYS {
         let want = tab_of(key.path);
         assert_eq!(
