@@ -13,7 +13,7 @@ use crate::process::{
 pub(crate) fn report_delegate_run_failure(
     runtime: &crate::runtime::Runtime,
     owner: &str,
-    error: &crate::Error,
+    error: &dyn std::fmt::Display,
 ) {
     runtime.emit(&contract::events::Event::Notice(contract::events::Notice {
         code: contract::ErrorCode::HookFailed,
@@ -59,7 +59,11 @@ impl ProcessExtension {
                 });
             match spawned {
                 Ok(thread) => drop(thread), // Detach: the callback completes independently.
-                Err(error) => drop(error), // `package.rs` likewise does not report pump spawn failure; it holds `_pumped`.
+                Err(error) => report_delegate_run_failure(
+                    &self.shared.runtime,
+                    &self.shared.owner,
+                    &error,
+                ), // The notice records that the bound run never started.
             }
         }
         true
