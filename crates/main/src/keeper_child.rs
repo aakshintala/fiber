@@ -36,6 +36,7 @@ fn append_marker(log: &Log, event: contract::events::Event) {
         .append(&event, None, None)
         .map_err(|error| io::Error::other(error.to_string()))
     {
+        // The log is already stopped, and the next durable append reports it.
         drop(error);
     }
 }

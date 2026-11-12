@@ -2939,7 +2939,13 @@ fn keeper_dead_at_expiry_with_no_takeover_names_never_spawned_died_before_openin
     let listener = UnixListener::bind(&socket).unwrap();
     drop(listener);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, None, &setup, id);
+        wait_for_refuse_only_socket(
+            setup.deadline.start_wait().within(Duration::from_millis(1)),
+            socket,
+            None,
+            &setup,
+            id,
+        );
     }));
     let message = outcome
         .unwrap_err()
