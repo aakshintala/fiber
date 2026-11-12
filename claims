@@ -189,3 +189,15 @@ crates/tui/src/event_loop.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook
 crates/tui/src/event_loop_tests.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/sources.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/sources_tests.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/login_view.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/logout_view.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/rebind.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/completion.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/model_picker.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/offer.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/approvals/approval.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/approvals/form.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/approvals/one_question.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/workspace.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/typed.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/keymap.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
