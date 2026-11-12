@@ -95,7 +95,6 @@ crates/loop/tests/fixtures/reviewer_eval/seeded.jsonl	fiber-4699	plan	2026-11-12
 crates/tui/src/event_loop.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/sources.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/sources_tests.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/session_turns/stop.rs	fiber-4711	plan	2026-11-12T05:42:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/rebind_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/model_picker_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
