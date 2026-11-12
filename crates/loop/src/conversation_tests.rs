@@ -699,6 +699,10 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
         extension: None,
         description: "npm test".into(),
         output_path: "artifacts/j_1.log".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     });
     let cut = vec![
         line("tool_call_requested", &requested, Some("a_1")),
@@ -1231,6 +1235,10 @@ fn extension_job_ends_never_render_or_flush_batches_live_or_rebuilt() {
                     extension: extension.then(|| "test/scan".into()),
                     description: "scan".into(),
                     output_path: "/child/events.jsonl".into(),
+
+                    pgid: None,
+                    start_time: None,
+                    kind: None,
                 });
                 let mut lines = vec![line("job_started", &started, None)];
                 if batch {
@@ -1317,6 +1325,10 @@ fn extension_ownership_survives_compaction_and_seeded_rebuilds() {
         extension: Some("test/scan".into()),
         description: "scan".into(),
         output_path: "/child/events.jsonl".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     });
     let starts = vec![line("job_started", &started, None)];
     let (_, _, _, seed) = super::rebuild_and_sent(
@@ -1996,6 +2008,10 @@ mod window {
             extension: None,
             description: format!("job {id}"),
             output_path: format!("artifacts/{id}"),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         })
     }
 

@@ -95,11 +95,6 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     );
     let mut app = connected();
     type_text(&mut app, "/");
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(selected(&app), table.first().cloned());
-    app.on_key(Key::Down, now());
-    assert_eq!(selected(&app), table.get(1).cloned());
-    app.on_key(Key::Up, now());
     assert_eq!(selected(&app), table.first().cloned());
     // Down to the last row in view: the window has not moved.
     for _ in 1..shown_rows {
@@ -119,8 +114,8 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         Some(shown_rows - 1)
     );
     assert_eq!(shown(&app).first(), table.get(1));
-    // Down clamps at the last row.
-    for _ in 0..table.len() {
+    // Down wraps at the last row.
+    for _ in 0..table.len() - shown_rows - 1 {
         app.on_key(Key::Down, now());
     }
     assert_eq!(selected(&app), table.last().cloned());
@@ -128,6 +123,26 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     assert_eq!(selected(&app), table.get(table.len() - 2).cloned());
     // The draft is untouched by moving.
     assert_eq!(app.draft(), "/");
+}
+
+#[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn slash_arrows_wrap_and_render_the_selected_row() {
+    let table = table_lines();
+    let mut app = connected();
+    type_text(&mut app, "/");
+    app.on_key(Key::Up, now());
+    assert_eq!(selected(&app), table.last().cloned());
+    let completions = app.completions().expect("the panel stays open");
+    assert_eq!(
+        completions.start + completions.selected.expect("the last row is selected"),
+        table.len() - 1
+    );
+    assert!(shown(&app).contains(table.last().unwrap()));
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), table.first().cloned());
+    let completions = app.completions().expect("the panel stays open");
+    assert_eq!(completions.start + completions.selected.unwrap(), 0);
 }
 
 #[test]
@@ -616,6 +631,9 @@ fn an_empty_slash_list_shows_no_matches() {
     assert_eq!(completions.selected, None);
     assert_eq!(completions.lines(), ["no matches"]);
     assert!(matches!(completions.rows, Rows::Message(_)));
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.completions().expect("panel remains").selected, None);
 }
 
 /// The structured `@` panel: the windowed paths and the query behind

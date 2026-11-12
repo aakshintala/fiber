@@ -402,6 +402,7 @@ impl Rig {
             "scan".into(),
             events.to_string_lossy().into_owned(),
             stop,
+            crate::support::identity(),
             crate::support::delegate_started(&self.job.0),
         );
         let park = Arc::clone(&runner.park);
@@ -3338,6 +3339,7 @@ fn the_fold_starts_from_the_run_boundary() {
         "scan".into(),
         events.to_string_lossy().into_owned(),
         stop,
+        crate::support::identity(),
         crate::support::delegate_started(&rig.job.0),
     );
     let watchdog = Watchdog::matching("fiber-delegate-fold-boundary");

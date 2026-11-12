@@ -1021,6 +1021,10 @@ fn the_note_after_a_stop_names_the_jobs_with_their_descriptions() {
             extension: None,
             description: description.into(),
             output_path: "/tmp/out".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         });
         let line = contract::Envelope {
             kind: EventKind::from_name(event.kind()),
@@ -1244,6 +1248,10 @@ fn a_job_ending_during_the_rewind_stop_wait_is_redacted_in_its_end_and_its_file(
                 extension: None,
                 description: "test job".into(),
                 output_path: output.display().to_string(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -1332,6 +1340,10 @@ fn a_withheld_job_end_during_the_rewind_stop_wait_withholds_its_file_and_notice(
                 extension: None,
                 description: "test job".into(),
                 output_path: output.display().to_string(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -1409,6 +1421,10 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
                 extension: None,
                 description: "test delegate".into(),
                 output_path: output.display().to_string(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,

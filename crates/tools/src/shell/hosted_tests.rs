@@ -297,10 +297,12 @@ fn a_detached_call_bypasses_the_host() {
         stopped: None,
         adopted: None,
     });
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let shell = Shell::new(
         dir.path().to_path_buf(),
         Arc::new(fakes::clock::SystemClock),
     )
+    .with_jobs(jobs.clone())
     .with_host(host)
     .with_detached(dir.path().join("detached"));
     let (done, result) = mpsc::channel();

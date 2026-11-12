@@ -41,7 +41,14 @@ pub(crate) struct FunctionRef {
 /// dispatcher that runs a provider's `credential()`, so ordinary calls
 /// carry `None` and never refresh.
 pub(crate) type ProcessInvoke = Arc<
-    dyn Fn(Value, Option<CredentialFor>, &dyn Cancel) -> Result<Option<Value>, Error> + Send + Sync,
+    dyn Fn(
+            Value,
+            Option<CredentialFor>,
+            &dyn Cancel,
+            Option<Arc<dyn contract::tool::InnerCalls>>,
+        ) -> Result<Option<Value>, Error>
+        + Send
+        + Sync,
 >;
 
 /// One registered function's target: a Lua function in its extension's VM,

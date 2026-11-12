@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use contract::RequestId;
 use contract::clock::Clock;
-use contract::tool::Cancel;
+use contract::tool::{Cancel, InnerCalls};
 
 use crate::Error;
 use crate::runtime::FunctionRef;
@@ -155,6 +155,53 @@ struct Inner {
     pending: BTreeMap<RequestId, Pending>,
     /// The stream item waiting for its reply, when one is outstanding.
     stream_held: Option<RequestId>,
+    /// Process callbacks bound to extension-owned delegate jobs.
+    delegates: BTreeMap<contract::JobId, DelegateBinding>,
+}
+
+/// A process callback bound to one extension-owned delegate.
+struct DelegateBinding {
+    handle: contract::CommandId,
+    timeout: Duration,
+    run: bool,
+    finish: Option<contract::events::DelegateFinished>,
+}
+
+/// The host call whose callback owns a delegate binding.
+#[derive(Clone)]
+pub(crate) struct HostCallHandle {
+    id: contract::CommandId,
+    table: Arc<Table>,
+}
+
+impl HostCallHandle {
+    pub(crate) fn new(id: contract::CommandId, table: Arc<Table>) -> Self {
+        Self { id, table }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        Self::new(
+            contract::CommandId("test-host-call".to_owned()),
+            Arc::new(Table::new()),
+        )
+    }
+
+    pub(crate) fn bind_delegate(&self, id: contract::JobId, timeout: Duration, run: bool) {
+        self.table.bind_delegate(id, self.id.clone(), timeout, run);
+    }
+
+    pub(crate) fn unbind_delegate(&self, id: &contract::JobId) {
+        self.table.unbind_delegate(id);
+    }
+}
+
+/// A delegate completion's process callback route.
+pub(crate) struct DelegateRoute {
+    pub(crate) handle: contract::CommandId,
+    pub(crate) timeout: Duration,
+    pub(crate) run: bool,
+    pub(crate) finish: Option<contract::events::DelegateFinished>,
 }
 
 /// The request table: one generation of pending requests and the stream
@@ -169,9 +216,22 @@ pub(crate) struct Table {
     fixed_request_nonce: Mutex<Option<String>>,
     #[cfg(test)]
     next_stream_wait: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    #[cfg(test)]
+    next_delegate_bind_pause:
+        Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+/// The callback details used to mint one pending request.
+struct MintSpec<'a> {
+    kind: RequestKind,
+    extension: &'a str,
+    ran_by: String,
+    deadline: Option<Instant>,
+    state_call: Option<u64>,
+    credential: Option<crate::lua::CredentialFor>,
+    inner_calls: Option<Arc<dyn InnerCalls>>,
+}
+
 impl Table {
     /// An empty table at its first generation.
     pub(crate) fn new() -> Self {
@@ -181,12 +241,15 @@ impl Table {
                 next_request_id: 0,
                 pending: BTreeMap::new(),
                 stream_held: None,
+                delegates: BTreeMap::new(),
             }),
             stream_gate: Condvar::new(),
             #[cfg(test)]
             fixed_request_nonce: Mutex::new(None),
             #[cfg(test)]
             next_stream_wait: Mutex::new(None),
+            #[cfg(test)]
+            next_delegate_bind_pause: Mutex::new(None),
         }
     }
 
@@ -207,6 +270,84 @@ impl Table {
         support::lock(&self.inner).generation
     }
 
+    /// Binds a delegate before its service returns from start, under the
+    /// service's start gate, so completion can route to this process call.
+    fn bind_delegate(
+        &self,
+        id: contract::JobId,
+        handle: contract::CommandId,
+        timeout: Duration,
+        run: bool,
+    ) {
+        support::lock(&self.inner).delegates.insert(
+            id,
+            DelegateBinding {
+                handle,
+                timeout,
+                run,
+                finish: None,
+            },
+        );
+        #[cfg(test)]
+        self.pause_delegate_bind();
+    }
+
+    /// Forgets a binding when start failed after invoking bind.
+    fn unbind_delegate(&self, id: &contract::JobId) {
+        support::lock(&self.inner).delegates.remove(id);
+    }
+
+    /// Holds a finish until its matching completion arrives.
+    pub(crate) fn hold_delegate_finish(
+        &self,
+        finished: &contract::events::DelegateFinished,
+    ) -> bool {
+        let mut inner = support::lock(&self.inner);
+        let Some(binding) = inner.delegates.get_mut(&finished.job_id) else {
+            return false;
+        };
+        binding.finish = Some(finished.clone());
+        true
+    }
+
+    /// Takes the route and finish for the one completion of a bound job.
+    pub(crate) fn finish_delegate(
+        &self,
+        completed: &contract::events::JobCompleted,
+    ) -> Option<DelegateRoute> {
+        let binding = support::lock(&self.inner)
+            .delegates
+            .remove(&completed.job_id)?;
+        Some(DelegateRoute {
+            handle: binding.handle,
+            timeout: binding.timeout,
+            run: binding.run,
+            finish: binding.finish,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_next_delegate_bind(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, reached) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *support::lock(&self.next_delegate_bind_pause) = Some((entered, released));
+        (reached, release)
+    }
+
+    #[cfg(test)]
+    fn pause_delegate_bind(&self) {
+        let pause = support::lock(&self.next_delegate_bind_pause).take();
+        if let Some((entered, release)) = pause
+            && let Ok(()) = entered.send(())
+        {
+            fakes::Deadline::after(std::time::Duration::from_secs(10))
+                .recv(&release)
+                .expect("the test releases the delegate bind pause");
+        }
+    }
+
     /// Mints one pending request of `kind`, run as `ran_by` for
     /// `extension` and ending at `deadline`, joining hook transaction
     /// `state_call` when the request is a hook delivery. `credential` is
@@ -225,6 +366,19 @@ impl Table {
         state_call: Option<u64>,
         credential: Option<crate::lua::CredentialFor>,
     ) -> Minted {
+        self.mint_with_inner_calls(MintSpec {
+            kind,
+            extension,
+            ran_by,
+            deadline,
+            state_call,
+            credential,
+            inner_calls: None,
+        })
+    }
+
+    /// Mints a pending request carrying the outer tool call's inner runner.
+    fn mint_with_inner_calls(&self, spec: MintSpec<'_>) -> Minted {
         let mut inner = support::lock(&self.inner);
         let sequence = inner.next_request_id;
         inner.next_request_id = sequence.wrapping_add(1);
@@ -237,19 +391,20 @@ impl Table {
         let id = RequestId(format!("{nonce}_{sequence:032x}"));
         let cancel = support::cancel::Token::new();
         let context = CallbackContext::request(
-            extension,
+            spec.extension,
             id.clone(),
-            ran_by,
-            deadline,
+            spec.ran_by,
+            spec.deadline,
             cancel.clone(),
-            state_call,
-            credential,
-        );
+            spec.state_call,
+            spec.credential,
+        )
+        .with_inner_calls(spec.inner_calls);
         let wait = WaitCell::new();
         inner.pending.insert(
             id.clone(),
             Pending {
-                kind,
+                kind: spec.kind,
                 context,
                 cancel: cancel.clone(),
                 done: false,
@@ -262,6 +417,7 @@ impl Table {
 
     /// Whether `id` names a live request of this generation: answered,
     /// timed out, cancelled or retired ids read stale.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn is_live(&self, id: &RequestId) -> bool {
         let inner = support::lock(&self.inner);
         inner.pending.get(id).is_some_and(|pending| !pending.done)
@@ -327,6 +483,7 @@ impl Table {
     }
 
     /// The live request's kind. A stale id names none.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn kind(&self, id: &RequestId) -> Option<RequestKind> {
         let inner = support::lock(&self.inner);
         let pending = inner.pending.get(id)?;
@@ -390,6 +547,7 @@ impl Table {
     /// Times `id` out: completes it without firing its cancel signal — a
     /// missed hook timeout stops nothing, the hook has failed and a late
     /// reply is dropped. The first settler wins.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn timeout(&self, id: &RequestId) -> Settled {
         self.settle(id, Outcome::TimedOut)
     }
@@ -445,6 +603,7 @@ impl Table {
             let mut inner = support::lock(&self.inner);
             inner.generation += 1;
             inner.stream_held = None;
+            inner.delegates.clear();
             let mut retired = Vec::with_capacity(inner.pending.len());
             for pending in inner.pending.values_mut() {
                 if !pending.done {
@@ -607,14 +766,15 @@ pub(crate) fn run_request(
     // Only the dispatcher that runs a provider's `credential()` sets a
     // scope: every other dispatch carries `None`, and a
     // `host.oauth.refresh` under it is refused.
-    let minted = shared.table.mint(
-        dispatch.kind,
-        &shared.owner,
-        dispatch.ran_by,
+    let minted = shared.table.mint_with_inner_calls(MintSpec {
+        kind: dispatch.kind,
+        extension: &shared.owner,
+        ran_by: dispatch.ran_by,
         deadline,
-        dispatch.state_call,
-        dispatch.credential,
-    );
+        state_call: dispatch.state_call,
+        credential: dispatch.credential,
+        inner_calls: dispatch.inner_calls,
+    });
     let id = minted.id;
     if dispatch.kind == RequestKind::Stream {
         let generation = shared.table.generation();
@@ -682,7 +842,7 @@ pub(crate) fn run_request(
 /// What one dispatch sends: the request's kind, whom it answers, what it
 /// runs as, its arguments, its timeout and its hook transaction. One
 /// value carries the dispatch so the send path stays narrow.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Dispatch {
     /// Ordered behind the stream gate, or concurrent with everything.
     pub kind: RequestKind,
@@ -703,6 +863,8 @@ pub(crate) struct Dispatch {
     /// What a `host.oauth.refresh` under this request refreshes: set
     /// only by the dispatcher that runs a provider's `credential()`.
     pub credential: Option<crate::lua::CredentialFor>,
+    /// The outer tool callback's per-call inner runner.
+    pub inner_calls: Option<Arc<dyn InnerCalls>>,
 }
 
 impl Dispatch {
@@ -727,6 +889,7 @@ impl Dispatch {
             timeout,
             state_call,
             credential: None,
+            inner_calls: None,
         }
     }
 
@@ -745,6 +908,7 @@ impl Dispatch {
             timeout,
             state_call: None,
             credential: None,
+            inner_calls: None,
         }
     }
 }

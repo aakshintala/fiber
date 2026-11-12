@@ -50,6 +50,10 @@ fn folded() -> (fakes::TempDir, Resumed) {
                 extension: None,
                 description: format!("job {id}"),
                 output_path: format!("artifacts/{id}.log"),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,

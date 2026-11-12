@@ -8,7 +8,7 @@ use contract::emit::Emit;
 use contract::jobs::{StopError, WriteError};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
-use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
 use crate::error::JobsError;
@@ -24,6 +24,24 @@ impl JobsTool {
     pub fn new(registry: Arc<Registry>) -> Self {
         Self { registry }
     }
+
+    fn run_call(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        execute_approved: bool,
+    ) -> Output {
+        let action = match action(arguments) {
+            Ok(action) => action,
+            Err(error) => return error.output(true),
+        };
+        match action {
+            Action::List => self.list(arguments),
+            Action::Wait => self.wait(arguments, cancel),
+            Action::Write => self.write(arguments, cancel),
+            Action::Stop => self.stop(arguments, cancel, execute_approved),
+        }
+    }
 }
 
 impl Tool for JobsTool {
@@ -34,8 +52,8 @@ impl Tool for JobsTool {
                  `list` shows each job. `wait` blocks until a job ends or `timeout_ms` passes; \
                  cancelling the wait leaves the job running. `write` types `input` into a job \
                  started with `tty` and returns the output that arrives within `timeout_ms`, 250 \
-                 by default and at most 30000; with empty `input` it waits at least 5000. `stop` \
-                 stops one job."
+                 by default and at most 30000; with empty `input` it waits at least 5000. Use \
+                 `stop` to stop a job or a detached process you started."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -70,23 +88,36 @@ impl Tool for JobsTool {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let action =
             action(arguments).map_err(|error| EffectsError::Arguments(error.to_string()))?;
-        Ok(effects_of(action))
+        let mut effects = effects_of(action);
+        if matches!(action, Action::Stop)
+            && job_id(arguments).is_ok_and(|id| self.registry.stop_needs_review(&id))
+        {
+            effects.declared.effects = vec![Effect::Executes];
+            effects.declared.reversible = false;
+        }
+        Ok(effects)
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let action = match action(arguments) {
-            Ok(action) => action,
-            Err(error) => return error.output(true),
-        };
-        match action {
-            Action::List => self.list(arguments),
-            Action::Wait => self.wait(arguments, cancel),
-            Action::Write => self.write(arguments, cancel),
-            Action::Stop => self.stop(arguments, cancel),
-        }
+        self.run_call(arguments, cancel, false)
+    }
+
+    fn run_with_effects(
+        &self,
+        arguments: &Map<String, Value>,
+        effects: &Effects,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+        _ask: &dyn Ask,
+    ) -> Output {
+        // The loop passes the declaration used for permission. A call that
+        // declared no execute effect cannot signal after its identity changes.
+        let execute_approved = effects.declared.effects.contains(&Effect::Executes);
+        self.run_call(arguments, cancel, execute_approved)
     }
 }
 
+#[derive(Clone, Copy)]
 enum Action {
     List,
     Wait,
@@ -143,6 +174,9 @@ impl JobsTool {
             Ok(id) => id,
             Err(error) => return error.output(true),
         };
+        if self.registry.is_detached(&id) {
+            return JobsError::UnknownJob { id: JobId(id) }.output(true);
+        }
         let timeout_ms = match timeout_ms(arguments) {
             Ok(timeout_ms) => timeout_ms,
             Err(error) => return error.output(true),
@@ -161,6 +195,9 @@ impl JobsTool {
             Ok(id) => id,
             Err(error) => return error.output(true),
         };
+        if self.registry.is_detached(&id) {
+            return JobsError::UnknownJob { id: JobId(id) }.output(true);
+        }
         let input = match arguments.get("input") {
             Some(Value::String(input)) => input.as_str(),
             Some(_) => return JobsError::InputNotString.output(true),
@@ -193,13 +230,24 @@ impl JobsTool {
         }
     }
 
-    fn stop(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
+    fn stop(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        execute_approved: bool,
+    ) -> Output {
         let id = match job_id(arguments) {
             Ok(id) => id,
             Err(error) => return error.output(true),
         };
-        match self.registry.stop(&id, cancel) {
+        match self.registry.stop(&id, cancel, execute_approved) {
             Ok(answer) => answered(answer.text, answer.settle),
+            Err(StopError::NotRunning) if self.registry.stop_needs_review(&id) => {
+                JobsError::StopNeedsReview {
+                    id: JobId(id.clone()),
+                }
+                .output(true)
+            }
             Err(StopError::NotRunning) => JobsError::UnknownJob {
                 id: JobId(id.clone()),
             }
