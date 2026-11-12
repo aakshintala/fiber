@@ -2505,6 +2505,81 @@ fn flake_classify_missing_flags_and_unreadable_files_are_errors() {
 }
 
 #[test]
+fn journey_streak_cli_dispatches_input_output() {
+    let dir = TempDir::new("journey-streak-cli");
+    let input = r#"[{"databaseId":2,"event":"push","headBranch":"main","conclusion":"failure"}]"#;
+    let (code, output) = xtask(&dir, &["journey-streak", "select"], &[], input);
+    assert_eq!(code, 0);
+    assert_eq!(output.trim(), "2");
+
+    let current = dir.path().join("current.txt");
+    let runs = dir.path().join("runs.json");
+    let history = dir.path().join("history");
+    let prior = history.join("1");
+    std::fs::create_dir_all(&prior).unwrap();
+    std::fs::write(&current, "qa\n").unwrap();
+    std::fs::write(&runs, r#"[{"databaseId":2,"headSha":"0123456789abcdef0123456789abcdef01234567","event":"push","headBranch":"main","conclusion":"failure"},{"databaseId":1,"headSha":"abcdef0123456789abcdef0123456789abcdef01","event":"push","headBranch":"main","conclusion":"failure"}]"#).unwrap();
+    std::fs::write(
+        prior.join("view.json"),
+        r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(prior.join("journey-failures.txt"), "qa\n").unwrap();
+    let output_path = dir.path().join("streaks.json");
+    let (code, output) = xtask(
+        &dir,
+        &[
+            "journey-streak",
+            "compute",
+            "--current-id",
+            "2",
+            "--current-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--failures",
+            current.to_str().unwrap(),
+            "--runs",
+            runs.to_str().unwrap(),
+            "--history-dir",
+            history.to_str().unwrap(),
+            "--output",
+            output_path.to_str().unwrap(),
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(
+        std::fs::read_to_string(&output_path).unwrap(),
+        r#"{"qa":{"count":2,"first_sha":"abcdef0123456789abcdef0123456789abcdef01"}}"#
+    );
+    std::fs::write(&runs, "[]").unwrap();
+    let current_only_output = dir.path().join("current-only.json");
+    let (code, output) = xtask(
+        &dir,
+        &[
+            "journey-streak",
+            "compute",
+            "--current-id",
+            "2",
+            "--current-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--failures",
+            current.to_str().unwrap(),
+            "--runs",
+            runs.to_str().unwrap(),
+            "--history-dir",
+            history.to_str().unwrap(),
+            "--output",
+            current_only_output.to_str().unwrap(),
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{output}");
+    assert!(!current_only_output.exists());
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TempDir::new("xtask-unknown");
     assert_eq!(

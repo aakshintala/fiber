@@ -150,6 +150,7 @@ mod ci_needs;
 mod doc_citations;
 mod docs;
 mod flake_report;
+mod journey_streak;
 mod logo;
 mod models_dev;
 mod models_dev_corrections;
@@ -198,6 +199,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         .split_first()
         .ok_or("usage: cargo xtask <command>; see xtask/src/main.rs")?;
     match command.as_str() {
+        "journey-streak" => journey_streak::run(rest),
         "select" => {
             let members = workspace_members()?;
             let selection = select::classify(&changed_files(&flag(rest, "--base")?)?, &members);
