@@ -256,7 +256,6 @@ crates/tui/src/event_loop_tests.rs:71-72	fiber-4700	plan	2026-11-12T08:09:58Z	ro
 crates/tui/src/event_loop_tests.rs:504-505	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/screen.rs:161-161	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/screen_tests.rs:574-575	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
-crates/tui/src/view/offer_tests.rs	fiber-4735	plan	2026-11-12T08:11:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/common/mod.rs,crates/extensions/tests/lua_tools.rs,crates/extensions/tests/oauth.rs,crates/extensions/tests/login_discovery.rs,crates/extensions/tests/lua_provider.rs	fiber-4730	grant	2026-11-12T08:22:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/events.md:746-746	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
 docs/events.md:1473-1473	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
