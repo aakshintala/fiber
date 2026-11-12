@@ -9,7 +9,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
-use fakes::MUST_SUCCEED_WITHIN;
+use fakes::Deadline;
 
 /// The checked-in events file both jig tests draw, so the path never
 /// changes with a checkout.
@@ -32,7 +32,7 @@ pub(crate) fn example_path(name: &str) -> fakes::WarmedJig {
 /// its own process group under a watchdog, so a stall fails naming
 /// `finished` and leaves no process behind.
 #[track_caller]
-pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
+pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str, deadline: Deadline) -> Output {
     let warmed = example_path(binary);
     let child = Command::new(warmed.path())
         .args(args)
@@ -42,7 +42,7 @@ pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
         .spawn()
         .expect("the jig binary spawns");
     let watchdog = fakes::Watchdog::group(child.id());
-    let output = fakes::wait_output(child, finished);
-    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
+    let output = fakes::finished(finished, child, &[], deadline);
+    watchdog.stand_down(deadline);
     output
 }

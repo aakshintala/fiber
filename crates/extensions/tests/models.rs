@@ -1178,6 +1178,228 @@ fn add_lua_suppresses_only_the_invalid_the_load_reported() {
 }
 
 #[test]
+fn a_disabled_process_package_warm_cache_names_an_omission_once() {
+    fakes::within(
+        "Providers::load_enabled",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        || {
+            let setup = Setup::new();
+            let mut m = manifest("acme");
+            m["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+            let source = setup.source("acme", &m, &[provider("acme", &["a"])]);
+            install(&setup.home(), &source, "0.1.0").unwrap();
+            write_model_cache(
+                &setup.home(),
+                "acme",
+                &json!([{
+                    "id": "gone", "protocol": "openai-responses",
+                    "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+                    "omit_reason": "no serving endpoint with a matching name"
+                }]),
+            )
+            .unwrap();
+            let configuration = config(&setup, &["extensions.acme.enabled=false"]);
+            let (providers, notices) =
+                Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(providers.resolve("acme/gone").is_err());
+            // The load reports each marked entry (`docs/model-routing.md`, "Model discovery").
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
+            assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+            assert_eq!(
+                notices[0].message,
+                "The model `acme/gone` was left out of the model list: no serving endpoint with a matching name."
+            );
+        },
+    );
+}
+
+#[test]
+fn a_warm_cache_names_an_omission_once() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let marked = json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"});
+    write_model_cache(&setup.home(), "acme", &json!([marked, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    let lua_notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let load_omitted: Vec<_> = load_notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    let lua_omitted: Vec<_> = lua_notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    // The same marked entry is reported once across load and admission (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(load_omitted.len(), 1);
+    assert_eq!(lua_omitted.len(), 0);
+    assert_eq!(load_omitted[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(
+        load_omitted[0].message,
+        "The model `acme/gone` was left out of the model list: first reason."
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn add_lua_suppresses_only_the_omissions_the_load_reported() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["ok"]);
+    data["models"].as_array_mut().unwrap().push(json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"}));
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='gone2', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='second reason'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let omitted: Vec<_> = notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    // A later admission reports only unseen omission identities (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(omitted.len(), 1, "{notices:?}");
+    assert_eq!(
+        omitted[0].message,
+        "The model `acme/gone2` was left out of the model list: second reason."
+    );
+    assert_ne!(omitted[0].message, load_notices[0].message);
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn add_lua_emits_omissions_beyond_the_load_count() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let gone = json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"});
+    write_model_cache(&setup.home(), "acme", &json!([gone, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let cache = config::model_cache_file(&setup.home(), "acme").unwrap();
+    std::fs::remove_file(cache).unwrap();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let load_count = load_notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .count();
+    let new: Vec<_> = notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    // A later admission emits only the excess over the recorded count (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(load_count, 1);
+    assert_eq!(new.len(), 1, "{notices:?}");
+    assert_eq!(
+        new[0].message,
+        load_notices
+            .iter()
+            .find(|n| n.code == ErrorCode::ModelOmitted)
+            .unwrap()
+            .message
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn set_models_suppresses_the_omissions_the_load_reported() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let gone = json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"});
+    write_model_cache(&setup.home(), "acme", &json!([gone, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let models: Vec<ModelData> = serde_json::from_value(json!([{"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"}, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let notices = providers.set_models("acme", models);
+    // A joined refresh does not repeat the load's omission (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(
+        load_notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0,
+        "{notices:?}"
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn refresh_without_cache_reports_an_omission_once() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let first = providers.add_lua(
+        "acme",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let models: Vec<ModelData> = serde_json::from_value(json!([{"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"}, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let second = providers.set_models("acme", models);
+    // Re-admission on the same registry converges on one notice (`docs/model-routing.md`, "Model discovery").
+    assert!(
+        load_notices
+            .iter()
+            .all(|n| n.code != ErrorCode::ModelOmitted)
+    );
+    assert_eq!(
+        first
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        second
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
 fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     let list = json!([
         {"id": "bad", "protocol": "anthropic-messages",
@@ -1879,6 +2101,55 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
     assert!(providers.resolve("acme/old").is_err());
     let model = providers.resolve("acme/new").unwrap();
     assert_eq!(providers.addendum(&model), Some("Fresh.\n"));
+}
+
+// Count assertions follow `docs/model-routing.md`, "Model discovery".
+#[test]
+fn add_lua_addenda_failure_reports_no_omission_yet() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='broken', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, prompt_addendum='no-such-addendum.md'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0
+    );
+
+    let models: Vec<ModelData> = serde_json::from_value(json!([
+        {"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"},
+        {"id":"broken", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "prompt_addendum":"no-such-addendum.md"},
+        {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}
+    ])).unwrap();
+    let notices = providers.set_models("acme", models);
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1,
+        "{notices:?}"
+    );
 }
 
 #[test]
