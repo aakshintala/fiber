@@ -62,10 +62,10 @@ pub struct Providers {
     /// model id: read with the data that declared them and replaced
     /// together with it.
     addenda: BTreeMap<String, BTreeMap<String, String>>,
-    /// Each `model_invalid` and `model_omitted` notice emitted by any
-    /// admission, by provider name, in emission order. Later admissions
-    /// suppress only the count already reported on this registry
-    /// (`docs/model-routing.md`, "Model discovery").
+    /// Every notice each admission emitted, by provider name, in emission
+    /// order. Later admissions match only `model_invalid` and
+    /// `model_omitted` against the reported count and suppress at most
+    /// that many (`docs/model-routing.md`, "Model discovery").
     reported_notices: BTreeMap<String, Vec<(ErrorCode, String)>>,
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
