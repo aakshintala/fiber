@@ -894,9 +894,7 @@ mod tests {
             let line_length = remaining.min(LINE_LIMIT);
             lines.push("x".repeat(line_length));
             remaining -= line_length;
-            if remaining > 0 {
-                remaining -= 1;
-            }
+            remaining = remaining.saturating_sub(1);
         }
         lines.join("\n")
     }
