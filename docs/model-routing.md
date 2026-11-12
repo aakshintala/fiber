@@ -920,8 +920,10 @@ reports only invalid the load did not report.
 
 The vendor's own list decides which models a provider offers. Every first-party
 package whose vendor has a listing endpoint declares a `models()` that calls it
-with the person's credential: `anthropic`, `openai`, `gemini`, `codex`, `muse`,
-`openrouter` and `databricks`. It keeps the models that output text and call
+with the person's credential, except OpenRouter, whose models endpoint needs no
+key: `anthropic`, `openai`, `gemini`, `codex`, `muse` and `databricks` use the
+person's credential; `openrouter` sends none, avoiding needless credential
+exposure. It keeps the models that output text and call
 tools, judged by the vendor's fields where it has them and by models.dev
 otherwise. A package whose vendor has no listing endpoint, and every package
 before its first refresh or without a credential, shows its generated list
