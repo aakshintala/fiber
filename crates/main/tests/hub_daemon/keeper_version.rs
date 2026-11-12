@@ -9,7 +9,7 @@
     reason = "binary test assertions"
 )]
 
-use super::keeper::wait_for_refuse_only_socket;
+use super::keeper::{kill_marker_file, wait_for_refuse_only_socket};
 use crate::support;
 
 use std::fs;
@@ -175,6 +175,7 @@ fn a_resume_against_a_newer_keeper_declines_naming_its_version_then_recovers() {
     let job = started["payload"]["job_id"].as_str().unwrap().to_owned();
     event(&lines, "tool_call_started", setup.deadline);
     assert!(!ready.wait(setup.deadline.start_wait()).is_empty());
+    let kill_marker = kill_marker_file(&setup, id);
     fakes::kill_group(group, "KILL").unwrap();
     assert!(!reap(child, setup.deadline).success());
     assert!(fakes::group_empties(group, setup.deadline.start_wait()));
@@ -184,7 +185,13 @@ fn a_resume_against_a_newer_keeper_declines_naming_its_version_then_recovers() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, &setup, id);
+    wait_for_refuse_only_socket(
+        setup.deadline.start_wait(),
+        socket,
+        Some(kill_marker),
+        &setup,
+        id,
+    );
     let dir = session_dir(&setup, id);
     // The keeper was spawned from this build's binary, so its `fiber_started`
     // is the latest; forging that line stands in for a newer keeper.

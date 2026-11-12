@@ -41,6 +41,7 @@ worktree = { path = "../worktree" }
 [dev-dependencies]
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 fakes = { package = "fakes-contract", path = "../fakes-contract" }
+log = { path = "../log", features = ["fault-hooks"] }
 insta.workspace = true
 vt100 = "0.16.2"
 

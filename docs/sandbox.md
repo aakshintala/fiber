@@ -58,9 +58,10 @@ the person's `sandbox.deny_read` paths.
   needs one runs with `unconfined: true` and is reviewed.
 - Change the shared `.git/config` and hooks, a worktree's `.git` pointer
   file, its git directory's `commondir` file or workspace-local `.fiber/`
-  without trace. On Linux, Fiber records them before the call and restores
-  them after it, reporting each change ("Protected paths" below). On macOS,
-  the policy denies writes to them even within a granted Git directory.
+  without trace. On Linux, writes to these paths can succeed during a
+  confined call; Fiber records them before the call and restores them after
+  it, reporting each change ("Protected paths" below). On macOS, the policy
+  denies writes to them even within a granted Git directory.
 - Signal a process outside it below Landlock ABI 6. From ABI 6, Landlock
   signal scoping covers every process outside the sandbox; below it a
   confined call can still `kill` same-user processes outside, though it
@@ -92,9 +93,10 @@ entries in session memory so active calls in that session cannot restore stale
 bytes. Fiber refuses to start another confined call in that session until it
 can persist those entries.
 
-A session that died mid-call leaves a stale baseline behind. The next
-session's first call finds no active holder, restores what the dead session
-changed, reports it with its own report, and only then takes its snapshot.
+A session that died mid-call leaves a stale baseline behind. At startup,
+before its first call, the next session finds no active holder, restores what
+the dead session changed and reports it in a notice. It then takes a fresh
+snapshot before any confined call runs.
 A live baseline is never touched while a call holds it.
 
 Two locks guard the baseline. The baseline lock is exclusive and short: a
@@ -152,10 +154,12 @@ shell's inherited terminal, which keeps working.
 
 Commits keep working on main checkouts and on worktrees: the worktree's own
 git directory stays writable, as do the shared `objects/`, `refs/` and
-`logs/` directories. Deny wins over those grants, so `.git/config`,
+`logs/` directories. Deny wins over those grants. On macOS, `.git/config`,
 `.git/hooks/`, a worktree's `.git` pointer file, its git directory's
 `commondir` file, `.fiber/`, and the shared hooks and config stay
-unwritable.
+unwritable. On Linux, writes to these paths can succeed during a confined
+call; Fiber records and restores them afterward, reporting each change as
+described in "Protected paths".
 
 ## On Linux
 

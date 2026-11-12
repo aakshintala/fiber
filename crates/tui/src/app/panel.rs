@@ -291,6 +291,8 @@ fn fold_session_figures(figures: &mut SessionFigures, envelope: &Envelope) {
         | EventKind::JobDelta
         | EventKind::JobLine
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => {}
@@ -500,6 +502,8 @@ impl PanelState {
             | EventKind::JobDelta
             | EventKind::JobLine
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}
@@ -624,6 +628,8 @@ impl PanelState {
             | EventKind::JobDelta
             | EventKind::JobLine
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}
@@ -1350,6 +1356,8 @@ impl App {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::Unknown(_) => {}
         }
         if self.panel_state.due {
