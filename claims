@@ -282,10 +282,4 @@ crates/tui/tests/support/jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacB
 docs/sandbox.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/events.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/config/src/prompt_files.rs	fiber-4682	plan	2026-11-12T07:16:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/sandbox.rs	fiber-4682	plan	2026-11-12T07:16:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/lifecycle.rs	fiber-4682	plan	2026-11-12T07:16:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
-docs/compaction.md:241-241	fiber-4682	plan	2026-11-12T07:21:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4682-docs-prompt-compaction	
-docs/system-prompt.md:18-18	fiber-4682	plan	2026-11-12T07:21:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4682-docs-prompt-compaction	
-docs/system-prompt.md:55-55	fiber-4682	plan	2026-11-12T07:21:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4682-docs-prompt-compaction	
