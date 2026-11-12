@@ -235,8 +235,7 @@ pub(crate) fn take(
         stop: stop_of(&job_cancel),
         input: moved.take_input(),
         lines: limit.is_some_and(|limit| limit.monitor),
-
-        identity: None,
+        identity: moved.identity(),
         detached: None,
     }) {
         Ok(opened) => {
@@ -812,7 +811,7 @@ fn format_rows(rows: &[(u32, String)]) -> Vec<String> {
 }
 
 /// The command's first line, cut to [`DESCRIPTION_LIMIT`] characters.
-fn description_of(command: &str) -> String {
+pub(super) fn description_of(command: &str) -> String {
     let line = command.lines().next().unwrap_or("");
     if line.chars().count() <= DESCRIPTION_LIMIT {
         return line.to_owned();

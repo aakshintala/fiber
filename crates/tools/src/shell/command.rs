@@ -305,6 +305,7 @@ pub(super) fn finish_spawned(
     drive: Drive,
 ) -> Result<Ran, std::io::Error> {
     let pgid = spawned.pgid();
+    let identity = spawned.identity();
     let shared = Arc::new(Shared::default());
     // The marker observation wakes the drive loop parked in
     // `drive_confined`: the wake bumps under the same lock the park
@@ -372,6 +373,7 @@ pub(super) fn finish_spawned(
             | MovePolicy::Monitor => None,
         },
         members: None,
+        identity,
         pgid,
         listing: listing.map(Box::new),
         hosted,

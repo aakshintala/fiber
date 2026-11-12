@@ -4,11 +4,12 @@ use std::process::Command;
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::events::Outcome;
-use contract::jobs::{JobRecord, Jobs as _};
+use contract::events::{JobKind, Outcome};
+use contract::jobs::{JobIdentity, JobRecord, Jobs as _, Opening, Stop};
 use contract::shapes::Effect;
 use contract::tool::Tool;
 use fakes::clock::FakeClock;
+use fakes::jobs::FakeJobs;
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
 
@@ -1992,18 +1993,23 @@ fn an_invalid_detached_call_is_not_always_reviewed() {
     );
 }
 
-fn detached_pid(text: &str) -> u32 {
-    text.strip_prefix("Started detached. PID ")
-        .and_then(|rest| rest.split('.').next())
-        .and_then(|pid| pid.parse().ok())
+fn detached_pid(jobs: &FakeJobs) -> u32 {
+    jobs.started()
+        .last()
+        .and_then(|started| started.pgid)
         .unwrap()
 }
 
-fn stand_down_group(pid: u32, watchdog: fakes::Watchdog) {
+fn stand_down_group(pid: u32, watchdog: fakes::Watchdog, jobs: &FakeJobs) {
     assert!(fakes::kill_group(pid, "KILL").unwrap());
     assert!(
         fakes::group_empties(pid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the reaper thread reaped the child, leaving no zombie"
+    );
+    assert!(
+        jobs.ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+            .is_some(),
+        "the detached supervisor reports its end"
     );
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
@@ -2026,9 +2032,11 @@ fn a_detached_call_without_a_detached_directory_is_unavailable() {
 }
 
 #[test]
-fn a_detached_sleep_is_not_a_bare_wait_and_needs_no_jobs() {
+fn a_detached_sleep_is_not_a_bare_wait_and_records_a_detached_job() {
     let dir = fakes::TempDir::new("fiber-shell-detached-sleep");
+    let jobs = FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
         .with_detached(dir.path().join("detached"));
     let waiting = shell.run(&args("sleep 60"), &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&waiting), Some(ErrorCode::InvalidArguments));
@@ -2045,8 +2053,187 @@ fn a_detached_sleep_is_not_a_bare_wait_and_needs_no_jobs() {
     );
     assert_eq!(output.details, Some(json!({"command": "sleep 60"})));
     assert!(output.process.is_none());
-    let pid = detached_pid(&text(&output));
-    stand_down_group(pid, fakes::Watchdog::group(pid));
+    let pid = detached_pid(&jobs);
+    let [JobRecord::Started(started)] = output.jobs.as_slice() else {
+        panic!("detached launch records exactly one job: {:?}", output.jobs);
+    };
+    assert_eq!(started.kind, Some(JobKind::Detached));
+    assert_eq!(started.pgid, Some(pid));
+    assert!(started.start_time.is_some());
+    assert!(text(&output).contains(&format!("Job {}", started.job_id.0)));
+    stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
+}
+
+#[test]
+fn a_live_background_job_target_is_an_unreviewed_kill() {
+    let dir = fakes::TempDir::new("fiber-shell-kill-own-job");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let mut arguments = args("exec sleep 60");
+    arguments.insert("run_in_background".into(), json!(true));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(
+        output.error.is_none(),
+        "background start: {:?}",
+        output.error
+    );
+    let started = jobs.started().pop().expect("background job recorded");
+    assert_eq!(started.kind, Some(JobKind::Job));
+    assert!(
+        started.start_time.is_some(),
+        "the process identity is recorded"
+    );
+    let pid = started.pgid.expect("the job leader is recorded");
+    let watchdog = fakes::Watchdog::group(pid);
+
+    let declared = effects(&shell, &format!("kill {pid}"));
+    assert!(
+        declared.declared.effects.is_empty(),
+        "a confirmed session job needs no review: {declared:?}"
+    );
+    let foreign = std::process::id();
+    assert_eq!(
+        effects(&shell, &format!("kill {foreign}")).declared.effects,
+        vec![Effect::Executes]
+    );
+    assert_eq!(
+        effects(&shell, &format!("kill {pid} {foreign}"))
+            .declared
+            .effects,
+        vec![Effect::Executes]
+    );
+    assert!(jobs.stop(&started.job_id));
+    let completed = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the cleanup stop ends the background job");
+    assert_eq!(completed.status, Outcome::Cancelled);
+    assert!(fakes::group_empties(
+        pid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn an_exited_detached_target_stays_reviewed() {
+    let dir = fakes::TempDir::new("fiber-shell-kill-exited-detached");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"));
+    let output = shell.run(
+        &detached_arguments("exec sleep 60"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pid = detached_pid(&jobs);
+    let watchdog = fakes::Watchdog::group(pid);
+    assert!(fakes::kill_group(pid, "KILL").unwrap());
+    assert!(fakes::group_empties(
+        pid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert_eq!(
+        effects(&shell, &format!("kill {pid}")).declared.effects,
+        vec![Effect::Executes],
+        "a dead identity is not an own-process fast path"
+    );
+    assert!(
+        jobs.ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+            .is_some()
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_live_group_with_an_unreadable_detached_leader_stays_reviewed() {
+    let dir = fakes::TempDir::new("fiber-shell-kill-unreadable-leader");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"));
+    let output = shell.run(
+        &detached_arguments("trap '' HUP; sleep 60 & exit 0"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pid = detached_pid(&jobs);
+    let watchdog = fakes::Watchdog::group(pid);
+    fakes::wait_until(
+        "the detached leader to exit",
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || !fakes::pid_alive(pid),
+    );
+    assert!(
+        fakes::group_alive(pid),
+        "the descendant keeps the group alive"
+    );
+    let declared = effects(&shell, &format!("kill -- -{pid}"));
+    assert_eq!(
+        declared.declared.effects,
+        vec![Effect::Executes],
+        "an unreadable leader cannot prove a group signal safe"
+    );
+
+    assert!(fakes::kill_group(pid, "KILL").unwrap());
+    assert!(fakes::group_empties(
+        pid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert!(
+        jobs.ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+            .is_some()
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_changed_leader_start_time_stays_reviewed() {
+    let dir = fakes::TempDir::new("fiber-shell-kill-start-time-mismatch");
+    let mut command = Command::new("sh");
+    command.args(["-c", "exec sleep 60"]).process_group(0);
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let watchdog = fakes::Watchdog::group(pid);
+    let start_time = support::group::start_time(pid).expect("the live child has an identity");
+    let jobs = FakeJobs::new(dir.path());
+    let opened = jobs
+        .open(Opening {
+            tool: "shell".to_owned(),
+            description: "sleep 60".to_owned(),
+            stop: Stop(Box::new(|| {})),
+            input: None,
+            lines: false,
+            identity: Some(JobIdentity {
+                pgid: pid,
+                start_time: start_time.wrapping_add(1),
+            }),
+            detached: None,
+        })
+        .unwrap();
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let declared = effects(&shell, &format!("kill {pid}"));
+    assert_eq!(declared.declared.effects, vec![Effect::Executes]);
+
+    assert!(fakes::kill_group(pid, "KILL").unwrap());
+    let _status = fakes::within(
+        "the mismatched-identity child to exit",
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || child.wait(),
+    )
+    .unwrap();
+    drop(opened);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2055,11 +2242,12 @@ fn a_detached_call_with_the_sandbox_on_runs_unconfined() {
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let (_home, sandbox) = sandbox_handle_for_test();
+    let jobs = FakeJobs::new(dir.path());
     let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_jobs(jobs.clone())
         .with_sandbox(sandbox)
         .with_detached(dir.path().join("detached"));
-    // No jobs: a detached call is not a job, so the check passes with none.
-    // No workdir either: the call runs in the shell's workspace.
+    // No workdir: the call runs in the shell's workspace.
     let ready = fakes::children::Ready::new(dir.path());
     let command = format!(
         "echo launched; echo $$ > {}; exec sleep 60",
@@ -2073,8 +2261,8 @@ fn a_detached_call_with_the_sandbox_on_runs_unconfined() {
         output.error
     );
     let receipt = text(&output);
-    assert!(receipt.starts_with("Started detached. PID "), "{receipt}");
-    assert!(receipt.contains("Fiber will not stop it."), "{receipt}");
+    assert!(receipt.starts_with("Started detached. Job j_"), "{receipt}");
+    assert!(receipt.contains("Stop it with `jobs stop j_"), "{receipt}");
     assert_eq!(output.details, Some(json!({"command": command})));
     assert!(output.process.is_none());
     assert!(output.protected_paths.is_none());
@@ -2087,7 +2275,7 @@ fn a_detached_call_with_the_sandbox_on_runs_unconfined() {
             .is_none(),
         "an unconfined call takes no protected-path transaction"
     );
-    let pid = detached_pid(&receipt);
+    let pid = detached_pid(&jobs);
     // The log write precedes the ready line in program order, so reading
     // the ready line first makes the log read exact.
     assert_eq!(
@@ -2100,13 +2288,15 @@ fn a_detached_call_with_the_sandbox_on_runs_unconfined() {
         .collect();
     assert_eq!(logs.len(), 1, "one call writes one log");
     assert_eq!(std::fs::read_to_string(&logs[0]).unwrap(), "launched\n");
-    stand_down_group(pid, fakes::Watchdog::group(pid));
+    stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
 }
 
 #[test]
 fn red_kill_own_detached_pid_declares_no_effect() {
     let dir = fakes::TempDir::new("fiber-shell-red-kill-own");
+    let jobs = FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
         .with_detached(dir.path().join("detached"));
     let output = shell.run(
         &detached_arguments("sleep 60"),
@@ -2118,19 +2308,21 @@ fn red_kill_own_detached_pid_declares_no_effect() {
         "detached launch: {:?}",
         output.error
     );
-    let pid = detached_pid(&text(&output));
+    let pid = detached_pid(&jobs);
     let declared = effects(&shell, &format!("kill {pid}"));
     assert!(
         declared.declared.effects.is_empty(),
         "own detached process should need no review: {declared:?}"
     );
-    stand_down_group(pid, fakes::Watchdog::group(pid));
+    stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
 }
 
 #[test]
 fn red_kill_foreign_pid_declares_executes() {
     let dir = fakes::TempDir::new("fiber-shell-red-kill-foreign");
+    let jobs = FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
         .with_detached(dir.path().join("detached"));
     let output = shell.run(
         &detached_arguments("sleep 60"),
@@ -2142,16 +2334,18 @@ fn red_kill_foreign_pid_declares_executes() {
         "detached launch: {:?}",
         output.error
     );
-    let pid = detached_pid(&text(&output));
+    let pid = detached_pid(&jobs);
     let declared = effects(&shell, &format!("kill {}", std::process::id()));
     assert_eq!(declared.declared.effects, vec![Effect::Executes]);
-    stand_down_group(pid, fakes::Watchdog::group(pid));
+    stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
 }
 
 #[test]
 fn red_kill_mixed_own_and_foreign_pids_declares_executes() {
     let dir = fakes::TempDir::new("fiber-shell-red-kill-mixed");
+    let jobs = FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
         .with_detached(dir.path().join("detached"));
     let output = shell.run(
         &detached_arguments("sleep 60"),
@@ -2163,10 +2357,10 @@ fn red_kill_mixed_own_and_foreign_pids_declares_executes() {
         "detached launch: {:?}",
         output.error
     );
-    let pid = detached_pid(&text(&output));
+    let pid = detached_pid(&jobs);
     let declared = effects(&shell, &format!("kill {pid} {}", std::process::id()));
     assert_eq!(declared.declared.effects, vec![Effect::Executes]);
-    stand_down_group(pid, fakes::Watchdog::group(pid));
+    stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
 }
 
 fn listed_files(root: &Path) -> Vec<(std::path::PathBuf, u64)> {
@@ -2206,7 +2400,9 @@ fn a_detached_call_takes_no_protected_path_transaction() {
         deny_read: Vec::new(),
         fiber_home: fiber_home.clone(),
     }));
+    let jobs = FakeJobs::new(dir.path());
     let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_jobs(jobs.clone())
         .with_sandbox(sandbox)
         .with_detached(dir.path().join("detached"))
         .with_protection(protection);
@@ -2231,8 +2427,51 @@ fn a_detached_call_takes_no_protected_path_transaction() {
         before,
         "the protection handle's state is unchanged"
     );
-    let pid = detached_pid(&text(&output));
-    stand_down_group(pid, fakes::Watchdog::group(pid));
+    let pid = detached_pid(&jobs);
+    stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
+}
+
+#[test]
+fn detached_supervisor_spawn_failure_kills_and_reports_once_without_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-spawner-failure");
+    let jobs = FakeJobs::new(dir.path());
+    let spawner: super::detached::Spawner = std::sync::Arc::new(|_task| {
+        Err(std::io::Error::other("detached supervisor thread refused"))
+    });
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"))
+        .with_detached_spawner(spawner);
+    let output = shell.run(
+        &detached_arguments("exec sleep 60"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_some(),
+        "a missing supervisor is not a receipt"
+    );
+    assert!(
+        output.jobs.is_empty(),
+        "the failed start writes no receipt row"
+    );
+    assert!(!text(&output).contains("Started detached."));
+    let pid = detached_pid(&jobs);
+    let watchdog = fakes::Watchdog::group(pid);
+    assert!(
+        fakes::group_empties(pid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the launch fallback kills the unowned group"
+    );
+    let completed = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the registry End reports the failed launch");
+    assert_eq!(completed.status, Outcome::Failed);
+    assert!(
+        jobs.ended(fakes::Deadline::after(Duration::from_millis(100)))
+            .is_none(),
+        "the End is reported exactly once"
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2253,8 +2492,8 @@ fn the_shell_schema_names_detach_last() {
     assert_eq!(
         tool.definition().input_schema["properties"]["detach"]["description"],
         json!(
-            "Start the command in its own session, outside the OS sandbox, and return its process ID and output-log path at once. \
-             Fiber never stops it, and it is not a job. It is always reviewed. It takes no `timeout_ms` and cannot be combined with \
+            "Start the command in its own session, outside the OS sandbox, and record it as a detached session job. \
+             Return its job id and output-log path; stop it with `jobs stop`. Session shutdown does not stop it. It is always reviewed. It takes no `timeout_ms` and cannot be combined with \
              `run_in_background`, `tty` or `monitor`."
         )
     );

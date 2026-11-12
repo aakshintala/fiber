@@ -380,6 +380,7 @@ fn hand_off_with_timeout(
             timeout_at,
             move_at: None,
             members: Some(members),
+            identity: None,
             pgid: 99,
             hosted: None,
             listing: None,

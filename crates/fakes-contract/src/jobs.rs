@@ -1,7 +1,7 @@
 //! A [`contract::jobs::Jobs`] whose files live in a directory a test chooses.
 //! Each completion is delivered on a channel so a test can wait for it.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
@@ -345,8 +345,16 @@ impl Jobs for FakeJobs {
         let mut inner = lock(&self.inner);
         inner.next = inner.next.wrapping_add(1);
         let id = format!("j_{:016x}", inner.next);
-        let path = self.dir.join(format!("{id}.log"));
-        let file = match File::create(&path) {
+        let detached = opening.detached.is_some();
+        let path = opening
+            .detached
+            .clone()
+            .unwrap_or_else(|| self.dir.join(format!("{id}.log")));
+        let file = match if detached {
+            OpenOptions::new().append(true).open(&path)
+        } else {
+            File::create(&path)
+        } {
             Ok(file) => file,
             Err(source) => return Err(OpenError { path, source }),
         };
@@ -356,7 +364,11 @@ impl Jobs for FakeJobs {
             tool: Some(opening.tool),
             extension: None,
             description: opening.description,
-            output_path: format!("{id}.log"),
+            output_path: if detached {
+                path.to_string_lossy().into_owned()
+            } else {
+                format!("{id}.log")
+            },
             pgid: opening.identity.map(|identity| identity.pgid),
             start_time: opening.identity.map(|identity| identity.start_time),
             kind: Some(if opening.detached.is_some() {

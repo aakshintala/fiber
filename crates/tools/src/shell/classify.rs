@@ -38,12 +38,37 @@ pub(super) fn classify(
         return executes(None, None);
     };
     let verdict = outcome(&script, workspace, workdir, configured);
-    // A substituted call that executes names no subject: no allow rule can
-    // match a reviewed call whose words arrive only when it runs. A read
-    // keeps its raw-token subject, substitution spellings included.
+    classify_verdict(&script, verdict)
+}
+
+/// The trust decision for a command, using process groups the session has
+/// independently confirmed alive before the classifier was called.
+pub(super) fn classify_with_owned(
+    command: &str,
+    workspace: &Path,
+    workdir: &Path,
+    configured: &[(String, Vec<String>)],
+    owned_alive: &[u32],
+) -> Effects {
+    if let Some(targets) = super::kill::targets(command)
+        && targets
+            .iter()
+            .all(|target| owned_alive.contains(&target.pgid))
+        && let Some(script) = super::syntax::parse(command)
+    {
+        let (subject, prefix) = subject_and_prefix(&script);
+        return crate::tool_util::effects(Vec::new(), false, None, subject, prefix);
+    }
+    classify(command, workspace, workdir, configured)
+}
+
+/// A substituted call that executes names no subject: no allow rule can
+/// match a reviewed call whose words arrive only when it runs. A read
+/// keeps its raw-token subject, substitution spellings included.
+fn classify_verdict(script: &Script, verdict: Outcome) -> Effects {
     let (subject, prefix) = match &verdict {
-        Outcome::Executes if script_has_substituted(&script) => (None, None),
-        Outcome::Executes | Outcome::Reads(_) | Outcome::Network(_) => subject_and_prefix(&script),
+        Outcome::Executes if script_has_substituted(script) => (None, None),
+        Outcome::Executes | Outcome::Reads(_) | Outcome::Network(_) => subject_and_prefix(script),
     };
     match verdict {
         Outcome::Reads(paths) => reads(paths, subject, prefix),

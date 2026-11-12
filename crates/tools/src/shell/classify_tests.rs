@@ -260,6 +260,16 @@ fn classified(command: &str) -> Effects {
     classify(command, Path::new("/work"), Path::new("/work"), &[])
 }
 
+fn classified_owned(command: &str, owned_alive: &[u32]) -> Effects {
+    super::classify_with_owned(
+        command,
+        Path::new("/work"),
+        Path::new("/work"),
+        &[],
+        owned_alive,
+    )
+}
+
 fn configured(name: &str, flags: &[&str]) -> (String, Vec<String>) {
     (
         name.to_owned(),
@@ -325,6 +335,59 @@ fn assert_closed(command: &str) {
     );
     assert!(!effects.declared.reversible, "{command}");
     assert!(effects.declared.paths.is_none(), "{command}");
+}
+
+#[test]
+fn bare_builtin_kill_has_no_effect_only_for_all_owned_targets() {
+    for command in [
+        "kill 123",
+        "kill -9 123",
+        "kill -KILL 123",
+        "kill -- 123",
+        "kill -- -123",
+    ] {
+        let effects = classified_owned(command, &[123]);
+        assert!(
+            effects.declared.effects.is_empty(),
+            "{command}: {effects:?}"
+        );
+        assert!(!effects.declared.reversible, "{command}");
+        assert!(effects.declared.paths.is_none(), "{command}");
+        assert!(!effects.always_reviewed, "{command}");
+    }
+}
+
+#[test]
+fn kill_stays_reviewed_for_foreign_mixed_wrapped_and_unparsed_targets() {
+    for command in [
+        "kill 456",
+        "kill -- -456",
+        "kill 123 456",
+        "kill -- -123 -456",
+        "kill -9 123 456",
+        "kill -s TERM 123",
+        "kill -l",
+        "kill %1",
+        "killall 123",
+        "pkill -g 123",
+        "env kill 123",
+        "timeout 1 kill 123",
+        "xargs kill 123",
+        "sudo kill 123",
+        "command kill 123",
+        "/bin/kill 123",
+        "kill 123 | cat",
+        "kill $(echo 123)",
+    ] {
+        let effects = classified_owned(command, &[123]);
+        assert_eq!(
+            effects.declared.effects,
+            vec![Effect::Executes],
+            "{command}"
+        );
+        assert!(!effects.declared.reversible, "{command}");
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
 }
 
 #[test]
