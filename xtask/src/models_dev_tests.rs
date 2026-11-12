@@ -353,6 +353,18 @@ fn a_correction_overrides_derived_fields_after_the_table() {
     assert_eq!(model["max_output_tokens"], 50);
     assert_eq!(model["input"], json!(["text", "image"]));
     assert_eq!(model["cost"], json!({"input": 5, "output": 6}));
+    let file: Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(
+        file["models_dev"]["pins"]["m"],
+        json!([
+            "context_window",
+            "cost",
+            "input",
+            "max_output_tokens",
+            "name",
+            "protocol"
+        ])
+    );
     // `docs/model-routing.md`, "What a provider extension declares": an
     // entry exists only while models.dev is wrong, so a differing entry
     // survives the run.
@@ -381,6 +393,8 @@ fn a_correction_matching_derived_values_is_pruned() {
     // deletes an entry once models.dev agrees with it, so a matching entry
     // leaves no survivor.
     assert!(survivors.is_empty());
+    let file: Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(file["models_dev"]["pins"], json!({}));
     let model = generated_model(&output, "m").unwrap();
     assert_eq!(model["context_window"], 1000);
 }

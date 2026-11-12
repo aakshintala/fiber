@@ -4,7 +4,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -339,7 +339,12 @@ impl Providers {
     /// numbers. Each damaged directory leaves one `extension_failed`
     /// notice naming it and the fix, before the healthy entries' notices.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |_: &str| true, &crate::RepositorySet::default())
+        Self::load_with(
+            home,
+            |_: &str| true,
+            &crate::RepositorySet::default(),
+            false,
+        )
     }
 
     /// Reads the installed providers enabled by the effective configuration.
@@ -356,6 +361,7 @@ impl Providers {
             home,
             |name: &str| crate::is_enabled(config, name),
             &crate::RepositorySet::default(),
+            config::models_dev_enabled(config),
         )
     }
 
@@ -375,6 +381,7 @@ impl Providers {
             home,
             |name: &str| crate::is_enabled(config, name),
             repository,
+            config::models_dev_enabled(config),
         )
     }
 
@@ -386,7 +393,7 @@ impl Providers {
         home: &Path,
         repository: &crate::RepositorySet,
     ) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |_: &str| true, repository)
+        Self::load_with(home, |_: &str| true, repository, false)
     }
 
     /// Reads the provider table an install will put in place before committing.
@@ -425,13 +432,14 @@ impl Providers {
             ));
         }
         candidates.sort_by(|(a, _), (b, _)| a.key.cmp(&b.key));
-        Self::load_candidates(home, candidates, notices, &|_| true)
+        Self::load_candidates(home, candidates, notices, &|_| true, false)
     }
 
     fn load_with(
         home: &Path,
         enabled: impl Fn(&str) -> bool,
         repository: &crate::RepositorySet,
+        models_dev_enabled: bool,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let entries = crate::installed::read_entries(home)?;
         let mut notices = Vec::new();
@@ -462,6 +470,7 @@ impl Providers {
             merged.into_iter().map(|candidate| (candidate, false)),
             notices,
             &enabled,
+            models_dev_enabled,
         )
     }
 
@@ -470,6 +479,7 @@ impl Providers {
         candidates: impl IntoIterator<Item = (crate::repository::Candidate, bool)>,
         mut notices: Vec<Notice>,
         enabled: &dyn Fn(&str) -> bool,
+        models_dev_enabled: bool,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let mut providers = Self::default();
         for (candidate, staged) in candidates {
@@ -569,7 +579,12 @@ impl Providers {
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
                 }
-                let admitted = providers.admit(&data.name, &manifest.name, &mut data.models);
+                let admitted = providers.admit(
+                    &data.name,
+                    &manifest.name,
+                    &mut data.models,
+                    Some((home, dir.clone(), models_dev_enabled)),
+                );
                 providers.record_notices(&data.name, &admitted);
                 notices.extend(admitted);
                 // One extension's addenda are read into a local buffer
@@ -636,7 +651,22 @@ impl Providers {
     /// A missing entry admits no model. Every extension-supplied model
     /// list passes through here before entering the registry; only the
     /// built-in scripted provider's model does not.
-    fn admit(&self, provider: &str, extension: &str, models: &mut Vec<ModelData>) -> Vec<Notice> {
+    fn admit(
+        &self,
+        provider: &str,
+        extension: &str,
+        models: &mut Vec<ModelData>,
+        catalog: Option<(&Path, PathBuf, bool)>,
+    ) -> Vec<Notice> {
+        if let Some((home, extension_dir, enabled)) = catalog {
+            *models = crate::models_dev::merge_admission(
+                home,
+                &extension_dir,
+                provider,
+                std::mem::take(models),
+                enabled,
+            );
+        }
         let mut notices = leave_out_omitted(provider, extension, models);
         notices.extend(leave_out_invalid(provider, extension, models));
         let empty = Vec::new();
@@ -680,7 +710,14 @@ impl Providers {
         }
         let mut notices = Vec::new();
         for (extension, provider) in extensions.lua_providers() {
-            notices.extend(self.add_lua(extension, provider, config, run, env));
+            notices.extend(self.add_lua_inner(
+                extension,
+                provider,
+                config,
+                run,
+                env,
+                Some(extensions.home()),
+            ));
         }
         notices
     }
@@ -782,6 +819,18 @@ impl Providers {
         run: config::Runner<'_>,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<Notice> {
+        self.add_lua_inner(extension, provider, config, run, env, None)
+    }
+
+    fn add_lua_inner(
+        &mut self,
+        extension: &str,
+        provider: &Arc<LuaProvider>,
+        config: &Config,
+        run: config::Runner<'_>,
+        env: &dyn Fn(&str) -> Option<String>,
+        home: Option<&Path>,
+    ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         if name == scripted::SCRIPTED {
             // An undeclared `scripted` fails as undeclared; a declared one
@@ -861,7 +910,11 @@ impl Providers {
                 }];
             }
         };
-        let admitted = self.admit(&name, extension, &mut models);
+        let catalog = home.and_then(|home| {
+            self.provider_source_dir(extension)
+                .map(|dir| (home, dir, config::models_dev_enabled(config)))
+        });
+        let admitted = self.admit(&name, extension, &mut models, catalog);
         let notices = self.filter_recorded(&name, admitted);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
@@ -1170,7 +1223,7 @@ impl Providers {
             .find(|(_, entries)| entries.contains_key(name))
             .map(|(extension, _)| extension.clone())?;
         let mut models = models;
-        let admitted = self.admit(name, &owner, &mut models);
+        let admitted = self.admit(name, &owner, &mut models, None);
         let notices = self.suppress_recorded(name, admitted);
         let mut data = self.data(name);
         data.models = models;
@@ -1240,7 +1293,7 @@ impl Providers {
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
             return self.suppress_recorded(name, notices);
         };
-        let admitted = self.admit(name, &owner, &mut models);
+        let admitted = self.admit(name, &owner, &mut models, None);
         let notices = self.suppress_recorded(name, admitted);
         match self.by_name.get_mut(name) {
             Some(data) => data.models = models,
