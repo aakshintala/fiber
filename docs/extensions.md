@@ -1568,7 +1568,8 @@ calls `on_click` as a click does (`docs/tui.md`, "Input and focus").
 
 `fiber.on_focus({ timeout, run })` runs `run` when the session on screen
 changes, with `{ session_id = "…" }`, or no `session_id` key on home. It
-runs as an event handler does and may make host calls. Its return value is
+runs as an event handler does and may call `host.http`; any other host call
+raises a Lua error, as it does from `on_key`. Its return value is
 ignored. An extension registers it once, and a second call records one
 rejection and is skipped.
 

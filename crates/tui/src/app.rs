@@ -22,7 +22,7 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, Queue};
-use crate::ext::{Handle, Renderer};
+use crate::ext::{Handle, Renderer, SessionCtx};
 use crate::import_report::ImportReport;
 use crate::input::Draft;
 use crate::install_worker::HooksJob;
@@ -898,6 +898,27 @@ impl App {
             stashed
                 .pages_mut()
                 .set_session_labels(Arc::clone(&self.session_names));
+        }
+    }
+
+    /// Runs every loaded focus handler for the session on screen after
+    /// a switch settles, then shows what the runs queued (`docs/tui.md`,
+    /// "Input and focus"). Home runs with no session; a session screen
+    /// carries the session and its halves.
+    pub(crate) fn fire_focus_change(&mut self, session: Option<SessionId>) {
+        let Some(renderer) = self.handle.get() else {
+            return;
+        };
+        let halves = session
+            .as_ref()
+            .and_then(|session| self.pages().halves_for(session));
+        let ctx = SessionCtx {
+            session_id: session,
+            halves,
+        };
+        renderer.on_focus(&ctx);
+        for (code, text) in renderer.take_pending() {
+            self.push_notice(ErrorCode::from_name(&code), text);
         }
     }
 
