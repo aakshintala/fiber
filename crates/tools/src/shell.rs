@@ -325,7 +325,7 @@ impl Shell {
 
     /// Stop callback and one-shot tracker for a detached group restored from
     /// the session log. The callback only signals after Registry approves it.
-    pub(crate) fn detached_restore_parts(
+    pub fn detached_restore_parts(
         &self,
         pgid: u32,
     ) -> (
