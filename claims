@@ -371,3 +371,6 @@ crates/extensions/tests/process_activation.rs	fiber-4691	grant	2026-11-12T20:24:
 crates/main/tests/extension_host/process_extensions.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/jobs/src/registry.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+.github/workflows/ci.yml	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-leak-scan	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
