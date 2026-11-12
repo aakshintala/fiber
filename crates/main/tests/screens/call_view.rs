@@ -385,26 +385,29 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
 }
 
 /// Whether the resume marker and tail have reached their snapshot rows.
+/// The wait checks each asserted row property before the grid read
+/// (`docs/testing/screens.md`, grid-read rule).
 fn settled_call_view(rows: &[String]) -> bool {
     rows.get(1)
         .is_some_and(|row| row.contains("── the model's view resumes ──"))
-        && rows.iter().any(|row| row.contains("TAIL"))
+        && rows.get(38).is_some_and(|row| row.contains("TAIL"))
 }
 
 #[test]
 fn settled_call_view_rejects_unsettled_and_accepts_settled_rows() {
-    let unsettled = vec![
-        "Shell awk".to_owned(),
-        "463 output".to_owned(),
-        "── the model's view resumes ──".to_owned(),
-        "TAIL output".to_owned(),
-    ];
-    let settled = vec![
-        "Shell awk".to_owned(),
-        "── the model's view resumes ──".to_owned(),
-        "463 output".to_owned(),
-        "TAIL output".to_owned(),
-    ];
+    let mut unsettled = vec![String::new(); 39];
+    unsettled[0] = "Shell awk".to_owned();
+    unsettled[1] = "463 output".to_owned();
+    unsettled[2] = "── the model's view resumes ──".to_owned();
+    unsettled[38] = "TAIL output".to_owned();
+    let mut settled = vec![String::new(); 39];
+    settled[0] = "Shell awk".to_owned();
+    settled[1] = "── the model's view resumes ──".to_owned();
+    settled[37] = "499 output".to_owned();
+    settled[38] = "TAIL output".to_owned();
+    let mut misplaced_tail = settled.clone();
+    misplaced_tail[37] = "TAIL output".to_owned();
+    misplaced_tail[38] = "499 output".to_owned();
     assert!(
         unsettled
             .iter()
@@ -416,6 +419,7 @@ fn settled_call_view_rejects_unsettled_and_accepts_settled_rows() {
             .any(|row| row.contains("── the model's view resumes ──"))
     );
     assert!(!settled_call_view(&unsettled));
+    assert!(!settled_call_view(&misplaced_tail));
     assert!(settled_call_view(&settled));
     assert!(!settled_call_view(&settled[..3]));
     assert!(!settled_call_view(&settled[1..]));
