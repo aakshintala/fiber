@@ -211,9 +211,11 @@ the exception.
 
 ### Recognising a quota or billing error
 
-`quota_exceeded` is matched only on the shapes vendors document
+`quota_exceeded` matches the documented shapes
 (`research/provider-errors/quota.md`, one fixture each in
-`research/provider-errors/documented/`):
+`research/provider-errors/documented/`), and any other HTTP 402 also maps to
+`quota_exceeded`: HTTP 402 means Payment Required, with no other meaning.
+The documented shapes are:
 
 - Anthropic: HTTP 402 `billing_error`; HTTP 429 `rate_limit_error` with
   `details.error_code` `enforced_spend_limit_reached` and no `retry-after`;
