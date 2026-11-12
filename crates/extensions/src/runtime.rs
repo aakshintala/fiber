@@ -71,14 +71,14 @@ struct Inner {
     command_inner: HashMap<(String, CommandId, std::thread::ThreadId), usize>,
 }
 
-type ActiveCommands = Arc<Mutex<Inner>>;
+type RuntimeInner = Arc<Mutex<Inner>>;
 
 /// The session's backend-neutral callback owner: generations, function
 /// references and dispatch, shared by every adapter.
 #[derive(Clone)]
 pub(crate) struct Runtime {
     /// The registry. The lock is a leaf: no callback runs under it.
-    inner: Arc<Mutex<Inner>>,
+    inner: RuntimeInner,
 }
 
 impl Runtime {

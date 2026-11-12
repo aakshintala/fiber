@@ -704,15 +704,27 @@ fn process_command_runner_returns_cancelled_without_live_inbox() {
                 Ok(Some(json!("returned")))
             }),
         );
-        let queued = runtime
-            .queue_command(
-                &invocation,
-                command(if closed { "closed" } else { "missing" }),
-                "go",
-            )
-            .unwrap();
+        let queued = Arc::new(
+            runtime
+                .queue_command(
+                    &invocation,
+                    command(if closed { "closed" } else { "missing" }),
+                    "go",
+                )
+                .unwrap(),
+        );
+        let waiting = Arc::clone(&queued);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _sent = result_tx.send(waiting.wait());
+        });
         queued.release();
-        assert_eq!(queued.wait().unwrap(), json!("returned"));
+        assert_eq!(
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&result_rx, "process command result without live inbox")
+                .unwrap(),
+            json!("returned")
+        );
     }
 }
 

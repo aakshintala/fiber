@@ -15,7 +15,7 @@ use crate::Error;
 use crate::lua::CredentialFor;
 use crate::lua::command_calls::{Ended, Reply, cancelled};
 
-use super::ActiveCommands;
+use super::RuntimeInner;
 use super::refs::ProcessInvoke;
 
 /// One held command call (`super`): the run waits for its release, on either backend.
@@ -71,7 +71,7 @@ impl ProcessQueued {
         arg: Value,
         scope: Option<CredentialFor>,
         inbox: Option<mpsc::Sender<Delivery>>,
-        active: ActiveCommands,
+        active: RuntimeInner,
     ) -> Self {
         let ended = Arc::new(Ended::default());
         let runner = Arc::new(ProcessCommandCalls {
@@ -163,12 +163,12 @@ struct ProcessCommandCalls {
     command: CommandId,
     inbox: Option<mpsc::Sender<Delivery>>,
     ended: Arc<Ended>,
-    active: ActiveCommands,
+    active: RuntimeInner,
 }
 
 struct ActiveInnerCall {
     entered: AtomicBool,
-    active: ActiveCommands,
+    active: RuntimeInner,
     key: (String, CommandId),
     thread: Mutex<Option<std::thread::ThreadId>>,
 }
