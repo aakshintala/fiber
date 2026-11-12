@@ -246,3 +246,7 @@ crates/main/src/keeper_child_tests.rs:453-454	fiber-4726	plan	2026-11-12T14:48:0
 crates/main/src/keeper_child_tests.rs:466-467	fiber-4726	plan	2026-11-12T14:48:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4726-keeper-leak	
 crates/main/src/keeper_child_tests.rs:499-500	fiber-4726	plan	2026-11-12T14:48:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4726-keeper-leak	
 scripts/test-leak-scan	fiber-4754	plan	2026-11-12T14:53:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/gemini/providers/gemini.json	fiber-4709	plan	2026-11-12T14:55:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/tests/provider_deferral.rs	fiber-4709	plan	2026-11-12T14:55:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/first_party_providers.rs	fiber-4709	plan	2026-11-12T14:55:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/provider/tests/completions.rs	fiber-4709	plan	2026-11-12T14:55:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
