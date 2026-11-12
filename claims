@@ -421,3 +421,5 @@ crates/tui/src/settings_view.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacB
 crates/main/tests/extension_host/damaged_extension.rs	fiber-4756	plan	2026-11-12T19:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4756	plan	2026-11-12T19:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/tests/draw_jig.rs	fiber-4742	plan	2026-11-12T19:05:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/connection.rs	fiber-4598	plan	2026-11-12T19:09:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/hub_daemon/hub_resume.rs	fiber-4598	plan	2026-11-12T19:09:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
