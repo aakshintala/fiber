@@ -42,7 +42,7 @@ fn reports_that_are_not_a_number_are_a_usage_error() {
     // A report count the jig cannot parse is a usage error, not a
     // defaulted measurement.
     let arg = jig::events_file().display().to_string();
-    let out = jig::run_jig(
+    let out = jig::run_hover_jig(
         "hover",
         &[arg.as_str(), "160", "48", "many"],
         "the hover jig finished",
@@ -55,7 +55,7 @@ fn zero_reports_are_a_usage_error() {
     // Zero reports would divide by zero when printing the time per
     // report, so the jig rejects it before measuring.
     let arg = jig::events_file().display().to_string();
-    let out = jig::run_jig(
+    let out = jig::run_hover_jig(
         "hover",
         &[arg.as_str(), "160", "48", "0"],
         "the hover jig finished",
@@ -66,7 +66,7 @@ fn zero_reports_are_a_usage_error() {
 #[test]
 fn it_measures_the_four_cases_at_the_given_report_count() {
     let arg = jig::events_file().display().to_string();
-    let out = jig::run_jig(
+    let out = jig::run_hover_jig(
         "hover",
         &[arg.as_str(), "160", "48", REPORTS],
         "the hover jig finished",
