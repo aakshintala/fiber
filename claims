@@ -440,3 +440,9 @@ docs/permissions.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Use
 docs/ci.md	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-flake-report	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/errors.md	fiber-4746	plan	2026-11-12T19:53:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/reviewer_tests.rs	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/prompt_tests.rs	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/fakes.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/code-quality/lints.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
