@@ -10,9 +10,9 @@ mod common;
 
 use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{Setup, config, write};
+use common::{Setup, config, thread_parked_at, write};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Providers, SystemBrowser, login_provider};
@@ -22,25 +22,6 @@ use serde_json::json;
 
 /// The extension's grace after a callback's own deadline.
 const GRACE: Duration = Duration::from_secs(1);
-
-// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
-/// The thread parked at `at`: exactly one thread waits there.
-#[track_caller]
-fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
-    let mark = clock
-        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
-    let threads = mark.threads();
-    assert_eq!(
-        threads.len(),
-        1,
-        "only one thread parks at {at:?}: {threads:?}"
-    );
-    match threads.into_iter().next() {
-        Some(id) => id,
-        None => panic!("one parked thread"),
-    }
-}
 
 /// Where the provider's Lua stops answering.
 #[derive(Clone, Copy, Debug)]

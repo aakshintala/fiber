@@ -874,6 +874,25 @@ expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
 
+# The partial collate artifact carries only the available titles: with
+# one decision plus one classification for the available title, the
+# writer files exactly once for it and names no missing leg as an
+# error in the summary. `docs/testing/running.md`, "Flaky tests":
+# "Within one report job a file's title files or comments once; a repeat is skipped"
+setup_case partial-available-title
+printf '%s\n' "$decide_new" >"$tmp/partial-available-title/decisions.jsonl"
+code=$(classify_case "$tmp/partial-available-title" push "" "" "")
+expect_exit partial-available-title-classify "$code" 0
+code=$(run_step "$tmp/partial-available-title" push "" "$empty_open" "" decisions.jsonl)
+expect_exit partial-available-title "$code" 0
+# Within one report job a file's title files or comments once; a repeat is skipped (`docs/testing/running.md`, "Flaky tests").
+expect_writes "$tmp/partial-available-title" 1
+expect_write "$tmp/partial-available-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$plain" "$push_tested")")"
+# The summary holds only the stub's empty-create-output note (the stub
+# prints no issue URL, so no overflow was filed): no line names a
+# missing leg as an error.
+expect_summary "$tmp/partial-available-title" "unknown create output: no overflow filed for $title"
+
 # A missing history input fails the decide step, and the writer then
 # files nothing: a failed rev-parse of the second parent, a failed diff,
 # and a missing origin/main ref each end the classify block non-zero
@@ -1106,6 +1125,192 @@ mkdir -p "$collate_odd/flaky"
 } >"$collate_odd/flaky/flaky-tests-linux.txt"
 run_collate "$collate_odd"
 expect_flakes "$collate_odd" 'has_flakes=true'
+
+# The producer marks the collection complete or not: the step is the
+# one whose header contains "Mark the collection complete or not", its
+# `run: |` body up to the next step line. Each case stubs the eight
+# GitHub expressions the block reads and asserts the marker file plus
+# the complete= output line. A skipped record step leaves no output,
+# so the stub leaves its complete empty; the marker then proves the
+# skipped run did not poison the collection.
+producer_dir=$tmp/producer
+mkdir -p "$producer_dir"
+awk '
+  index($0, "Mark the collection complete or not") { armed = 1; next }
+  armed && !started && $0 ~ /^ *run: \|$/ { started = 1; match($0, /[^ ]/); indent = RSTART - 1; next }
+  started {
+    if ($0 ~ /^ *$/) { print ""; next }
+    match($0, /[^ ]/)
+    if (RSTART - 1 <= indent) exit
+    print
+  }
+' .github/workflows/ci.yml >"$producer_dir/producer.sh"
+[ -s "$producer_dir/producer.sh" ] || fail "the producer step's script was not found in .github/workflows/ci.yml"
+grep -Fq 'GITHUB_OUTPUT' "$producer_dir/producer.sh" || fail "the producer step writes no completion output"
+sed \
+  -e 's|\${{ steps\.flaky\.outputs\.complete }}|${STUB_FLAKY_COMPLETE}|g' \
+  -e 's|\${{ steps\.flaky_hub\.outputs\.complete }}|${STUB_HUB_COMPLETE}|g' \
+  -e 's|\${{ steps\.flaky_alloc\.outputs\.complete }}|${STUB_ALLOC_COMPLETE}|g' \
+  -e 's|\${{ steps\.flaky_dhat\.outputs\.complete }}|${STUB_DHAT_COMPLETE}|g' \
+  -e 's|\${{ steps\.alloc_tests\.outcome }}|${STUB_ALLOC_OUTCOME}|g' \
+  -e 's|\${{ steps\.dhat_tests\.outcome }}|${STUB_DHAT_OUTCOME}|g' \
+  -e 's|\${{ matrix\.runner }}|${STUB_RUNNER}|g' \
+  -e 's|\${{ github\.event_name }}|${STUB_EVENT}|g' \
+  "$producer_dir/producer.sh" >"$producer_dir/stubbed.sh"
+# shellcheck disable=SC2016 # '${{' is the literal GitHub expression text the stub must not contain.
+grep -Fq '${{' "$producer_dir/stubbed.sh" && fail "the stubbed producer run leaks a GitHub expression"
+bash -n "$producer_dir/stubbed.sh" || fail "the stubbed producer run does not parse"
+# run_producer DIR VAR=value...: runs the stubbed producer block with
+# the STUB_* fixtures in the environment, writing DIR/marker and
+# DIR/out/output. Prints the block's exit code; the case asserts the
+# marker plus the output.
+run_producer() {
+  dir=$1
+  shift
+  code=0
+  mkdir -p "$dir/out"
+  : >"$dir/out/output"
+  # shellcheck disable=SC2086
+  env -i PATH="$PATH" MARKER="$dir/marker" GITHUB_OUTPUT="$dir/out/output" "$@" \
+    bash --noprofile --norc -eo pipefail "$producer_dir/stubbed.sh" || code=$?
+  echo "$code"
+}
+# A skipped record step leaves no output, so on a push run with the
+# flaky and hub records complete and both push-only records skipped,
+# the collection stays complete: the missing outputs must not poison
+# the marker.
+producer_skipped=$tmp/producer-skipped
+mkdir -p "$producer_skipped"
+code=$(run_producer "$producer_skipped" STUB_EVENT=push STUB_RUNNER=macos-26 STUB_FLAKY_COMPLETE=true STUB_HUB_COMPLETE=true STUB_ALLOC_COMPLETE= STUB_DHAT_COMPLETE= STUB_ALLOC_OUTCOME=skipped STUB_DHAT_OUTCOME=skipped)
+expect_exit producer-skipped "$code" 0
+[ "$(cat "$producer_skipped/marker")" = true ] || fail "producer-skipped: a skipped record must leave the marker true"
+grep -Fq 'complete=true' "$producer_skipped/out/output" || fail "producer-skipped: the output must read complete=true"
+# A record step that ran but whose parser failed still marks the
+# collection incomplete: the fail-closed on parser failure is
+# preserved.
+producer_parser_fail=$tmp/producer-parser-fail
+mkdir -p "$producer_parser_fail"
+code=$(run_producer "$producer_parser_fail" STUB_EVENT=push STUB_RUNNER=ubuntu-24.04 STUB_FLAKY_COMPLETE=true STUB_HUB_COMPLETE=true STUB_ALLOC_COMPLETE=false STUB_DHAT_COMPLETE=true STUB_ALLOC_OUTCOME=success STUB_DHAT_OUTCOME=success)
+expect_exit producer-parser-fail "$code" 0
+[ "$(cat "$producer_parser_fail/marker")" = false ] || fail "producer-parser-fail: a failed parser must leave the marker false"
+grep -Fq 'complete=false' "$producer_parser_fail/out/output" || fail "producer-parser-fail: the output must read complete=false"
+# Off a push event the push-only records never apply: a pull request
+# run with the flaky record complete marks the collection complete
+# whatever the push-only stubs say.
+producer_pr=$tmp/producer-pr
+mkdir -p "$producer_pr"
+code=$(run_producer "$producer_pr" STUB_EVENT=pull_request STUB_RUNNER=macos-26 STUB_FLAKY_COMPLETE=true STUB_HUB_COMPLETE= STUB_ALLOC_COMPLETE= STUB_DHAT_COMPLETE= STUB_ALLOC_OUTCOME=skipped STUB_DHAT_OUTCOME=skipped)
+expect_exit producer-pr "$code" 0
+[ "$(cat "$producer_pr/marker")" = true ] || fail "producer-pr: a pull request run must ignore the push-only records"
+grep -Fq 'complete=true' "$producer_pr/out/output" || fail "producer-pr: the output must read complete=true"
+# run_collate_status DIR VAR=value...: runs the extracted Collate step
+# like run_collate but with the caller's selection env, and prints the
+# step's exit code instead of failing: a selected leg with no readable
+# list fails closed, like the job. The case asserts the code plus the
+# flakes output and the summary.
+run_collate_status() {
+  dir=$1
+  shift
+  code=0
+  mkdir -p "$dir/out"
+  : >"$dir/out/output"
+  : >"$dir/out/summary"
+  # shellcheck disable=SC2086
+  env -i PATH="$PATH" \
+    FLAKY_DIR="$dir/flaky" LINUX_SELECTED=false LINUX_FLAKES=false LINUX_COMPLETE=true TEST_SELECTED=false \
+    RUNNER_TEMP="$dir/out" GITHUB_OUTPUT="$dir/out/output" GITHUB_STEP_SUMMARY="$dir/out/summary" \
+    "$@" \
+    bash --noprofile --norc -eo pipefail "$collate_dir/collate.sh" || code=$?
+  echo "$code"
+}
+# A leg whose tests failed but whose list was written still feeds the
+# collate: a non-empty arm list with a false marker warns and reports
+# flakes instead of failing closed, beside a complete-empty macos list.
+collate_failed_leg=$tmp/collate-failed-leg
+mkdir -p "$collate_failed_leg/flaky"
+printf 'main::probe a\td1\n' >"$collate_failed_leg/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo false >"$collate_failed_leg/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_failed_leg/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_failed_leg/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_failed_leg" TEST_SELECTED=true)
+expect_exit collate-failed-leg "$code" 0
+expect_flakes "$collate_failed_leg" 'has_flakes=true'
+expect_summary "$collate_failed_leg/out" "the ubuntu-24.04-arm collection is incomplete: partial report"
+# A selected leg with no list is no report for that leg only: with the
+# arm list feeding the scan, the collate warns and reports flakes
+# instead of failing closed.
+collate_no_report_leg=$tmp/collate-no-report-leg
+mkdir -p "$collate_no_report_leg/flaky"
+printf 'main::probe a\td1\n' >"$collate_no_report_leg/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo true >"$collate_no_report_leg/flaky/collection-complete-ubuntu-24.04-arm.txt"
+echo true >"$collate_no_report_leg/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_no_report_leg" TEST_SELECTED=true)
+expect_exit collate-no-report-leg "$code" 0
+expect_flakes "$collate_no_report_leg" 'has_flakes=true'
+expect_summary "$collate_no_report_leg/out" "the flaky-tests-macos-26 list is missing: partial report"
+# The Linux-only completed-empty result stays a success with no flakes:
+# no list was ever uploaded, and none is expected.
+collate_linux_only_empty=$tmp/collate-linux-only-empty
+mkdir -p "$collate_linux_only_empty/flaky"
+code=$(run_collate_status "$collate_linux_only_empty" LINUX_SELECTED=true TEST_SELECTED=false)
+expect_exit collate-linux-only-empty "$code" 0
+expect_flakes "$collate_linux_only_empty" 'has_flakes=false'
+# Both runner lists absent with the matrix selected is no report at
+# all: the collate fails closed with the missing-list sentence.
+collate_both_absent=$tmp/collate-both-absent
+mkdir -p "$collate_both_absent/flaky"
+code=$(run_collate_status "$collate_both_absent" TEST_SELECTED=true)
+[ "$code" -ne 0 ] || fail "collate-both-absent: the collate step must fail with no lists"
+expect_summary "$collate_both_absent/out" "the flaky-tests-ubuntu-24.04-arm list is missing: no report"
+# Existing-but-empty lists with false markers are the parser-error
+# placeholder: no report, so the incomplete-collection fail-closed
+# stands.
+collate_both_empty_false=$tmp/collate-both-empty-false
+mkdir -p "$collate_both_empty_false/flaky"
+: >"$collate_both_empty_false/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo false >"$collate_both_empty_false/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_both_empty_false/flaky/flaky-tests-macos-26.txt"
+echo false >"$collate_both_empty_false/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_both_empty_false" TEST_SELECTED=true)
+[ "$code" -ne 0 ] || fail "collate-both-empty-false: the collate step must fail on the parser-error placeholder"
+expect_summary "$collate_both_empty_false/out" "the ubuntu-24.04-arm collection is incomplete: no report"
+# A readable arm list keeps a Linux flake run reportable even when the
+# selected Linux list is absent; the missing Linux list is a partial
+# report warning rather than a fail-closed result.
+collate_linux_flakes_no_list=$tmp/collate-linux-flakes-no-list
+mkdir -p "$collate_linux_flakes_no_list/flaky"
+printf 'main::probe a\td1\n' >"$collate_linux_flakes_no_list/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo true >"$collate_linux_flakes_no_list/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_linux_flakes_no_list/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_linux_flakes_no_list/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_linux_flakes_no_list" LINUX_SELECTED=true LINUX_FLAKES=true TEST_SELECTED=true)
+expect_exit collate-linux-flakes-no-list "$code" 0
+expect_flakes "$collate_linux_flakes_no_list" 'has_flakes=true'
+expect_summary "$collate_linux_flakes_no_list/out" "the flaky-tests-ubuntu-24.04 list is missing: partial report"
+# An empty false-marked parser placeholder does not feed; the readable
+# other leg still reports, with one incomplete-collection warning.
+collate_placeholder_plus_readable=$tmp/collate-placeholder-plus-readable
+mkdir -p "$collate_placeholder_plus_readable/flaky"
+: >"$collate_placeholder_plus_readable/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo false >"$collate_placeholder_plus_readable/flaky/collection-complete-ubuntu-24.04-arm.txt"
+printf 'main::probe a\td1\n' >"$collate_placeholder_plus_readable/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_placeholder_plus_readable/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_placeholder_plus_readable" TEST_SELECTED=true)
+expect_exit collate-placeholder-plus-readable "$code" 0
+expect_flakes "$collate_placeholder_plus_readable" 'has_flakes=true'
+expect_summary "$collate_placeholder_plus_readable/out" "the ubuntu-24.04-arm collection is incomplete: partial report"
+# An incomplete Linux collection without a list is a partial warning
+# when the selected arm leg has readable report data.
+collate_linux_incomplete_no_list=$tmp/collate-linux-incomplete-no-list
+mkdir -p "$collate_linux_incomplete_no_list/flaky"
+printf 'main::probe a\td1\n' >"$collate_linux_incomplete_no_list/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo true >"$collate_linux_incomplete_no_list/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_linux_incomplete_no_list/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_linux_incomplete_no_list/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_linux_incomplete_no_list" LINUX_SELECTED=true LINUX_COMPLETE=false TEST_SELECTED=true)
+expect_exit collate-linux-incomplete-no-list "$code" 0
+expect_flakes "$collate_linux_incomplete_no_list" 'has_flakes=true'
+expect_summary "$collate_linux_incomplete_no_list/out" "the flaky-tests-ubuntu-24.04 list is missing: partial report"
 
 # A malformed JUnit file fails collection with no list, so the producer
 # marks the collection incomplete instead of a complete empty list. An

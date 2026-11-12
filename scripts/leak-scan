@@ -79,6 +79,29 @@ holds_token() {
 # a pull request that cites the process.
 daemons="sccache"
 
+# Read a value from an environment block represented as newline-separated
+# NAME=value entries. Never print values other than the two test identifiers.
+env_value() {
+  local block=$1 key=$2 entry
+  while IFS= read -r entry; do
+    case $entry in "$key="*) printf '%s' "${entry#*=}"; return 0 ;; esac
+  done <<<"$block"
+  return 1
+}
+
+# Render the identity carried by an environment block. Missing either
+# nextest value means the process cannot be attributed reliably.
+test_identity_of() {
+  local block=$1 binary_id test_name
+  binary_id=$(env_value "$block" NEXTEST_BINARY_ID || true)
+  test_name=$(env_value "$block" NEXTEST_TEST_NAME || true)
+  if [ -z "$binary_id" ] || [ -z "$test_name" ]; then
+    printf '%s' 'test: unknown (not in env)'
+  else
+    printf 'test: %s::%s' "$binary_id" "$test_name"
+  fi
+}
+
 # Report one nonce-carrying process: a listed server warns without
 # counting as a leak, and anything else fails the scan. The executable is
 # the first word of the command line, reduced to its basename; the match
@@ -87,6 +110,7 @@ daemons="sccache"
 report_match() {
   local pid=$1
   local cmd=$2
+  local test_identity=$3
   local word=${cmd%% *}
   local base=${word##*/}
   case " $daemons " in
@@ -94,7 +118,7 @@ report_match() {
     echo "warning: shared build-cache server $pid: $cmd (not counted as a leak)" >&2
     ;;
   *)
-    echo "leaked process $pid: $cmd" >&2
+    echo "leaked process $pid: $cmd ($test_identity)" >&2
     leaks=$((leaks + 1))
     ;;
   esac
@@ -112,6 +136,9 @@ if [ "$(uname -s)" = Darwin ]; then
     case $pid in '' | *[!0-9]*) continue ;; esac
     case $excluded in *" $pid "*) continue ;; esac
     if holds_token "$line" "FIBER_CHECK_RUN=$nonce"; then
+      # Darwin's -E output is space-separated: discard the pid and split
+      # its NAME=value tokens into the format env_value reads.
+      test_identity=$(test_identity_of "$(printf '%s\n' "$rest" | tr ' ' '\n')")
       # The -E row is matched internally only: the report refetches the
       # command without -E, so no environment value reaches the log.
       if cmd=$(env -u FIBER_CHECK_RUN ps -ww -o command= -p "$pid" 2>/dev/null); then
@@ -123,7 +150,7 @@ if [ "$(uname -s)" = Darwin ]; then
       if [ -z "$cmd" ]; then
         cmd="(no command line)"
       fi
-      report_match "$pid" "$cmd"
+      report_match "$pid" "$cmd" "$test_identity"
     fi
   done <<<"$table"
 else
@@ -134,11 +161,14 @@ else
     case $excluded in *" $pid "*) continue ;; esac
     # One exact line FIBER_CHECK_RUN=NONCE among the NUL-separated entries;
     # an unreadable file belongs to a process that already exited.
-    # No -q: grep consumes the whole stream, so tr never dies of SIGPIPE
-    # under pipefail when the match comes early; matches go to /dev/null.
-    # The group's 2>/dev/null also covers the failed open of an environ file
-    # the user may not read: a redirect error prints before a later 2>/dev/null.
-    if { env -u FIBER_CHECK_RUN tr '\0' '\n' <"$envfile" | env -u FIBER_CHECK_RUN grep -Fx "FIBER_CHECK_RUN=$nonce" >/dev/null; } 2>/dev/null; then
+    # Capture the complete NUL-separated environment as newline-separated
+    # entries. The command and input redirection are both quiet for processes
+    # whose environ file is unreadable or disappears during the scan.
+    if env_block=$(env -u FIBER_CHECK_RUN tr '\0' '\n' 2>/dev/null <"$envfile"); then
+      if [ "$(env_value "$env_block" FIBER_CHECK_RUN || true)" != "$nonce" ]; then
+        continue
+      fi
+      test_identity=$(test_identity_of "$env_block")
       if cmd=$(env -u FIBER_CHECK_RUN tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline"); then
         if [ -z "$cmd" ]; then
           if cmd=$(env -u FIBER_CHECK_RUN ps -o command= -p "$pid" 2>/dev/null); then
@@ -155,7 +185,7 @@ else
       if [ -z "$cmd" ]; then
         cmd="(no command line)"
       fi
-      report_match "$pid" "$cmd"
+      report_match "$pid" "$cmd" "$test_identity"
     fi
   done
 fi

@@ -225,6 +225,10 @@
       ]
     }
   ],
+  "models_dev": {
+    "pins": {},
+    "source": "google-vertex"
+  },
   "name": "vertex",
   "placeholders": {
     "project": {
