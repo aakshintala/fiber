@@ -156,14 +156,12 @@ crates/tui/src/app/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	ro
 crates/tui/src/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/screen_looks/panel_look.rs	fiber-4717	grant	2026-11-12T06:58:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
 crates/tui/tests/hover_jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/tests/support/jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/sandbox.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/events.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
-crates/main/tests/screen_looks/swapped_panels_look.rs:944-944	fiber-4717	plan	2026-11-12T07:27:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
 docs/mcp.md:193-195	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 docs/mcp.md:264-265	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 docs/tools.md:1689-1690	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
