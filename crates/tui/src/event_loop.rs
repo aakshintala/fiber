@@ -50,13 +50,43 @@ pub enum Error {
     /// screen would move.
     #[error("terminal: could not start the terminal's timer: {0}")]
     TimerStart(#[from] std::io::Error),
+    #[error(transparent)]
+    LoopExit(#[from] ExitCause),
+}
+
+#[derive(Debug)]
+pub struct ExitCause {
+    message: &'static str,
+    source: Option<io::Error>,
+}
+
+impl ExitCause {
+    fn new(message: &'static str, source: Option<io::Error>) -> Self {
+        Self { message, source }
+    }
+}
+
+impl std::fmt::Display for ExitCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)?;
+        if let Some(source) = &self.source {
+            write!(f, ": {source}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ExitCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|error| error as _)
+    }
 }
 
 impl Error {
     /// The stable code a consumer switches on (`docs/errors.md`, "Registry").
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::ReaderStart(_) | Self::TimerStart(_) => ErrorCode::IoFailed,
+            Self::ReaderStart(_) | Self::TimerStart(_) | Self::LoopExit(_) => ErrorCode::IoFailed,
         }
     }
 }
