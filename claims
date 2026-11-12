@@ -267,3 +267,4 @@ scripts/test-leak-scan	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plus
 scripts/test-leak-probe	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/leak_probe.rs	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/tests/common/mod.rs,crates/extensions/tests/lua_tools.rs,crates/extensions/tests/oauth.rs,crates/extensions/tests/login_discovery.rs,crates/extensions/tests/lua_provider.rs	fiber-4730	grant	2026-11-12T08:22:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
