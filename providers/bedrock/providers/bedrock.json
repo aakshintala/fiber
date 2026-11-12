@@ -3404,6 +3404,266 @@
       "thinking_levels": []
     }
   ],
+  "models_dev": {
+    "pins": {
+      "amazon.nova-2-lite-v1:0": [
+        "compat"
+      ],
+      "amazon.nova-lite-v1:0": [
+        "compat"
+      ],
+      "amazon.nova-micro-v1:0": [
+        "compat"
+      ],
+      "amazon.nova-pro-v1:0": [
+        "compat"
+      ],
+      "apac.amazon.nova-lite-v1:0": [
+        "compat"
+      ],
+      "apac.amazon.nova-micro-v1:0": [
+        "compat"
+      ],
+      "apac.amazon.nova-pro-v1:0": [
+        "compat"
+      ],
+      "au.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        "compat"
+      ],
+      "au.anthropic.claude-haiku-5-5": [
+        "compat"
+      ],
+      "au.anthropic.claude-opus-4-6-v1": [
+        "compat"
+      ],
+      "au.anthropic.claude-opus-4-7": [
+        "compat"
+      ],
+      "au.anthropic.claude-opus-4-8": [
+        "compat"
+      ],
+      "au.anthropic.claude-opus-5": [
+        "compat"
+      ],
+      "au.anthropic.claude-opus-5-5": [
+        "compat"
+      ],
+      "au.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+        "compat"
+      ],
+      "au.anthropic.claude-sonnet-4-6": [
+        "compat"
+      ],
+      "au.anthropic.claude-sonnet-5": [
+        "compat"
+      ],
+      "ca.amazon.nova-lite-v1:0": [
+        "compat"
+      ],
+      "eu.amazon.nova-2-lite-v1:0": [
+        "compat"
+      ],
+      "eu.amazon.nova-lite-v1:0": [
+        "compat"
+      ],
+      "eu.amazon.nova-micro-v1:0": [
+        "compat"
+      ],
+      "eu.amazon.nova-pro-v1:0": [
+        "compat"
+      ],
+      "eu.anthropic.claude-fable-5": [
+        "compat"
+      ],
+      "eu.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        "compat"
+      ],
+      "eu.anthropic.claude-haiku-5-5": [
+        "compat"
+      ],
+      "eu.anthropic.claude-opus-4-5-20251101-v1:0": [
+        "compat"
+      ],
+      "eu.anthropic.claude-opus-4-6-v1": [
+        "compat"
+      ],
+      "eu.anthropic.claude-opus-4-7": [
+        "compat"
+      ],
+      "eu.anthropic.claude-opus-4-8": [
+        "compat"
+      ],
+      "eu.anthropic.claude-opus-5": [
+        "compat"
+      ],
+      "eu.anthropic.claude-opus-5-5": [
+        "compat"
+      ],
+      "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+        "compat"
+      ],
+      "eu.anthropic.claude-sonnet-4-6": [
+        "compat"
+      ],
+      "eu.anthropic.claude-sonnet-5": [
+        "compat"
+      ],
+      "eu.anthropic.claude-sonnet-5-5": [
+        "compat"
+      ],
+      "global.amazon.nova-2-lite-v1:0": [
+        "compat"
+      ],
+      "global.anthropic.claude-fable-5": [
+        "compat"
+      ],
+      "global.anthropic.claude-fable-5-1": [
+        "compat"
+      ],
+      "global.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        "compat"
+      ],
+      "global.anthropic.claude-haiku-5-5": [
+        "compat"
+      ],
+      "global.anthropic.claude-opus-4-5-20251101-v1:0": [
+        "compat"
+      ],
+      "global.anthropic.claude-opus-4-6-v1": [
+        "compat"
+      ],
+      "global.anthropic.claude-opus-4-7": [
+        "compat"
+      ],
+      "global.anthropic.claude-opus-4-8": [
+        "compat"
+      ],
+      "global.anthropic.claude-opus-5": [
+        "compat"
+      ],
+      "global.anthropic.claude-opus-5-5": [
+        "compat"
+      ],
+      "global.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+        "compat"
+      ],
+      "global.anthropic.claude-sonnet-4-6": [
+        "compat"
+      ],
+      "global.anthropic.claude-sonnet-5": [
+        "compat"
+      ],
+      "global.anthropic.claude-sonnet-5-5": [
+        "compat"
+      ],
+      "in.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        "compat"
+      ],
+      "in.anthropic.claude-opus-5": [
+        "compat"
+      ],
+      "in.anthropic.claude-sonnet-5": [
+        "compat"
+      ],
+      "jp.amazon.nova-2-lite-v1:0": [
+        "compat"
+      ],
+      "jp.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        "compat"
+      ],
+      "jp.anthropic.claude-haiku-5-5": [
+        "compat"
+      ],
+      "jp.anthropic.claude-opus-4-7": [
+        "compat"
+      ],
+      "jp.anthropic.claude-opus-4-8": [
+        "compat"
+      ],
+      "jp.anthropic.claude-opus-5": [
+        "compat"
+      ],
+      "jp.anthropic.claude-opus-5-5": [
+        "compat"
+      ],
+      "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+        "compat"
+      ],
+      "jp.anthropic.claude-sonnet-4-6": [
+        "compat"
+      ],
+      "jp.anthropic.claude-sonnet-5": [
+        "compat"
+      ],
+      "openai.gpt-oss-120b-1:0": [
+        "compat"
+      ],
+      "openai.gpt-oss-20b-1:0": [
+        "compat"
+      ],
+      "us-gov.openai.gpt-oss-120b-1:0": [
+        "compat"
+      ],
+      "us-gov.openai.gpt-oss-20b-1:0": [
+        "compat"
+      ],
+      "us.amazon.nova-2-lite-v1:0": [
+        "compat"
+      ],
+      "us.amazon.nova-lite-v1:0": [
+        "compat"
+      ],
+      "us.amazon.nova-micro-v1:0": [
+        "compat"
+      ],
+      "us.amazon.nova-pro-v1:0": [
+        "compat"
+      ],
+      "us.anthropic.claude-fable-5": [
+        "compat"
+      ],
+      "us.anthropic.claude-fable-5-1": [
+        "compat"
+      ],
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        "compat"
+      ],
+      "us.anthropic.claude-haiku-5-5": [
+        "compat"
+      ],
+      "us.anthropic.claude-opus-4-5-20251101-v1:0": [
+        "compat"
+      ],
+      "us.anthropic.claude-opus-4-6-v1": [
+        "compat"
+      ],
+      "us.anthropic.claude-opus-4-7": [
+        "compat"
+      ],
+      "us.anthropic.claude-opus-4-8": [
+        "compat"
+      ],
+      "us.anthropic.claude-opus-5": [
+        "compat"
+      ],
+      "us.anthropic.claude-opus-5-5": [
+        "compat"
+      ],
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+        "compat"
+      ],
+      "us.anthropic.claude-sonnet-4-6": [
+        "compat"
+      ],
+      "us.anthropic.claude-sonnet-5": [
+        "compat"
+      ],
+      "us.anthropic.claude-sonnet-5-5": [
+        "compat"
+      ]
+    },
+    "source": "amazon-bedrock"
+  },
   "name": "bedrock",
   "placeholders": {
     "region": {

@@ -18,6 +18,247 @@ use extensions::{Error, ModelsArg, Providers, leave_out_invalid, leave_out_omitt
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, NoLock};
 use serde_json::json;
+use std::time::Duration;
+
+#[test]
+fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
+    let mut models: Vec<ModelData> =
+        serde_json::from_value(provider("acme", &["m1", "m2"])["models"].clone()).unwrap();
+    models[0].context_window = Some(100);
+    let meta = extensions::models_dev::CatalogMeta {
+        source: Some("acme".into()),
+        ..Default::default()
+    };
+    let catalog = json!({"acme": {"m1": {"name":"Live", "limit":{"context":200,"output":50}, "modalities":{"input":["text","image"]}, "cost":{"input":1.0,"output":2.0}}}});
+    let merged = extensions::models_dev::merge(models, &meta, &catalog);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].name.as_deref(), Some("Live"));
+    assert_eq!(merged[0].context_window, Some(200));
+    assert_eq!(merged[0].max_output_tokens, Some(50));
+    assert_eq!(merged[0].input, ["text", "image"]);
+    assert_eq!(
+        merged[0].cost,
+        Some(config::Cost {
+            input: 1.0,
+            output: 2.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new()
+        })
+    );
+    assert_eq!(merged[1].context_window, Some(1000));
+}
+
+#[test]
+fn models_dev_pins_keep_generated_values_while_unpinned_fields_are_fetched() {
+    let models: Vec<ModelData> = serde_json::from_value(json!([{
+        "id":"m", "name":"Generated", "protocol":"openai-responses",
+        "base_url":"http://127.0.0.1:1/v1", "context_window":100,
+        "max_output_tokens":20, "input":["text"], "cost":{"input":0.5,"output":1.5}
+    }]))
+    .unwrap();
+    let meta = extensions::models_dev::CatalogMeta {
+        source: Some("acme".into()),
+        pins: [(
+            "m".to_owned(),
+            vec![
+                "name".into(),
+                "max_output_tokens".into(),
+                "input".into(),
+                "cost".into(),
+            ],
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let catalog = json!({"acme":{"m":{
+        "name":"Fetched", "limit":{"context":200,"output":50},
+        "modalities":{"input":["text","image"]}, "cost":{"input":1.0,"output":2.0}
+    }}});
+    let merged = extensions::models_dev::merge(models, &meta, &catalog);
+    assert_eq!(merged[0].name.as_deref(), Some("Generated"));
+    assert_eq!(merged[0].context_window, Some(200));
+    assert_eq!(merged[0].max_output_tokens, Some(20));
+    assert_eq!(merged[0].input, ["text"]);
+    assert_eq!(
+        merged[0].cost,
+        Some(config::Cost {
+            input: 0.5,
+            output: 1.5,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new()
+        })
+    );
+}
+
+#[test]
+fn models_dev_provider_metadata_blocks_match_the_committed_provider_files() {
+    let table: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/anthropic/providers/anthropic.json"
+    ))
+    .unwrap();
+    let table = extensions::models_dev::meta_of(&table).unwrap();
+    assert_eq!(table.source.as_deref(), Some("anthropic"));
+    assert!(table.pins.contains_key("claude-fable-5"));
+
+    let openrouter: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/openrouter/providers/openrouter.json"
+    ))
+    .unwrap();
+    let databricks: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/databricks/providers/databricks.json"
+    ))
+    .unwrap();
+
+    let openrouter = extensions::models_dev::meta_of(&openrouter).unwrap();
+    assert!(openrouter.split_source);
+    assert!(openrouter.source_aliases.is_empty());
+    assert!(openrouter.pins.is_empty());
+
+    let databricks = extensions::models_dev::meta_of(&databricks).unwrap();
+    assert_eq!(databricks.strip_prefix.as_deref(), Some("databricks-"));
+    assert_eq!(
+        databricks.sources,
+        ["anthropic", "google", "google-vertex", "meta", "openai"]
+    );
+    assert!(databricks.source_aliases.is_empty());
+    assert!(databricks.pins.is_empty());
+}
+
+#[test]
+fn models_dev_fills_vendor_context_before_load_admission() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["m"]);
+    data["models"][0]["context_window"] = serde_json::Value::Null;
+    data["models_dev"] = json!({"source": "acme", "pins": {}});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"m":{"limit":{"context":200}}}}"#,
+    )
+    .unwrap();
+    let configuration = config(&setup, &[]);
+
+    let (providers, notices) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.code != ErrorCode::ModelInvalid)
+    );
+    assert_eq!(providers.get("acme").unwrap().models.len(), 1);
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].context_window,
+        Some(200)
+    );
+}
+
+#[test]
+fn models_dev_forced_refresh_skips_a_held_lock() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let path = config::models_dev_lock_file(&home).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let held = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .unwrap();
+    held.try_lock().unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(br#"{"acme":{}}"#.to_vec())
+    });
+
+    fakes::within(
+        "forced models.dev refresh skips held lock",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            extensions::models_dev::refresh_forced(
+                &home,
+                true,
+                fakes::clock::FakeClock::new().wall(),
+                &fetch,
+            );
+        },
+    );
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(held);
+}
+
+#[test]
+fn models_dev_fetch_reads_a_loopback_http_response() {
+    use fakes::{ProviderServer, Response};
+
+    let server = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    let agent = ureq::Agent::new_with_defaults();
+    let bytes =
+        extensions::models_dev::fetch(&agent, &format!("{}/api.json", server.url())).unwrap();
+    assert_eq!(bytes, b"{}");
+}
+
+#[test]
+fn models_dev_refresh_and_spawn_run_when_due() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let now = fakes::clock::FakeClock::new().wall();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(br#"{"acme":{}}"#.to_vec())
+    });
+    extensions::models_dev::refresh_if_due(&home, true, None, now, &fetch);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        config::read_models_dev(&home).unwrap(),
+        Some(br#"{"acme":{}}"#.to_vec())
+    );
+
+    let fresh_home = setup.workspace().join("second-home");
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(br#"{"acme":{}}"#.to_vec())
+    });
+    extensions::models_dev::spawn_if_due(fresh_home, true, None, now, fetch)
+        .expect("missing catalog is due")
+        .join()
+        .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn models_dev_fetch_decision_respects_switch_and_missing_cache() {
+    let setup = Setup::new();
+    let now = fakes::clock::FakeClock::new().wall();
+    assert!(!extensions::models_dev::should_fetch(
+        &setup.home(),
+        false,
+        Some(Duration::from_secs(60)),
+        now
+    ));
+    assert!(extensions::models_dev::should_fetch(
+        &setup.home(),
+        true,
+        Some(Duration::from_secs(60)),
+        now
+    ));
+    config::write_models_dev(&setup.home(), b"{}").unwrap();
+    assert!(!extensions::models_dev::should_fetch(
+        &setup.home(),
+        true,
+        Some(Duration::from_secs(60)),
+        now
+    ));
+}
 
 #[test]
 fn switched_on_lists_presence_without_acquiring_or_losing_identity() {
@@ -937,6 +1178,228 @@ fn add_lua_suppresses_only_the_invalid_the_load_reported() {
 }
 
 #[test]
+fn a_disabled_process_package_warm_cache_names_an_omission_once() {
+    fakes::within(
+        "Providers::load_enabled",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        || {
+            let setup = Setup::new();
+            let mut m = manifest("acme");
+            m["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+            let source = setup.source("acme", &m, &[provider("acme", &["a"])]);
+            install(&setup.home(), &source, "0.1.0").unwrap();
+            write_model_cache(
+                &setup.home(),
+                "acme",
+                &json!([{
+                    "id": "gone", "protocol": "openai-responses",
+                    "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+                    "omit_reason": "no serving endpoint with a matching name"
+                }]),
+            )
+            .unwrap();
+            let configuration = config(&setup, &["extensions.acme.enabled=false"]);
+            let (providers, notices) =
+                Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(providers.resolve("acme/gone").is_err());
+            // The load reports each marked entry (`docs/model-routing.md`, "Model discovery").
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].code, ErrorCode::ModelOmitted);
+            assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+            assert_eq!(
+                notices[0].message,
+                "The model `acme/gone` was left out of the model list: no serving endpoint with a matching name."
+            );
+        },
+    );
+}
+
+#[test]
+fn a_warm_cache_names_an_omission_once() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let marked = json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"});
+    write_model_cache(&setup.home(), "acme", &json!([marked, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    let lua_notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let load_omitted: Vec<_> = load_notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    let lua_omitted: Vec<_> = lua_notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    // The same marked entry is reported once across load and admission (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(load_omitted.len(), 1);
+    assert_eq!(lua_omitted.len(), 0);
+    assert_eq!(load_omitted[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(
+        load_omitted[0].message,
+        "The model `acme/gone` was left out of the model list: first reason."
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn add_lua_suppresses_only_the_omissions_the_load_reported() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["ok"]);
+    data["models"].as_array_mut().unwrap().push(json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"}));
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='gone2', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='second reason'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let omitted: Vec<_> = notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    // A later admission reports only unseen omission identities (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(omitted.len(), 1, "{notices:?}");
+    assert_eq!(
+        omitted[0].message,
+        "The model `acme/gone2` was left out of the model list: second reason."
+    );
+    assert_ne!(omitted[0].message, load_notices[0].message);
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn add_lua_emits_omissions_beyond_the_load_count() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let gone = json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"});
+    write_model_cache(&setup.home(), "acme", &json!([gone, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let cache = config::model_cache_file(&setup.home(), "acme").unwrap();
+    std::fs::remove_file(cache).unwrap();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let load_count = load_notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .count();
+    let new: Vec<_> = notices
+        .iter()
+        .filter(|n| n.code == ErrorCode::ModelOmitted)
+        .collect();
+    // A later admission emits only the excess over the recorded count (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(load_count, 1);
+    assert_eq!(new.len(), 1, "{notices:?}");
+    assert_eq!(
+        new[0].message,
+        load_notices
+            .iter()
+            .find(|n| n.code == ErrorCode::ModelOmitted)
+            .unwrap()
+            .message
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn set_models_suppresses_the_omissions_the_load_reported() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme-ext"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let gone = json!({"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"});
+    write_model_cache(&setup.home(), "acme", &json!([gone, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let models: Vec<ModelData> = serde_json::from_value(json!([{"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"}, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let notices = providers.set_models("acme", models);
+    // A joined refresh does not repeat the load's omission (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(
+        load_notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0,
+        "{notices:?}"
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
+fn refresh_without_cache_reports_an_omission_once() {
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme"), &[provider("acme", &["ok"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let first = providers.add_lua(
+        "acme",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    let models: Vec<ModelData> = serde_json::from_value(json!([{"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"}, {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}])).unwrap();
+    let second = providers.set_models("acme", models);
+    // Re-admission on the same registry converges on one notice (`docs/model-routing.md`, "Model discovery").
+    assert!(
+        load_notices
+            .iter()
+            .all(|n| n.code != ErrorCode::ModelOmitted)
+    );
+    assert_eq!(
+        first
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        second
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0
+    );
+    assert!(providers.resolve("acme/ok").is_ok());
+}
+
+#[test]
 fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     let list = json!([
         {"id": "bad", "protocol": "anthropic-messages",
@@ -1638,6 +2101,55 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
     assert!(providers.resolve("acme/old").is_err());
     let model = providers.resolve("acme/new").unwrap();
     assert_eq!(providers.addendum(&model), Some("Fresh.\n"));
+}
+
+// Count assertions follow `docs/model-routing.md`, "Model discovery".
+#[test]
+fn add_lua_addenda_failure_reports_no_omission_yet() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='broken', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, prompt_addendum='no-such-addendum.md'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0
+    );
+
+    let models: Vec<ModelData> = serde_json::from_value(json!([
+        {"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"},
+        {"id":"broken", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "prompt_addendum":"no-such-addendum.md"},
+        {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}
+    ])).unwrap();
+    let notices = providers.set_models("acme", models);
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1,
+        "{notices:?}"
+    );
 }
 
 #[test]

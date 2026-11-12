@@ -1019,6 +1019,149 @@
       ]
     }
   ],
+  "models_dev": {
+    "pins": {
+      "gpt-4.1": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-4.1-mini": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-4o": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-4o-2024-08-06": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-4o-2024-11-20": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-4o-mini": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5-mini": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5-nano": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5-pro": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.1": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.2": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.2-pro": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.3-codex": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.3-codex-spark": [
+        "compat"
+      ],
+      "gpt-5.4": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-5.4-mini": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-5.4-nano": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.4-pro": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.5": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-5.5-pro": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-5.6-luna": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-5.6-sol": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-5.6-terra": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-6-astra": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-6-luna": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-6-sol": [
+        "compat",
+        "deferred_tools",
+        "web_search"
+      ],
+      "gpt-6.1-sol": [
+        "compat",
+        "web_search"
+      ],
+      "gpt-6.1-terra": [
+        "compat"
+      ],
+      "gpt-daybreak-blue-latest": [
+        "compat"
+      ],
+      "gpt-daybreak-red-latest": [
+        "compat"
+      ],
+      "gpt-realtime-2.1": [
+        "compat"
+      ],
+      "o3": [
+        "compat",
+        "web_search"
+      ],
+      "o3-pro": [
+        "compat"
+      ]
+    },
+    "source": "openai"
+  },
   "name": "openai",
   "reviewer_model": "gpt-6-luna"
 }

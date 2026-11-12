@@ -410,6 +410,50 @@
       "web_search": "google_search"
     }
   ],
+  "models_dev": {
+    "pins": {
+      "gemini-3-flash-preview": [
+        "web_search"
+      ],
+      "gemini-3.1-flash-lite": [
+        "web_search"
+      ],
+      "gemini-3.1-pro-preview": [
+        "web_search"
+      ],
+      "gemini-3.1-pro-preview-customtools": [
+        "web_search"
+      ],
+      "gemini-3.5-flash": [
+        "web_search"
+      ],
+      "gemini-3.5-flash-lite": [
+        "web_search"
+      ],
+      "gemini-3.6-flash": [
+        "web_search"
+      ],
+      "gemini-3.7-flash": [
+        "web_search"
+      ],
+      "gemini-3.8-flash": [
+        "web_search"
+      ],
+      "gemini-flash-latest": [
+        "web_search"
+      ],
+      "gemini-flash-lite-latest": [
+        "web_search"
+      ],
+      "gemma-4-26b-a4b-it": [
+        "web_search"
+      ],
+      "gemma-4-31b-it": [
+        "web_search"
+      ]
+    },
+    "source": "google"
+  },
   "name": "gemini",
   "reviewer_model": "gemini-3.8-flash"
 }
