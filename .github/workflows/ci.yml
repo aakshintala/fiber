@@ -1081,23 +1081,26 @@ jobs:
             exit 1
           fi
       # The one-leg test_linux matrix uploads its list only when
-      # non-empty: download it only when its output says flakes exist,
-      # and a missing artifact then fails the job.
+      # non-empty: download it only when its output says flakes exist;
+      # a missing artifact is reported as partial by the collate.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: fromJSON(needs.select.outputs.jobs).test_linux && needs.test_linux.outputs.has_flakes == 'true'
+        continue-on-error: true
         with:
           name: flaky-tests-ubuntu-24.04
           path: ${{ runner.temp }}/flaky
       # Each two-leg test matrix leg always uploads its list, including
       # an empty one: an empty file is a complete empty list, while a
-      # missing artifact fails closed.
+      # missing artifact is reported as partial by the collate.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: fromJSON(needs.select.outputs.jobs).test
+        continue-on-error: true
         with:
           name: flaky-tests-ubuntu-24.04-arm
           path: ${{ runner.temp }}/flaky
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: fromJSON(needs.select.outputs.jobs).test
+        continue-on-error: true
         with:
           name: flaky-tests-macos-26
           path: ${{ runner.temp }}/flaky
