@@ -277,3 +277,5 @@ docs/performance.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:
 crates/main/tests/screen_looks/panel_look.rs	fiber-4717	grant	2026-11-12T06:58:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
 docs/tools.md	fiber-4683	plan	2026-11-12T06:58:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/mcp.md	fiber-4683	plan	2026-11-12T06:58:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/system-prompt.md	fiber-4682	plan	2026-11-12T07:04:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/compaction.md	fiber-4682	plan	2026-11-12T07:04:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
