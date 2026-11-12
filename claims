@@ -220,3 +220,4 @@ crates/tui/src/app/home/typed_tests.rs	fiber-4619	plan	2026-11-12T05:48:27Z	roun
 crates/tui/src/keymap_tests.rs	fiber-4619	plan	2026-11-12T05:48:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/rebind_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/model_picker_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4717	plan	2026-11-12T05:53:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
