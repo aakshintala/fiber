@@ -18,7 +18,7 @@
 //! reference; in production the transport installs it, and in tests the
 //! test installs it, so the seam is exercised without a child process.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
@@ -67,7 +67,11 @@ struct Inner {
     emit: Option<Arc<dyn Emit>>,
     /// The loop inbox for process command inner calls.
     inbox: Option<std::sync::mpsc::Sender<Delivery>>,
+    /// Command-anchored inner calls by owner, invocation and serving thread.
+    command_inner: HashMap<(String, CommandId, std::thread::ThreadId), usize>,
 }
+
+type ActiveCommands = Arc<Mutex<Inner>>;
 
 /// The session's backend-neutral callback owner: generations, function
 /// references and dispatch, shared by every adapter.
@@ -75,8 +79,6 @@ struct Inner {
 pub(crate) struct Runtime {
     /// The registry. The lock is a leaf: no callback runs under it.
     inner: Arc<Mutex<Inner>>,
-    /// Command-anchored inner calls currently being served, by owner and anchor.
-    command_inner: Arc<Mutex<BTreeMap<(String, CommandId), usize>>>,
 }
 
 impl Runtime {
@@ -90,8 +92,8 @@ impl Runtime {
                 functions: BTreeMap::new(),
                 emit: None,
                 inbox: None,
+                command_inner: HashMap::new(),
             })),
-            command_inner: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -401,10 +403,8 @@ impl Runtime {
                 }
             }
             FunctionTarget::Process(invoke) => {
-                let (inbox, command_inner) = {
-                    let inner = lock(&self.inner);
-                    (inner.inbox.clone(), Arc::clone(&self.command_inner))
-                };
+                let inbox = lock(&self.inner).inbox.clone();
+                let command_inner = Arc::clone(&self.inner);
                 Ok(CommandWait::Process(Arc::new(ProcessQueued::new(
                     resolved.owner,
                     id,
@@ -509,14 +509,17 @@ impl Runtime {
         }
     }
 
-    /// Whether the hook behind `func` would wait behind its extension's own
-    /// command: Lua command hooks and active command-anchored process inner
-    /// calls refuse their owner's hooks.
+    /// Whether this thread's hook would wait behind its own command: Lua
+    /// command hooks and active process inner-call chains refuse their owner's hooks.
     pub(crate) fn runs_own_command(&self, func: &FunctionRef, point: &str) -> Option<HookFailure> {
         let resolved = self.resolve(func).ok()?;
-        if lock(&self.command_inner)
+        let current_thread = std::thread::current().id();
+        if lock(&self.inner)
+            .command_inner
             .iter()
-            .any(|((owner, _), count)| owner == &resolved.owner && *count > 0)
+            .any(|((owner, _, thread), count)| {
+                owner == &resolved.owner && thread == &current_thread && *count > 0
+            })
         {
             return Some(HookFailure {
                 extension: resolved.owner,

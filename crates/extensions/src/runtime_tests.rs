@@ -620,10 +620,11 @@ fn process_command_runner_returns_cancelled_when_callback_ends() {
     runtime.register_owner("fiber.test/proc", None);
     let (delivery_tx, delivery_rx) = std::sync::mpsc::channel();
     runtime.set_inbox(delivery_tx);
-    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel::<()>();
+    let continue_rx = Arc::new(Mutex::new(continue_rx));
     let (call_tx, call_rx) = std::sync::mpsc::channel();
     let invocation = {
-        let barrier = Arc::clone(&barrier);
+        let continue_rx = Arc::clone(&continue_rx);
         runtime.install_process_handler(
             "fiber.test/proc",
             command("registered"),
@@ -637,14 +638,22 @@ fn process_command_runner_returns_cancelled_when_callback_ends() {
                         .unwrap();
                     let _sent = call_tx.send(result.status);
                 });
-                barrier.wait();
+                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&continue_rx.lock().unwrap(), "command callback release");
                 Ok(Some(json!("callback-result")))
             }),
         )
     };
-    let queued = runtime
-        .queue_command(&invocation, command("cmd_cancel"), "go")
-        .unwrap();
+    let queued = Arc::new(
+        runtime
+            .queue_command(&invocation, command("cmd_cancel"), "go")
+            .unwrap(),
+    );
+    let waiting = Arc::clone(&queued);
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(waiting.wait());
+    });
     queued.release();
     let Delivery::InnerCall(request) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&delivery_rx, "process command cancellation delivery")
@@ -652,8 +661,13 @@ fn process_command_runner_returns_cancelled_when_callback_ends() {
         panic!("expected inner call");
     };
     (request.taken)();
-    barrier.wait();
-    assert_eq!(queued.wait().unwrap(), json!("callback-result"));
+    continue_tx.send(()).unwrap();
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&result_rx, "process command callback result")
+            .unwrap(),
+        json!("callback-result")
+    );
     assert_eq!(
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&call_rx, "cancelled host-tool result"),

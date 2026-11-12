@@ -1,12 +1,11 @@
 //! Queued process commands and their command-scoped inner-call runner.
 
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 
 use contract::CommandId;
 use contract::clock::Wake;
-use contract::events::{CallStatus, ToolCallCompleted};
+use contract::events::ToolCallCompleted;
 use contract::inbox::{Delivery, InnerCallRequest};
 use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
@@ -14,8 +13,9 @@ use support::lock;
 
 use crate::Error;
 use crate::lua::CredentialFor;
-use crate::lua::command_calls::Ended;
+use crate::lua::command_calls::{Ended, Reply, cancelled};
 
+use super::ActiveCommands;
 use super::refs::ProcessInvoke;
 
 /// One held command call (`super`): the run waits for its release, on either backend.
@@ -45,8 +45,6 @@ impl CommandWait {
     }
 }
 
-type ActiveCommands = Arc<Mutex<BTreeMap<(String, CommandId), usize>>>;
-
 /// A process command's one-shot invocation, with its answer published after
 /// the callback worker has returned.
 pub(crate) struct ProcessQueued {
@@ -66,7 +64,7 @@ struct ProcessQueuedState {
 
 impl ProcessQueued {
     /// A held process command with the driver's invocation as its anchor.
-    pub(crate) fn new(
+    pub(super) fn new(
         owner: String,
         command: CommandId,
         invoke: ProcessInvoke,
@@ -172,6 +170,7 @@ struct ActiveInnerCall {
     entered: AtomicBool,
     active: ActiveCommands,
     key: (String, CommandId),
+    thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl ActiveInnerCall {
@@ -179,81 +178,45 @@ impl ActiveInnerCall {
         if self.entered.swap(true, Ordering::AcqRel) {
             return;
         }
-        *lock(&self.active).entry(self.key.clone()).or_default() += 1;
+        let thread = std::thread::current().id();
+        *lock(&self.thread) = Some(thread);
+        *lock(&self.active)
+            .command_inner
+            .entry((self.key.0.clone(), self.key.1.clone(), thread))
+            .or_default() += 1;
     }
 }
 
 impl Drop for ActiveInnerCall {
     fn drop(&mut self) {
-        if !self.entered.load(Ordering::Acquire) {
+        if !self.entered.swap(false, Ordering::AcqRel) {
             return;
         }
-        let mut active = lock(&self.active);
-        if let Some(count) = active.get_mut(&self.key) {
+        let Some(thread) = lock(&self.thread).take() else {
+            return;
+        };
+        let key = (self.key.0.clone(), self.key.1.clone(), thread);
+        let mut inner = lock(&self.active);
+        if let Some(count) = inner.command_inner.get_mut(&key) {
             *count -= 1;
             if *count == 0 {
-                active.remove(&self.key);
+                inner.command_inner.remove(&key);
             }
         }
     }
 }
 
-struct InnerAnswer {
-    reply: Arc<Reply>,
-    answered: bool,
-}
+struct InnerAnswer(Arc<Reply>);
 
 impl InnerAnswer {
-    fn resolve(&mut self, completed: Box<ToolCallCompleted>) {
-        if !self.answered {
-            self.answered = true;
-            self.reply.resolve(completed);
-        }
+    fn resolve(self, completed: Box<ToolCallCompleted>) {
+        self.0.resolve(completed);
     }
 }
 
 impl Drop for InnerAnswer {
     fn drop(&mut self) {
-        if !self.answered {
-            self.reply.resolve(cancelled());
-        }
-    }
-}
-
-struct Reply {
-    state: Mutex<Option<Box<ToolCallCompleted>>>,
-    changed: Condvar,
-    ended: Arc<Ended>,
-}
-
-impl Reply {
-    fn resolve(&self, result: Box<ToolCallCompleted>) {
-        let mut state = lock(&self.state);
-        if state.is_none() {
-            *state = Some(result);
-            self.changed.notify_all();
-        }
-    }
-
-    fn wait(&self) -> Box<ToolCallCompleted> {
-        let mut state = lock(&self.state);
-        loop {
-            if let Some(result) = state.take() {
-                return result;
-            }
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-}
-
-impl Wake for Reply {
-    fn wake(&self) {
-        if self.ended.is_cancelled() {
-            self.resolve(cancelled());
-        }
+        self.0.resolve(cancelled());
     }
 }
 
@@ -270,11 +233,7 @@ impl InnerCalls for ProcessCommandCalls {
         let Some(inbox) = self.inbox.as_ref() else {
             return Ok(cancelled());
         };
-        let reply = Arc::new(Reply {
-            state: Mutex::new(None),
-            changed: Condvar::new(),
-            ended: Arc::clone(&self.ended),
-        });
+        let reply = Arc::new(Reply::new(Arc::clone(&self.ended)));
         let wake: Arc<dyn Wake> = reply.clone();
         self.ended.subscribe(Arc::downgrade(&wake));
         reply.wake();
@@ -285,13 +244,11 @@ impl InnerCalls for ProcessCommandCalls {
             entered: AtomicBool::new(false),
             active: Arc::clone(&self.active),
             key: (self.owner.clone(), self.command.clone()),
+            thread: Mutex::new(None),
         });
         let taken_active = Arc::clone(&active);
         let answered_active = Arc::clone(&active);
-        let answer = InnerAnswer {
-            reply: Arc::clone(&reply),
-            answered: false,
-        };
+        let answer = InnerAnswer(Arc::clone(&reply));
         let taken_reply = Arc::clone(&reply);
         let ended = Arc::clone(&self.ended);
         let request = Delivery::InnerCall(InnerCallRequest {
@@ -308,7 +265,6 @@ impl InnerCalls for ProcessCommandCalls {
             }),
             answer: Box::new(move |completed| {
                 answered_active.enter();
-                let mut answer = answer;
                 answer.resolve(completed);
             }),
         });
@@ -317,24 +273,4 @@ impl InnerCalls for ProcessCommandCalls {
         }
         Ok(reply.wait())
     }
-}
-
-fn cancelled() -> Box<ToolCallCompleted> {
-    Box::new(ToolCallCompleted {
-        status: CallStatus::Cancelled,
-        reason: None,
-        error: None,
-        process: None,
-        content: Vec::new(),
-        details: None,
-        artifact: None,
-        kept: None,
-        changes: None,
-        control: None,
-        changed_by: None,
-        provider_item: None,
-        hosts_surfaced: Vec::new(),
-        loaded: None,
-        protected_paths: None,
-    })
 }

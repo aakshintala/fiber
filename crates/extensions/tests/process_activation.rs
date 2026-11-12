@@ -119,6 +119,7 @@ impl Wake for CancelWake {
 fn process_command_inner_call_timeout_cancels_wait() {
     let env = Env::new("fiber-process-command-timeout");
     let request_path = env.marker("request.json");
+    let answer_path = env.marker("inner-tool-answer.json");
     let mut steps = vec![json!({"read": {}})];
     steps.extend(
         register(
@@ -139,6 +140,7 @@ fn process_command_inner_call_timeout_cancels_wait() {
         "call": "host.tool", "args": ["read", {}], "request_id": {"$ref": "request.payload.request_id"}
     }}}));
     steps.push(json!({"read_until": {"path": "payload.command_id", "equals": "inner-tool", "as": "tool_answer"}}));
+    steps.push(json!({"write_file": {"path": answer_path, "value": {"$ref": "tool_answer"}}}));
     steps.push(json!({"loop": [{"read": {}}]}));
     env.install_process(
         "command-timeout",
@@ -187,6 +189,8 @@ fn process_command_inner_call_timeout_cancels_wait() {
     );
     Deadline::after(WAIT).recv_or_fail(&woken, "the process command cancellation");
     assert!(inner.cancel.is_cancelled());
+    let answer = read_json_file(&answer_path, "cancelled host-tool answer");
+    assert_eq!(answer["payload"]["result"]["value"]["status"], "cancelled");
     session.finish_processes(&CancelToken::new());
 }
 
