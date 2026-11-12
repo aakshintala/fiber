@@ -337,7 +337,7 @@ impl Setup {
         );
         write_json(
             &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
+            &json!({"model": "fake/m", "model_lists": {"models_dev": false}}),
         );
     }
 
@@ -375,7 +375,7 @@ impl Setup {
         );
         write_json(
             &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
+            &json!({"model": "fake/m", "model_lists": {"models_dev": false}}),
         );
     }
 
@@ -411,7 +411,7 @@ impl Setup {
         );
         write_json(
             &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
+            &json!({"model": "fake/m", "model_lists": {"models_dev": false}}),
         );
     }
 
