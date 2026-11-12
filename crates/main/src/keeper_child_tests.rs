@@ -458,11 +458,8 @@ fn keeper_crashed_socket_drops_other_lines_and_keeps_running() {
     Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits after dropped-line probes");
-    assert!(
-        fakes::group_empties(pgid, Deadline::after(Duration::from_secs(10))),
-        "the dropped-line test reaps its shell job"
-    );
-    watchdog.stand_down(Deadline::after(Duration::from_secs(10)));
+    // A single probe races a transient child just after the keeper exits.
+    assert_test_group_empty(pgid, watchdog);
 }
 
 #[test]
@@ -510,9 +507,14 @@ fn keeper_crashed_socket_drops_an_overlong_line_and_keeps_running() {
         .recv_or_fail(&keeper.result, "the keeper exit")
         .expect("keeper exits on the frozen stop");
     assert!(!socket.exists(), "the socket is unlinked on exit");
+    // A single probe races a transient child just after the keeper exits.
+    assert_test_group_empty(pgid, watchdog);
+}
+
+fn assert_test_group_empty(pgid: u32, watchdog: fakes::Watchdog) {
     assert!(
         fakes::group_empties(pgid, Deadline::after(Duration::from_secs(10))),
-        "the overlong-line test reaps its shell job"
+        "the test reaps its shell job"
     );
     watchdog.stand_down(Deadline::after(Duration::from_secs(10)));
 }
