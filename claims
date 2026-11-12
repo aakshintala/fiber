@@ -151,9 +151,6 @@ crates/tui/src/view/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	r
 crates/tui/src/view/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/tests/hover_jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/tests/support/jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/sandbox.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/permissions.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/events.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 docs/mcp.md:193-195	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 docs/mcp.md:264-265	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
@@ -268,3 +265,10 @@ scripts/test-leak-probe	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plu
 crates/main/tests/leak_probe.rs	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4726	plan	2026-11-12T08:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/tests/common/mod.rs,crates/extensions/tests/lua_tools.rs,crates/extensions/tests/oauth.rs,crates/extensions/tests/login_discovery.rs,crates/extensions/tests/lua_provider.rs	fiber-4730	grant	2026-11-12T08:22:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/events.md:746-746	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
+docs/events.md:1473-1473	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
+docs/permissions.md:264-267	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
+docs/sandbox.md:61-63	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
+docs/sandbox.md:95-97	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
+docs/sandbox.md:155-155	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
+docs/sandbox.md:158-158	fiber-4680	plan	2026-11-12T08:26:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4680-docs-sandbox	
