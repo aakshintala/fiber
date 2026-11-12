@@ -994,8 +994,8 @@ fn delegate_pair_plan(markers: &Path) -> Value {
     watcher.push(json!({"send": {"id": "a-watcher", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}}));
     let route = |name: &str| {
         json!([
-            {"write_file": {"path": marker(name), "value": {"$ref": "req"}}},
-            {"send": {"id": format!("answer-{name}"), "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}}
+            {"send": {"id": format!("answer-{name}"), "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}},
+            {"write_file": {"path": marker(name), "value": {"$ref": "req"}}}
         ])
     };
     let serve = json!([

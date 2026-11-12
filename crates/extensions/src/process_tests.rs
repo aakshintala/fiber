@@ -7197,6 +7197,7 @@ fn process_delegate_run_failure_notice() {
     );
 
     let events = emitted.0.lock().unwrap();
+    // `docs/extensions.md`, `Host calls`: a run that raises emits `hook_failed`.
     let [contract::events::Event::Notice(notice)] = events.as_slice() else {
         panic!("the run failure emits one notice: {events:?}");
     };
@@ -7319,7 +7320,7 @@ fn process_model_usage_attribution() {
     .expect("the host model answers");
     assert_eq!(answer.unwrap()["text"], "routed");
     let events = emitted.0.lock().unwrap();
-    // `docs/extensions.md`, "Process extensions": host.model writes `usage_recorded`.
+    // `docs/extensions.md`, `Host calls`: host.model writes `usage_recorded`.
     let [contract::events::Event::UsageRecorded(record)] = events.as_slice() else {
         panic!("one usage event is attributed: {events:?}");
     };
