@@ -420,3 +420,4 @@ crates/main/src/settings.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-
 crates/tui/src/settings_view.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_host/damaged_extension.rs	fiber-4756	plan	2026-11-12T19:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4756	plan	2026-11-12T19:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/tests/draw_jig.rs	fiber-4742	plan	2026-11-12T19:05:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
