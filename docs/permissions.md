@@ -261,10 +261,10 @@ that the permission system let through moves the baseline forward, because
 each one landed with approval; an approved shell command never does.
 Unconfined and read-only calls take no protected-path transaction.
 
-An added folder changes nothing here. Were confinement implemented, its roots
-would be the workspace and the added folders, the same folded list the fast
-path above turns on; it is not implemented, so the boundary an added folder
-joins stays the permission boundary above, never an operating-system one.
+Added folders affect the permission fast paths above, but they do not become
+sandbox write roots. A confined call can write to the workspace, the system
+temp directory and paths explicitly granted through `sandbox.allow_write`
+(`docs/sandbox.md`, "What a confined call can do").
 
 The evidence is [research/sandbox/](../research/sandbox/).
 
