@@ -3517,16 +3517,7 @@ fn emptied_query_closes_typed_search() {
         &[Key::Backspace, Key::Backspace, Key::Backspace],
     );
 
-    assert!(settings.search.is_none());
-    assert_eq!(settings.tab, SettingsTab::Appearance);
-    let shown = screen(&settings);
-    assert!(
-        shown
-            .lines()
-            .any(|line| line.contains("Appearance   Notifications")),
-        "{shown}"
-    );
-    assert!(shown.contains("› Hover"), "{shown}");
+    assert_search_closed(&settings);
 }
 
 #[test]
@@ -3538,15 +3529,14 @@ fn emptied_query_closes_seeded_search() {
 
     one(&mut settings, &fake, Key::Backspace);
 
+    assert_search_closed(&settings);
+}
+
+fn assert_search_closed(settings: &Settings) {
     assert!(settings.search.is_none());
     assert_eq!(settings.tab, SettingsTab::Appearance);
-    let shown = screen(&settings);
-    assert!(
-        shown
-            .lines()
-            .any(|line| line.contains("Appearance   Notifications")),
-        "{shown}"
-    );
+    let shown = screen(settings);
+    assert!(shown.contains("Appearance   Notifications"), "{shown}");
     assert!(shown.contains("› Hover"), "{shown}");
 }
 
