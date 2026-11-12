@@ -3812,19 +3812,16 @@ fn feedback_hands_the_screen_ring_to_the_writer() {
 
 #[test]
 fn loop_exit_cause_displays_family_and_optional_source() {
-    let sourceless =
-        super::ExitCause::new("terminal: could not send an image to the terminal", None);
-    assert_eq!(
-        sourceless.to_string(),
-        "terminal: could not send an image to the terminal"
-    );
-
-    let sourced = super::ExitCause::new(
+    for family in [
+        "terminal: could not send an image to the terminal",
         "terminal: could not draw the screen",
-        Some(io::Error::other("draw failed")),
-    );
-    assert_eq!(
-        sourced.to_string(),
-        "terminal: could not draw the screen: draw failed"
-    );
+        "terminal: could not draw the logo",
+        "terminal: could not take the terminal back",
+    ] {
+        let sourceless = super::ExitCause::new(family, None);
+        assert_eq!(sourceless.to_string(), family);
+
+        let sourced = super::ExitCause::new(family, Some(io::Error::other("write failed")));
+        assert_eq!(sourced.to_string(), format!("{family}: write failed"));
+    }
 }
