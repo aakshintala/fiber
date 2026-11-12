@@ -190,8 +190,8 @@ A result goes through the tool contract in `docs/tools.md`:
 - an embedded PDF is saved to `artifacts/`, and the model gets one line giving
   its path and size. It reads it with `read`, which handles PDFs
   (`docs/tools.md`, "read"), as it does a PDF `web_fetch` saves
-- other binary content is written to `artifacts/`, and the model gets one
-  line giving its MIME type, size and path
+- other binary content, audio included, is written to `artifacts/`, and the
+  model gets one line giving its MIME type, size and path
 - unknown or unreadable content becomes the text “Unsupported content.”
 - an image is processed once (`docs/model-routing.md`, "Image limits") and
   goes to `content` as an image part, written to `artifacts/`
