@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use super::{PriorRun, producer_job, select, streaks};
+use fakes::TempDir;
+
+use super::{PriorRun, compute, producer_job, select, streaks};
 
 #[test]
 fn selector_filters_and_orders_mixed_runs() {
@@ -111,6 +113,47 @@ fn producer_lookup_selects_journey_suite_or_absence() {
         Some("success")
     );
     assert!(producer_job(&serde_json::json!({"jobs":[]})).is_none());
+}
+
+#[test]
+fn failed_history_view_lookup_leaves_no_companion() {
+    for view in [None, Some("not json")] {
+        let dir = TempDir::new("journey-streak-history-failure");
+        dir.write("failures.txt", "qa\\n");
+        dir.write(
+            "runs.json",
+            r#"[
+                {"databaseId":1000,"headSha":"0123456789abcdef0123456789abcdef01234567","event":"push","headBranch":"main","conclusion":"failure"},
+                {"databaseId":999,"headSha":"abcdef0123456789abcdef0123456789abcdef01","event":"push","headBranch":"main","conclusion":"failure"}
+            ]"#,
+        );
+        dir.write(
+            "history/1000/view.json",
+            r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]}"#,
+        );
+        dir.write("history/1000/journey-failures.txt", "qa\\n");
+        if let Some(view) = view {
+            dir.write("history/999/view.json", view);
+        }
+        let args = [
+            "--current-id",
+            "1000",
+            "--current-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--failures",
+            dir.path().join("failures.txt").to_str().unwrap(),
+            "--runs",
+            dir.path().join("runs.json").to_str().unwrap(),
+            "--history-dir",
+            dir.path().join("history").to_str().unwrap(),
+            "--output",
+            dir.path().join("journey-streaks.json").to_str().unwrap(),
+        ]
+        .map(str::to_owned);
+
+        assert!(compute(&args).unwrap());
+        assert!(!dir.path().join("journey-streaks.json").exists());
+    }
 }
 
 #[test]
