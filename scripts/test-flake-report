@@ -1272,6 +1272,43 @@ echo false >"$collate_both_empty_false/flaky/collection-complete-macos-26.txt"
 code=$(run_collate_status "$collate_both_empty_false" TEST_SELECTED=true)
 [ "$code" -ne 0 ] || fail "collate-both-empty-false: the collate step must fail on the parser-error placeholder"
 expect_summary "$collate_both_empty_false/out" "the ubuntu-24.04-arm collection is incomplete: no report"
+# A readable arm list keeps a Linux flake run reportable even when the
+# selected Linux list is absent; the missing Linux list is a partial
+# report warning rather than a fail-closed result.
+collate_linux_flakes_no_list=$tmp/collate-linux-flakes-no-list
+mkdir -p "$collate_linux_flakes_no_list/flaky"
+printf 'main::probe a\td1\n' >"$collate_linux_flakes_no_list/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo true >"$collate_linux_flakes_no_list/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_linux_flakes_no_list/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_linux_flakes_no_list/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_linux_flakes_no_list" LINUX_SELECTED=true LINUX_FLAKES=true TEST_SELECTED=true)
+expect_exit collate-linux-flakes-no-list "$code" 0
+expect_flakes "$collate_linux_flakes_no_list" 'has_flakes=true'
+expect_summary "$collate_linux_flakes_no_list/out" "the flaky-tests-ubuntu-24.04 list is missing: partial report"
+# An empty false-marked parser placeholder does not feed; the readable
+# other leg still reports, with one incomplete-collection warning.
+collate_placeholder_plus_readable=$tmp/collate-placeholder-plus-readable
+mkdir -p "$collate_placeholder_plus_readable/flaky"
+: >"$collate_placeholder_plus_readable/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo false >"$collate_placeholder_plus_readable/flaky/collection-complete-ubuntu-24.04-arm.txt"
+printf 'main::probe a\td1\n' >"$collate_placeholder_plus_readable/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_placeholder_plus_readable/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_placeholder_plus_readable" TEST_SELECTED=true)
+expect_exit collate-placeholder-plus-readable "$code" 0
+expect_flakes "$collate_placeholder_plus_readable" 'has_flakes=true'
+expect_summary "$collate_placeholder_plus_readable/out" "the ubuntu-24.04-arm collection is incomplete: partial report"
+# An incomplete Linux collection without a list is a partial warning
+# when the selected arm leg has readable report data.
+collate_linux_incomplete_no_list=$tmp/collate-linux-incomplete-no-list
+mkdir -p "$collate_linux_incomplete_no_list/flaky"
+printf 'main::probe a\td1\n' >"$collate_linux_incomplete_no_list/flaky/flaky-tests-ubuntu-24.04-arm.txt"
+echo true >"$collate_linux_incomplete_no_list/flaky/collection-complete-ubuntu-24.04-arm.txt"
+: >"$collate_linux_incomplete_no_list/flaky/flaky-tests-macos-26.txt"
+echo true >"$collate_linux_incomplete_no_list/flaky/collection-complete-macos-26.txt"
+code=$(run_collate_status "$collate_linux_incomplete_no_list" LINUX_SELECTED=true LINUX_COMPLETE=false TEST_SELECTED=true)
+expect_exit collate-linux-incomplete-no-list "$code" 0
+expect_flakes "$collate_linux_incomplete_no_list" 'has_flakes=true'
+expect_summary "$collate_linux_incomplete_no_list/out" "the flaky-tests-ubuntu-24.04 list is missing: partial report"
 
 # A malformed JUnit file fails collection with no list, so the producer
 # marks the collection incomplete instead of a complete empty list. An
