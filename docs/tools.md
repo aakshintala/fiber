@@ -1687,6 +1687,8 @@ of:
 - `closing`: the target was sent `close` or is exiting (`docs/invocation.md`); a `fiber ask` session is, from its start
 - `message_refused`: the target's `before_message` refused it, with the
   hook's reason (`docs/extensions.md`, "Hooks")
+- `tool_error`: Fiber could not send the message because of a local I/O error
+- `invalid_arguments`: the message's arguments did not fit the tool schema
 - `hook_failed`: the target's `blocking` `before_message` failed
 
 A session may message itself. The message arrives as steering at its own next

@@ -190,9 +190,9 @@ A result goes through the tool contract in `docs/tools.md`:
 - an embedded PDF is saved to `artifacts/`, and the model gets one line giving
   its path and size. It reads it with `read`, which handles PDFs
   (`docs/tools.md`, "read"), as it does a PDF `web_fetch` saves
-- any other content, audio and other binary content included, is written to
-  `artifacts/`, and the model gets one line giving its MIME type, size and
-  path
+- other binary content is written to `artifacts/`, and the model gets one
+  line giving its MIME type, size and path
+- unknown or unreadable content becomes the text “Unsupported content.”
 - an image is processed once (`docs/model-routing.md`, "Image limits") and
   goes to `content` as an image part, written to `artifacts/`
 - an image that cannot be read, or is over 50 megapixels, ends the call
@@ -261,8 +261,8 @@ Each server pipe takes one parked thread, and a remote server one, plus one for 
 
 ## When a server dies
 
-A server that dies mid-session is restarted once, on the next call to one of its
-tools. Each death is recorded as `mcp_server_failed`, and a restart that
+A server that dies mid-session is restarted once, on its next use: a tool
+call, prompt, or resource read. Each death is recorded as `mcp_server_failed`, and a restart that
 brings it back as `mcp_server_ready`. If it dies again, it
 stays dead for the rest of the session. Its tools
 stay declared, so the prompt cache holds, and every call to them fails with code
