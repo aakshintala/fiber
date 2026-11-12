@@ -15,6 +15,7 @@ use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, JobDelive
 use contract::jobs::{JobRecord, Taken};
 use contract::shapes::Process;
 use contract::tool::Bound;
+use contract::{MONITOR_DELIVERY_LIMIT as DELIVERY_LIMIT, MONITOR_LINE_LIMIT as LINE_LIMIT};
 use log::{OutputRead, Unreadable};
 use serde_json::Map;
 
@@ -527,11 +528,6 @@ fn bound_notice(log: &log::Log, id: &JobId, replacement: &str, built: &str) -> S
         .0
 }
 
-// debt: two copies of the monitor's line and delivery limits; move them to
-// `contract` when monitor.rs is next edited beyond a literal.
-const LINE_LIMIT: usize = 500;
-const DELIVERY_LIMIT: usize = 3_000;
-
 /// A replaced monitor batch after the hook: each line cut at 500
 /// characters with ` [cut]`, the delivery at 3,000 characters with a
 /// marker, as the monitor's own batching cuts them. A replacement equal
@@ -854,4 +850,54 @@ fn replace_external(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
         source,
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DELIVERY_LIMIT, LINE_LIMIT, bound_lines};
+
+    #[test]
+    fn replacement_line_limit_cuts_only_above_the_cap() {
+        assert_eq!(LINE_LIMIT, 500);
+        for length in [LINE_LIMIT - 1, LINE_LIMIT] {
+            let line = "x".repeat(length);
+            assert_eq!(bound_lines(&line, ""), line);
+        }
+        let line = "x".repeat(LINE_LIMIT + 1);
+        assert_eq!(
+            bound_lines(&line, ""),
+            format!("{} [cut]", "x".repeat(LINE_LIMIT))
+        );
+    }
+
+    #[test]
+    fn replacement_delivery_limit_cuts_only_above_the_cap() {
+        assert_eq!(DELIVERY_LIMIT, 3_000);
+        for length in [DELIVERY_LIMIT - 1, DELIVERY_LIMIT] {
+            let delivery = delivery_of_length(length);
+            assert_eq!(delivery.chars().count(), length);
+            assert_eq!(bound_lines(&delivery, ""), delivery);
+        }
+        let delivery = delivery_of_length(DELIVERY_LIMIT + 1);
+        assert_eq!(delivery.chars().count(), DELIVERY_LIMIT + 1);
+        let prefix: String = delivery.chars().take(DELIVERY_LIMIT).collect();
+        assert_eq!(
+            bound_lines(&delivery, ""),
+            format!("{prefix}\n[cut: 1 more characters]")
+        );
+    }
+
+    fn delivery_of_length(total: usize) -> String {
+        let mut remaining = total;
+        let mut lines = Vec::new();
+        while remaining > 0 {
+            let line_length = remaining.min(LINE_LIMIT);
+            lines.push("x".repeat(line_length));
+            remaining -= line_length;
+            if remaining > 0 {
+                remaining -= 1;
+            }
+        }
+        lines.join("\n")
+    }
 }
