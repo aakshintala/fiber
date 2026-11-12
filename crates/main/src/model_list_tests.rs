@@ -81,7 +81,9 @@ impl Setup {
     }
 
     fn write_config(&self, value: &Value) {
-        std::fs::write(self.home().join("config.json"), value.to_string()).unwrap();
+        let mut config = value.clone();
+        config["model_lists"]["models_dev"] = json!(false);
+        std::fs::write(self.home().join("config.json"), config.to_string()).unwrap();
     }
 
     /// Installs a data-only extension `extension` registering provider

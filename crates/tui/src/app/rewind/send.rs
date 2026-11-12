@@ -86,13 +86,6 @@ impl Send {
         self.summarise = summarise;
     }
 
-    /// Whether a `rewind` is on the wire. The outbox `RewindSend` tag
-    /// is the sole record of its command id.
-    pub(super) fn matches(&self) -> bool {
-        self.send.is_some()
-    }
-    // debt: matches() duplicates is_sending(); PR #4204's merge frees the shrink to is_sending().
-
     /// Notes the `rewind` request on the wire.
     pub(super) fn begin(&mut self) {
         self.send = Some(SendPending);
@@ -206,7 +199,7 @@ impl App {
         if waiting == Some(Waiting::RewindHistory) && self.rewind.fold.take_wait() {
             self.outbox.settled(&id.0);
             self.rewind.fold.fail_walk(rejected.message.clone());
-        } else if waiting == Some(Waiting::RewindSend) && self.rewind.send.matches() {
+        } else if waiting == Some(Waiting::RewindSend) && self.rewind.send.is_sending() {
             self.outbox.settled(&id.0);
             self.rewind.send.refuse(
                 rejected.message.clone(),
@@ -234,7 +227,7 @@ impl App {
                 true
             }
             Waiting::RewindSend => {
-                if !self.rewind.send.matches() {
+                if !self.rewind.send.is_sending() {
                     return false;
                 }
                 self.rewind_refused(&CommandRejected {
@@ -313,7 +306,7 @@ impl App {
             | Waiting::Steer
             | Waiting::Shell => return None,
             Waiting::RewindSend => {
-                if !self.rewind.send.matches() {
+                if !self.rewind.send.is_sending() {
                     return None;
                 }
             }
