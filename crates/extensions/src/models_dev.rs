@@ -335,6 +335,44 @@ fn resolve(id: &str, meta: &CatalogMeta) -> (String, String) {
 }
 
 /// Parse provider metadata tolerantly; malformed or absent metadata has no overlay.
+#[cfg(test)]
+#[derive(Default)]
+struct Selection(std::collections::BTreeMap<String, std::collections::BTreeSet<String>>);
+
+#[cfg(test)]
+impl Selection {
+    fn insert(&mut self, source: &str, id: &str) {
+        self.0
+            .entry(source.to_owned())
+            .or_default()
+            .insert(id.to_owned());
+    }
+}
+
+// The production parser will use this selection when projecting the catalog.
+#[cfg(test)]
+fn select_catalog(bytes: &[u8], _selected: &Selection) -> Option<Value> {
+    serde_json::from_slice(bytes).ok()
+}
+
+#[cfg(test)]
+mod retained_catalog_tests {
+    use super::{Selection, select_catalog};
+    use serde_json::json;
+
+    #[test]
+    fn retains_only_selected_catalog_rows() {
+        let bytes = br#"{"served":{"model":{"name":"kept"},"unserved-model":{"name":"drop"}},"unserved-source":{"model":{"name":"drop"}}}"#;
+        let mut selected = Selection::default();
+        selected.insert("served", "model");
+
+        let retained = select_catalog(bytes, &selected).unwrap();
+
+        assert_eq!(retained, json!({"served":{"model":{"name":"kept"}}}));
+    }
+}
+
+/// Parse provider metadata tolerantly; malformed or absent metadata has no overlay.
 pub fn meta_of(file: &Value) -> Option<CatalogMeta> {
     let value = file.get("models_dev")?.as_object()?;
     let strings = |key: &str| {
