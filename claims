@@ -117,3 +117,5 @@ crates/main/tests/support/journey.rs:400-400	fiber-4756	plan	2026-11-12T16:33:27
 crates/main/tests/support/mod.rs:340-340	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
 crates/main/tests/support/mod.rs:378-378	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
 crates/main/tests/support/mod.rs:414-414	fiber-4756	plan	2026-11-12T16:33:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
+crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4582	plan	2026-11-12T16:48:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4582	plan	2026-11-12T16:48:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
