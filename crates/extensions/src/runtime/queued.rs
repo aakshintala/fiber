@@ -108,8 +108,9 @@ impl ProcessQueued {
             // The driver's return value is ignored (`docs/extensions.md`,
             // "Commands and screens"): answering nothing completes, and only
             // an error fails the wait.
-            state.answer =
-                Some(invoke(arg, scope, &cancel).map(|returned| returned.unwrap_or(Value::Null)));
+            state.answer = Some(
+                invoke(arg, scope, &cancel, None).map(|returned| returned.unwrap_or(Value::Null)),
+            );
         }
         self.done.notify_all();
     }
