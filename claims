@@ -248,7 +248,6 @@ crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/
 crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/src/notes.rs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4717	grant	2026-11-12T06:01:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/fakes/src/lib.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/support/mod.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -283,3 +282,4 @@ docs/sandbox.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/a
 docs/permissions.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/events.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
+crates/main/tests/screen_looks/swapped_panels_look.rs:944-944	fiber-4717	plan	2026-11-12T07:27:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
