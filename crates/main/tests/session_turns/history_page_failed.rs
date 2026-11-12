@@ -607,9 +607,9 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     driver.write(b"\x03\x03");
     let quit_wait = setup.deadline.start_wait();
     let quit_wait_left = quit_wait.left();
-    let code = quit_wait.recv(&finished).unwrap_or_else(|_| {
+    let code = quit_wait.recv(&finished).unwrap_or_else(|error| {
         panic!(
-            "waited until the deadline for the loop to quit (deadline had {quit_wait_left:?} left when the wait began; after {batches} batches of 5)"
+            "waited until the deadline for the loop to quit (deadline had {quit_wait_left:?} left when the wait began; after {batches} batches of 5; receive error: {error:?})"
         )
     });
     assert_eq!(code.expect("the loop to exit cleanly"), 0);
