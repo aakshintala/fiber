@@ -278,7 +278,7 @@ fn null_tests_by_equality_and_indexing_null_errors() {
 
 #[test]
 fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
-    let big = "B".repeat(20 * 1024);
+    let big = "B".repeat(2 * 1024 * 1024);
     let source = "local small = _G.host.tool(\"read\", { path = \"small.txt\" })\n\
         local nested = load('local o = host.tool(\"read\", { path = \"nested.txt\" }); print(\"nested:\" .. o.content[1].text)')\n\
         nested()\n\
@@ -314,7 +314,7 @@ fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     let shell_row = lines.pop().unwrap();
     let nested_read_row = lines.pop().unwrap();
     let read_row = lines.pop().unwrap();
-    // The script saw the whole 20 KiB output: the file bytes plus the
+    // The script saw the whole 2 MiB output: the file bytes plus the
     // shell tool's closing line (`text_of`/`exit_line` in
     // `crates/tools/src/shell.rs`), with no cut marker.
     let whole = format!("{big}\nExit code 0.\n");
@@ -339,6 +339,20 @@ fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     assert_large_eq(completed_text(inner), &whole);
     assert_eq!(inner["payload"].get("artifact"), None);
     assert_eq!(inner["payload"].get("kept"), None);
+    // `docs/tools.md`, "Bounded results", promises the 16 KiB model-facing
+    // bound; "Shell" → "Result and output" promises no inner-shell spill artifact.
+    assert!(
+        text.len() <= 16 * 1024,
+        "model-facing result: {} bytes",
+        text.len()
+    );
+    let artifacts = run.session_dir(&setup).join("artifacts");
+    // `docs/tools.md`, "Shell" → "Result and output" promises no inner-shell
+    // spill artifact.
+    assert!(
+        !artifacts.exists() || std::fs::read_dir(&artifacts).unwrap().next().is_none(),
+        "inner shell call created an artifact"
+    );
     // The turn finished on the scripted follow-up.
     assert_eq!(
         run.of("text_completed").last().unwrap()["payload"]["text"],
