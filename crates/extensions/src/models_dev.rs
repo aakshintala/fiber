@@ -1,6 +1,6 @@
 //! Fetches and merges the advisory models.dev catalog over generated provider data.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
 use config::ModelData;
+use serde::Deserializer;
+use serde::de::{DeserializeSeed, MapAccess, Visitor};
 use serde_json::Value;
 
 use crate::Providers;
@@ -165,11 +167,7 @@ pub(crate) fn merge_admission(
     if !enabled {
         return models;
     }
-    let Some(catalog) = config::read_models_dev(home)
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-    else {
+    let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
         return models;
     };
     let path = extension_dir
@@ -180,6 +178,10 @@ pub(crate) fn merge_admission(
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|file| meta_of(&file))
     else {
+        return models;
+    };
+    let selected = selections(&models, &meta);
+    let Some(catalog) = select_catalog(&bytes, &selected) else {
         return models;
     };
     merge(models, &meta, &catalog)
@@ -197,27 +199,35 @@ pub fn apply(
     let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
         return Vec::new();
     };
-    let Ok(catalog) = serde_json::from_slice::<Value>(&bytes) else {
+    let names: Vec<String> = providers.names().map(str::to_owned).collect();
+    let mut pending = Vec::new();
+    let mut selected = Selection::default();
+    for name in &names {
+        let Ok(dir) = provider_dir(home, providers, name) else {
+            continue;
+        };
+        let Ok(provider_bytes) = fs::read(dir) else {
+            continue;
+        };
+        let Ok(file) = serde_json::from_slice::<Value>(&provider_bytes) else {
+            continue;
+        };
+        let Some(meta) = meta_of(&file) else { continue };
+        let data = providers.data(name);
+        for (source, ids) in selections(&data.models, &meta).0 {
+            for id in ids {
+                selected.insert(source.clone(), id);
+            }
+        }
+        pending.push((name.clone(), meta, data.models.clone()));
+    }
+    let Some(catalog) = select_catalog(&bytes, &selected) else {
         return Vec::new();
     };
-    let names: Vec<String> = providers.names().map(str::to_owned).collect();
     let mut notices = Vec::new();
-    for name in names {
-        let Ok(dir) = provider_dir(home, providers, &name) else {
-            continue;
-        };
-        let Ok(bytes) = fs::read(dir) else {
-            continue;
-        };
-        let Ok(file) = serde_json::from_slice::<Value>(&bytes) else {
-            continue;
-        };
-        let Some(meta) = meta_of(&file) else {
-            continue;
-        };
-        let mut data = providers.data(&name);
-        data.models = merge(data.models, &meta, &catalog);
-        notices.extend(providers.set_models(&name, data.models));
+    for (name, meta, mut models) in pending {
+        models = merge(models, &meta, &catalog);
+        notices.extend(providers.set_models(&name, models));
     }
     notices
 }
@@ -231,6 +241,128 @@ fn provider_dir(
         .provider_source_dir(provider)
         .unwrap_or_else(|| home.join("providers").join(provider));
     Ok(base.join("providers").join(format!("{provider}.json")))
+}
+
+#[derive(Default)]
+struct Selection(BTreeMap<String, BTreeSet<String>>);
+
+impl Selection {
+    fn insert(&mut self, source: String, id: String) {
+        self.0.entry(source).or_default().insert(id);
+    }
+
+    fn get(&self, source: &str) -> Option<&BTreeSet<String>> {
+        self.0.get(source)
+    }
+}
+
+fn selections(models: &[ModelData], meta: &CatalogMeta) -> Selection {
+    let mut selected = Selection::default();
+    for model in models {
+        let (source, id) = resolve(&model.id, meta);
+        selected.insert(source, id);
+    }
+    selected
+}
+
+fn select_catalog(bytes: &[u8], selected: &Selection) -> Option<Value> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let catalog = SelectionSeed(selected)
+        .deserialize(&mut deserializer)
+        .ok()?;
+    deserializer.end().ok()?;
+    Some(catalog)
+}
+
+struct SelectionSeed<'a>(&'a Selection);
+
+impl<'de> DeserializeSeed<'de> for SelectionSeed<'_> {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct CatalogVisitor<'a>(&'a Selection);
+        impl<'de> Visitor<'de> for CatalogVisitor<'_> {
+            type Value = Value;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a models.dev catalog object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+                let mut catalog = serde_json::Map::new();
+                while let Some(source) = map.next_key::<String>()? {
+                    if let Some(ids) = self.0.get(&source) {
+                        let rows = map.next_value_seed(ModelRows(ids))?;
+                        catalog.insert(source, rows);
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(Value::Object(catalog))
+            }
+        }
+        deserializer.deserialize_map(CatalogVisitor(self.0))
+    }
+}
+
+struct ModelRows<'a>(&'a BTreeSet<String>);
+
+impl<'de> DeserializeSeed<'de> for ModelRows<'_> {
+    type Value = Value;
+    fn deserialize<D>(self, deserializer: D) -> Result<Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RowsVisitor<'a>(&'a BTreeSet<String>);
+        impl<'de> Visitor<'de> for RowsVisitor<'_> {
+            type Value = Value;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a models.dev provider object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+                let mut rows = serde_json::Map::new();
+                while let Some(id) = map.next_key::<String>()? {
+                    if self.0.contains(&id) {
+                        rows.insert(id, map.next_value::<Value>()?);
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(Value::Object(rows))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Value, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(Value::Null)
+            }
+            // Non-object rows have no selectable fields, so represent them as Null.
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+            fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+        }
+        deserializer.deserialize_any(RowsVisitor(self.0))
+    }
 }
 
 /// Merge fetched fields into each generated row while retaining pins and Fiber-only fields.
@@ -335,44 +467,6 @@ fn resolve(id: &str, meta: &CatalogMeta) -> (String, String) {
 }
 
 /// Parse provider metadata tolerantly; malformed or absent metadata has no overlay.
-#[cfg(test)]
-#[derive(Default)]
-struct Selection(std::collections::BTreeMap<String, std::collections::BTreeSet<String>>);
-
-#[cfg(test)]
-impl Selection {
-    fn insert(&mut self, source: &str, id: &str) {
-        self.0
-            .entry(source.to_owned())
-            .or_default()
-            .insert(id.to_owned());
-    }
-}
-
-// The production parser will use this selection when projecting the catalog.
-#[cfg(test)]
-fn select_catalog(bytes: &[u8], _selected: &Selection) -> Option<Value> {
-    serde_json::from_slice(bytes).ok()
-}
-
-#[cfg(test)]
-mod retained_catalog_tests {
-    use super::{Selection, select_catalog};
-    use serde_json::json;
-
-    #[test]
-    fn retains_only_selected_catalog_rows() {
-        let bytes = br#"{"served":{"model":{"name":"kept"},"unserved-model":{"name":"drop"}},"unserved-source":{"model":{"name":"drop"}}}"#;
-        let mut selected = Selection::default();
-        selected.insert("served", "model");
-
-        let retained = select_catalog(bytes, &selected).unwrap();
-
-        assert_eq!(retained, json!({"served":{"model":{"name":"kept"}}}));
-    }
-}
-
-/// Parse provider metadata tolerantly; malformed or absent metadata has no overlay.
 pub fn meta_of(file: &Value) -> Option<CatalogMeta> {
     let value = file.get("models_dev")?.as_object()?;
     let strings = |key: &str| {
@@ -431,4 +525,21 @@ pub fn meta_of(file: &Value) -> Option<CatalogMeta> {
             .unwrap_or_default(),
         source_aliases: strings("source_aliases"),
     })
+}
+
+#[cfg(test)]
+mod retained_catalog_tests {
+    use super::{Selection, select_catalog};
+    use serde_json::json;
+
+    #[test]
+    fn retains_only_selected_catalog_rows() {
+        let bytes = br#"{"served":{"model":{"name":"kept"},"unserved-model":{"name":"drop"}},"unserved-source":{"model":{"name":"drop"}}}"#;
+        let mut selected = Selection::default();
+        selected.insert("served".to_owned(), "model".to_owned());
+
+        let retained = select_catalog(bytes, &selected).unwrap();
+
+        assert_eq!(retained, json!({"served":{"model":{"name":"kept"}}}));
+    }
 }
