@@ -48,9 +48,12 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the milliseconds from the reply's `Date` header until then
-become the error's `retry_after_ms`, and
-the message names the reset time. Without a usable `Date`, no wait is set. `rate_limit_exceeded` stays `rate_limited`.
+(Unix seconds), Fiber uses `retry-after` first. Only when the reply has no
+`retry-after` header at all does it use the milliseconds from the reply's
+`Date` header until `resets_at` as `retry_after_ms`; a present but
+unparseable `retry-after` vetoes that fallback. Without a usable `Date`, no
+fallback wait is set. The message names the reset time. `rate_limit_exceeded`
+stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
 "The usage-limit error body").
@@ -916,8 +919,10 @@ reports only invalid the load did not report.
 
 The vendor's own list decides which models a provider offers. Every first-party
 package whose vendor has a listing endpoint declares a `models()` that calls it
-with the person's credential: `anthropic`, `openai`, `gemini`, `codex`, `muse`,
-`openrouter` and `databricks`. It keeps the models that output text and call
+with the person's credential, except OpenRouter, whose models endpoint needs no
+key: `anthropic`, `openai`, `gemini`, `codex`, `muse` and `databricks` use the
+person's credential; `openrouter` sends none, avoiding needless credential
+exposure. It keeps the models that output text and call
 tools, judged by the vendor's fields where it has them and by models.dev
 otherwise. A package whose vendor has no listing endpoint, and every package
 before its first refresh or without a credential, shows its generated list
