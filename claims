@@ -110,3 +110,5 @@ crates/main/tests/screens/call_view.rs	fiber-4723	plan	2026-11-12T17:04:30Z	Amog
 crates/main/tests/session_turns/history_page_failed.rs	fiber-4724	plan	2026-11-12T17:04:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reload_tests.rs	fiber-4734	plan	2026-11-12T17:04:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/reload_tests.rs	fiber-4734	plan	2026-11-12T17:04:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/lib.rs	fiber-4671	plan	2026-11-12T17:04:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/prompt-cache.md	fiber-4671	plan	2026-11-12T17:04:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
