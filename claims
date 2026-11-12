@@ -400,3 +400,4 @@ crates/tools/src/shell/detached.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhou
 crates/tools/src/shell/detached_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/builtin.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/builtin_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check-docs	fiber-4465	plan	2026-11-12T21:40:24Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
