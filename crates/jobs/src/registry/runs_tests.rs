@@ -79,7 +79,14 @@ fn resume_counts_as_a_start_but_a_live_steer_does_not() {
         let called = AtomicBool::new(false);
         let answer = registry.resume(&id.0, None, |_| {
             called.store(true, Ordering::SeqCst);
-            Ok::<_, ()>((Stop(Box::new(|| {})), ()))
+            Ok::<_, ()>((
+                Stop(Box::new(|| {})),
+                contract::jobs::JobIdentity {
+                    pgid: 4242,
+                    start_time: 99,
+                },
+                (),
+            ))
         });
         assert_eq!(called.load(Ordering::SeqCst), count == 9);
         assert_eq!(answer.is_ok(), count == 9);
@@ -87,9 +94,10 @@ fn resume_counts_as_a_start_but_a_live_steer_does_not() {
             assert!(matches!(answer, Err(Resume::Full)));
         }
         assert!(matches!(
-            registry.resume(&running[0].0.0, None, |_| Err::<(Stop, ()), _>(
-                "must not start"
-            )),
+            registry.resume(&running[0].0.0, None, |_| Err::<
+                (Stop, contract::jobs::JobIdentity, ()),
+                _,
+            >("must not start")),
             Err(Resume::Live(_, _))
         ));
     }
@@ -148,6 +156,7 @@ fn open_delegate(registry: &Arc<Registry>) -> (contract::JobId, Unreported) {
         "scan".into(),
         OUTPUT.into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     (id, finish)
@@ -188,9 +197,9 @@ fn started(id: &contract::JobId, action: Option<ActionId>) -> Taken {
             description: "scan".into(),
             output_path: OUTPUT.into(),
 
-            pgid: None,
-            start_time: None,
-            kind: None,
+            pgid: Some(4242),
+            start_time: Some(99),
+            kind: Some(contract::events::JobKind::Job),
         }),
         action,
     }
@@ -221,7 +230,14 @@ fn resume_ok(
     action: Option<ActionId>,
 ) -> Resumed<()> {
     match registry.resume(&id.0, action, |_| {
-        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Ok(resumed) => resumed,
         Err(_) => panic!("the resume committed"),
@@ -255,6 +271,9 @@ fn a_resume_queues_the_new_run_after_the_ended_run_news() {
         JobRecord::Started(line) if line.tool.as_deref() == Some("delegate_message")
             && line.description == "scan"
             && line.output_path == OUTPUT
+            && line.pgid == Some(4242)
+            && line.start_time == Some(99)
+            && line.kind == Some(contract::events::JobKind::Job)
     ));
     assert!(matches!(
         &ds_taken.record,
@@ -313,7 +332,7 @@ fn a_failed_start_leaves_the_job_ended_with_its_news_queued() {
     let (id, finish) = open_delegate(&registry);
     end_run(finish, &id, "Done.");
     let Err(Resume::Start(message)) = registry.resume(&id.0, Some(action()), |_| {
-        Err::<(Stop, ()), _>("boom".to_owned())
+        Err::<(Stop, contract::jobs::JobIdentity, ()), _>("boom".to_owned())
     }) else {
         panic!("the start failed");
     };
@@ -431,6 +450,39 @@ fn run_2_finish_queues_its_news_behind_the_taken_start() {
 }
 
 #[test]
+fn detached_end_sends_no_delivery_or_completed_record() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let log = registry.artifacts.join("detached.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let mut detached = opening("sleep 60");
+    detached.detached = Some(log);
+    detached.identity = Some(contract::jobs::JobIdentity {
+        pgid: 4242,
+        start_time: 99,
+    });
+    let opened = registry.open(detached).unwrap();
+    let id = opened.started.job_id.0.clone();
+    (opened.end.0)(ended_ok(&id));
+
+    assert!(!registry.running(&id, 1));
+    assert!(rx.try_recv().is_err(), "detached end sent a delivery");
+    let inner = crate::registry::lock(&registry.inner);
+    let job = inner
+        .jobs
+        .iter()
+        .find(|job| job.started.job_id.0 == id)
+        .unwrap();
+    assert!(
+        job.queue.is_empty(),
+        "detached end queued a completed record"
+    );
+    drop(inner);
+    assert!(registry.list_text().contains("detached completed sleep 60"));
+}
+
+#[test]
 fn target_names_what_the_id_names() {
     let (_dir, registry) = world();
     assert!(matches!(registry.target("j_missing"), Target::Unknown));
@@ -497,6 +549,7 @@ fn stop_delegates_stops_a_resumed_run() {
         "scan".into(),
         OUTPUT.into(),
         stop,
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     end_run(finish, &id, "Done.");
@@ -505,7 +558,16 @@ fn stop_delegates_stops_a_resumed_run() {
         let fired2 = Arc::clone(&fired2);
         Stop(Box::new(move || fired2.store(true, Ordering::SeqCst)))
     };
-    match registry.resume(&id.0, Some(action()), |_| Ok::<_, String>((stop2, ()))) {
+    match registry.resume(&id.0, Some(action()), |_| {
+        Ok::<_, String>((
+            stop2,
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
+    }) {
         Ok(held) => {
             assert_eq!(registry.stop_delegates(), 1);
             assert!(fired2.load(Ordering::SeqCst), "the resumed run stops");
@@ -584,6 +646,7 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
         "scan".into(),
         OUTPUT.into(),
         stop,
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     let a = action();
@@ -609,9 +672,16 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
                         let _sent = stop2_tx.send(());
                     }))
                 };
-                match hook_waiter
-                    .resume(&hook_id.0, Some(action()), |_| Ok::<_, String>((stop, ())))
-                {
+                match hook_waiter.resume(&hook_id.0, Some(action()), |_| {
+                    Ok::<_, String>((
+                        stop,
+                        contract::jobs::JobIdentity {
+                            pgid: 4242,
+                            start_time: 99,
+                        },
+                        (),
+                    ))
+                }) {
                     Ok(resumed) => {
                         *moved_held.lock().unwrap() = Some(resumed.unreported);
                     }
@@ -619,7 +689,7 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
                 }
             }));
         });
-        let answer = waiter.stop(&wid.0, &CancelToken::new()).unwrap();
+        let answer = waiter.stop(&wid.0, &CancelToken::new(), false).unwrap();
         let _sent = answer_tx.send(answer);
     });
     let wait = Deadline::after(MUST_SUCCEED_WITHIN);
@@ -642,7 +712,9 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
     let stop_id = id.clone();
     let (run2_tx, run2_rx) = mpsc::channel();
     let stopping = thread::spawn(move || {
-        let answer = stopper.stop(&stop_id.0, &CancelToken::new()).unwrap();
+        let answer = stopper
+            .stop(&stop_id.0, &CancelToken::new(), false)
+            .unwrap();
         let _sent = run2_tx.send(answer);
     });
     Deadline::after(MUST_SUCCEED_WITHIN)
@@ -728,7 +800,14 @@ fn the_run_number_is_never_reused() {
     let moved = Arc::clone(&called);
     match registry.resume(&id.0, Some(action()), |_| {
         moved.store(true, Ordering::SeqCst);
-        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Err(Resume::Exhausted) => {}
         _ => panic!("the run count is exhausted"),
@@ -758,7 +837,14 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
         first.resume(&first_id.0, Some(action()), |_| {
             let _sent = started_tx.send(());
             release_rx.recv().unwrap();
-            Ok::<_, String>((Stop(Box::new(|| {})), ()))
+            Ok::<_, String>((
+                Stop(Box::new(|| {})),
+                contract::jobs::JobIdentity {
+                    pgid: 4242,
+                    start_time: 99,
+                },
+                (),
+            ))
         })
     });
     Deadline::after(MUST_SUCCEED_WITHIN)
@@ -770,7 +856,14 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
         let _sent = attempting_tx.send(());
         second.resume(&second_id.0, Some(action()), |_| {
             let _sent = called_tx.send(());
-            Ok::<_, String>((Stop(Box::new(|| {})), ()))
+            Ok::<_, String>((
+                Stop(Box::new(|| {})),
+                contract::jobs::JobIdentity {
+                    pgid: 4242,
+                    start_time: 99,
+                },
+                (),
+            ))
         })
     });
     Deadline::after(MUST_SUCCEED_WITHIN)
@@ -817,7 +910,14 @@ fn a_resume_whose_run_moved_during_start_answers_live_and_changes_nothing() {
             .find(|job| job.started.job_id == moved_id)
             .expect("the job is still there")
             .run = 7;
-        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Err(Resume::Live(_, 7)) => {}
         _ => panic!("the stale resume answers live"),
@@ -844,7 +944,14 @@ fn a_resume_whose_phase_left_ended_during_start_answers_live_and_changes_nothing
             .find(|job| job.started.job_id == moved_id)
             .expect("the job is still there")
             .phase = super::super::Phase::Running;
-        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Err(Resume::Live(_, 1)) => {}
         _ => panic!("the racing resume answers live"),
@@ -1021,7 +1128,14 @@ fn two_resumes_in_one_step_queue_both_starts() {
     let moved = Arc::clone(&called);
     match registry.resume(&id.0, Some(action()), |_| {
         moved.store(true, Ordering::SeqCst);
-        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Err(Resume::Live(_, 2)) => {}
         _ => panic!("run 2 is live"),
@@ -1197,6 +1311,10 @@ fn a_dropped_resume_settle_is_taken_by_shutdown_after_a_stop() {
             Stop(Box::new(move || {
                 let _sent = stop_tx.send(());
             })),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
             (),
         ))
     }) {
@@ -1212,7 +1330,9 @@ fn a_dropped_resume_settle_is_taken_by_shutdown_after_a_stop() {
     let stopper = Arc::clone(&registry);
     let stop_id = id.clone();
     let stopping = thread::spawn(move || {
-        let answer = stopper.stop(&stop_id.0, &CancelToken::new()).unwrap();
+        let answer = stopper
+            .stop(&stop_id.0, &CancelToken::new(), false)
+            .unwrap();
         let _sent = stopped_tx.send(answer);
     });
     Deadline::after(MUST_SUCCEED_WITHIN)
@@ -1280,6 +1400,7 @@ fn open_delegate_on(
         "scan".into(),
         events.to_string_lossy().into_owned(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         start,
     );
     (id, finish)

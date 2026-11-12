@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock as _;
 use contract::inbox::Delivery;
-use contract::jobs::{Jobs as _, Stop, Taken};
+use contract::jobs::{JobRecord, Jobs as _, Stop, Taken};
 use contract::tool::{Answered, Ask, Asking, Output, Tool};
 use contract::{ActionId, ErrorCode, JobId, SessionId};
 use fakes::clock::FakeClock;
@@ -364,6 +364,7 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
             "scan".into(),
             "output".into(),
             Stop(Box::new(|| {})),
+            crate::support::identity(),
             delegate,
         );
         end_resume_run(finish, &id, "done");
@@ -452,6 +453,7 @@ fn open_resume_delegate(
         "scan".into(),
         output.into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     (id, finish)
@@ -480,7 +482,31 @@ fn code_of(output: &Output) -> ErrorCode {
 }
 
 fn call(settle: &contract::tool::Settle) -> Vec<Taken> {
-    (settle.0)()
+    let mut taken = (settle.0)();
+    normalize_started(&mut taken);
+    taken
+}
+
+fn normalize_started(taken: &mut [Taken]) {
+    for item in taken {
+        let contract::jobs::JobRecord::Started(started) = &mut item.record else {
+            continue;
+        };
+        assert!(
+            started.pgid.is_some(),
+            "a resumed start records its process group"
+        );
+        assert!(
+            started.start_time.is_some(),
+            "a resumed start records its start time"
+        );
+        assert_eq!(started.kind, Some(contract::events::JobKind::Job));
+        // The child pid varies between runs; pin the new fields above while
+        // surrounding tests compare the stable row.
+        started.pgid = None;
+        started.start_time = None;
+        started.kind = None;
+    }
 }
 
 /// The runner's park when it lies ahead of `now()`, otherwise `None`.
@@ -858,18 +884,41 @@ fn a_dropped_resume_output_loses_no_start() {
         &Recorder::default(),
     );
     assert!(output.error.is_none());
+    let pids = fakes::matching("fiber-message-dropped", MUST_SUCCEED_WITHIN).unwrap();
+    assert_eq!(
+        pids.len(),
+        1,
+        "the resumed child is the only matching process"
+    );
+    let pgid = pids.first().copied().unwrap();
+    let start_time = support::group::start_time(pgid).unwrap();
     // The settle is never called: run 2 ends, and its notice takes
     // everything ahead of its own news.
     let run2 = stop_and_reap(&rig, &id, watchdog);
     assert!(run2.delegate.is_some(), "run 2 finished");
+    let mut records = (run2.claim.0)().expect("the notice claims run 2's records");
+    let started = records
+        .iter()
+        .find_map(|taken| {
+            if let JobRecord::Started(started) = &taken.record {
+                Some(started)
+            } else {
+                None
+            }
+        })
+        .expect("run 2's start is recorded");
+    assert_eq!(started.pgid, Some(pgid));
+    assert_eq!(started.start_time, Some(start_time));
+    assert_eq!(started.kind, Some(contract::events::JobKind::Job));
+    normalize_started(&mut records);
     assert_eq!(
-        (run2.claim.0)(),
-        Some(vec![
+        records,
+        vec![
             taken_record(&id, "Done.", &output_path, None),
             taken_completed(&id),
             taken_started(&id, &output_path, None),
             taken_delegate_started(&id, None),
-        ])
+        ]
     );
 }
 

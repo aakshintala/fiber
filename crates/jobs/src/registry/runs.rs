@@ -246,12 +246,15 @@ impl Registry {
     /// inner lock released. On `Ok` the ended run's end moves to `ends`,
     /// the new run's start is appended after its news, and the new run is
     /// recorded running. On `Err` nothing changes and nothing is queued.
-    pub(crate) fn resume<T, E>(
+    pub(crate) fn resume<T, E, I>(
         self: &Arc<Self>,
         id: &str,
         action: Option<ActionId>,
-        start: impl FnOnce(&Resumable) -> Result<(Stop, T), E>,
-    ) -> Result<Resumed<T>, Resume<E>> {
+        start: impl FnOnce(&Resumable) -> Result<(Stop, I, T), E>,
+    ) -> Result<Resumed<T>, Resume<E>>
+    where
+        I: Into<contract::jobs::JobIdentity>,
+    {
         let _gate = lock(&self.start_gate);
         let (job_id, next, resumable) = {
             let inner = lock(&self.inner);
@@ -287,8 +290,8 @@ impl Registry {
             )
         };
         let run = next - 1;
-        let (stop, value) = match start(&resumable) {
-            Ok(started) => started,
+        let (stop, identity, value) = match start(&resumable) {
+            Ok((stop, identity, value)) => (stop, identity.into(), value),
             Err(error) => return Err(Resume::Start(error)),
         };
         // The new run is recorded with what the resume was started with.
@@ -340,10 +343,13 @@ impl Registry {
                 description,
                 output_path: job.path.to_string_lossy().into_owned(),
 
-                pgid: None,
-                start_time: None,
-                kind: None,
+                pgid: Some(identity.pgid),
+                start_time: Some(identity.start_time),
+                kind: Some(contract::events::JobKind::Job),
             };
+            job.started.pgid = Some(identity.pgid);
+            job.started.start_time = Some(identity.start_time);
+            job.started.kind = Some(contract::events::JobKind::Job);
             let delegate_started = resumable.delegate.clone();
             job.queue.push_back(Pending {
                 at: Mark::start(next),
@@ -530,37 +536,39 @@ impl Registry {
             // the same file. Nothing is written here: the delivery writes
             // the file after the hooks.
             let delegate = delegate.map(|finished| with_final_file(job, finished));
-            // A delegate's finish is kept past the end, for a later
-            // `wait` and its text.
-            job.finished = delegate.clone();
-            if let Some(finished) = delegate.clone() {
+            if job.started.kind != Some(contract::events::JobKind::Detached) {
+                // A delegate's finish is kept past the end, for a later
+                // `wait` and its text.
+                job.finished = delegate.clone();
+                if let Some(finished) = delegate.clone() {
+                    job.queue.push_back(Pending {
+                        at: Mark::end(run),
+                        record: JobRecord::DelegateFinished(finished),
+                        action: None,
+                    });
+                }
                 job.queue.push_back(Pending {
                     at: Mark::end(run),
-                    record: JobRecord::DelegateFinished(finished),
+                    record: JobRecord::Completed(completed.clone()),
                     action: None,
                 });
-            }
-            job.queue.push_back(Pending {
-                at: Mark::end(run),
-                record: JobRecord::Completed(completed.clone()),
-                action: None,
-            });
-            if let Some(inbox) = &inner.inbox {
-                let registry = Weak::clone(&self.me);
-                let id = completed.job_id.0.clone();
-                let claim = Claim(Box::new(move || {
-                    registry
-                        .upgrade()
-                        .and_then(|registry| registry.claim_through(&id, run))
-                }));
-                // A loop that is gone takes no news; the end stays
-                // recorded for `list`.
-                let _sent =
-                    inbox.send(contract::inbox::Delivery::Job(contract::inbox::JobNotice {
-                        completed,
-                        claim,
-                        delegate,
+                if let Some(inbox) = &inner.inbox {
+                    let registry = Weak::clone(&self.me);
+                    let id = completed.job_id.0.clone();
+                    let claim = Claim(Box::new(move || {
+                        registry
+                            .upgrade()
+                            .and_then(|registry| registry.claim_through(&id, run))
                     }));
+                    // A loop that is gone takes no news; the end stays
+                    // recorded for `list`.
+                    let _sent =
+                        inbox.send(contract::inbox::Delivery::Job(contract::inbox::JobNotice {
+                            completed,
+                            claim,
+                            delegate,
+                        }));
+                }
             }
         }
         self.park.bump();

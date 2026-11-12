@@ -291,6 +291,7 @@ fn open_delegate(rig: &Rig, description: &str) -> (contract::JobId, crate::regis
         description.into(),
         "/sessions/s_x/events.jsonl".into(),
         contract::jobs::Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     (id, finish)
@@ -817,7 +818,14 @@ fn a_run_that_changes_under_a_committed_attempt_is_not_sent_twice() {
     // Another call ends run 1 and resumes it to run 2.
     end_run(finish, &id);
     let _held = match rig.registry.resume(&id.0, None, |_| {
-        Ok::<_, String>((contract::jobs::Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            contract::jobs::Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Ok(resumed) => resumed,
         Err(_) => panic!("the other resume committed"),
@@ -871,7 +879,14 @@ fn a_stale_commit_is_withheld_and_never_resent() {
     // its commit.
     end_run(finish, &id);
     let _held = match rig.registry.resume(&id.0, None, |_| {
-        Ok::<_, String>((contract::jobs::Stop(Box::new(|| {})), ()))
+        Ok::<_, String>((
+            contract::jobs::Stop(Box::new(|| {})),
+            contract::jobs::JobIdentity {
+                pgid: 4242,
+                start_time: 99,
+            },
+            (),
+        ))
     }) {
         Ok(resumed) => resumed,
         Err(_) => panic!("the other resume committed"),

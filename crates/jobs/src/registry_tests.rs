@@ -62,6 +62,7 @@ fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_an
                 "scan".into(),
                 "/child/events.jsonl".into(),
                 Stop(Box::new(|| {})),
+                crate::support::identity(),
                 delegate_started("j_one"),
             )
         } else {
@@ -72,6 +73,7 @@ fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_an
                     "scan".into(),
                     "/child/events.jsonl".into(),
                     Stop(Box::new(|| {})),
+                    crate::support::identity(),
                     delegate_started("j_one"),
                 )
                 .1
@@ -95,7 +97,7 @@ fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_an
         let mut called = false;
         let resumed = registry.resume("j_one", None, |_| {
             called = true;
-            Err::<(Stop, ()), _>(())
+            Err::<(Stop, contract::jobs::JobIdentity, ()), _>(())
         });
         assert_eq!(
             matches!(resumed, Err(super::runs::Resume::Unknown)),
@@ -115,6 +117,7 @@ fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacti
         "scan".into(),
         "/child/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started("j_ext"),
     );
     let tool = crate::delegate::DelegateMessage {
@@ -723,11 +726,11 @@ fn stop_through_the_trait_on_an_ended_or_unknown_job_is_false() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let cancel = CancelToken::new();
     assert!(matches!(
-        registry.stop("j_missing", &cancel),
+        registry.stop("j_missing", &cancel, false),
         Err(contract::jobs::StopError::NotRunning)
     ));
     assert!(matches!(
-        registry.stop(&id.0, &cancel),
+        registry.stop(&id.0, &cancel, false),
         Err(contract::jobs::StopError::Ended(Outcome::Completed))
     ));
 }
@@ -1534,6 +1537,7 @@ fn open_started_records_the_job_without_a_file() {
         "scan".into(),
         output.clone(),
         stop_of(&flag),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     assert_eq!(started.job_id, id);
@@ -1543,6 +1547,34 @@ fn open_started_records_the_job_without_a_file() {
     assert!(!std::path::Path::new(&output).exists());
     assert!(registry.list_text().contains(&id.0));
     assert!(registry.list_text().contains("scan"));
+}
+
+#[test]
+fn detached_admission_preserves_the_existing_log_and_lists_the_identity() {
+    let (_dir, registry) = world();
+    let log = registry.artifacts.join("detached.log");
+    std::fs::write(&log, "already written\n").unwrap();
+    let mut detached = opening("sleep 60");
+    detached.detached = Some(log.clone());
+    detached.identity = Some(contract::jobs::JobIdentity {
+        pgid: 4242,
+        start_time: 99,
+    });
+    let opened = registry.open(detached).unwrap();
+    assert!(registry.contains(&opened.started.job_id.0));
+    assert!(!Jobs::running(registry.as_ref()).contains(&opened.started.job_id));
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "already written\n");
+    assert!(opened.started.output_path.ends_with("detached.log"));
+    let row = registry.list_text();
+    assert!(row.contains("detached running sleep 60"), "{row}");
+    assert_eq!(
+        Jobs::owned_identities(registry.as_ref()),
+        vec![contract::jobs::JobIdentity {
+            pgid: 4242,
+            start_time: 99,
+        }]
+    );
+    drop(opened.end);
 }
 
 #[test]
@@ -1563,6 +1595,7 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(
@@ -1617,6 +1650,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
@@ -1635,6 +1669,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
@@ -1654,6 +1689,7 @@ fn a_dropped_delegate_end_is_indeterminate_with_an_empty_finish() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     drop(finish);
@@ -1702,6 +1738,7 @@ fn stop_delegates_stops_only_running_delegates() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         stop_of(&delegate_flag),
+        crate::support::identity(),
         delegate_started(&delegate_id.0),
     );
     assert_eq!(registry.stop_delegates(), 1);
@@ -1766,6 +1803,7 @@ fn a_stop_racing_a_gated_start_stops_the_starting_delegate() {
                     "scan".into(),
                     "/sessions/s_x/events.jsonl".into(),
                     stop,
+                    crate::support::identity(),
                     delegate_started(&id.0),
                 );
                 id_tx.send(id).expect("the test reads the committed id");
@@ -1818,6 +1856,7 @@ fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_a),
+        crate::support::identity(),
         delegate_started(&id_a.0),
     );
     let flag_b = stopped();
@@ -1828,6 +1867,7 @@ fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_b),
+        crate::support::identity(),
         delegate_started(&id_b.0),
     );
     let model_flag = stopped();
@@ -1838,6 +1878,7 @@ fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&model_flag),
+        crate::support::identity(),
         delegate_started(&model_id.0),
     );
     let shell_flag = stopped();
@@ -1869,6 +1910,7 @@ fn retain_extensions_with_no_loaded_names_stops_every_extension_job() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_a),
+        crate::support::identity(),
         delegate_started(&id_a.0),
     );
     let flag_b = stopped();
@@ -1879,6 +1921,7 @@ fn retain_extensions_with_no_loaded_names_stops_every_extension_job() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_b),
+        crate::support::identity(),
         delegate_started(&id_b.0),
     );
     assert_eq!(registry.retain_extensions(&[]), 2);
@@ -1905,6 +1948,7 @@ fn retain_extensions_waits_for_a_start_holding_the_gate_then_stops_it() {
                 "scan".into(),
                 "/child/events.jsonl".into(),
                 stop_of(&flag),
+                crate::support::identity(),
                 delegate_started(&id.0),
             );
             Ok::<_, ()>((id, finish, flag))
@@ -1964,6 +2008,7 @@ fn answer_for_end(completed: JobCompleted, text: &str) -> (TempDir, String) {
             .to_string_lossy()
             .into_owned(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(completed, Some(delegate_finished(&id.0, text)));

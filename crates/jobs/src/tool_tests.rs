@@ -3,6 +3,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
 use fakes::MUST_SUCCEED_WITHIN;
+use std::io::{BufRead, Write as _};
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
@@ -12,11 +16,11 @@ use contract::clock::{Clock, Wake};
 use contract::events::{DelegateFinished, DelegateStarted, JobCompleted, Outcome};
 use contract::jobs::{End, JobRecord, Opening, Stop, Taken};
 use contract::shapes::{ContentPart, Effect, Failure, Process, ProviderFailure, Usage};
-use contract::tool::{Cancel, Output, Tool};
-use contract::{ErrorCode, JobId, SessionId};
+use contract::tool::{Answered, Ask, Asking, Cancel, Effects, Output, Tool};
+use contract::{ActionId, ErrorCode, JobId, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Recorder, TempDir};
+use fakes::{CancelToken, Recorder, TempDir, Watchdog, group_empties, kill_group};
 use serde_json::{Map, Value, json};
 
 use super::JobsTool;
@@ -55,6 +59,31 @@ fn text_of(output: &Output) -> &str {
 
 fn run(tool: &JobsTool, value: Value, cancel: &dyn Cancel) -> Output {
     tool.run(&args(value), cancel, &Recorder::default())
+}
+
+fn run_with_effects(
+    tool: &JobsTool,
+    value: Value,
+    effects: &Effects,
+    cancel: &dyn Cancel,
+) -> Output {
+    tool.run_with_effects(&args(value), effects, cancel, &Recorder::default(), &NoAsk)
+}
+
+struct NoAsk;
+
+impl Ask for NoAsk {
+    fn action(&self) -> ActionId {
+        ActionId("a_1".into())
+    }
+
+    fn answerable(&self) -> bool {
+        false
+    }
+
+    fn ask(&self, _asking: Asking) -> Answered {
+        Answered::NoAnswer
+    }
 }
 
 fn setup(clock: Arc<dyn Clock>) -> (TempDir, Arc<Registry>, JobsTool) {
@@ -262,6 +291,7 @@ fn failed_delegate(
         description.into(),
         output.into(),
         idle_stop(),
+        crate::support::identity(),
         delegate,
     );
     finish.report(
@@ -373,6 +403,7 @@ fn a_running_fiber_delegate_lists_its_prospective_path() {
         "scan".into(),
         output.clone(),
         idle_stop(),
+        crate::support::identity(),
         delegate,
     );
     let listed = run(&tool, json!({"action": "list"}), &cancel);
@@ -409,6 +440,7 @@ fn a_completed_fiber_delegate_with_its_log_lists_no_error() {
         "scan".into(),
         output.clone(),
         idle_stop(),
+        crate::support::identity(),
         delegate,
     );
     finish.report(
@@ -1453,6 +1485,449 @@ fn write_waits_250_ms_by_default() {
         json!({"action": "write", "input": "x"}),
         Duration::from_millis(250),
     );
+}
+
+#[test]
+fn detached_jobs_list_but_cannot_be_waited_or_written() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let normal = open(&registry, "ordinary job", idle_stop());
+    let normal_id = normal.started.job_id.0.clone();
+    let normal_row = format!(
+        "{normal_id} running ordinary job — {}\n",
+        normal.path.display()
+    );
+    let log = _dir.path().join("artifacts/detached.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let mut opening = Opening {
+        tool: "shell".into(),
+        description: "sleep 60".into(),
+        stop: idle_stop(),
+        lines: false,
+        input: None,
+        identity: None,
+        detached: Some(log.clone()),
+    };
+    opening.identity = Some(contract::jobs::JobIdentity {
+        pgid: std::process::id(),
+        start_time: support::group::start_time(std::process::id()).unwrap(),
+    });
+    let opened = registry.open(opening).unwrap();
+    let id = opened.started.job_id.0.clone();
+    let listed = run(&tool, json!({"action":"list"}), &CancelToken::new());
+    let named_list = run(
+        &tool,
+        json!({"action":"list", "job_id":id.clone()}),
+        &CancelToken::new(),
+    );
+    assert!(named_list.error.is_none(), "{}", text_of(&named_list));
+    assert_eq!(
+        text_of(&listed),
+        format!(
+            "{normal_row}{id} detached running sleep 60 — {}\n",
+            log.display()
+        )
+    );
+    let waited = run(
+        &tool,
+        json!({"action":"wait", "job_id":id, "timeout_ms":0}),
+        &CancelToken::new(),
+    );
+    assert_eq!(
+        waited.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::InvalidArguments)
+    );
+    let written = run(
+        &tool,
+        json!({"action":"write", "job_id":id, "input":"x"}),
+        &CancelToken::new(),
+    );
+    assert_eq!(
+        written.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::InvalidArguments)
+    );
+    drop((normal.end, opened.end));
+}
+
+#[test]
+fn stop_of_an_entry_without_a_confirmed_identity_needs_review() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let log = _dir.path().join("artifacts/unidentified.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep 60".into(),
+            stop: idle_stop(),
+            lines: false,
+            input: None,
+            identity: None,
+            detached: Some(log),
+        })
+        .unwrap();
+    let effects = tool
+        .effects(&args(
+            json!({"action":"stop", "job_id":opened.started.job_id.0}),
+        ))
+        .unwrap();
+    assert_eq!(effects.declared.effects, vec![Effect::Executes]);
+    drop(opened.end);
+}
+
+#[test]
+fn a_mismatched_detached_identity_is_gone_and_never_signalled() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let mut command = Command::new("sleep");
+    command
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let start_time = support::group::start_time(pgid).unwrap() ^ 1;
+    let log = _dir.path().join("artifacts/mismatched.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let stops = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&stops);
+    let end_slot = Arc::new(Mutex::new(None::<End>));
+    let stop_slot = Arc::clone(&end_slot);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep 60".into(),
+            stop: Stop(Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                if let Some(end) = stop_slot.lock().unwrap().take() {
+                    end.0(JobCompleted {
+                        job_id: JobId(String::new()),
+                        status: Outcome::Cancelled,
+                        error: None,
+                        process: None,
+                        output_tail: None,
+                        notice: None,
+                        changed_by: None,
+                        protected_paths: None,
+                    });
+                }
+            })),
+            lines: false,
+            input: None,
+            identity: Some(contract::jobs::JobIdentity { pgid, start_time }),
+            detached: Some(log),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    *end_slot.lock().unwrap() = Some(opened.end);
+    let arguments = json!({"action":"stop", "job_id":id});
+    assert!(
+        tool.effects(&args(arguments.clone()))
+            .unwrap()
+            .declared
+            .effects
+            .is_empty()
+    );
+    let output = run(&tool, arguments, &CancelToken::new());
+    assert_eq!(
+        output.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        0,
+        "the stale process was not signalled"
+    );
+    drop(end_slot);
+    kill_group(pgid, "KILL").unwrap();
+    child.wait().unwrap();
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_confirmed_detached_stop_that_loses_its_identity_requires_review() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "sleep 60 & read _"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let start_time = support::group::start_time(pgid).unwrap();
+    let log = _dir.path().join("artifacts/identity-changed.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let stops = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&stops);
+    let end_slot = Arc::new(Mutex::new(None::<End>));
+    let stop_slot = Arc::clone(&end_slot);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep 60".into(),
+            stop: Stop(Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                if let Some(end) = stop_slot.lock().unwrap().take() {
+                    end.0(JobCompleted {
+                        job_id: JobId(String::new()),
+                        status: Outcome::Cancelled,
+                        error: None,
+                        process: None,
+                        output_tail: None,
+                        notice: None,
+                        changed_by: None,
+                        protected_paths: None,
+                    });
+                }
+            })),
+            lines: false,
+            input: None,
+            identity: Some(contract::jobs::JobIdentity { pgid, start_time }),
+            detached: Some(log),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    *end_slot.lock().unwrap() = Some(opened.end);
+    let arguments = json!({"action":"stop", "job_id":id});
+    let effects = tool.effects(&args(arguments.clone())).unwrap();
+    assert!(effects.declared.effects.is_empty());
+
+    child.stdin.as_mut().unwrap().write_all(b"exit\n").unwrap();
+    drop(child.stdin.take());
+    assert!(child.wait().unwrap().success(), "the shell leader exited");
+    assert!(!support::group::pid_alive(pgid), "the leader was reaped");
+    assert!(support::group::alive(pgid), "the detached child survives");
+
+    let output = run_with_effects(&tool, arguments, &effects, &CancelToken::new());
+    assert_eq!(
+        output.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert!(
+        text_of(&output).contains("identity for job"),
+        "{}",
+        text_of(&output)
+    );
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        0,
+        "the child was not signalled"
+    );
+    assert!(support::group::alive(pgid), "the detached child still runs");
+    kill_group(pgid, "KILL").unwrap();
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    drop(end_slot);
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn an_unreadable_detached_leader_needs_review_and_can_be_stopped() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "sleep 60 & read _"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    // Hold the leader open until its start time is recorded, then let it exit.
+    let start_time = support::group::start_time(pgid).unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"exit\n").unwrap();
+    drop(child.stdin.take());
+    let (reaped_tx, reaped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = reaped_tx.send(child.wait());
+    });
+    assert!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&reaped_rx)
+            .expect("the detached leader exited")
+            .unwrap()
+            .success(),
+        "the detached leader exited successfully"
+    );
+    assert!(!support::group::pid_alive(pgid), "the leader is reaped");
+    assert!(support::group::alive(pgid), "its process group survives");
+
+    let log = _dir.path().join("artifacts/unreadable-leader.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let end_slot = Arc::new(Mutex::new(None::<End>));
+    let stop_slot = Arc::clone(&end_slot);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep 60".into(),
+            stop: Stop(Box::new(move || {
+                if let Some(end) = stop_slot.lock().unwrap().take() {
+                    end.0(JobCompleted {
+                        job_id: JobId(String::new()),
+                        status: Outcome::Cancelled,
+                        error: None,
+                        process: None,
+                        output_tail: None,
+                        notice: None,
+                        changed_by: None,
+                        protected_paths: None,
+                    });
+                }
+            })),
+            lines: false,
+            input: None,
+            identity: Some(contract::jobs::JobIdentity { pgid, start_time }),
+            detached: Some(log),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    *end_slot.lock().unwrap() = Some(opened.end);
+    let arguments = json!({"action":"stop", "job_id":id});
+    let effects = tool.effects(&args(arguments.clone())).unwrap();
+    assert_eq!(effects.declared.effects, vec![Effect::Executes]);
+    let output = run_with_effects(&tool, arguments, &effects, &CancelToken::new());
+    assert!(output.error.is_none(), "{}", text_of(&output));
+    assert!(
+        text_of(&output).contains("cancelled"),
+        "{}",
+        text_of(&output)
+    );
+    kill_group(pgid, "KILL").unwrap();
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
+    let clock = FakeClock::new();
+    let as_clock: Arc<dyn Clock> = clock.clone();
+    let (_dir, registry, tool) = setup(as_clock);
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "trap '' TERM; echo ready; sleep 60"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let start_time = support::group::start_time(pgid).unwrap();
+    let mut ready = String::new();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    stdout.read_line(&mut ready).unwrap();
+    assert_eq!(ready, "ready\n");
+    drop(stdout);
+    let (reaped_tx, reaped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = reaped_tx.send(child.wait());
+    });
+    let log = _dir.path().join("artifacts/detached.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let end_slot = Arc::new(Mutex::new(None::<End>));
+    let stop_slot = Arc::clone(&end_slot);
+    let (supervisor_id_tx, supervisor_id_rx) = mpsc::channel();
+    let stop_clock = clock.clone();
+    let stop = Stop(Box::new(move || {
+        support::group::signal(pgid, rustix::process::Signal::TERM).unwrap();
+        let end_slot = Arc::clone(&stop_slot);
+        let supervisor_id_tx = supervisor_id_tx.clone();
+        let clock = stop_clock.clone();
+        let parker = Arc::new(support::clock::Parker::new());
+        let wake: Arc<dyn Wake> = parker.clone();
+        clock.subscribe(Arc::downgrade(&wake));
+        let until = clock.now() + support::group::GRACE;
+        let seen = parker.generation();
+        thread::spawn(move || {
+            if supervisor_id_tx.send(thread::current().id()).is_err() {
+                return;
+            }
+            parker.park(clock.as_ref(), Some(until), seen);
+            if support::group::alive(pgid) {
+                support::group::signal(pgid, rustix::process::Signal::KILL).unwrap();
+            }
+            if let Some(end) = end_slot.lock().unwrap().take() {
+                end.0(JobCompleted {
+                    job_id: JobId(String::new()),
+                    status: Outcome::Cancelled,
+                    error: None,
+                    process: None,
+                    output_tail: None,
+                    notice: None,
+                    changed_by: None,
+                    protected_paths: None,
+                });
+            }
+        });
+    }));
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep 60".into(),
+            stop,
+            lines: false,
+            input: None,
+            identity: Some(contract::jobs::JobIdentity { pgid, start_time }),
+            detached: Some(log.clone()),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    *end_slot.lock().unwrap() = Some(opened.end);
+    let arguments = json!({"action":"stop", "job_id":id});
+    assert!(
+        tool.effects(&args(arguments.clone()))
+            .unwrap()
+            .declared
+            .effects
+            .is_empty()
+    );
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(run(&tool, arguments, &CancelToken::new()));
+    });
+    let supervisor_id = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_id_rx)
+        .expect("the supervisor started");
+    let until = clock.now() + support::group::GRACE;
+    assert!(clock.await_parked(until, Deadline::after(MUST_SUCCEED_WITHIN)));
+    assert!(
+        rx.try_recv().is_err(),
+        "stop returned before the supervisor end"
+    );
+    clock.advance_when_parked(
+        Some(until),
+        Some(supervisor_id),
+        support::group::GRACE,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("jobs stop returned");
+    assert!(output.error.is_none(), "{}", text_of(&output));
+    assert!(
+        text_of(&output).contains("cancelled"),
+        "{}",
+        text_of(&output)
+    );
+    assert!(
+        !Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&reaped_rx)
+            .expect("the supervisor reaped the stopped child")
+            .unwrap()
+            .success(),
+        "SIGKILL stopped the child after the grace period"
+    );
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]

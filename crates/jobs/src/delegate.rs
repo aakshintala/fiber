@@ -13,6 +13,7 @@ use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Point};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, JobId, SessionId};
+use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 pub(crate) mod fork;
 pub(crate) mod group;
@@ -588,10 +589,34 @@ impl DelegateWiring {
                     self.registry.timing().cloned(),
                 );
                 let runner = runner.with_worktree(worktree_run);
-                let (child, listing) = match runner.spawn(&self.launch, &launched) {
+                let (mut child, listing) = match runner.spawn(&self.launch, &launched) {
                     Ok(started) => started,
                     Err(source) => {
                         runner.end_worktree();
+                        return Err(JobsError::SpawnFailed { source });
+                    }
+                };
+                let identity = match run::process_identity(child.id()) {
+                    Ok(identity) => identity,
+                    Err(source) => {
+                        let cleanup = match support::group::signal(child.id(), Signal::KILL) {
+                            Ok(()) => child.wait().map(|_| ()),
+                            Err(group_error) => child
+                                .kill()
+                                .and_then(|()| child.wait().map(|_| ()))
+                                .map_err(|child_error| {
+                                    std::io::Error::other(format!(
+                                        "group kill failed ({group_error}); child cleanup failed ({child_error})"
+                                    ))
+                                }),
+                        };
+                        runner.end_worktree();
+                        let source = match cleanup {
+                            Ok(()) => source,
+                            Err(cleanup) => std::io::Error::other(format!(
+                                "{source}; child cleanup failed ({cleanup})"
+                            )),
+                        };
                         return Err(JobsError::SpawnFailed { source });
                     }
                 };
@@ -616,9 +641,9 @@ impl DelegateWiring {
                         description: description.clone(),
                         output_path: output_path.clone(),
 
-                        pgid: None,
-                        start_time: None,
-                        kind: None,
+                        pgid: Some(identity.pgid),
+                        start_time: Some(identity.start_time),
+                        kind: Some(contract::events::JobKind::Job),
                     };
                     let finish = self.registry.open_extension_started(
                         job_id.clone(),
@@ -626,6 +651,7 @@ impl DelegateWiring {
                         description,
                         output_path.clone(),
                         stop,
+                        identity,
                         delegate.clone(),
                     );
                     (started, finish)
@@ -636,6 +662,7 @@ impl DelegateWiring {
                         description,
                         output_path.clone(),
                         stop,
+                        identity,
                         delegate.clone(),
                     )
                 };

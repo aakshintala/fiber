@@ -130,7 +130,7 @@ fn macos_start_time(pid: u32) -> Option<u64> {
     }
     // SAFETY: proc_pidinfo returned exactly the structure's size.
     let info = unsafe { info.assume_init() };
-    Some(((info.pbi_start_tvsec as u64) << 32) | info.pbi_start_tvusec as u64)
+    Some((info.pbi_start_tvsec << 32) | info.pbi_start_tvusec)
 }
 
 /// Whether the process `pid` still runs, through `kill(pid, 0)`, with the

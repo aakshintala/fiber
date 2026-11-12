@@ -4038,6 +4038,40 @@ fn a_refused_notice_kept_by_a_cancelled_turn_starts_no_turn() {
 }
 
 #[test]
+fn a_detached_start_is_not_folded_into_delivery_state() {
+    let id = JobId(JOB.into());
+    let mut starts = crate::deliveries::Starts::default();
+    starts.fold(&Event::JobStarted(JobStarted {
+        job_id: id.clone(),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "sleep 60".into(),
+        output_path: "/tmp/detached.log".into(),
+        pgid: Some(4242),
+        start_time: Some(99),
+        kind: Some(contract::events::JobKind::Detached),
+    }));
+    assert!(starts.get(&id).is_none());
+}
+
+#[test]
+fn a_detached_start_is_not_owed_an_orphaned_end() {
+    let id = JobId(JOB.into());
+    let mut orphans = super::Orphans::default();
+    orphans.fold(&Event::JobStarted(JobStarted {
+        job_id: id,
+        tool: Some("shell".into()),
+        extension: None,
+        description: "sleep 60".into(),
+        output_path: "/tmp/detached.log".into(),
+        pgid: Some(4242),
+        start_time: Some(99),
+        kind: Some(contract::events::JobKind::Detached),
+    }));
+    assert!(orphans.finish().is_empty());
+}
+
+#[test]
 fn a_restarted_job_is_owed_another_orphaned_end() {
     use contract::events::{Event, JobStarted};
     let started = || {

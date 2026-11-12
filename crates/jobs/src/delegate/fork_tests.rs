@@ -126,6 +126,7 @@ fn a_fork_at_the_cap_is_refused_like_a_spawn() {
             "fixture".into(),
             "/unused".into(),
             contract::jobs::Stop(Box::new(|| {})),
+            crate::support::identity(),
             crate::support::delegate_started(&id.0),
         ));
     }
@@ -157,6 +158,7 @@ fn a_started_fork_counts_toward_the_cap() {
             "fixture".into(),
             "/unused".into(),
             contract::jobs::Stop(Box::new(|| {})),
+            crate::support::identity(),
             crate::support::delegate_started(&id.0),
         ));
     }

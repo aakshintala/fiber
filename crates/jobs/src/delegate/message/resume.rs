@@ -224,12 +224,40 @@ impl DelegateMessage {
                     finish: Arc::clone(&self.finish),
                 }
             }));
-            let (child, listing) = match runner.spawn(&launch, &launched) {
+            let (mut child, listing) = match runner.spawn(&launch, &launched) {
                 Ok(started) => started,
                 Err(source) => return Err(StartFailed::Spawn(source)),
             };
+            let identity = match super::super::run::process_identity(child.id()) {
+                Ok(identity) => identity,
+                Err(source) => {
+                    let cleanup = match support::group::signal(
+                        child.id(),
+                        rustix::process::Signal::KILL,
+                    ) {
+                        Ok(()) => child.wait().map(|_| ()),
+                        Err(group_error) => child
+                            .kill()
+                            .and_then(|()| child.wait().map(|_| ()))
+                            .map_err(|child_error| {
+                                std::io::Error::other(format!(
+                                    "group kill failed ({group_error}); child cleanup failed ({child_error})"
+                                ))
+                            }),
+                    };
+                    runner.end_worktree();
+                    let source = match cleanup {
+                        Ok(()) => source,
+                        Err(cleanup) => std::io::Error::other(format!(
+                            "{source}; child cleanup failed ({cleanup})"
+                        )),
+                    };
+                    return Err(StartFailed::Spawn(source));
+                }
+            };
             Ok((
                 stop,
+                identity,
                 Started {
                     runner,
                     child,
