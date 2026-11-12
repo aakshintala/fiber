@@ -1526,7 +1526,7 @@ impl SessionExtensions {
     }
 
     /// Fiber home, which anchors the catalog cache and extension data directories.
-    pub fn home(&self) -> &Path {
+    pub(crate) fn home(&self) -> &Path {
         &self.home
     }
 
