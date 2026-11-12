@@ -13,7 +13,7 @@ use crate::test_support::{
 };
 use std::fs;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ use crate::CliError;
 use contract::clock::Clock;
 use serde_json::{Value, json};
 
-use super::{providers_and_config, refresh_named, refresh_run, run};
+use super::{providers_and_config, refresh_named, refresh_run, refresh_run_with_fetch, run};
 use fakes::{Deadline, NoLock};
 
 pub(crate) fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
@@ -152,6 +152,7 @@ impl Setup {
         };
         fs::create_dir_all(setup.home()).unwrap();
         fs::create_dir_all(setup.root.path().join("workspace")).unwrap();
+        setup.write_config(&json!({"model_lists":{"models_dev":false}}));
         setup
     }
 
@@ -1104,6 +1105,50 @@ fn a_spawn_that_fails_still_prints_from_the_cache() {
 }
 
 #[test]
+fn the_refresh_child_writes_the_catalogue_and_keeps_it_on_failure() {
+    for fail in [false, true] {
+        let setup = Setup::new();
+        setup.write_config(&json!({"model_lists":{"models_dev":true,"refresh_after":"60s"}}));
+        let expected = br#"{"acme":{"m":{"limit":{"context":200}}}}"#.to_vec();
+        let old = br#"{"acme":{"m":{"limit":{"context":150}}}}"#.to_vec();
+        if fail {
+            config::write_models_dev(&setup.home(), &old).unwrap();
+            let file = config::models_dev_cache_file(&setup.home()).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(file)
+                .unwrap()
+                .set_modified(fakes::clock::FakeClock::new().wall() - Duration::from_secs(61))
+                .unwrap();
+        }
+        let response = expected.clone();
+        let fetch: extensions::models_dev::Fetch = Arc::new(move |_| {
+            if fail {
+                Err("catalog offline".to_owned())
+            } else {
+                Ok(response.clone())
+            }
+        });
+        let clock = fakes::clock::FakeClock::new();
+        let clock: Arc<dyn Clock> = clock;
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+
+        refresh_run_with_fetch(
+            &setup.home(),
+            &setup.workspace(),
+            &["--models-dev".to_owned()],
+            clock,
+            locks,
+            &fakes::children::grouped_output,
+            &fetch,
+        );
+
+        let cached = config::read_models_dev(&setup.home()).unwrap().unwrap();
+        assert_eq!(cached, if fail { old } else { expected });
+    }
+}
+
+#[test]
 fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
     // A named stale provider beside an unrelated credentialed provider
     // with no cache: only the named one refreshes, and nothing runs the
@@ -1212,6 +1257,35 @@ fn a_list_exactly_refresh_after_old_spawns_nothing() {
 }
 
 #[test]
+fn a_due_models_dev_catalogue_schedules_the_refresh_child() {
+    let setup = Setup::new();
+    setup.install(
+        "acme-ext",
+        "acme",
+        &json!([{
+            "id": "m",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
+        }]),
+    );
+    setup.write_config(&json!({"model_lists":{"models_dev":true}}));
+    let spawner = Recorder::fresh();
+
+    let (result, out, err) = setup.run(
+        None,
+        false,
+        &|names| spawner.spawn(names),
+        fakes::clock::FakeClock::new(),
+    );
+
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(out.contains("acme/m"), "{out:?}");
+    assert_eq!(spawner.calls(), [vec!["--models-dev"]]);
+}
+
+#[test]
 fn stale_lists_counts_a_configured_command_without_running_it() {
     // `stale_lists` checks the cache age, then presence without running
     // anything: `fresh` has a young cache and `stale` an old one, each
@@ -1237,7 +1311,7 @@ fn stale_lists_counts_a_configured_command_without_running_it() {
     .unwrap();
     let marker = |name: &str| setup.home().join(format!("{name}-ran"));
     let command = |name: &str| json!({"command": ["sh", "-c", format!("touch '{}'; printf {name}-key", marker(name).display())]});
-    setup.write_config(&json!({"providers": {
+    setup.write_config(&json!({"model_lists":{"models_dev":false}, "providers": {
         "fresh": {"credentials": {"default": command("fresh")}},
         "stale": {"credentials": {"default": command("stale")}},
         "bed": {"credentials": {"default": command("bed")}},
