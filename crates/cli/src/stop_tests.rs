@@ -66,6 +66,66 @@ fn accepted(n: u64) -> Value {
         "payload": {"command_id": "c_stop", "result": {"sessions_stopped": n}}})
 }
 
+/// A newer hub's answer accepting `stop` with both counts.
+fn accepted_with_keepers(sessions: u64, keepers: u64) -> Value {
+    json!({"kind": "command_accepted", "ts": 1,
+        "schema_version": contract::SCHEMA_VERSION,
+        "payload": {"command_id": "c_stop",
+            "result": {"sessions_stopped": sessions, "keepers_stopped": keepers}}})
+}
+
+/// Sends one accepted answer, then closes: the answer and the close.
+fn answer_then_close(hub: UnixStream, answer: Value) {
+    let mut bytes = serde_json::to_vec(&answer).unwrap();
+    bytes.push(b'\n');
+    (&hub).write_all(&bytes).unwrap();
+    drop(hub);
+}
+
+#[test]
+fn remote_stop_without_keepers_prints_todays_line() {
+    // An old hub omits the keeper count, and zero keepers print
+    // byte-identical to today.
+    let (_got, client) = fake_hub(|hub| answer_then_close(hub, accepted(3)));
+    let clock = FakeClock::new();
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&run_wait(client, &clock))
+        .expect("the stop returns");
+    result.unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Stopped 3 sessions and the hub.\n"
+    );
+}
+
+#[test]
+fn remote_stop_with_one_keeper_names_it() {
+    let (_got, client) = fake_hub(|hub| answer_then_close(hub, accepted_with_keepers(2, 1)));
+    let clock = FakeClock::new();
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&run_wait(client, &clock))
+        .expect("the stop returns");
+    result.unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Stopped 2 sessions, 1 keeper and the hub.\n"
+    );
+}
+
+#[test]
+fn remote_stop_with_many_keepers_names_the_count() {
+    let (_got, client) = fake_hub(|hub| answer_then_close(hub, accepted_with_keepers(2, 3)));
+    let clock = FakeClock::new();
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&run_wait(client, &clock))
+        .expect("the stop returns");
+    result.unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Stopped 2 sessions, 3 keepers and the hub.\n"
+    );
+}
+
 /// The hub's answer refusing `stop` partway: two sessions never confirmed.
 fn rejected() -> Value {
     json!({"kind": "command_rejected", "ts": 1,
@@ -251,6 +311,30 @@ fn a_close_before_the_answer_is_a_failure() {
     Deadline::after(DEADLINE)
         .recv(&got)
         .expect("the hub reads the command first");
+}
+
+#[test]
+fn an_answer_with_a_misshaped_keeper_count_is_a_failure() {
+    // A present keeper count that is not a number is missing, as for
+    // sessions; an absent one still reads as zero.
+    let (_got, client) = fake_hub(|hub| {
+        let mut bytes = serde_json::to_vec(&json!({"kind": "command_accepted", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": "c_stop",
+                "result": {"sessions_stopped": 3, "keepers_stopped": "x"}}}))
+        .unwrap();
+        bytes.push(b'\n');
+        (&hub).write_all(&bytes).unwrap();
+        drop(hub);
+    });
+    let clock = FakeClock::new();
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&run_wait(client, &clock))
+        .expect("the stop returns");
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::StopCountMissing), "{error}");
+    assert!(out.is_empty());
 }
 
 #[test]

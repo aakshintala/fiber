@@ -201,6 +201,7 @@ impl Picker {
             command: "/credential".to_owned(),
             rows,
             list: self.list,
+            gutter_mark: ratatui::style::Style::default(),
             below: vec![below],
             field: None,
             footer: "↑↓ move · Enter choose · Ctrl+S this session · Esc close".to_owned(),

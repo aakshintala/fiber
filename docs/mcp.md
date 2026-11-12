@@ -53,7 +53,7 @@ A session `DELETE` answered HTTP 401 is ignored.
 
 Fiber is an MCP server in one place: `fiber mcp serve`, which a delegate on
 another harness uses to send session messages (`docs/delegates.md`,
-"Delegates on another harness").
+"Delegates on another harness"). Not built yet: see #600.
 
 ## Tools and their names
 

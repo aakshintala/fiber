@@ -1,0 +1,162 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "hy4",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 402,
+   "elapsed_s": 0.34,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 402,
+   "elapsed_s": 0.55,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 402,
+   "elapsed_s": 0.28,
+   "request": {
+    "model": "hy4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  }
+ ]
+}

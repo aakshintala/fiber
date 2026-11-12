@@ -113,6 +113,24 @@ fn register_keys(
     }
 }
 
+/// Moves one loaded extension's focus registration into the composite:
+/// a malformed registration becomes one `extension_failed` notice and is
+/// skipped. Dispatch calls every loaded winner in name order, so no
+/// contender table is kept.
+fn register_focus(candidate: &Candidate, notices: &mut Vec<(String, String)>) {
+    let name = &candidate.manifest.name;
+    let vm = candidate.vm.borrow();
+    for rejection in vm.focus_rejections() {
+        notices.push((
+            "extension_failed".into(),
+            format!(
+                "extension {name}: {}; loading skips that registration.",
+                rejection.reason
+            ),
+        ));
+    }
+}
+
 /// Whether `name` is plain: non-empty with no whitespace, `/` or `:`,
 /// the same rule the session's command rename check reads
 /// (`docs/extensions.md`, "Commands and screens").
@@ -496,6 +514,7 @@ impl Load for Loader {
                     }
                     register_keys(&mut composite, &candidate, &person_owned, &mut notices);
                     register_commands(&mut composite, &candidate, &config, &mut notices);
+                    register_focus(&candidate, &mut notices);
                     composite
                         .candidates
                         .insert(candidate.manifest.name.clone(), candidate);
@@ -642,6 +661,14 @@ struct KeyNoticeKey {
     extension: String,
 }
 
+/// An extension whose focus handler already failed: focus hook notices
+/// come once per extension until `/reload`. A separate set from the key
+/// slots, so a slot literally named `focus` cannot collide.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct FocusNoticeKey {
+    extension: String,
+}
+
 #[derive(Debug, Default)]
 struct Composite {
     candidates: BTreeMap<String, Candidate>,
@@ -662,6 +689,8 @@ struct Composite {
     person_seen: RefCell<BTreeSet<KeyNoticeKey>>,
     /// Hook failures already reported per key slot and extension.
     key_hooks: RefCell<BTreeSet<KeyNoticeKey>>,
+    /// Focus hook failures already reported per extension.
+    focus_hooks: RefCell<BTreeSet<FocusNoticeKey>>,
 }
 
 impl Candidate {
@@ -1015,6 +1044,46 @@ impl Renderer for Composite {
                     ));
                 }
                 tui::ext::KeyOutcome::NotHandled
+            }
+        }
+    }
+    fn on_focus(&self, ctx: &SessionCtx) {
+        // Name order is load order: the candidates map iterates by name,
+        // mirroring every other adapter dispatch. Home runs every loaded
+        // winner with the key omitted; a session screen runs only winners
+        // the session's halves keep compatible. Every return is ignored
+        // and notices travel via `pending`.
+        let session = ctx.session_id.as_ref().map(|id| id.0.as_str());
+        for (name, candidate) in &self.candidates {
+            if candidate.off.get() {
+                continue;
+            }
+            if session.is_some() && !candidate.compatible(ctx) {
+                continue;
+            }
+            match candidate.vm.borrow_mut().run_focus(session) {
+                Ok(()) => {}
+                Err(extensions::Error::TuiTimeout) => {
+                    candidate.off.set(true);
+                    self.pending.borrow_mut().push((
+                        "extension_failed".into(),
+                        format!(
+                            "extension {name} passed its focus timeout; it is switched off until `/reload`"
+                        ),
+                    ));
+                }
+                Err(extensions::Error::TuiOff) => {}
+                Err(error) => {
+                    let seen = FocusNoticeKey {
+                        extension: name.clone(),
+                    };
+                    if self.focus_hooks.borrow_mut().insert(seen) {
+                        self.pending.borrow_mut().push((
+                            "hook_failed".into(),
+                            format!("extension {name}'s focus handler failed: {error}"),
+                        ));
+                    }
+                }
             }
         }
     }

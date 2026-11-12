@@ -267,7 +267,7 @@ prints each such notice.
 | `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
 | `mcp login <server>` | Logs in to a server that needs OAuth. |
 | `mcp logout <server>` | Deletes a server's stored token. |
-| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). |
+| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). Not built yet: see #600. |
 
 **Configuration.** `fiber config` reads and writes configuration
 (`docs/configuration.md`, "When Fiber writes").
@@ -1274,6 +1274,7 @@ answers each command it read exactly once. `Exited`: its log ends in
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `stop` | `sessions` (boolean, optional) | Ends the hub as SIGTERM does. With `sessions` true, first shuts down every running session and keeper the hub finds in `run/`, each session through its own shutdown (`close` with `now`) and each keeper by its stop (`docs/tools.md`, "The keeper"), bounded, then exits. Any authenticated connection may send it. |
+| `stop_keepers` | `keepers` (array of session ids, nonempty) | Stops each named keeper through its stop, bounded, and answers how many confirmed, without closing any session and without exiting the hub. An unknown key, a wrong type, an explicit null, or an empty array is refused `invalid_arguments`. A keeper that answers the probe is left running and reported; one whose socket is gone is skipped. |
 | `placeholder_env` | `names` (array of strings) | Answers with the hub's captured values for the named placeholders, absent names omitted, so the list and the session agree (`docs/model-routing.md`, "Model discovery"). |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |

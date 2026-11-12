@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/app/interrupt_tests.rs
+assertion_line: 661
 expression: text
 ---
   Keys  /keys                                                                            Esc returns
@@ -12,17 +13,17 @@ expression: text
  › Ctrl+N                new_session          Start a new session
    ⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7  rail_row_n           Switch to the session of rail card N
    ⌥8 ⌥9
-   Delete, Backspace     delete_session       Delete the selected exited, or a live one with Delete
-                                              session in the session list
+   Delete,               delete_session       Delete the selected exited, or a live one with Delete
+   Shift+Backspace                            session in the session list
    ⌥I                    interrupt_turn       Interrupt the turn on screen, whatever is open over
                                               it, except the /keys screen
+⋮  Backspace             archive_session      Archive the selected exited session in the session
+⋮                                             list
 ⋮  ↑                     recall_prompt        Recall an earlier prompt from the project of the
-⋮                                             session on screen
-⋮  ←                     focus_rail           Move focus from an empty input box into the rail
+                                              session on screen
+   ←                     focus_rail           Move focus from an empty input box into the rail
    Ctrl+R                search_prompts       Search those prompts
    ⌥← ⌥→, Ctrl+← Ctrl+→, move_word            Move by word
-   ⌥B ⌥F
-   ⌥Backspace,           delete_word          Delete a word
  ⌥I is bound to Interrupt the turn on screen, whatever is open over it, except the /keys screen
  Enter swap · Esc cancel
    ● Working · Esc to interrupt

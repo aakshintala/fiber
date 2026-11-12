@@ -1,0 +1,198 @@
+{
+ "route": "go",
+ "protocol": "messages",
+ "model": "claude-fable-5-2",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.28,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.3,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "minimal"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 400,
+   "elapsed_s": 0.24,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "low"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 400,
+   "elapsed_s": 0.26,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "medium"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 400,
+   "elapsed_s": 0.24,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "high"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.24,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "xhigh"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 1.57,
+   "request": {
+    "model": "claude-fable-5-2",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "max"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  }
+ ]
+}

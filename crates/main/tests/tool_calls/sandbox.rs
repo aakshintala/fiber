@@ -74,6 +74,98 @@ impl Setup {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_confined_device_read_is_refused_through_the_binary() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let device = if std::path::Path::new("/dev/zero").exists() {
+        "/dev/zero"
+    } else {
+        "/dev/urandom"
+    };
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "device_1",
+            "shell",
+            &json!({"command": format!("head -c 1 {device}")}),
+        )]),
+        stream(&[function_call(
+            "null_1",
+            "shell",
+            &json!({"command": "cat /dev/null"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m", "sandbox": {"enabled": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({
+                "decision": "allow", "tool": "shell", "prefix": "head -c 1"
+            })
+        ) + &format!(
+            "{}\n",
+            json!({
+                "decision": "allow", "tool": "shell", "prefix": "cat /dev/null"
+            })
+        ),
+    )
+    .unwrap();
+    let run = setup.fiber_run(&["ask", "read a device and null"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let action = |command: &str| {
+        lines
+            .iter()
+            .find(|line| {
+                line["kind"] == "tool_call_requested"
+                    && line["payload"]["arguments"].to_string().contains(command)
+            })
+            .and_then(|line| line["action_id"].as_str())
+            .expect("call requested")
+            .to_owned()
+    };
+    let completed = |id: &str| {
+        lines
+            .iter()
+            .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == id)
+            .expect("call completed")
+    };
+    let device_id = action("head -c 1");
+    let null_id = action("cat /dev/null");
+    let device_result = completed(&device_id);
+    assert_eq!(device_result["payload"]["status"], "failed");
+    let text = device_result["payload"]["content"].to_string();
+    #[cfg(target_os = "macos")]
+    let refusal = "Operation not permitted";
+    #[cfg(target_os = "linux")]
+    let refusal = "Permission denied";
+    assert!(text.contains(refusal), "the binary reports refusal: {text}");
+    assert!(
+        !text.contains("\\u0000"),
+        "no device bytes reach output: {text}"
+    );
+    assert_eq!(completed(&null_id)["payload"]["status"], "completed");
+}
+
 #[test]
 fn sandbox_keys_round_trip_through_the_binary() {
     let setup = Setup::new_with_sandbox_root();

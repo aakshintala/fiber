@@ -265,10 +265,14 @@ impl App {
             | Waiting::Subscribe { .. }
             | Waiting::Stop
             | Waiting::Delete
+            | Waiting::Archive
             | Waiting::OfferImport
             | Waiting::DeleteDiscovery(..)
             | Waiting::DeleteStop { .. }
             | Waiting::DeleteFinal(..)
+            | Waiting::ArchiveDiscovery(..)
+            | Waiting::ArchiveStop { .. }
+            | Waiting::ArchiveFinal(..)
             | Waiting::Feed
             | Waiting::Recent(..)
             | Waiting::Close => false,
@@ -327,10 +331,14 @@ impl App {
             | Waiting::Subscribe { .. }
             | Waiting::Stop
             | Waiting::Delete
+            | Waiting::Archive
             | Waiting::OfferImport
             | Waiting::DeleteDiscovery(..)
             | Waiting::DeleteStop { .. }
             | Waiting::DeleteFinal(..)
+            | Waiting::ArchiveDiscovery(..)
+            | Waiting::ArchiveStop { .. }
+            | Waiting::ArchiveFinal(..)
             | Waiting::Feed
             | Waiting::Recent(..)
             | Waiting::Close => return None,
