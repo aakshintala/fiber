@@ -515,14 +515,6 @@ fn fiber_import_matches_the_driver_command() {
     // reaches the loop; the fake server sees no request.
     let provider = ProviderServer::start_with_fallback([], hello()).unwrap();
     setup.provider(&provider);
-    let config_path = setup.home().join("config.json");
-    let mut test_config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
-    test_config["model_lists"]["models_dev"] = json!(false);
-    fs::write(
-        &config_path,
-        serde_json::to_vec_pretty(&test_config).unwrap(),
-    )
-    .unwrap();
     let driven = Driven::start(&setup);
     let claude_result = driven.import(Some("claude-code"));
     let codex_result = driven.import(Some("codex"));

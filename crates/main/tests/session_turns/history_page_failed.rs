@@ -605,6 +605,12 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     );
     // A key is still handled: quit exits 0 on the idle session.
     driver.write(b"\x03\x03");
-    let code = setup.deadline.recv(&finished).expect("the loop to quit");
+    let quit_wait = setup.deadline.start_wait();
+    let quit_wait_left = quit_wait.left();
+    let code = quit_wait.recv(&finished).unwrap_or_else(|error| {
+        panic!(
+            "waited until the deadline for the loop to quit (deadline had {quit_wait_left:?} left when the wait began; after {batches} batches of 5; receive error: {error:?})"
+        )
+    });
     assert_eq!(code.expect("the loop to exit cleanly"), 0);
 }

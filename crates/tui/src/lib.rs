@@ -46,6 +46,7 @@ mod layout;
 mod link;
 mod local_time;
 mod logical;
+mod login_logout_view;
 mod login_view;
 mod login_worker;
 mod logout_view;

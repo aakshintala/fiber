@@ -375,21 +375,8 @@ fn confirm(
 }
 
 /// Sends `delete` for `id` and reads until its answer, skipping every
-/// other line. An end before the answer is `io_failed`; a rejection is a
-/// failure with its code and message.
-pub(crate) fn send_delete(
-    read: &mut BufReader<UnixStream>,
-    command_id: &str,
-    id: &SessionId,
-    cascade: bool,
-) -> Result<(), Failure> {
-    // debt: a later #923 part deletes this wrapper once prune calls `delete_value`.
-    delete_value(read, command_id, id, cascade).map_err(Failure::from)
-}
-
-/// The typed core behind [`send_delete`]: sends `delete` for `id` and
-/// reads until its answer, skipping every other line.
-fn delete_value(
+/// other line.
+pub(super) fn delete_value(
     read: &mut BufReader<UnixStream>,
     command_id: &str,
     id: &SessionId,
@@ -406,12 +393,6 @@ fn delete_value(
         }),
     )
     .map(drop)
-}
-
-/// Local connections keep their existing message; listed failures keep their code.
-pub(crate) fn hub_failure(error: doors::Error) -> Failure {
-    // debt: a later #923 part deletes this wrapper once its callers build `CliError::Hub` directly.
-    Failure::from(CliError::Hub(error))
 }
 
 /// One hub line as the CLI dispatches it: the closed kind set plus the

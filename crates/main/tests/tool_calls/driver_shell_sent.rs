@@ -65,10 +65,6 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
     }
 }
 
-fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\"'\"'"))
-}
-
 /// Drains `running` to its exit, asserting it left no process behind.
 #[track_caller]
 fn exit_cleanly(running: Running) {
@@ -288,7 +284,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     let input = setup.workspace().join("input.bin");
     fs::write(&input, &fixture).unwrap();
     let script = setup.workspace().join("print.sh");
-    fs::write(&script, format!("cat {}\n", shell_quote(&input))).unwrap();
+    fs::write(&script, format!("cat {}\n", fakes::shell_quote(&input))).unwrap();
 
     let server = ProviderServer::start([
         // A pending approval lets the loop drain shell deliveries without
@@ -340,7 +336,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     });
     let request = asked.last().unwrap()["payload"]["request_id"].clone();
 
-    let shell_command = format!("/bin/sh {}", shell_quote(&script));
+    let shell_command = format!("/bin/sh {}", fakes::shell_quote(&script));
     let line = json!({
         "id": "c_big",
         "command": "shell",
@@ -434,7 +430,7 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
     let marker = setup.workspace().join("shell.started");
     client.send(&shell_line(
         "c_shell",
-        &format!("touch {} && tail -f /dev/null", shell_quote(&marker)),
+        &format!("touch {} && tail -f /dev/null", fakes::shell_quote(&marker)),
         true,
     ));
     loop {
@@ -583,7 +579,7 @@ fn driver_shell_sent_during_a_turn_joins_the_next_turn_only() {
     let marker = setup.workspace().join("shell.done");
     client.send(&shell_line(
         "c_shell",
-        &format!("echo MARK && touch {}", shell_quote(&marker)),
+        &format!("echo MARK && touch {}", fakes::shell_quote(&marker)),
         true,
     ));
     // The shell ends while the approval is pending, so its delivery is

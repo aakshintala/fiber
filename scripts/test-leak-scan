@@ -140,11 +140,13 @@ other="sibling-$$-$(date +%s)-$RANDOM"
 secret="leak-secret-$$-$(date +%s)-$RANDOM"
 
 # Exercise the same Darwin row shape consumed by leak-scan's `ps -E` path.
-# shellcheck disable=SC2016
+fns="$tmp/leak-scan-functions"
+sed -n '/^env_value()/,/^}/p; /^test_identity_of()/,/^}/p' scripts/leak-scan >"$fns"
 identity=$(bash -c '
-  source <(sed -n "/^env_value()/,/^}/p; /^test_identity_of()/,/^}/p" scripts/leak-scan)
+  . "$1"
+  shift
   test_identity_of "$(printf "%s\\n" "$@" | tr " " "\\n")"
-' _ '123 NEXTEST_BINARY_ID=main::leak_probe NEXTEST_TEST_NAME=darwin_fixture')
+' _ "$fns" '123 NEXTEST_BINARY_ID=main::leak_probe NEXTEST_TEST_NAME=darwin_fixture')
 if [ "$identity" != "test: main::leak_probe::darwin_fixture" ]; then
   echo "scripts/test-leak-scan: Darwin-shaped identity row parsed as: $identity" >&2
   exit 1

@@ -70,6 +70,11 @@ pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
 pub use within::{MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN, within};
 
+/// Single-quotes a path for use in a shell command.
+pub fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 /// The check run's nonce for a child process: `("FIBER_CHECK_RUN", value)`
 /// when the test process carries it, and nothing otherwise, so a test that
 /// clears a child's environment puts the nonce back and a leak of that
@@ -89,6 +94,20 @@ pub fn nextest_identity() -> impl Iterator<Item = (&'static str, std::ffi::OsStr
     ["NEXTEST_BINARY_ID", "NEXTEST_TEST_NAME"]
         .into_iter()
         .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+}
+
+#[cfg(test)]
+mod shell_quote_tests {
+    use std::path::Path;
+
+    #[test]
+    fn quotes_paths_with_spaces_and_single_quotes() {
+        assert_eq!(
+            super::shell_quote(Path::new("/tmp/a path")),
+            "'/tmp/a path'"
+        );
+        assert_eq!(super::shell_quote(Path::new("/tmp/a'b")), "'/tmp/a'\\''b'");
+    }
 }
 
 #[cfg(test)]

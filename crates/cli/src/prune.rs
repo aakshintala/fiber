@@ -447,7 +447,7 @@ fn prune_run(
         Err(e) => {
             // No `delete` was accepted: every remaining directory fails
             // with the connection error, as `reconcile` reports.
-            let failure = crate::sessions::hub_failure(e);
+            let failure = Failure::from(CliError::Hub(e));
             let results: Vec<Result<(), Failure>> = selected
                 .deletes
                 .iter()
@@ -472,7 +472,7 @@ fn prune_run(
     let mut send = |id: &SessionId, cascade: bool, _expect: Option<&BTreeSet<SessionId>>| {
         sent += 1;
         let command_id = format!("c_prune_{sent}");
-        crate::sessions::send_delete(&mut read, &command_id, id, cascade)
+        crate::sessions::delete_value(&mut read, &command_id, id, cascade).map_err(Failure::from)
     };
     let results = delete_sessions(&selected.deletes, &none, &mut send);
     reconcile(

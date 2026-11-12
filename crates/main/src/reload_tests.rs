@@ -540,6 +540,75 @@ fn read_server_log(dir: &std::path::Path, file: &str) -> String {
 }
 
 #[test]
+fn shutdown_cancels_a_blocked_reload_prepare_without_applying_it() {
+    let fixture = Fixture::new();
+    let prepared = Arc::new(Mutex::new(Some(fixture.prepare())));
+    let reads = fixture.state.switching.reads();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let prepared_for_build = Arc::clone(&prepared);
+    let build = move |_: &r#loop::ReloadRoute| {
+        Ok(prepared_for_build
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the held preparation"))
+    };
+    let reads_for_run = Arc::clone(&reads);
+    let release_for_run = Arc::clone(&release_rx);
+    let prepare = crate::reload::preparer(build, move |purpose, work| {
+        let entered = entered_tx.clone();
+        let release = Arc::clone(&release_for_run);
+        let finished = finished_tx.clone();
+        reads_for_run.run(purpose, move || {
+            entered.send(()).unwrap();
+            release
+                .lock()
+                .unwrap()
+                .recv()
+                .expect("the held reload work is released");
+            let result = work();
+            finished.send(()).unwrap();
+            result
+        })
+    });
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        result_tx
+            .send(prepare(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            }))
+            .unwrap();
+    });
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered_rx)
+        .expect("the reload prepare entered its held work");
+    reads.cancel();
+    let rejected = match Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&result_rx)
+        .expect("the cancelled reload wait returned")
+    {
+        Err(rejected) => rejected,
+        Ok(_) => panic!("shutdown refuses the prepared reload"),
+    };
+    assert_eq!(rejected.code, contract::ErrorCode::Closing);
+    assert!(fixture.replacements.lock().unwrap().is_empty());
+    release_tx.send(()).unwrap();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&finished_rx)
+        .expect("the abandoned prepare worker finished");
+    waiter.join().unwrap();
+    assert_eq!(rejected.code, contract::ErrorCode::Closing);
+    assert!(
+        prepared.lock().unwrap().is_none(),
+        "the released prepare consumed and dropped its build value"
+    );
+}
+
+#[test]
 fn a_reload_that_keeps_the_extension_swaps_in_the_new_set() {
     let fixture = Fixture::new();
     let old = fixture.state.current.get();

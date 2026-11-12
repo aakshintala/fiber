@@ -18,6 +18,9 @@ use crate::configure::{HostGap, LoginKind, LoginTarget};
 use crate::format;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
+use crate::login_logout_view::{
+    Group, Item, blank_row, build, shown_body_rows as shared_shown_body_rows, text_row,
+};
 use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
 use crate::mouse::{Target, TargetId};
 use crate::rows::Join;
@@ -69,56 +72,9 @@ impl SecretField {
     }
 }
 
-/// A heading's group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Group {
-    /// The installed providers.
-    Providers,
-    /// The declared secrets.
-    Secrets,
-}
-
-/// One row of the view: a heading, one target, the blank row between
-/// the groups, or the note in place of every row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Item {
-    /// A group's heading; Enter on it does nothing.
-    Heading(Group),
-    /// One provider or secret: its index in the targets.
-    Target(usize),
-    /// The blank row between the providers and the secrets.
-    Gap,
-    /// The note shown with no provider and no secret.
-    Note,
-}
-
-/// The list overlay's chrome in rows, measured with a one-row probe so
-/// the count never depends on the body: the edges, the pads, the title
-/// and its gap, and the footer and its gap.
-fn list_chrome() -> usize {
-    let probe = overlay::Overlay {
-        title: Some(("Log in".to_owned(), Some(Span::raw("✕")))),
-        close: None,
-        body: vec![overlay::Row {
-            spans: Vec::new(),
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        }],
-        footer: Some(overlay::legend(&[
-            ("↑↓", "move"),
-            ("Enter", "log in"),
-            ("Esc", "close"),
-        ])),
-        prefer: 96,
-    };
-    usize::from(overlay::height(&probe)).saturating_sub(1)
-}
-
-/// How many body rows the list overlay shows at `height` rows tall:
-/// the height less its chrome, or none when the chrome fills it.
+/// Login's list body rows, retaining the test module's existing helper seam.
 fn shown_body_rows(height: usize) -> usize {
-    height.saturating_sub(list_chrome())
+    shared_shown_body_rows(height, true)
 }
 
 /// Where the list overlay's window starts so `focused` shows in `shown`
@@ -349,7 +305,11 @@ impl Login {
                 targets.sort_by_key(|target| {
                     (target.kind == LoginKind::Secret, target.label.is_none())
                 });
-                let items = build(&targets);
+                let provider_rows: Vec<bool> = targets
+                    .iter()
+                    .map(|target| target.kind != LoginKind::Secret)
+                    .collect();
+                let items = build(&provider_rows);
                 (targets, items, Vec::new())
             }
             Err(error) => (Vec::new(), Vec::new(), vec![error.message]),
@@ -1663,26 +1623,6 @@ fn choice_rows(
     )
 }
 
-/// One overlay body row holding `text` in `style`.
-fn text_row(text: impl Into<String>, style: Style) -> overlay::Row {
-    overlay::Row {
-        spans: vec![Span::styled(text.into(), style)],
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
-/// One blank overlay body row.
-fn blank_row() -> overlay::Row {
-    overlay::Row {
-        spans: Vec::new(),
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
 /// `text` cut from the left to at most `max` columns, keeping its tail:
 /// whole when it fits, else "…" plus the longest tail that fits.
 /// `max` 0 gives "".
@@ -1999,42 +1939,6 @@ fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<(overla
         )
     })
     .collect()
-}
-
-/// The view's rows for `targets`: a heading over each group that has rows.
-/// With neither, one note in place of the rows.
-fn build(targets: &[LoginTarget]) -> Vec<Item> {
-    let mut items = Vec::new();
-    if targets
-        .iter()
-        .any(|target| target.kind != LoginKind::Secret)
-    {
-        items.push(Item::Heading(Group::Providers));
-        for (at, target) in targets.iter().enumerate() {
-            if target.kind != LoginKind::Secret {
-                items.push(Item::Target(at));
-            }
-        }
-    }
-    if targets
-        .iter()
-        .any(|target| target.kind == LoginKind::Secret)
-    {
-        // The blank row between the groups, only when both have rows.
-        if !items.is_empty() {
-            items.push(Item::Gap);
-        }
-        items.push(Item::Heading(Group::Secrets));
-        for (at, target) in targets.iter().enumerate() {
-            if target.kind == LoginKind::Secret {
-                items.push(Item::Target(at));
-            }
-        }
-    }
-    if items.is_empty() {
-        items.push(Item::Note);
-    }
-    items
 }
 
 #[cfg(test)]

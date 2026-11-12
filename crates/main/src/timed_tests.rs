@@ -103,11 +103,11 @@ impl ChildFixture {
             "fiber-stub",
             &format!(
                 "{} --ignored --exact builtin::timed_tests::guarded_stub_child -- {} {} {} \"$@\" > /dev/null\nstatus=$?\n[ \"$status\" -eq 0 ] || exit \"$status\"\nwhile IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < {}",
-                shell_quote(&executable),
-                shell_quote(&answer),
-                shell_quote(&groups),
-                shell_quote(&output),
-                shell_quote(&output),
+                fakes::shell_quote(&executable),
+                fakes::shell_quote(&answer),
+                fakes::shell_quote(&groups),
+                fakes::shell_quote(&output),
+                fakes::shell_quote(&output),
             ),
         );
         Self {
@@ -267,10 +267,6 @@ fn guarded_stub_child() {
         "answering stub exited with {}",
         output.status
     );
-}
-
-fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
 #[test]
