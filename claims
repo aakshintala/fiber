@@ -446,3 +446,5 @@ docs/testing/fakes.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-
 docs/code-quality/lints.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/lib_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/idle_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
