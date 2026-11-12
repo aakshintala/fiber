@@ -509,17 +509,17 @@ fn a_success_while_thinking_is_hidden_and_still_drops_the_row_and_asks() {
 }
 
 #[test]
-fn the_walk_crosses_from_the_last_model_to_the_rows_and_clamps() {
+fn the_walk_crosses_between_models_and_install_rows() {
     let mut picker = picker(Mode::Choose, &["acme/m1", "acme/m2"], &["openai", "zeta"]);
     assert_eq!(picker.focus(), Some(Stop::Model(0)));
     let walk = [
         (1, Stop::Model(1)),
         (1, Stop::Install("openai".to_owned())),
         (1, Stop::Install("zeta".to_owned())),
-        (1, Stop::Install("zeta".to_owned())),
+        (1, Stop::Model(0)),
+        (-1, Stop::Install("zeta".to_owned())),
         (-1, Stop::Install("openai".to_owned())),
         (-1, Stop::Model(1)),
-        (-1, Stop::Model(0)),
         (-1, Stop::Model(0)),
     ];
     for (delta, expected) in walk {
