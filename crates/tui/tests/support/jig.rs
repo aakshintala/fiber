@@ -52,6 +52,10 @@ pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
 }
 
 /// Runs the complete hover measurement under the documented subsystem bound.
+#[allow(
+    dead_code,
+    reason = "the hover and draw tests include this shared support separately"
+)]
 #[track_caller]
 pub(crate) fn run_hover_jig(binary: &str, args: &[&str], finished: &str) -> Output {
     let warmed = example_path(binary);
