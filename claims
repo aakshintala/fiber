@@ -410,7 +410,6 @@ crates/main/src/settings.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-
 crates/tui/src/settings_view.rs	fiber-4598	plan	2026-11-12T19:00:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_host/damaged_extension.rs	fiber-4756	plan	2026-11-12T19:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4756	plan	2026-11-12T19:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/tests/draw_jig.rs	fiber-4742	plan	2026-11-12T19:05:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection.rs	fiber-4598	plan	2026-11-12T19:09:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/hub_resume.rs	fiber-4598	plan	2026-11-12T19:09:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop.rs	fiber-4746	plan	2026-11-12T19:14:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -430,3 +429,7 @@ crates/main/tests/commands/tui_silent_exit.rs	fiber-4746	plan	2026-11-12T19:29:3
 crates/extensions/src/hooks.rs	fiber-4691	plan	2026-11-12T19:43:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_panel_tests.rs	fiber-4746	plan	2026-11-12T19:46:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/timing_tests.rs	fiber-4746	plan	2026-11-12T19:46:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/tests/draw_jig.rs:18-19	fiber-4742	plan	2026-11-12T19:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4742-draw-jig-bound	
+crates/tui/tests/draw_jig.rs:38-38	fiber-4742	plan	2026-11-12T19:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4742-draw-jig-bound	
+crates/tui/tests/draw_jig.rs:51-51	fiber-4742	plan	2026-11-12T19:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4742-draw-jig-bound	
+crates/tui/tests/draw_jig.rs:63-63	fiber-4742	plan	2026-11-12T19:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4742-draw-jig-bound	
