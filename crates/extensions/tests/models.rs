@@ -38,7 +38,15 @@ fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
 }
 
 #[test]
-fn models_dev_vendor_metadata_blocks_match_the_committed_provider_files() {
+fn models_dev_provider_metadata_blocks_match_the_committed_provider_files() {
+    let table: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/anthropic/providers/anthropic.json"
+    ))
+    .unwrap();
+    let table = extensions::models_dev::meta_of(&table).unwrap();
+    assert_eq!(table.source.as_deref(), Some("anthropic"));
+    assert!(table.pins.contains_key("claude-fable-5"));
+
     let openrouter: serde_json::Value = serde_json::from_str(include_str!(
         "../../../providers/openrouter/providers/openrouter.json"
     ))
