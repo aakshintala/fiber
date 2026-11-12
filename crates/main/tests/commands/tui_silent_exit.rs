@@ -13,6 +13,10 @@ use crate::support;
 #[test]
 fn tui_normal_exit_keeps_its_status_and_leaves_no_failure_message() {
     let setup = support::Setup::new();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &serde_json::json!({"hub": {"idle_exit_ms": 200}}),
+    );
     let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[]);
     run.wait_screen("the terminal's first frame", |grid| {
         grid.contents.contains("No sessions yet.")
