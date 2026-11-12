@@ -268,6 +268,8 @@ fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => match Event::from_envelope(line) {

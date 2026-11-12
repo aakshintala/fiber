@@ -935,7 +935,9 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::JobLine(_)
         | Event::DelegateFinished(_)
         | Event::JobCompleted(_)
-        | Event::JobsPendingNotified(_) => false,
+        | Event::JobsPendingNotified(_)
+        | Event::KeeperStarted(_)
+        | Event::KeeperBound(_) => false,
         // Ephemeral: never written.
         Event::SteeringQueue(_)
         | Event::Clients(_)
@@ -1033,8 +1035,12 @@ impl Log {
 
     /// Replaces the event file with a read-only handle on it, so the next
     /// write fails for real. Test-only.
-    #[cfg(test)]
-    pub(crate) fn break_writes(&self) {
+    #[cfg(any(test, feature = "fault-hooks"))]
+    #[allow(
+        clippy::expect_used,
+        reason = "test-only fault hook; a failure is the test's"
+    )]
+    pub fn break_writes(&self) {
         let mut inner = self.lock();
         let path = inner.dir.join(EVENTS);
         inner.events = OpenOptions::new()

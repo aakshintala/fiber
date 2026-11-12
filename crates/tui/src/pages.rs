@@ -331,6 +331,8 @@ impl Index {
                     | EventKind::DelegateFinished
                     | EventKind::JobCompleted
                     | EventKind::JobsPendingNotified
+                    | EventKind::KeeperStarted
+                    | EventKind::KeeperBound
                     | EventKind::CommandAccepted
                     | EventKind::CommandRejected
                     | EventKind::Unknown(_) => Flight::Permission,
@@ -409,6 +411,8 @@ impl Index {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}

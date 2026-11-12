@@ -303,6 +303,8 @@ impl Rendered {
             | Event::TextCompleted(_)
             | Event::AssistantMessageCompleted(_)
             | Event::JobsPendingNotified(_)
+            | Event::KeeperStarted(_)
+            | Event::KeeperBound(_)
             | Event::FiberExited(_)
             | Event::Rewound(_)
             | Event::Moved(_)
@@ -806,6 +808,8 @@ pub(crate) fn render(
         | Event::JobDelta(_)
         | Event::DelegateFinished(_)
         | Event::JobCompleted(_)
+        | Event::KeeperStarted(_)
+        | Event::KeeperBound(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
     }

@@ -144,6 +144,8 @@ impl App {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::Unknown(_) => return Vec::new(),
         };
         if !matches!(self.outbox.pending.get(&id), Some((Kind::Reply, _))) {

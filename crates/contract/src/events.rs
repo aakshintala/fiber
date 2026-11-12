@@ -374,6 +374,8 @@ kinds! {
     DelegateFinished(DelegateFinished) = "delegate_finished", Durable;
     JobCompleted(JobCompleted) = "job_completed", Durable;
     JobsPendingNotified(JobsPendingNotified) = "jobs_pending_notified", Durable;
+    KeeperStarted(Empty) = "keeper_started", Durable;
+    KeeperBound(Empty) = "keeper_bound", Durable;
     CommandAccepted(CommandAccepted) = "command_accepted", Ephemeral;
     CommandRejected(CommandRejected) = "command_rejected", Ephemeral;
 }

@@ -142,6 +142,8 @@ impl App {
             | EventKind::JobLine
             | EventKind::DelegateFinished
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}
