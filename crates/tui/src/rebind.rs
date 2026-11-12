@@ -536,6 +536,7 @@ impl KeysScreen {
             rows,
             joins,
             list: List::gutter(),
+            gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
             footer: self.footer(),

@@ -3005,10 +3005,10 @@ fn wheel_carrying_focus_offscreen_follows_the_new_target() {
     accept(&mut app, &lines[0]["id"], history);
     let top = app.top();
     for _ in 0..40 {
-        app.on_key(crate::keys::Key::Up, clock.now());
+        app.on_key(crate::keys::Key::PageUp, clock.now());
     }
     let frame = app.session_view_screen(80).expect("the view is open");
-    assert_eq!(frame.list.selected(), 0, "many Ups reach the first row");
+    assert_eq!(frame.list.selected(), 0, "page-ups reach the first row");
     assert_eq!(frame.list.top(), 0);
     let before = point(&app);
     app.on_wheel(&wheel(10, 5, true));
@@ -3072,10 +3072,10 @@ fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
     }
     accept(&mut app, &lines[0]["id"], history);
     for _ in 0..40 {
-        app.on_key(crate::keys::Key::Up, clock.now());
+        app.on_key(crate::keys::Key::PageUp, clock.now());
     }
     let frame = app.session_view_screen(80).expect("the view is open");
-    assert_eq!(frame.list.selected(), 0, "many Ups reach the first row");
+    assert_eq!(frame.list.selected(), 0, "page-ups reach the first row");
     // The cursor sits on the first turn's start, past its writing call:
     // everything after it lists.
     assert_eq!(

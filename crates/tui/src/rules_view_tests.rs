@@ -382,9 +382,9 @@ fn up_and_down_move_only_between_rules_and_notes() {
     for (key, to) in [
         (Key::Down, second),
         (Key::Down, note),
-        (Key::Down, note),
+        (Key::Down, first),
+        (Key::Up, note),
         (Key::Up, second),
-        (Key::Up, first),
         (Key::Up, first),
     ] {
         rules.key(&key, &ctx(&fake));

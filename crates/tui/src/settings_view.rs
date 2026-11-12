@@ -15,8 +15,10 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Chrome, Frame, GUTTER, Ink, Inline, List, Span, Spot, rows_height, tinted};
+use crate::layout::{PANEL_CEILING, PANEL_FLOOR, RAIL_CEILING, RAIL_FLOOR, share_of};
+use crate::swapped::{Chrome, Frame, GUTTER, Ink, Inline, List, Span, Spot, rows_height};
 use crate::text;
+use crate::theme::Role;
 
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
@@ -813,19 +815,21 @@ impl Settings {
         vec![("/ ".to_owned(), Ink::Muted.style()), (query, Style::new())]
     }
 
-    /// The tab bar: the open tab bold on the `surface` tint, the rest
-    /// plain. A bar wider than the frame drops tabs from the left, never
-    /// the open one.
+    /// The tab bar: the open tab bold in `background` on an `accent`
+    /// fill, the rest dim. A bar wider than the frame drops tabs from
+    /// the left, never the open one.
     fn tab_bar(&self, width: usize) -> Vec<Span> {
-        let open = Style::new().add_modifier(Modifier::BOLD);
         let spans: Vec<(SettingsTab, Span)> = SettingsTab::ALL
             .into_iter()
             .map(|tab| {
                 let name = format!(" {} ", tab_name(tab));
                 let style = if tab == self.tab {
-                    tinted(open)
-                } else {
                     Style::new()
+                        .fg(Role::Background.color())
+                        .bg(Role::Accent.color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().add_modifier(Modifier::DIM)
                 };
                 (tab, (name, style))
             })
@@ -890,9 +894,13 @@ impl Settings {
         }
     }
 
-    /// The body rows that fit at `ctx`'s size.
+    /// The body rows that fit at `ctx`'s size. The frame is only
+    /// measured, never drawn, so the suffix reads the draw width.
     fn shown(&self, ctx: &Ctx<'_>) -> usize {
-        rows_height(&self.frame(ctx.width, ctx.height, ctx.usage), ctx.height)
+        rows_height(
+            &self.frame(ctx.width, ctx.height, ctx.usage, ctx.width),
+            ctx.height,
+        )
     }
 }
 
@@ -1207,17 +1215,18 @@ impl Settings {
         }
     }
 
-    /// Moves to the next or previous tab; the first and last stop.
+    /// Moves to the next or previous tab, wrapping past either end:
+    /// past the last tab to the first, past the first to the last.
     fn step_tab(&mut self, forward: bool, ctx: &Ctx<'_>) {
+        let count = SettingsTab::ALL.len();
         let at = SettingsTab::ALL
             .iter()
             .position(|tab| *tab == self.tab)
             .unwrap_or(0);
         let to = if forward {
-            at.saturating_add(1)
-                .min(SettingsTab::ALL.len().saturating_sub(1))
+            (at + 1) % count
         } else {
-            at.saturating_sub(1)
+            (at + count - 1) % count
         };
         if let Some(tab) = SettingsTab::ALL.get(to).copied()
             && tab != self.tab
@@ -1827,7 +1836,13 @@ fn footer(parts: &[(&str, &str)]) -> (String, Vec<Span>) {
 
 impl Settings {
     /// The frame to draw at `width` by `height`.
-    pub(crate) fn frame(&self, width: usize, height: usize, usage: Option<u64>) -> Frame {
+    pub(crate) fn frame(
+        &self,
+        width: usize,
+        height: usize,
+        usage: Option<u64>,
+        suffix_width: usize,
+    ) -> Frame {
         if let Some(page) = &self.page {
             return self.page_frame(page, width, height);
         }
@@ -1852,17 +1867,27 @@ impl Settings {
                     })
                     .collect(),
                 list: *list,
+                // The focused row's mark draws in `accent`, bold.
+                gutter_mark: Style::new()
+                    .fg(Role::Accent.color())
+                    .add_modifier(Modifier::BOLD),
                 below: self.said.clone(),
                 field: None,
                 footer: "↑↓ move · Enter choose · Esc back".to_owned(),
                 chrome: None,
             },
-            Mode::Rows | Mode::Field(_) => self.rows_frame(width, height, usage),
+            Mode::Rows | Mode::Field(_) => self.rows_frame(width, height, usage, suffix_width),
         }
     }
 
     /// The open tab.
-    fn rows_frame(&self, width: usize, height: usize, usage: Option<u64>) -> Frame {
+    fn rows_frame(
+        &self,
+        width: usize,
+        height: usize,
+        usage: Option<u64>,
+        suffix_width: usize,
+    ) -> Frame {
         let layout = self.layout(width, height, usage);
         let list = if layout.takes.is_empty() {
             self.list.blur()
@@ -1885,6 +1910,8 @@ impl Settings {
                     &layout,
                     width,
                     editing.is_some_and(|(line, _)| line == at),
+                    layout.focus == Some(at),
+                    suffix_width,
                 ),
             })
             .collect();
@@ -1911,6 +1938,10 @@ impl Settings {
             command: "/settings".to_owned(),
             rows,
             list,
+            // The focused row's mark draws in `accent`, bold.
+            gutter_mark: Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
             below: layout.below,
             field: None,
             footer: plain,
@@ -1922,22 +1953,63 @@ impl Settings {
         }
     }
 
+    /// A rail or panel width row's columns on a `suffix_width`-wide
+    /// terminal: the share's columns after the region's limits. `None`
+    /// for any other row, or when the row holds no share to count.
+    fn width_columns(key: &str, shown: &Shown, suffix_width: usize) -> Option<u16> {
+        let (floor, ceiling) = match key {
+            "tui.rail.width" => (RAIL_FLOOR, RAIL_CEILING),
+            "tui.panel.width" => (PANEL_FLOOR, PANEL_CEILING),
+            _ => return None,
+        };
+        let Shown::Value(text) = shown else {
+            return None;
+        };
+        let share = as_number(text)?;
+        let terminal = u16::try_from(suffix_width).unwrap_or(u16::MAX);
+        Some(share_of(terminal, share, floor, ceiling))
+    }
+
+    /// Whether a boolean row is set on: `[x] On` reads in `added`,
+    /// `[ ] Off` dim.
+    fn boolean_on(row: &SettingRow) -> Option<bool> {
+        if !matches!(row.control, SettingControl::Boolean) {
+            return None;
+        }
+        if let Shown::Value(text) = &row.value {
+            return Some(text == "true");
+        }
+        None
+    }
+
     /// One row's cells: the label, the value, then the layer it comes from
-    /// when that is not global. A row being edited keeps its label only;
-    /// the field draws over its value.
+    /// when that is not global. The focused row's label is bold in
+    /// `accent`; its value is bold in `info`, an unset value dim, a
+    /// layer tag in `attention`, `[x] On` in `added`, `[ ] Off` dim,
+    /// and a screen row's value in `secondary`. A width row's value
+    /// ends with its columns on a `suffix_width`-wide terminal. A row
+    /// being edited keeps its label only; the field draws over its
+    /// value.
     fn cells(
         &self,
         item: Item,
         layout: &Layout,
         width: usize,
         editing: bool,
+        focused: bool,
+        suffix_width: usize,
     ) -> Vec<(String, Option<Spot>, Ink)> {
         let label = text::cut(&self.label_of(item), layout.label_col, "…");
         let pad = layout
             .label_col
             .saturating_sub(text::width(&label))
             .saturating_add(GAP);
-        let mut cells = vec![(format!("{label}{}", " ".repeat(pad)), None, Ink::Plain)];
+        let label_ink = if focused {
+            Ink::Bold(Role::Accent)
+        } else {
+            Ink::Plain
+        };
+        let mut cells = vec![(format!("{label}{}", " ".repeat(pad)), None, label_ink)];
         if editing {
             return cells;
         }
@@ -1952,6 +2024,25 @@ impl Settings {
                 .row(at)
                 .map_or_else(|| (String::new(), None), shown_value),
         };
+        let value_ink = match item {
+            Item::Screen(_) => Ink::Role(Role::Secondary),
+            Item::Key(at) => {
+                let row = self.row(at);
+                let unset = row.is_some_and(|row| matches!(row.value, Shown::Unset));
+                match (unset, row.and_then(Self::boolean_on)) {
+                    (true, _) => Ink::Muted,
+                    (false, Some(true)) => Ink::Role(Role::Added),
+                    (false, Some(false)) => Ink::Muted,
+                    (false, None) => {
+                        if focused {
+                            Ink::Bold(Role::Info)
+                        } else {
+                            Ink::Role(Role::Info)
+                        }
+                    }
+                }
+            }
+        };
         // A search annotates each result with its own tab, dim at the
         // right: the value is cut short of the annotation, keeping the
         // layer tag whole.
@@ -1962,19 +2053,39 @@ impl Settings {
             };
             tab.map(tab_name).unwrap_or_default().to_owned()
         });
+        // A width row ends with its columns on the terminal, read from
+        // the terminal width; the room and the cut below still read the
+        // draw width.
+        let suffix = match item {
+            Item::Screen(_) => None,
+            Item::Key(at) => self.row(at).and_then(|row| {
+                Self::width_columns(&row.key, &row.value, suffix_width)
+                    .map(|columns| format!(" · {columns} columns"))
+            }),
+        };
         let annotation_room = annotation
             .as_ref()
             .map_or(0, |name| text::width(name) + GAP);
         let tag_room = tag.as_ref().map_or(0, |tag| text::width(tag) + GAP);
+        let suffix_room = suffix.as_ref().map_or(0, |suffix| text::width(suffix));
         let room = width
-            .saturating_sub(GUTTER + layout.label_col + GAP + tag_room + annotation_room)
+            .saturating_sub(
+                GUTTER + layout.label_col + GAP + tag_room + annotation_room + suffix_room,
+            )
             .max(1);
         let shown = text::cut(&value, room, "…");
-        let mut used = GUTTER + layout.label_col + GAP + text::width(&shown);
-        cells.push((shown, None, Ink::Plain));
+        let mut used = GUTTER + layout.label_col + GAP + text::width(&shown) + suffix_room;
+        cells.push((shown, None, value_ink));
+        if let Some(suffix) = suffix {
+            cells.push((suffix, None, value_ink));
+        }
         if let Some(tag) = tag {
             used = used.saturating_add(GAP + text::width(&tag));
-            cells.push((format!("{}{tag}", " ".repeat(GAP)), None, Ink::Muted));
+            cells.push((
+                format!("{}{tag}", " ".repeat(GAP)),
+                None,
+                Ink::Role(Role::Attention),
+            ));
         }
         if let Some(name) = annotation {
             let gap = width.saturating_sub(used + text::width(&name));
@@ -2062,6 +2173,10 @@ impl Settings {
             command: "/settings".to_owned(),
             rows,
             list,
+            // The focused row's mark draws in `accent`, bold.
+            gutter_mark: Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
             below,
             field: None,
             footer: plain,
@@ -2071,6 +2186,165 @@ impl Settings {
                 footer: spans,
             }),
         }
+    }
+}
+
+/// A JSON number as a count, or `None` when the text is no number.
+fn as_number(text: &str) -> Option<f64> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| value.as_f64())
+}
+
+/// A count without a trailing decimal point: whole numbers read as
+/// integers, the rest with their decimals.
+fn trimmed(n: f64) -> String {
+    if n.fract() == 0.0 {
+        format!("{n:.0}")
+    } else {
+        format!("{n:.3}")
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_owned()
+    }
+}
+
+/// A count with its singular or plural word: exactly one takes the
+/// singular, anything else the plural.
+fn counted(n: f64, one: &str, many: &str) -> String {
+    let word = if n == 1.0 { one } else { many };
+    format!("{} {word}", trimmed(n))
+}
+
+/// Milliseconds in the doc's words: whole hours, else whole minutes,
+/// else whole or fractional seconds. The seconds arm is the fallback
+/// itself: a whole count of seconds reads the same either way, so no
+/// extra branch pins it.
+fn ms_text(ms: f64) -> String {
+    if ms.fract() == 0.0 && ms >= 0.0 {
+        if ms != 0.0 && ms % 3_600_000.0 == 0.0 {
+            return format!("{} h", ms / 3_600_000.0);
+        }
+        if ms % 60_000.0 == 0.0 {
+            return format!("{} min", ms / 60_000.0);
+        }
+    }
+    format!("{} s", trimmed(ms / 1_000.0))
+}
+
+/// A token count in thousands or millions, as the list spells them.
+fn tokens_text(n: f64) -> String {
+    if n.fract() == 0.0 && n > 0.0 {
+        if n % 1_000_000.0 == 0.0 {
+            return format!("{}M tokens", n / 1_000_000.0);
+        }
+        if n % 1_000.0 == 0.0 {
+            return format!("{}k tokens", n / 1_000.0);
+        }
+    }
+    format!("{} tokens", trimmed(n))
+}
+
+/// A listed value as given, anything else with "(custom)" after it.
+fn listed(n: f64, values: &[f64], text: String) -> String {
+    if values.contains(&n) {
+        text
+    } else {
+        format!("{text} (custom)")
+    }
+}
+
+/// A number row's text with its unit, as the `/settings` tables spell
+/// it. Slider rows show any value plain; list rows mark a value
+/// outside their list with "(custom)". A key this ticket does not
+/// cover keeps its raw text with no unit.
+fn number_text(key: &str, text: &str) -> String {
+    let Some(n) = as_number(text) else {
+        return as_typed(text);
+    };
+    match key {
+        "tui.rail.width" | "tui.panel.width" => format!("{}% of screen width", trimmed(n)),
+        "quota.notice_at" => format!("{}% used", trimmed(n)),
+        "compaction.window_fraction" => {
+            format!("{}% of the context window", trimmed(n * 100.0))
+        }
+        "cache.warm_cap" => counted(n, "cache lifetime", "cache lifetimes"),
+        "retry.attempts" => counted(n, "retry", "retries"),
+        "compaction.tokens" => listed(
+            n,
+            &[
+                100_000.0,
+                200_000.0,
+                400_000.0,
+                600_000.0,
+                800_000.0,
+                1_000_000.0,
+            ],
+            tokens_text(n),
+        ),
+        "budget.usd" => {
+            if n == 0.0 {
+                "No limit".to_owned()
+            } else {
+                listed(
+                    n,
+                    &[1.0, 5.0, 10.0, 25.0, 50.0, 100.0],
+                    format!("${}", trimmed(n)),
+                )
+            }
+        }
+        "reviewer.block_limits.consecutive" => listed(
+            n,
+            &[1.0, 2.0, 3.0, 5.0, 10.0],
+            counted(n, "block", "blocks"),
+        ),
+        "reviewer.block_limits.session" => listed(
+            n,
+            &[5.0, 10.0, 20.0, 50.0, 100.0],
+            counted(n, "block", "blocks"),
+        ),
+        "retry.initial_delay_ms" => {
+            listed(n, &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0], ms_text(n))
+        }
+        "retry.max_delay_ms" => listed(
+            n,
+            &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0],
+            ms_text(n),
+        ),
+        "hub.idle_exit_ms" | "session.idle_exit_ms" => listed(
+            n,
+            &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
+            ms_text(n),
+        ),
+        _ => as_typed(text),
+    }
+}
+
+/// A duration string with its unit word spaced out: "24h" reads
+/// "24 h". A value outside the stepping list reads with "(custom)"
+/// after it; anything unparseable keeps its raw text.
+fn refresh_text(text: &str) -> String {
+    let raw = as_typed(text);
+    let at = raw.len().saturating_sub(1);
+    if !raw.is_char_boundary(at) {
+        return raw;
+    }
+    let (count, unit) = raw.split_at(at);
+    let word = match unit {
+        "s" => "s",
+        "m" => "min",
+        "h" => "h",
+        "d" => "d",
+        _ => return raw,
+    };
+    if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+        return raw;
+    }
+    let shown = format!("{count} {word}");
+    if ["1h", "6h", "12h", "24h", "3d", "7d"].contains(&raw.as_str()) {
+        shown
+    } else {
+        format!("{shown} (custom)")
     }
 }
 
@@ -2110,6 +2384,10 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Value(text)) => {
             format!("{} ›", list_text(text))
+        }
+        (SettingControl::Number, Shown::Value(text)) => number_text(&row.key, text),
+        (SettingControl::Text, Shown::Value(text)) if row.key == "model_lists.refresh_after" => {
+            refresh_text(text)
         }
         (_, Shown::Unset) => "Not set".to_owned(),
         (_, Shown::Value(text)) => as_typed(text),

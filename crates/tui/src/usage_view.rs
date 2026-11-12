@@ -135,6 +135,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
         command: "/usage".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),

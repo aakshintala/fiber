@@ -331,6 +331,7 @@ pub(crate) fn frame(
         command: "diff against HEAD".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: vec![format!(
             "{} changed  +{added} −{removed}",
             format::count(files, "file", "files")
@@ -380,6 +381,7 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
         command: "diff against HEAD".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
         footer: "↑↓ scroll · Ctrl+G edits · ← files · Esc close".to_owned(),
