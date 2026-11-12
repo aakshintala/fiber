@@ -1380,6 +1380,8 @@ impl App {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::Unknown(_) => {}
         }
         send

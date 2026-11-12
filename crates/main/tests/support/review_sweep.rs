@@ -898,6 +898,8 @@ fn fold_index(dir: &Path, chain: &[contract::Envelope]) -> Result<FoldIndex, Str
             | Event::DelegateFinished(_)
             | Event::JobCompleted(_)
             | Event::JobsPendingNotified(_)
+            | Event::KeeperStarted(_)
+            | Event::KeeperBound(_)
             | Event::CommandAccepted(_)
             | Event::Archived(_)
             | Event::CommandRejected(_) => {}
