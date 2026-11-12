@@ -52,9 +52,8 @@ sends these codes, so the match needs no flag. When the body has `resets_at`
 `retry-after` header at all does it use the milliseconds from the reply's
 `Date` header until `resets_at` as `retry_after_ms`; a present but
 unparseable `retry-after` vetoes that fallback. Without a usable `Date`, no
-fallback wait is set. The message names the reset time. The vendor's explicit
-wait takes priority, and the reset time fills in only when the vendor sends
-no wait. `rate_limit_exceeded` stays `rate_limited`.
+fallback wait is set. The message names the reset time. `rate_limit_exceeded`
+stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
 "The usage-limit error body").

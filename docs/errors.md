@@ -185,7 +185,7 @@ The Retried column is the default. A response header `x-should-retry: true`
 or `false` overrides it for that response (`docs/model-routing.md`, "When a
 model call fails"). It never overrides `quota_exceeded`, `unknown_stop_reason` or `paused_too_long`, which are never retried.
 
-A wait longer than `retry.max_delay_ms`, 60 seconds by default, fails at once
+A wait longer than `retry.max_delay_ms` (60 seconds by default) fails at once
 as `rate_limited` with `retry_after_ms` set, so a person or a caller can decide.
 
 ### Recognising a context overflow
@@ -213,8 +213,10 @@ the exception.
 
 `quota_exceeded` matches the documented shapes
 (`research/provider-errors/quota.md`, one fixture each in
-`research/provider-errors/documented/`), and any other HTTP 402 also maps to
-`quota_exceeded`: HTTP 402 means Payment Required, with no other meaning.
+`research/provider-errors/documented/`), and any other HTTP 402 maps to `quota_exceeded`, except an OpenRouter
+in-flight-budget 402 with a `Retry-After` in seconds, which remains
+`rate_limited`: HTTP 402 means Payment Required, with no other meaning outside
+that known retryable exception.
 The documented shapes are:
 
 - Anthropic: HTTP 402 `billing_error`; HTTP 429 `rate_limit_error` with
