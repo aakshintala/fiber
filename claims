@@ -391,3 +391,4 @@ docs/events.md	fiber-4465	plan	2026-11-12T20:50:17Z	Amoghs-MacBook-Pro:/Users/aa
 crates/config/src/keys.rs	fiber-4582	plan	2026-11-12T21:00:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/src/keys_tests.rs	fiber-4582	plan	2026-11-12T21:00:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap	fiber-4582	plan	2026-11-12T21:14:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/config/tests/keys.rs	fiber-4598	plan	2026-11-12T21:20:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
