@@ -189,7 +189,6 @@ crates/extensions/src/runtime/queued.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amo
 crates/extensions/src/process/registry.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/runtime_tests.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tools/src/shell/sandbox/mod.rs	fiber-4681	plan	2026-11-11T21:33:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/extensions.md	fiber-4678	plan	2026-11-11T21:43:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/providers.rs	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/models.rs	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
