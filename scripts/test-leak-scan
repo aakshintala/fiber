@@ -139,9 +139,20 @@ n="self-test-$$-$(date +%s)-$RANDOM"
 other="sibling-$$-$(date +%s)-$RANDOM"
 secret="leak-secret-$$-$(date +%s)-$RANDOM"
 
+# Exercise the same Darwin row shape consumed by leak-scan's `ps -E` path.
+# shellcheck disable=SC2016
+identity=$(bash -c '
+  source <(sed -n "/^env_value()/,/^}/p; /^test_identity_of()/,/^}/p" scripts/leak-scan)
+  test_identity_of "$(printf "%s\\n" "$@" | tr " " "\\n")"
+' _ '123 NEXTEST_BINARY_ID=main::leak_probe NEXTEST_TEST_NAME=darwin_fixture')
+if [ "$identity" != "test: main::leak_probe::darwin_fixture" ]; then
+  echo "scripts/test-leak-scan: Darwin-shaped identity row parsed as: $identity" >&2
+  exit 1
+fi
+
 # A leaker in this process group. It stays in python: macOS ps shows the
 # environment of python but not of sh or sleep, so only a python leaker
-# proves the scan names it. On Darwin, its `ps -E` row is the fixture for
+# proves the scan names it. The Darwin-shaped row below separately checks
 # parsing a PID followed by space-separated NAME=value tokens. It ignores SIGTERM like the fixtures, and
 # stops when the stop file exists (or after 120 s on its own).
 FIBER_CHECK_RUN=$n NEXTEST_BINARY_ID=main::leak_probe NEXTEST_TEST_NAME=the_shell_tool_leak_is_named_by_pid LEAK_SCAN_SECRET="$secret" STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
