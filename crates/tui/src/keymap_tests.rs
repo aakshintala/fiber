@@ -299,24 +299,23 @@ fn editing_the_query_resets_focus_and_scroll() {
 }
 
 #[test]
-fn up_and_down_stop_at_the_ends() {
+fn up_and_down_wrap_at_the_ends() {
     let keys = Keyset::default();
     let fits = |_: usize| 40;
     let mut state = KeyMap::default();
+    let last = state.visible(&keys).len() - 1;
     state.key(&Key::Up, &keys, &fits);
-    assert_eq!((state.focus(), state.top()), (0, 0));
+    assert_eq!(state.focus(), last);
     state.key(&Key::Down, &keys, &fits);
-    assert_eq!(state.focus(), 1);
-    for _ in 0..100 {
+    assert_eq!(state.focus(), 0);
+    for _ in 0..last {
         state.key(&Key::Down, &keys, &fits);
     }
-    assert_eq!(state.focus(), BINDINGS.len() - 1);
+    assert_eq!(state.focus(), last);
     state.key(&Key::Down, &keys, &fits);
-    assert_eq!(state.focus(), BINDINGS.len() - 1);
-    for _ in 0..100 {
-        state.key(&Key::Up, &keys, &fits);
-    }
-    assert_eq!((state.focus(), state.top()), (0, 0));
+    assert_eq!(state.focus(), 0);
+    state.key(&Key::Up, &keys, &fits);
+    assert_eq!(state.focus(), last);
 }
 
 #[test]
