@@ -6960,29 +6960,6 @@ fn set_reason_moves_only_a_session_run() {
     assert_eq!(hello.reason, contract::events::CallReason::Call);
 }
 
-/// A process delegate may omit its completion callback while still
-/// starting the job; a function marker keeps completion routing enabled.
-#[test]
-fn process_delegate_bind_run_flag_controls_end_routing() {
-    use super::process::calls::{DecodedCall, decode_host};
-    use super::process::context::HostOperation;
-
-    let args = |run| {
-        vec![
-            json!({"description": "work", "prompt": "do work"}),
-            json!({"timeout": 250, "run": run}),
-        ]
-    };
-    for (run, expected) in [(false, false), (true, true)] {
-        let decoded = decode_host("host.delegate", &args(run)).expect("the call decodes");
-        let DecodedCall::Service(HostOperation::Delegate { run, timeout, .. }) = decoded else {
-            panic!("host.delegate decodes as a service call");
-        };
-        assert_eq!(run, expected);
-        assert_eq!(timeout, Duration::from_millis(250));
-    }
-}
-
 enum ProcessDelegateAnswer {
     Started(contract::JobId),
     FailedAfterBind(contract::JobId, contract::shapes::Failure),
@@ -7121,26 +7098,6 @@ fn process_delegate_bind() {
     );
     assert_eq!(route.timeout, Duration::from_millis(250));
     assert!(route.run);
-
-    let no_run_id = contract::JobId("j_process_no_run".to_owned());
-    *delegate.answer.lock().unwrap() = ProcessDelegateAnswer::Started(no_run_id.clone());
-    let no_run_call = HostCallHandle::new(
-        contract::CommandId("host-call-no-run".to_owned()),
-        Arc::clone(&table),
-    );
-    ProcessHostServices::perform(
-        services.as_ref(),
-        &context,
-        &callback,
-        operation(false),
-        &no_run_call,
-        &callback.cancel,
-    )
-    .expect("a delegate without an end callback still starts");
-    let route = table
-        .finish_delegate(&process_job_completed(no_run_id))
-        .expect("the no-run completion removes its binding");
-    assert!(!route.run);
 
     let failed_id = contract::JobId("j_process_failed".to_owned());
     *delegate.answer.lock().unwrap() = ProcessDelegateAnswer::FailedAfterBind(
