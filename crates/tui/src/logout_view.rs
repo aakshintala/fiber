@@ -12,38 +12,13 @@ use ratatui::text::Span;
 use crate::configure::LogoutRow;
 use crate::format;
 use crate::keys::Key;
+use crate::login_logout_view::{
+    Group, Item, blank_row, build, shown_body_rows as shared_shown_body_rows, text_row,
+};
 use crate::mouse::{Target, TargetId};
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::Spot;
 use crate::view::overlay;
-
-/// A heading's group.
-// debt: Group, Item, rows_key, target_rows, the list assembly in draw,
-// list_chrome, shown_body_rows, text_row, blank_row and wrapped_rows
-// mirror login_view.rs; share one list both views call once login_view.rs
-// is in the fence. Upgrade trigger: the next ticket that touches
-// login_view.rs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Group {
-    /// The stored and configured provider labels.
-    Providers,
-    /// The declared secrets.
-    Secrets,
-}
-
-/// One row of the view: a heading, one target, the blank row between
-/// the groups, or the note in place of every row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Item {
-    /// A group's heading; Enter on it does nothing.
-    Heading(Group),
-    /// One provider label or secret: its index in the rows.
-    Target(usize),
-    /// The blank row between the providers and the secrets.
-    Gap,
-    /// The note shown with no label and no secret.
-    Note,
-}
 
 /// What the view shows below its header.
 #[derive(Debug)]
@@ -79,7 +54,8 @@ impl Logout {
     pub(crate) fn open(ctx: &Ctx<'_>) -> Self {
         let (rows, items, said) = match ctx.seam.logout_rows() {
             Ok(rows) => {
-                let items = build(&rows);
+                let provider_rows: Vec<bool> = rows.iter().map(is_provider).collect();
+                let items = build(&provider_rows);
                 (rows, items, Vec::new())
             }
             Err(error) => (Vec::new(), Vec::new(), vec![error.message]),
@@ -112,6 +88,11 @@ impl Logout {
                     .position(|item| matches!(item, Item::Target(_)))
             })
             .unwrap_or(0);
+    }
+
+    fn rebuild_items(&mut self) {
+        let provider_rows: Vec<bool> = self.rows.iter().map(is_provider).collect();
+        self.items = build(&provider_rows);
     }
 
     /// The selected row.
@@ -263,7 +244,7 @@ impl Logout {
                 match ctx.seam.logout_rows() {
                     Ok(rows) => {
                         self.rows = rows;
-                        self.items = build(&self.rows);
+                        self.rebuild_items();
                         self.refocus();
                         self.said = vec![line];
                     }
@@ -273,7 +254,7 @@ impl Logout {
                         self.rows.retain(|kept| {
                             kept.name() != row.name() || kept.label() != row.label()
                         });
-                        self.items = build(&self.rows);
+                        self.rebuild_items();
                         self.refocus();
                         self.said = vec![line, error.message];
                     }
@@ -287,6 +268,7 @@ impl Logout {
     }
 
     /// The target rows' indices in display order.
+    // debt: keep the projection local until navigation state is shared; revisit with that state.
     fn target_rows(&self) -> Vec<usize> {
         self.items
             .iter()
@@ -322,38 +304,23 @@ impl Logout {
     }
 }
 
+/// Logout's list body rows, retaining the test module's existing helper seam.
+fn shown_body_rows(height: usize) -> usize {
+    shared_shown_body_rows(height, false)
+}
+
+/// One plain row per wrapped line of `text`.
+fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
+    format::wrap(text, inner.max(1))
+        .into_iter()
+        .map(|row| text_row(row, style))
+        .collect()
+}
+
 /// Whether the row lists under Providers: a provider's label, stored or
 /// configured. Secrets list under Secrets.
 fn is_provider(row: &LogoutRow) -> bool {
     matches!(row, LogoutRow::Provider { .. })
-}
-
-fn build(rows: &[LogoutRow]) -> Vec<Item> {
-    let mut items = Vec::new();
-    if rows.iter().any(is_provider) {
-        items.push(Item::Heading(Group::Providers));
-        for (at, row) in rows.iter().enumerate() {
-            if is_provider(row) {
-                items.push(Item::Target(at));
-            }
-        }
-    }
-    if rows.iter().any(|row| !is_provider(row)) {
-        // The blank row between the groups, only when both have rows.
-        if !items.is_empty() {
-            items.push(Item::Gap);
-        }
-        items.push(Item::Heading(Group::Secrets));
-        for (at, row) in rows.iter().enumerate() {
-            if !is_provider(row) {
-                items.push(Item::Target(at));
-            }
-        }
-    }
-    if items.is_empty() {
-        items.push(Item::Note);
-    }
-    items
 }
 
 impl Logout {
@@ -517,35 +484,6 @@ impl Logout {
     }
 }
 
-/// The list overlay's chrome in rows, measured with a one-row probe so
-/// the count never depends on the body: the edges, the pads, the title
-/// and its gap, and the footer and its gap.
-fn list_chrome() -> usize {
-    let probe = overlay::Overlay {
-        title: Some(("Log out".to_owned(), Some(Span::raw("✕")))),
-        close: None,
-        body: vec![overlay::Row {
-            spans: Vec::new(),
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        }],
-        footer: Some(overlay::legend(&[
-            ("↑↓", "move"),
-            ("Enter", "delete"),
-            ("Esc", "close"),
-        ])),
-        prefer: 96,
-    };
-    usize::from(overlay::height(&probe)).saturating_sub(1)
-}
-
-/// How many body rows the list overlay shows at `height` rows tall:
-/// the height less its chrome, or none when the chrome fills it.
-fn shown_body_rows(height: usize) -> usize {
-    height.saturating_sub(list_chrome())
-}
-
 /// One row's text as drawn: the provider and its label with the
 /// default mark, and the origin a dim row's key comes from; or the
 /// secret's name.
@@ -579,34 +517,6 @@ fn delete_line(row: &LogoutRow) -> String {
         LogoutRow::Provider { name, label, .. } => format!("Delete {name}/{label}?"),
         LogoutRow::Secret { name, .. } => format!("Delete {name}?"),
     }
-}
-
-/// One overlay body row holding `text` in `style`.
-fn text_row(text: impl Into<String>, style: Style) -> overlay::Row {
-    overlay::Row {
-        spans: vec![Span::styled(text.into(), style)],
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
-/// One blank overlay body row.
-fn blank_row() -> overlay::Row {
-    overlay::Row {
-        spans: Vec::new(),
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
-/// One plain row per wrapped line of `text`.
-fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
-    format::wrap(text, inner.max(1))
-        .into_iter()
-        .map(|row| text_row(row, style))
-        .collect()
 }
 
 #[cfg(test)]
