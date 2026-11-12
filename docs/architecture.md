@@ -359,9 +359,9 @@ ones through an emitter handle defined in `contract`. This keeps `seq` minted
 in one place and keeps the fsync ordering rule in `docs/events.md` — two
 fsyncs bracketing each side effect — a property of one thread's sequence of
 calls rather than of a race. While the session is gone, its keeper appends
-`job_completed` as the holder of `session.lock` (`docs/events.md`;
-`docs/tools.md`, "The keeper"). One process holds the lock at a time, so `seq`
-still has one minter.
+`keeper_started`, `keeper_bound`, then `job_completed` as the holder of
+`session.lock` (`docs/events.md`; `docs/tools.md`, "The keeper"). One
+process holds the lock at a time, so `seq` still has one minter.
 
 ### Tool calls in a step
 

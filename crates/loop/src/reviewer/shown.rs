@@ -357,6 +357,7 @@ pub fn render_reviewed(
         | Event::ExtensionExec(_) => {}
         Event::JobStarted(_) | Event::DelegateStarted(_) | Event::JobDelta(_) => {}
         Event::JobLine(_) | Event::DelegateFinished(_) | Event::JobCompleted(_) => {}
+        Event::KeeperStarted(_) | Event::KeeperBound(_) => {}
         Event::JobsPendingNotified(_) | Event::CommandAccepted(_) | Event::CommandRejected(_) => {}
     }
 }
