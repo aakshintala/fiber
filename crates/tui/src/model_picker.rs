@@ -603,9 +603,8 @@ impl ModelPicker {
     }
 
     /// Moves the focus over the model rows and then the not-installed
-    /// rows by `delta`, clamped: headings are not stops, and no key
-    /// cycles past either end. With nothing focused, only a step down
-    /// lands, on the first stop.
+    /// rows by `delta`, wrapping at either end: headings are not stops.
+    /// With nothing focused, only a step down lands, on the first stop.
     pub(crate) fn move_row(&mut self, delta: isize) {
         let stops = self.stops();
         if stops.is_empty() {
@@ -614,8 +613,7 @@ impl ModelPicker {
         let next = match self.focus() {
             Some(now) => {
                 let at = stops.iter().position(|stop| *stop == now).unwrap_or(0);
-                at.saturating_add_signed(delta)
-                    .clamp(0, stops.len().saturating_sub(1))
+                crate::swapped::wrap_step(at, stops.len(), delta)
             }
             None if delta > 0 => 0,
             None => return,

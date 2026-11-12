@@ -698,16 +698,15 @@ fn down_and_up_step_over_targets_only() {
     // Down from codex skips the gap and the Secrets heading.
     press(&mut login, &fake, &[Key::Down]);
     assert_eq!(login.selected, 5);
-    // Down on the last target stays.
-    press(&mut login, &fake, &[Key::Down]);
-    assert_eq!(login.selected, 5);
     // Up from the secret skips back past the gap.
     press(&mut login, &fake, &[Key::Up]);
     assert_eq!(login.selected, 2);
     press(&mut login, &fake, &[Key::Up]);
     assert_eq!(login.selected, 1);
-    // Up on the first target stays.
+    // Up on the first target wraps to the last, and Down wraps back.
     press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 5);
+    press(&mut login, &fake, &[Key::Down]);
     assert_eq!(login.selected, 1);
 }
 
@@ -2791,6 +2790,39 @@ fn key_choices(
     (fake, login)
 }
 
+/// Up wraps from the first reviewer to the last, and from the middle to the first
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn reviewer_choices_up_wraps_from_first_and_middle() {
+    let (fake, mut first) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["m1", "m2", "m3"], Some("m1")),
+    );
+    assert!(matches!(first.key(&Key::Up, &ctx(&fake)), Act::Stay));
+    save_highlighted(&mut first, &fake);
+    assert_eq!(
+        fake.reviewer_saves()
+            .last()
+            .map(|(_, model)| model.as_str()),
+        Some("m3")
+    );
+
+    let (fake, mut middle) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["m1", "m2", "m3"], Some("m2")),
+    );
+    assert!(matches!(middle.key(&Key::Up, &ctx(&fake)), Act::Stay));
+    save_highlighted(&mut middle, &fake);
+    assert_eq!(
+        fake.reviewer_saves()
+            .last()
+            .map(|(_, model)| model.as_str()),
+        Some("m1")
+    );
+}
+
 /// Whether the view shows the provider rows.
 fn rows_shown(login: &Login) -> bool {
     drawn(login, 80, 24).contains("Providers")
@@ -3308,7 +3340,7 @@ fn without_a_preselection_no_row_opens_highlighted() {
     let row: String = (0..80)
         .map(|x| buf[(x, barred_rows(&buf, 80, 24)[0])].symbol())
         .collect();
-    assert!(row.contains("m1"), "down clamps, up steps back: {row}");
+    assert!(row.contains("m2"), "Up wraps from first to last: {row}");
     // Up from no highlight reaches the last row.
     let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
     press(&mut login, &fake, &[Key::Up]);
@@ -3389,10 +3421,10 @@ fn arrows_move_and_clamp_over_the_models() {
     for (keys, shown) in [
         (vec![Key::Down], "m1"),
         (vec![Key::Down, Key::Down], "m2"),
-        (vec![Key::Down, Key::Down, Key::Down], "m2"),
+        (vec![Key::Down, Key::Down, Key::Down], "m1"),
         (vec![Key::Up], "m2"),
         (vec![Key::Down, Key::Up, Key::Up], "m1"),
-        (vec![Key::Up, Key::Up, Key::Up], "m1"),
+        (vec![Key::Up, Key::Up, Key::Up], "m2"),
     ] {
         let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
         press(&mut login, &fake, &keys);

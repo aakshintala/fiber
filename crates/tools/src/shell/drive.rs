@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::emit::Emit;
+use contract::jobs::JobIdentity;
 use contract::tool::Cancel;
 use rustix::process::Signal;
 
@@ -47,6 +48,8 @@ pub(super) struct Run {
     /// receipt reuses it instead of running `ps` a second time. `None`
     /// until the drive lists the group.
     pub(super) members: Option<GroupMembers>,
+    /// The local child's leader identity, captured before it can leave.
+    pub(super) identity: Option<JobIdentity>,
     pub(super) pgid: u32,
     pub(super) hosted: Option<super::hosted::Hosted>,
     /// The run's registration in the process-wide list, boxed so the run

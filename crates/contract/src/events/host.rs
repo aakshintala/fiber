@@ -233,6 +233,25 @@ pub struct JobStarted {
     pub description: String,
     /// The job's output file.
     pub output_path: String,
+    /// The process group started for this job, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgid: Option<u32>,
+    /// The leader's opaque start-time identity, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<u64>,
+    /// The registry entry kind; absent only on pre-upgrade rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<JobKind>,
+}
+
+/// A kind of registry entry recorded by `job_started`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// A process managed as a session job.
+    Job,
+    /// A detached process managed only until explicitly stopped.
+    Detached,
 }
 
 /// `delegate_started` (`docs/delegates.md`).

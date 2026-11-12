@@ -1918,6 +1918,9 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             stop: Stop(Box::new(|| {})),
             input: None,
             lines: false,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let tool = Arc::new(JobsWait {
@@ -1958,6 +1961,9 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             })),
             input: None,
             lines: false,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let job_id = opened.started.job_id.clone();

@@ -742,8 +742,8 @@ fn up_and_down_stop_at_the_ends() {
     press(&mut queue, Key::Down, 5);
     assert_eq!(answer(&mut queue)["args"]["decision"], "deny");
     queue.fold(&offering(S_A, "r_2"));
-    press(&mut queue, Key::Down, 5);
-    press(&mut queue, Key::Up, 2);
+    press(&mut queue, Key::Down, 4);
+    press(&mut queue, Key::Up, 3);
     assert_eq!(answer(&mut queue)["args"]["remember"]["scope"], "session");
     queue.fold(&offering(S_A, "r_3"));
     press(&mut queue, Key::Down, 1);

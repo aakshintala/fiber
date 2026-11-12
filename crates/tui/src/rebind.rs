@@ -296,8 +296,8 @@ impl KeysScreen {
         // an action index enters the fitting count.
         let top_action = action_at(self.top.min(total_lines.saturating_sub(1)), &grown);
         match key {
-            Key::Up => self.selected = self.selected.saturating_sub(1),
-            Key::Down => self.selected = self.selected.saturating_add(1),
+            Key::Up => self.selected = crate::swapped::wrap_step(self.selected, total, -1),
+            Key::Down => self.selected = crate::swapped::wrap_step(self.selected, total, 1),
             Key::PageUp => {
                 let page = fits_from(top_action, &grown, shown)
                     .saturating_sub(1)

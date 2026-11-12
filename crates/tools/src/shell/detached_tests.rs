@@ -4,11 +4,20 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
+use contract::clock::Clock as _;
+use contract::jobs::Jobs as _;
+use contract::tool::Tool;
 use fakes::children::Ready;
+use fakes::clock::FakeClock;
+use fakes::jobs::FakeJobs;
+use fakes::{CancelToken, Recorder};
+use serde_json::{Map, Value, json};
 
-use super::{create_log, launch, receipt};
+use super::{Spawner, create_log, launch, receipt};
 
 /// The Fiber pid the log names: fixed, so a stale file from an earlier
 /// process with a reused pid is just another collision.
@@ -280,13 +289,255 @@ fn launch_with_a_non_utf8_directory_fails_before_spawn() {
 }
 
 #[test]
-fn receipt_names_the_pid_and_the_log_path() {
+fn reaped_leader_does_not_end_while_its_group_lives() {
+    let dir = fakes::TempDir::new("fiber-detached-reaped-leader");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let clock = FakeClock::new();
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-detached-supervisor".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    let shell = super::super::Shell::new(dir.path().to_path_buf(), clock.clone())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"))
+        .with_detached_spawner(spawner);
+    let command = format!("sleep 60 & echo $$ > '{}'; exit 0", ready.path().display());
+    let mut arguments = Map::new();
+    arguments.insert("command".into(), Value::String(command));
+    arguments.insert("detach".into(), json!(true));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let started = jobs.started().pop().expect("detached row");
+    let supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("supervisor started");
+    fakes::wait_until(
+        "leader reaped while descendant lives",
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || !fakes::pid_alive(pgid),
+    );
+    assert!(
+        fakes::group_alive(pgid),
+        "the background sleep holds the group"
+    );
+    for _ in 0..3 {
+        clock.advance_when_parked(
+            None,
+            Some(supervisor),
+            support::group::GROUP_POLL,
+            &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        );
+        assert!(
+            jobs.ended(fakes::Deadline::after(std::time::Duration::ZERO))
+                .is_none(),
+            "no End while the group remains alive"
+        );
+    }
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    let completed = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("End after the group empties");
+    assert_eq!(completed.job_id, started.job_id);
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert_eq!(jobs.end_count(), 1);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn detached_stop_escalates_after_the_session_clock_grace() {
+    let dir = fakes::TempDir::new("fiber-detached-stop-supervisor");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let clock = FakeClock::new();
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-detached-supervisor".to_owned())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    let shell = super::super::Shell::new(dir.path().to_path_buf(), clock.clone())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"))
+        .with_detached_spawner(spawner);
+    let command = format!(
+        "trap '' TERM; echo $$ > '{}'; exec sleep 60",
+        ready.path().display()
+    );
+    let mut arguments = Map::new();
+    arguments.insert("command".to_owned(), Value::String(command));
+    arguments.insert("detach".to_owned(), json!(true));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let started = jobs.started().pop().expect("the detached row was recorded");
+    assert_eq!(started.pgid, Some(pgid));
+    let supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("the supervisor thread started");
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_result = Arc::clone(&stopped);
+    let mark = clock.advance_when_parked_then(
+        None,
+        Some(supervisor),
+        Duration::ZERO,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            stop_result.store(jobs.stop(&started.job_id), Ordering::SeqCst);
+        },
+    );
+    assert!(
+        stopped.load(Ordering::SeqCst),
+        "the recorded job accepts stop"
+    );
+    assert!(fakes::group_alive(pgid), "TERM is ignored during grace");
+
+    let deadline = clock.now().checked_add(support::group::GRACE).unwrap();
+    assert!(clock.await_parked_since(
+        &mark,
+        Some(deadline),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(supervisor),
+        support::group::GRACE,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    let completed = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the supervisor reports after the group empties");
+    assert_eq!(completed.status, contract::events::Outcome::Cancelled);
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert_eq!(jobs.end_count(), 1, "the supervisor reports one End");
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+fn failed_supervisor_fixture() -> (
+    super::Supervisor,
+    mpsc::Receiver<contract::events::JobCompleted>,
+    String,
+) {
+    let dir = fakes::TempDir::new("fiber-detached-supervisor-failure");
+    let jobs = FakeJobs::new(dir.path());
+    let mut opened = jobs
+        .open(contract::jobs::Opening {
+            tool: "shell".into(),
+            description: "detached command".into(),
+            stop: contract::jobs::Stop(Box::new(|| {})),
+            lines: false,
+            input: None,
+            identity: None,
+            detached: None,
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let (report_tx, report_rx) = mpsc::channel();
+    let old_end = std::mem::replace(&mut opened.end, contract::jobs::End(Box::new(|_| {})));
+    old_end.0(contract::events::JobCompleted {
+        job_id: opened.started.job_id.clone(),
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    opened.end = contract::jobs::End(Box::new(move |completed| {
+        let _sent = report_tx.send(completed);
+    }));
+    let (done_tx, done) = mpsc::channel();
+    drop(done_tx);
     let started = super::Started {
-        pid: 48213,
-        log: std::path::PathBuf::from("/home/a/.fiber/detached/d_48200_0.log"),
+        pid: 2,
+        log: opened.path.clone(),
+        identity: contract::jobs::JobIdentity {
+            pgid: 2,
+            start_time: 3,
+        },
+        done,
+        control: super::StopControl::new(),
     };
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    (
+        super::Supervisor {
+            opened,
+            started,
+            clock,
+        },
+        report_rx,
+        id,
+    )
+}
+
+#[test]
+fn supervisor_indeterminate_failure_reports_one_failed_end() {
+    let (supervisor, reported, id) = failed_supervisor_fixture();
+    supervisor.fail_indeterminate();
+    let completed = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reported)
+        .expect("indeterminate supervisor failure reports an End");
+    assert_eq!(completed.job_id.0, id);
+    assert_eq!(completed.status, contract::events::Outcome::Failed);
     assert_eq!(
-        receipt(&started),
-        "Started detached. PID 48213. Output: /home/a/.fiber/detached/d_48200_0.log. Fiber will not stop it.\n"
+        completed.error.unwrap().code,
+        contract::ErrorCode::Indeterminate
+    );
+    assert!(reported.try_recv().is_err(), "one End is reported");
+}
+
+#[test]
+fn supervisor_signal_failure_reports_one_failed_end() {
+    let (supervisor, reported, id) = failed_supervisor_fixture();
+    supervisor.fail_signal(std::io::Error::other("signal denied"));
+    let completed = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reported)
+        .expect("signal failure reports an End");
+    assert_eq!(completed.job_id.0, id);
+    assert_eq!(completed.status, contract::events::Outcome::Failed);
+    let error = completed.error.unwrap();
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert!(error.message.contains("signal denied"), "{}", error.message);
+    assert!(reported.try_recv().is_err(), "one End is reported");
+}
+
+#[test]
+fn receipt_names_the_job_log_and_stop_action() {
+    assert_eq!(
+        receipt(
+            Path::new("/home/a/.fiber/detached/d_48200_0.log"),
+            "j_abc123"
+        ),
+        "Started detached. Job j_abc123. Output: /home/a/.fiber/detached/d_48200_0.log. Stop it with `jobs stop j_abc123`.\n"
     );
 }

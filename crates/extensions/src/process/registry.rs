@@ -407,7 +407,7 @@ impl Registry {
             &self.owner,
             command,
             key.to_owned(),
-            FunctionTarget::Process(Arc::new(move |_, _, _| {
+            FunctionTarget::Process(Arc::new(move |_, _, _, _| {
                 Err(Error::Stopped {
                     extension: owner.clone(),
                 })
