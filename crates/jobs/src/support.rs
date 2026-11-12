@@ -140,5 +140,7 @@ pub(crate) fn opening(description: &str) -> Opening {
         stop: Stop(Box::new(|| {})),
         lines: false,
         input: None,
+        identity: None,
+        detached: None,
     }
 }

@@ -662,6 +662,10 @@ fn write_extension_started(world: &mut World, id: &str) {
                 extension: Some("test/scan".into()),
                 description: "extension scan".into(),
                 output_path: "/child/events.jsonl".into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -773,6 +777,10 @@ fn extension_start(id: &str) -> Delivery {
             extension: Some("test/scan".into()),
             description: "scan".into(),
             output_path: "/child/events.jsonl".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         },
         DelegateStarted {
             job_id: JobId(id.into()),
@@ -2192,6 +2200,9 @@ fn open_job(jobs: &FakeJobs) -> contract::jobs::Opened {
         stop: contract::jobs::Stop(Box::new(|| {})),
         lines: false,
         input: None,
+
+        identity: None,
+        detached: None,
     })
     .unwrap()
 }
@@ -4036,6 +4047,10 @@ fn a_restarted_job_is_owed_another_orphaned_end() {
             extension: None,
             description: "a job".into(),
             output_path: "jobs/j_5e10c0ffee123456.jsonl".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         })
     };
     let mut orphans = super::Orphans::default();
@@ -4060,6 +4075,10 @@ fn a_job_completed_after_its_restart_owes_nothing() {
             extension: None,
             description: "a job".into(),
             output_path: "jobs/j_5e10c0ffee123456.jsonl".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         })
     };
     let mut orphans = super::Orphans::default();
@@ -4079,6 +4098,10 @@ fn a_rewound_line_settles_no_job() {
         extension: None,
         description: "a job".into(),
         output_path: "jobs/j_5e10c0ffee123456.jsonl".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     });
     let rewound = Event::Rewound(Rewound {
         new_session_id: SessionId("s_0000000000000001".into()),
@@ -4133,6 +4156,10 @@ fn resumed_ahead(id: &str, action: &ActionId) -> Vec<Taken> {
                 extension: None,
                 description: "resumed".into(),
                 output_path: format!("artifacts/{id}.log"),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             action: Some(action.clone()),
         },
@@ -4452,6 +4479,10 @@ fn loop_write_folds_started_jobs_and_fiber_delegates_into_the_cache() {
                 extension: None,
                 description: "sleep 1".into(),
                 output_path: "artifacts/j_1.log".into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -4465,6 +4496,10 @@ fn loop_write_folds_started_jobs_and_fiber_delegates_into_the_cache() {
                 extension: Some("e".into()),
                 description: "delegated".into(),
                 output_path: "artifacts/j_2.log".into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -4776,6 +4811,10 @@ fn write_started(world: &mut World, job: &str, tool: Option<&str>) {
                 extension: None,
                 description: "test job".into(),
                 output_path: "artifacts/test.log".into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -5617,6 +5656,10 @@ fn write_started_at(world: &mut World, job: &str, tool: Option<&str>, output_pat
                 extension: None,
                 description: "test job".into(),
                 output_path: output_path.into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -6576,6 +6619,9 @@ fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();

@@ -260,6 +260,10 @@ impl Registry {
             extension: None,
             description: opening.description,
             output_path: format!("artifacts/{id}.log"),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         };
         let lines = opening.lines.then(|| {
             let registry = Weak::clone(&self.me);
@@ -402,6 +406,10 @@ impl Registry {
             extension: None,
             description,
             output_path: output_path.clone(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         };
         let finish = Unreported {
             job_id: job_id.clone(),
@@ -520,6 +528,10 @@ impl Registry {
             extension: Some(extension),
             description,
             output_path: output_path.clone(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         };
         let finish = Unreported {
             job_id,

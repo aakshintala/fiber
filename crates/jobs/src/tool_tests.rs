@@ -71,6 +71,9 @@ fn open(registry: &Arc<Registry>, description: &str, stop: Stop) -> contract::jo
             stop,
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap()
 }
@@ -1286,6 +1289,9 @@ fn tty_job(registry: &Arc<Registry>) -> (String, contract::jobs::Opened) {
             input: Some(contract::jobs::Input(Box::new(|bytes, _, _| {
                 Ok(bytes.len())
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     (opened.started.job_id.0.clone(), opened)
@@ -1367,6 +1373,9 @@ fn a_failed_write_to_the_terminal_is_a_tool_error() {
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();

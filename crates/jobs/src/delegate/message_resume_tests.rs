@@ -659,6 +659,10 @@ fn taken_started(id: &JobId, output: &str, action: Option<ActionId>) -> Taken {
             extension: None,
             description: "scan".into(),
             output_path: output.into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         }),
         action,
     }

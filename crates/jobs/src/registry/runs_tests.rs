@@ -187,6 +187,10 @@ fn started(id: &contract::JobId, action: Option<ActionId>) -> Taken {
             extension: None,
             description: "scan".into(),
             output_path: OUTPUT.into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         }),
         action,
     }

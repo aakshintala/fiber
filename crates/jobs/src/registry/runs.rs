@@ -339,6 +339,10 @@ impl Registry {
                 extension: None,
                 description,
                 output_path: job.path.to_string_lossy().into_owned(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             };
             let delegate_started = resumable.delegate.clone();
             job.queue.push_back(Pending {

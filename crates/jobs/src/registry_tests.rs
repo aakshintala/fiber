@@ -692,6 +692,9 @@ fn counted_stop(
             })),
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     (opened.started.job_id.clone(), calls, opened)
@@ -834,6 +837,9 @@ fn open_tty(
                     .write_all(reply)
                     .map(|()| bytes.len())
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     *sink.lock().unwrap() = Some(opened.file.try_clone().unwrap());
@@ -975,6 +981,9 @@ fn a_failed_write_to_the_terminal_is_an_io_error() {
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1024,6 +1033,9 @@ fn a_write_that_typed_less_than_it_was_given_says_so() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1114,6 +1126,9 @@ fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc
                     ))
                 }
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     (opened.started.job_id.0.clone(), opened, entry_rx)
@@ -1192,6 +1207,9 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
                     ))
                 }
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1264,6 +1282,9 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
                 }
                 Ok(0)
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1304,6 +1325,9 @@ fn seam_write_reports_a_short_write_as_a_timeout() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     assert!(
@@ -1335,6 +1359,9 @@ fn seam_write_succeeds_when_the_terminal_drains_before_the_deadline() {
                 tick.advance(Duration::from_millis(500));
                 Ok(bytes.len())
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     seam_write(&registry, &opened.started.job_id, "hi").unwrap();
@@ -1396,6 +1423,9 @@ fn seam_write_reports_a_failed_terminal_write_as_io() {
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     assert!(matches!(
@@ -1985,6 +2015,9 @@ fn started(id: &str, description: &str) -> contract::events::JobStarted {
         extension: None,
         description: description.into(),
         output_path: format!("artifacts/{id}.log"),
+        pgid: None,
+        start_time: None,
+        kind: None,
     }
 }
 

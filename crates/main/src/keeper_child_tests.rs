@@ -1904,6 +1904,10 @@ fn the_switch_moves_every_byte_from_the_file_to_frames() {
             extension: None,
             description: "job j_job".into(),
             output_path: "artifacts/job.out".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         },
         path: output.clone(),
         file,

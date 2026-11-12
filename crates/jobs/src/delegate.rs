@@ -615,6 +615,10 @@ impl DelegateWiring {
                         extension: Some(extension.to_owned()),
                         description: description.clone(),
                         output_path: output_path.clone(),
+
+                        pgid: None,
+                        start_time: None,
+                        kind: None,
                     };
                     let finish = self.registry.open_extension_started(
                         job_id.clone(),

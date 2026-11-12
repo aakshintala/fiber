@@ -439,6 +439,9 @@ fn a_job_that_is_not_a_delegate_fails() {
             stop: contract::jobs::Stop(Box::new(|| {})),
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();

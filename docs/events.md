@@ -1404,6 +1404,9 @@ absent when an extension started it.
 | `extension` | string | no | the extension that started it with `host.delegate` |
 | `description` | string | yes | a short description |
 | `output_path` | string | yes | the job's output file |
+| `pgid` | integer | no | the process group id, when known |
+| `start_time` | integer | no | the leader's opaque process start-time identity, when known |
+| `kind` | string | no | `job` or `detached`; absent only on pre-upgrade rows |
 
 #### `delegate_started`
 

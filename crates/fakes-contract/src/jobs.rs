@@ -12,7 +12,9 @@ use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Class, Event, JobCompleted, JobLine, JobStarted};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening, UsageTap};
+use contract::jobs::{
+    End, Foreground, JobIdentity, Jobs, Lines, OpenError, Opened, Opening, UsageTap,
+};
 use contract::tool::Cancel;
 
 use crate::deadline::Deadline;
@@ -355,6 +357,13 @@ impl Jobs for FakeJobs {
             extension: None,
             description: opening.description,
             output_path: format!("{id}.log"),
+            pgid: opening.identity.map(|identity| identity.pgid),
+            start_time: opening.identity.map(|identity| identity.start_time),
+            kind: Some(if opening.detached.is_some() {
+                contract::events::JobKind::Detached
+            } else {
+                contract::events::JobKind::Job
+            }),
         };
         inner.started.push(started.clone());
         inner
@@ -474,6 +483,19 @@ impl Jobs for FakeJobs {
             .iter()
             .map(|started| started.job_id.clone())
             .filter(|id| !inner.ended.contains(id))
+            .collect()
+    }
+
+    fn owned_identities(&self) -> Vec<JobIdentity> {
+        lock(&self.inner)
+            .started
+            .iter()
+            .filter_map(|started| {
+                Some(JobIdentity {
+                    pgid: started.pgid?,
+                    start_time: started.start_time?,
+                })
+            })
             .collect()
     }
 
