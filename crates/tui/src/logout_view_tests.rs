@@ -179,3 +179,54 @@ fn body_len_counts_wrapped_status_and_short_draw_clips() {
     let mut targets = Vec::new();
     let _ = logout.draw(area, &mut buf, &mut targets);
 }
+
+/// Confirming a deletion redraws the list from the rows returned by the re-list.
+#[test]
+fn confirmed_delete_draws_only_the_relisted_rows() {
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "removed".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        },
+        LoginTarget {
+            name: "remaining".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        },
+    ]);
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+
+    let remaining = fake_with(vec![LoginTarget {
+        name: "remaining".to_owned(),
+        kind: LoginKind::Key,
+        label: None,
+    }]);
+    *fake.logout.lock().expect("logout rows") =
+        remaining.logout.lock().expect("remaining rows").clone();
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let _ = logout.draw(area, &mut buf, &mut Vec::new());
+    let rendered = buf
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(
+        rendered.contains("remaining"),
+        "re-listed row must be drawn: {rendered}"
+    );
+    assert!(
+        !rendered.contains("removed"),
+        "deleted row must not remain: {rendered}"
+    );
+    assert_eq!(
+        rendered.matches("remaining").count(),
+        1,
+        "no stale extra target row: {rendered}"
+    );
+}
