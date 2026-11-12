@@ -2758,6 +2758,9 @@ fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
 fn enter_row(app: &mut App, tab: SettingsTab, down: usize) -> Effect {
     let at = SettingsTab::ALL.iter().position(|t| *t == tab).unwrap();
     for _ in 0..at {
+        // The fixture's first Appearance row is numeric; move to its
+        // following Theme row before an arrow can switch tabs.
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
         app.on_edit(Edit::Right);
     }
     for _ in 0..down {
