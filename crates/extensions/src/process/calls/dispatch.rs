@@ -59,11 +59,9 @@ impl ProcessExtension {
                 });
             match spawned {
                 Ok(thread) => drop(thread), // Detach: the callback completes independently.
-                Err(error) => report_delegate_run_failure(
-                    &self.shared.runtime,
-                    &self.shared.owner,
-                    &error,
-                ), // The notice records that the bound run never started.
+                Err(error) => {
+                    report_delegate_run_failure(&self.shared.runtime, &self.shared.owner, &error)
+                } // The notice records that the bound run never started.
             }
         }
         true
