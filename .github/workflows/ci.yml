@@ -1139,12 +1139,6 @@ jobs:
               if [ "$LINUX_FLAKES" = true ] || [ "$LINUX_COMPLETE" != true ]; then
                 expected=true
               fi
-              list="$FLAKY_DIR/flaky-tests-$runner.txt"
-              marker="$FLAKY_DIR/collection-complete-$runner.txt"
-              feeds=false
-              if readable "$list" "$marker"; then
-                feeds=true
-              fi
             else
               [ "$TEST_SELECTED" = true ] || continue
               expected=true

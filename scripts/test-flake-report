@@ -885,6 +885,7 @@ code=$(classify_case "$tmp/partial-available-title" push "" "" "")
 expect_exit partial-available-title-classify "$code" 0
 code=$(run_step "$tmp/partial-available-title" push "" "$empty_open" "" decisions.jsonl)
 expect_exit partial-available-title "$code" 0
+# Within one report job a file's title files or comments once; a repeat is skipped (`docs/testing/running.md`, "Flaky tests").
 expect_writes "$tmp/partial-available-title" 1
 expect_write "$tmp/partial-available-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$plain" "$push_tested")")"
 # The summary holds only the stub's empty-create-output note (the stub
