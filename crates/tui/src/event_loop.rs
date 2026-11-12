@@ -61,6 +61,7 @@ pub struct ExitCause {
 }
 
 impl ExitCause {
+    #[cfg(test)]
     fn new(message: &'static str, source: Option<io::Error>) -> Self {
         Self { message, source }
     }
