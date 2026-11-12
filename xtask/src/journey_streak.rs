@@ -17,7 +17,7 @@ pub(crate) fn run(args: &[String]) -> Result<bool, String> {
             }
             Ok(true)
         }
-        Some("compute") => compute(&args[1..]),
+        Some("compute") => compute(args.get(1..).ok_or("missing command arguments")?),
         _ => Err("usage: cargo xtask journey-streak <select|compute>".into()),
     }
 }
@@ -46,7 +46,7 @@ fn select(runs: &Value) -> Vec<String> {
             ))
         })
         .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     candidates.into_iter().take(20).map(|(_, id)| id).collect()
 }
 
@@ -79,7 +79,7 @@ fn compute(args: &[String]) -> Result<bool, String> {
             .and_then(|runs| {
                 runs.iter().find(|run| {
                     run.get("databaseId")
-                        .is_some_and(|value| value.to_string() == id)
+                        .is_some_and(|value| id.parse::<u64>().ok() == value.as_u64())
                 })
             })
             .ok_or("selected run disappeared")?;
