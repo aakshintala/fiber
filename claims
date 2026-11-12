@@ -97,7 +97,6 @@ crates/tui/src/logout_view_tests.rs	fiber-4673	plan	2026-11-12T09:44:36Z	roundho
 crates/tui/src/login_logout_view.rs	fiber-4673	plan	2026-11-12T09:44:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/host/resolve.rs	fiber-4673	plan	2026-11-12T09:44:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/cli/src/prune.rs	fiber-4673	plan	2026-11-12T09:57:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/view/offer_tests.rs	fiber-4735	plan	2026-11-12T10:02:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tui/src/app/completion.rs:472-473	fiber-4619	plan	2026-11-12T10:41:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
 crates/tui/src/app/completion.rs:477-478	fiber-4619	plan	2026-11-12T10:41:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
 crates/tui/src/app/completion_tests.rs:98-102	fiber-4619	plan	2026-11-12T10:41:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
