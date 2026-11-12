@@ -637,7 +637,9 @@ impl Settings {
                         .iter()
                         .enumerate()
                         .filter(|(_, row)| {
-                            row.presentation.tab == Some(tab) && key_matches(row, &needle)
+                            row.key != "hub.port"
+                                && row.presentation.tab == Some(tab)
+                                && key_matches(row, &needle)
                         })
                         .map(|(at, _)| Item::Key(at)),
                 );
@@ -658,7 +660,7 @@ impl Settings {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.presentation.tab == Some(self.tab))
+            .filter(|(_, row)| row.key != "hub.port" && row.presentation.tab == Some(self.tab))
             .map(|(at, _)| Item::Key(at))
             .collect();
         items.extend(

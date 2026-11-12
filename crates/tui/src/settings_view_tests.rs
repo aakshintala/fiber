@@ -795,6 +795,8 @@ fn a_key_with_no_tab_has_no_row_and_every_tabbed_key_has_exactly_one() {
         .collect();
     drawn_keys.sort();
     want.sort();
+    assert!(drawn_keys.iter().all(|key| key != "hub.port"));
+    want.retain(|key| key != "hub.port");
     assert_eq!(drawn_keys, want);
     assert!(
         !drawn_keys
