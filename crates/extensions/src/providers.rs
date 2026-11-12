@@ -1174,10 +1174,9 @@ impl Providers {
         Some(notices)
     }
 
-    /// Suppresses at most the number of identical invalid or omitted
-    /// notices previously emitted by this registry for this provider, then
-    /// records every notice kept. Recording each admission's emissions makes
-    /// repeated identical admissions converge without hiding excess entries.
+    /// Drops up to the number of identical invalid or omitted notices already
+    /// reported for this provider, then records every notice it keeps. A
+    /// repeated admission reports no new notices unless it has excess entries.
     fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
         let mut consumed = Vec::<(ErrorCode, String, usize)>::new();
         let mut kept = Vec::new();
