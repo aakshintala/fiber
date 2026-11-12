@@ -416,6 +416,7 @@ fn keeper_crashed_socket_drops_other_lines_and_keeps_running() {
     let clock = fakes::clock::FakeClock::new();
     let mut keeper = serve_keeper("keeper-crash-drop", id, clock.clone());
     let pgid = start_shell(&keeper, "sleepy", "sleep 60");
+    let watchdog = fakes::Watchdog::group(pgid);
     adopt_call(&keeper, "sleepy", "j_sleepy");
     crash(&mut keeper);
     let socket = crashed_socket(&keeper);
@@ -451,6 +452,17 @@ fn keeper_crashed_socket_drops_other_lines_and_keeps_running() {
         );
         assert!(socket.exists(), "the socket stays bound");
     }
+    let mut stop = await_crashed_socket(&socket);
+    stop.write_all(b"{\"shutdown\":true}\n")
+        .expect("frozen stop");
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper exit")
+        .expect("keeper exits after dropped-line probes");
+    assert!(
+        fakes::group_empties(pgid, Deadline::after(Duration::from_secs(10))),
+        "the dropped-line test reaps its shell job"
+    );
+    watchdog.stand_down(Deadline::after(Duration::from_secs(10)));
 }
 
 #[test]
@@ -464,6 +476,7 @@ fn keeper_crashed_socket_drops_an_overlong_line_and_keeps_running() {
     let clock = fakes::clock::FakeClock::new();
     let mut keeper = serve_keeper("keeper-crash-overlong", id, clock.clone());
     let pgid = start_shell(&keeper, "sleepy", "sleep 60");
+    let watchdog = fakes::Watchdog::group(pgid);
     adopt_call(&keeper, "sleepy", "j_sleepy");
     crash(&mut keeper);
     let socket = crashed_socket(&keeper);
@@ -497,6 +510,11 @@ fn keeper_crashed_socket_drops_an_overlong_line_and_keeps_running() {
         .recv_or_fail(&keeper.result, "the keeper exit")
         .expect("keeper exits on the frozen stop");
     assert!(!socket.exists(), "the socket is unlinked on exit");
+    assert!(
+        fakes::group_empties(pgid, Deadline::after(Duration::from_secs(10))),
+        "the overlong-line test reaps its shell job"
+    );
+    watchdog.stand_down(Deadline::after(Duration::from_secs(10)));
 }
 
 fn job_completed_lines(keeper: &Keeper) -> Vec<contract::Envelope> {
