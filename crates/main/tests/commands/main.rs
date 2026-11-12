@@ -36,4 +36,5 @@ mod setup;
 mod slash_aliases;
 mod startup_log;
 mod tui_silent_exit;
+mod tui_startup_failure;
 mod update;
