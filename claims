@@ -119,3 +119,4 @@ docs/invocation.md	fiber-4704	plan	2026-11-12T23:19:10Z	Amoghs-MacBook-Pro:/User
 .github/workflows/ci.yml:1100-1101	fiber-4663	plan	2026-11-12T23:24:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 docs/ci.md:260-265	fiber-4663	plan	2026-11-12T23:24:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-12T23:24:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+crates/main/src/settings_metadata_tests.rs	fiber-4582	plan	2026-11-12T23:52:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
