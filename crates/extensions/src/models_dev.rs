@@ -121,9 +121,8 @@ pub fn refresh_if_due(
         }
         if let Ok(bytes) = fetcher(URL)
             && valid_catalog(&bytes)
-            && config::write_models_dev(home, &bytes).is_err()
         {
-            return;
+            drop(config::write_models_dev(home, &bytes));
         }
     });
 }
@@ -137,9 +136,8 @@ pub fn refresh_forced(home: &Path, enabled: bool, now: SystemTime, fetcher: &Fet
         if should_fetch(home, enabled, None, now)
             && let Ok(bytes) = fetcher(URL)
             && valid_catalog(&bytes)
-            && config::write_models_dev(home, &bytes).is_err()
         {
-            return;
+            drop(config::write_models_dev(home, &bytes));
         }
     });
 }
