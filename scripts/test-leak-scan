@@ -141,7 +141,8 @@ secret="leak-secret-$$-$(date +%s)-$RANDOM"
 
 # A leaker in this process group. It stays in python: macOS ps shows the
 # environment of python but not of sh or sleep, so only a python leaker
-# proves the scan names it. It ignores SIGTERM like the fixtures, and
+# proves the scan names it. On Darwin, its `ps -E` row is the fixture for
+# parsing a PID followed by space-separated NAME=value tokens. It ignores SIGTERM like the fixtures, and
 # stops when the stop file exists (or after 120 s on its own).
 FIBER_CHECK_RUN=$n NEXTEST_BINARY_ID=main::leak_probe NEXTEST_TEST_NAME=the_shell_tool_leak_is_named_by_pid LEAK_SCAN_SECRET="$secret" STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
 leaker1=$!
@@ -190,7 +191,7 @@ if ! grep -Fq "leaked process $leaker2:" "$err"; then
   cat "$err" >&2
   exit 1
 fi
-if ! grep -Fq "leaked process $leaker2:" "$err" || ! grep -Fq "test: unknown (not in env)" "$err"; then
+if ! grep -Fq "test: unknown (not in env)" "$err"; then
   echo "scripts/test-leak-scan: nonce-only leaker $leaker2 did not get unknown attribution:" >&2
   cat "$err" >&2
   exit 1

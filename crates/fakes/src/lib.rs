@@ -91,6 +91,24 @@ pub fn nextest_identity() -> impl Iterator<Item = (&'static str, std::ffi::OsStr
         .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
 }
 
+#[cfg(test)]
+mod nextest_identity_tests {
+    #[test]
+    fn preserves_nextest_identity_variables() {
+        let binary_id = std::env::var_os("NEXTEST_BINARY_ID")
+            .expect("nextest test process must provide NEXTEST_BINARY_ID");
+        let test_name = std::env::var_os("NEXTEST_TEST_NAME")
+            .expect("nextest test process must provide NEXTEST_TEST_NAME");
+        assert_eq!(
+            super::nextest_identity().collect::<Vec<_>>(),
+            vec![
+                ("NEXTEST_BINARY_ID", binary_id),
+                ("NEXTEST_TEST_NAME", test_name),
+            ]
+        );
+    }
+}
+
 /// The context window every fake model declares, in tokens: the window
 /// fixtures build sessions with, so size notices and the compaction trigger
 /// run as they do in production.

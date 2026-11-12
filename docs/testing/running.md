@@ -32,7 +32,8 @@ does not fail the run, since such a server outlives the run by design; a new
 name joins the list in `scripts/leak-scan` only through a pull request that
 cites the process.
 A test that clears a child's environment puts `FIBER_CHECK_RUN`
-back (`fakes::check_run`), so `fiber` and the processes it starts carry
+back (`fakes::check_run`) and the available nextest identity variables
+(`fakes::nextest_identity`), so `fiber` and the processes it starts carry
 the nonce. The exception is the case processes of `fiber extension test`,
 which Fiber starts with a cleared environment. A shell-tool command gets
 the nonce through the session's environment: `fiber ask` passes its
