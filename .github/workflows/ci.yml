@@ -1789,7 +1789,6 @@ jobs:
           cargo xtask journey-streak select < "$HISTORY/runs.json" > "$HISTORY/selected.txt" || exit 0
           while IFS= read -r id || [ -n "$id" ]; do
             [ -n "$id" ] || continue
-            [ "$id" != "$GITHUB_RUN_ID" ] || continue
             dir="$HISTORY/$id"
             mkdir -p "$dir"
             gh run view "$id" --json jobs > "$dir/view.json" || continue

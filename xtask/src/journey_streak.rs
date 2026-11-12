@@ -4,6 +4,11 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+struct PriorRun {
+    sha: String,
+    failures: Option<String>,
+}
+
 pub(crate) fn run(args: &[String]) -> Result<bool, String> {
     match args.first().map(String::as_str) {
         Some("select") => {
@@ -105,7 +110,10 @@ fn compute(args: &[String]) -> Result<bool, String> {
             continue;
         }
         let artifact = std::fs::read_to_string(dir.join("journey-failures.txt")).ok();
-        history.push((sha.to_owned(), artifact, true));
+        history.push(PriorRun {
+            sha: sha.to_owned(),
+            failures: artifact,
+        });
         if history.len() == 20 {
             break;
         }
@@ -144,24 +152,21 @@ fn producer_job(view: &Value) -> Option<&Value> {
 fn streaks(
     current_sha: &str,
     current: &str,
-    history: &[(String, Option<String>, bool)],
+    history: &[PriorRun],
 ) -> BTreeMap<String, (usize, String)> {
     let mut results = BTreeMap::new();
     for journey in current.lines().filter(|line| !line.is_empty()) {
         let mut count = 1;
         let mut first = current_sha.to_owned();
-        for (sha, failures, ran) in history {
-            if !ran {
-                continue;
-            }
-            let Some(failures) = failures else {
+        for prior in history {
+            let Some(failures) = &prior.failures else {
                 break;
             };
             if !failures.lines().any(|name| name == journey) {
                 break;
             }
             count += 1;
-            first.clone_from(sha);
+            first.clone_from(&prior.sha);
         }
         results.insert(journey.to_owned(), (count, first));
     }

@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{producer_job, select, streaks};
+use super::{PriorRun, producer_job, select, streaks};
 
 #[test]
 fn selector_filters_and_orders_mixed_runs() {
@@ -14,6 +14,7 @@ fn selector_filters_and_orders_mixed_runs() {
     ]"#,
     )
     .unwrap();
+    // `docs/ci.md`, "The journey suite" promises newest-first order.
     assert_eq!(select(&runs), ["5", "3"]);
 }
 
@@ -33,6 +34,7 @@ fn selector_caps_prior_candidates_at_twenty() {
             })
             .collect(),
     );
+    // `docs/ci.md`, "The journey suite" promises a 20-run cap and newest-first order.
     let selected = select(&runs);
     assert_eq!(selected.len(), 20);
     assert_eq!(selected.first().map(String::as_str), Some("21"));
@@ -47,11 +49,15 @@ fn current_run_counts_once_and_threshold_and_first_sha_are_exact() {
         streaks(current_sha, "qa\n", &[])["qa"],
         (1, current_sha.to_owned())
     );
+    // `docs/ci.md`, "The journey suite" promises a threshold of two and the first failing SHA.
     assert_eq!(
         streaks(
             current_sha,
             "qa\n",
-            &[(prior_sha.into(), Some("qa\n".into()), true)]
+            &[PriorRun {
+                sha: prior_sha.into(),
+                failures: Some("qa\n".into())
+            }]
         )["qa"],
         (2, prior_sha.to_owned())
     );
@@ -62,14 +68,27 @@ fn pass_or_missing_artifact_resets_each_journey() {
     let current_sha = "0123456789abcdef0123456789abcdef01234567";
     let prior_sha = "abcdef0123456789abcdef0123456789abcdef01";
     let history = [
-        (prior_sha.into(), Some("qa\n".into()), true),
-        (prior_sha.into(), Some("qb\n".into()), true),
+        PriorRun {
+            sha: prior_sha.into(),
+            failures: Some("qa\n".into()),
+        },
+        PriorRun {
+            sha: prior_sha.into(),
+            failures: Some("qb\n".into()),
+        },
     ];
     let results = streaks(current_sha, "qa\nqb\n", &history);
     assert_eq!(results["qa"], (2, prior_sha.to_owned()));
     assert_eq!(results["qb"], (1, current_sha.to_owned()));
     assert_eq!(
-        streaks(current_sha, "qa\n", &[(prior_sha.into(), None, true)])["qa"],
+        streaks(
+            current_sha,
+            "qa\n",
+            &[PriorRun {
+                sha: prior_sha.into(),
+                failures: None
+            }]
+        )["qa"],
         (1, current_sha.to_owned())
     );
 }
@@ -98,7 +117,14 @@ fn producer_lookup_selects_journey_suite_or_absence() {
 fn skipped_producer_is_ignored() {
     let sha = "0123456789abcdef0123456789abcdef01234567";
     assert_eq!(
-        streaks(sha, "qa\n", &[(sha.into(), None, false)])["qa"],
+        streaks(
+            sha,
+            "qa\n",
+            &[PriorRun {
+                sha: sha.into(),
+                failures: None
+            }]
+        )["qa"],
         (1, sha.to_owned())
     );
 }

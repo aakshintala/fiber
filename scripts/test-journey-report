@@ -429,8 +429,7 @@ expect_writes "$tmp/streak-one" 1
 expect_write "$tmp/streak-one" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_qa")")"
 expect_summary "$tmp/streak-one" ""
 
-# A failed history lookup files the plain sighting, never a streak claim,
-# and notes the journey it could not prove.
+# A failed history lookup files the plain sighting, never a streak claim.
 setup_case history-fetch-fail
 printf 'qa\n' >"$tmp/history-fetch-fail/failures.txt"
 code=$(run_step "$tmp/history-fetch-fail" "" STUB_RUN_LIST_FAIL=1)

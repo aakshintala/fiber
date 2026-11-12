@@ -668,7 +668,7 @@ match and every build recompiles the dependencies.
 After the backstop passes on `main`, and in the nightly before it publishes,
 the journey suite drives that commit's release binary through the paths a
 person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
-comments on the open one. After two or more consecutive failures of the same
+comments on the open one. The selector considers at most 20 prior runs, newest first. After two or more consecutive failures of the same
 journey, the comment appends `Streak: <n> consecutive failures since
 <first-sha>.`, counting this run and using the full SHA of the first failing
 commit; incomplete history keeps the plain sighting. It never blocks a merge,
