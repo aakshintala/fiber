@@ -149,7 +149,12 @@ fn command_tool_plan(first: &str, second: &str) -> Value {
             json!({"write_file": {"path": marker, "value": {"$ref": "last"}}}),
         ]
     };
-    let mut command_callback = Vec::new();
+    let mut command_callback = vec![
+        json!({"send": {"id": "command-starting", "command": "call", "args": {
+            "call": "host.status", "args": ["starting"], "request_id": {"$ref": "req.payload.request_id"}
+        }}}),
+        json!({"read_until": {"path": "payload.command_id", "equals": "command-starting"}}),
+    ];
     command_callback.extend(host_tool("inner-1", first));
     command_callback.extend(host_tool("inner-2", second));
     command_callback.push(
@@ -215,13 +220,15 @@ fn process_command_host_tool_runs_alone_while_idle() {
         r#"{"id":"cmd","command":"command","args":{"name":"exercise"}}"#,
     );
     let events = until_session(&client, "process command inner calls", |line| {
-        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/command-tool"
+        line["kind"] == "extension_ui"
+            && line["payload"]["extension"] == "fiber.test/command-tool"
+            && line["payload"]["status"] == "both-returned"
     });
     assert_eq!(events.last().unwrap()["payload"]["status"], "both-returned");
     for marker in [&first, &second] {
         let answer: Value = serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
         assert_eq!(answer["kind"], "command_accepted");
-        assert_eq!(answer["payload"]["result"]["status"], "completed");
+        assert_eq!(answer["payload"]["result"]["value"]["status"], "completed");
     }
     let inner: Vec<_> = events
         .iter()
@@ -255,6 +262,130 @@ fn process_command_host_tool_runs_alone_while_idle() {
             ]
         );
     }
+    send(&client, r#"{"id":"close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+/// While the turn waits for permission, a process command cannot start its
+/// inner call. Resolving the interaction lets it run at the next step boundary.
+#[test]
+fn process_command_inner_call_waits_behind_interaction_until_step_boundary() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "approval-call",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    std::fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    std::fs::write(setup.workspace().join("note.txt"), "read\n").unwrap();
+    let first = setup.workspace().join("first.json");
+    let second = setup.workspace().join("second.json");
+    process_with(
+        &setup,
+        "command-turn-boundary",
+        &json!({}),
+        &command_tool_plan(first.to_str().unwrap(), second.to_str().unwrap()),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"subscribe","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until_session(&client, "the pending permission", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let permission = asked.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    send(
+        &client,
+        r#"{"id":"command","command":"command","args":{"name":"exercise"}}"#,
+    );
+    let started = until_session(
+        &client,
+        "the command to reach its first host.tool",
+        |line| {
+            line["kind"] == "extension_ui"
+                && line["payload"]["extension"] == "fiber.test/command-turn-boundary"
+                && line["payload"]["status"] == "starting"
+        },
+    );
+    let before_reply = [asked.clone(), started.clone()].concat();
+    assert!(
+        !before_reply
+            .iter()
+            .any(|line| line["kind"] == "tool_call_requested"
+                && line["payload"]["ran_by"]["extension"] == "fiber.test/command-turn-boundary"),
+        "the inner call stays queued while the interaction holds its step: {before_reply:?}"
+    );
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"permission-reply","command":"reply","args":{{"request_id":"{permission}","decision":"allow"}}}}"#
+        ),
+    );
+    let done = until_session(&client, "the resolved turn", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let mut stream = [asked, started, done].concat();
+    if !stream.iter().any(|line| {
+        line["kind"] == "extension_ui"
+            && line["payload"]["extension"] == "fiber.test/command-turn-boundary"
+            && line["payload"]["status"] == "both-returned"
+    }) {
+        stream.extend(until_session(
+            &client,
+            "the process command result",
+            |line| {
+                line["kind"] == "extension_ui"
+                    && line["payload"]["extension"] == "fiber.test/command-turn-boundary"
+                    && line["payload"]["status"] == "both-returned"
+            },
+        ));
+    }
+    let resolved = stream
+        .iter()
+        .position(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    let inner = stream
+        .iter()
+        .position(|line| {
+            line["kind"] == "tool_call_requested"
+                && line["payload"]["ran_by"]["extension"] == "fiber.test/command-turn-boundary"
+        })
+        .unwrap();
+    let completed = stream
+        .iter()
+        .position(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert!(
+        resolved < inner && inner < completed,
+        "the inner call runs after reply at a step boundary: {stream:?}"
+    );
+    assert_eq!(stream[inner]["payload"]["ran_by"]["command_id"], "command");
     send(&client, r#"{"id":"close","command":"close"}"#);
     let _tail = until_session_close(&client);
     drop(client);

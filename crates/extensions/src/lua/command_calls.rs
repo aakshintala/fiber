@@ -14,12 +14,12 @@ use super::Hub;
 
 /// The end of one command. Subscribers wake outside the signal's lock.
 #[derive(Default)]
-pub(super) struct Ended {
+pub(crate) struct Ended {
     state: Mutex<(bool, Vec<Weak<dyn Wake>>)>,
 }
 
 impl Ended {
-    pub(super) fn end(&self) {
+    pub(crate) fn end(&self) {
         let subscribers = {
             let mut state = lock(&self.state);
             if state.0 {

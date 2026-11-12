@@ -531,6 +531,177 @@ fn process_command_queue_runs_on_release() {
     assert!(queued.wait().is_err());
 }
 
+/// An admitted process command sends its invocation-anchored inner call,
+/// waits for its answer off the client reader, and publishes the callback's
+/// actual result. A duplicate release cannot invoke it twice.
+#[test]
+fn process_command_runner_delivers_invocation_and_waits_in_flight() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::inbox::Delivery;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let (delivery_tx, delivery_rx) = std::sync::mpsc::channel();
+    runtime.set_inbox(delivery_tx);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let invocation = {
+        let calls = Arc::clone(&calls);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("registered"),
+            "run",
+            Arc::new(move |_arg, _scope, _cancel, inner_calls| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                inner_calls
+                    .unwrap()
+                    .run("fiber.test/other", "read", json!({}))
+                    .map_err(|message| Error::Lua {
+                        extension: "fiber.test/proc".to_owned(),
+                        message,
+                    })?;
+                Ok(Some(json!("callback-result")))
+            }),
+        )
+    };
+    let queued = Arc::new(
+        runtime
+            .queue_command(&invocation, command("cmd_1"), "go")
+            .unwrap(),
+    );
+    let waiting = Arc::clone(&queued);
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(waiting.wait());
+    });
+    queued.release();
+    let Delivery::InnerCall(request) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&delivery_rx, "process command inner delivery")
+    else {
+        panic!("expected inner call");
+    };
+    assert_eq!(request.command, command("cmd_1"));
+    assert_eq!(request.extension, "fiber.test/other");
+    assert_eq!(request.name, "read");
+    (request.taken)();
+    queued.release();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    (request.answer)(Box::new(ToolCallCompleted {
+        status: CallStatus::Completed,
+        content: Vec::new(),
+        reason: None,
+        error: None,
+        process: None,
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        protected_paths: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+        loaded: None,
+    }));
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&result_rx, "process command callback result")
+            .unwrap(),
+        json!("callback-result")
+    );
+}
+
+/// Ending a process command wakes a pending host-tool call as an ordinary
+/// cancelled result, while the command wait still receives its real result.
+#[test]
+fn process_command_runner_returns_cancelled_when_callback_ends() {
+    use contract::events::CallStatus;
+    use contract::inbox::Delivery;
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let (delivery_tx, delivery_rx) = std::sync::mpsc::channel();
+    runtime.set_inbox(delivery_tx);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (call_tx, call_rx) = std::sync::mpsc::channel();
+    let invocation = {
+        let barrier = Arc::clone(&barrier);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("registered"),
+            "run",
+            Arc::new(move |_, _, _, inner_calls| {
+                let inner_calls = inner_calls.unwrap();
+                let call_tx = call_tx.clone();
+                std::thread::spawn(move || {
+                    let result = inner_calls
+                        .run("fiber.test/other", "read", json!({}))
+                        .unwrap();
+                    let _sent = call_tx.send(result.status);
+                });
+                barrier.wait();
+                Ok(Some(json!("callback-result")))
+            }),
+        )
+    };
+    let queued = runtime
+        .queue_command(&invocation, command("cmd_cancel"), "go")
+        .unwrap();
+    queued.release();
+    let Delivery::InnerCall(request) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&delivery_rx, "process command cancellation delivery")
+    else {
+        panic!("expected inner call");
+    };
+    (request.taken)();
+    barrier.wait();
+    assert_eq!(queued.wait().unwrap(), json!("callback-result"));
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&call_rx, "cancelled host-tool result"),
+        CallStatus::Cancelled
+    );
+}
+
+/// Missing or closed session inboxes answer `host.tool` as an ordinary
+/// cancelled result rather than failing the process callback.
+#[test]
+fn process_command_runner_returns_cancelled_without_live_inbox() {
+    use contract::events::CallStatus;
+    for closed in [false, true] {
+        let runtime = runtime();
+        runtime.register_owner("fiber.test/proc", None);
+        if closed {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            runtime.set_inbox(sender);
+            drop(receiver);
+        }
+        let invocation = runtime.install_process_handler(
+            "fiber.test/proc",
+            command("registered"),
+            "run",
+            Arc::new(|_, _, _, inner_calls| {
+                let result = inner_calls
+                    .unwrap()
+                    .run("fiber.test/proc", "read", json!({}))
+                    .map_err(|message| Error::Lua {
+                        extension: "fiber.test/proc".to_owned(),
+                        message,
+                    })?;
+                assert_eq!(result.status, CallStatus::Cancelled);
+                Ok(Some(json!("returned")))
+            }),
+        );
+        let queued = runtime
+            .queue_command(
+                &invocation,
+                command(if closed { "closed" } else { "missing" }),
+                "go",
+            )
+            .unwrap();
+        queued.release();
+        assert_eq!(queued.wait().unwrap(), json!("returned"));
+    }
+}
+
 /// A process command that returns nothing still completes: the driver's
 /// return value is ignored (`docs/extensions.md`, "Commands and screens"),
 /// so there is no failure to notice. An error still fails the wait.

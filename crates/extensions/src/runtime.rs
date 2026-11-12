@@ -29,6 +29,7 @@ use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::Event;
 use contract::hook::{HookFailure, StateLine};
+use contract::inbox::Delivery;
 use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
 
@@ -64,6 +65,8 @@ struct Inner {
     functions: BTreeMap<(CommandId, String, u64), (String, FunctionTarget)>,
     /// The session's emitter, for process failures with no VM to emit them.
     emit: Option<Arc<dyn Emit>>,
+    /// The loop inbox for process command inner calls.
+    inbox: Option<std::sync::mpsc::Sender<Delivery>>,
 }
 
 /// The session's backend-neutral callback owner: generations, function
@@ -72,6 +75,8 @@ struct Inner {
 pub(crate) struct Runtime {
     /// The registry. The lock is a leaf: no callback runs under it.
     inner: Arc<Mutex<Inner>>,
+    /// Command-anchored inner calls currently being served, by owner and anchor.
+    command_inner: Arc<Mutex<BTreeMap<(String, CommandId), usize>>>,
 }
 
 impl Runtime {
@@ -84,7 +89,9 @@ impl Runtime {
                 owners: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 emit: None,
+                inbox: None,
             })),
+            command_inner: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -203,6 +210,11 @@ impl Runtime {
                 .functions
                 .get(&(func.command.clone(), func.key.clone(), func.generation))?;
         inner.owners.contains_key(owner).then(|| owner.clone())
+    }
+
+    /// Installs the session inbox used by process command inner calls.
+    pub(crate) fn set_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
+        lock(&self.inner).inbox = Some(inbox);
     }
 
     /// Installs the session's emitter, for process failures with no VM.
@@ -388,9 +400,21 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => Ok(CommandWait::Process(Arc::new(
-                ProcessQueued::new(resolved.owner, invoke, Value::String(text.to_owned()), None),
-            ))),
+            FunctionTarget::Process(invoke) => {
+                let (inbox, command_inner) = {
+                    let inner = lock(&self.inner);
+                    (inner.inbox.clone(), Arc::clone(&self.command_inner))
+                };
+                Ok(CommandWait::Process(Arc::new(ProcessQueued::new(
+                    resolved.owner,
+                    id,
+                    invoke,
+                    Value::String(text.to_owned()),
+                    None,
+                    inbox,
+                    command_inner,
+                ))))
+            }
         }
     }
 
@@ -486,10 +510,19 @@ impl Runtime {
     }
 
     /// Whether the hook behind `func` would wait behind its extension's own
-    /// command: only a Lua command running in its VM refuses its own hooks,
-    /// and a process owner never owns a command call.
+    /// command: Lua command hooks and active command-anchored process inner
+    /// calls refuse their owner's hooks.
     pub(crate) fn runs_own_command(&self, func: &FunctionRef, point: &str) -> Option<HookFailure> {
         let resolved = self.resolve(func).ok()?;
+        if lock(&self.command_inner)
+            .iter()
+            .any(|((owner, _), count)| owner == &resolved.owner && *count > 0)
+        {
+            return Some(HookFailure {
+                extension: resolved.owner,
+                message: format!("The `{point}` hook would wait behind its extension's command"),
+            });
+        }
         match resolved.target {
             FunctionTarget::Lua(binding) => {
                 let extension = binding.extension.upgrade()?;
