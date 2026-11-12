@@ -127,12 +127,12 @@ pub fn refresh_if_due(
     });
 }
 
-/// Wait for the catalog lock and refresh the catalog for a forced read.
+/// Refresh the catalog for a forced read, skipping when another refresh holds the lock.
 pub fn refresh_forced(home: &Path, enabled: bool, now: SystemTime, fetcher: &Fetch) {
     if !enabled {
         return;
     }
-    with_lock(home, true, || {
+    with_lock(home, false, || {
         if should_fetch(home, enabled, None, now)
             && let Ok(bytes) = fetcher(URL)
             && valid_catalog(&bytes)

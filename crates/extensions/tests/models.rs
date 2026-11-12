@@ -101,6 +101,43 @@ fn models_dev_fills_vendor_context_before_load_admission() {
 }
 
 #[test]
+fn models_dev_forced_refresh_skips_a_held_lock() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let path = config::models_dev_lock_file(&home).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let held = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .unwrap();
+    held.try_lock().unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(br#"{"acme":{}}"#.to_vec())
+    });
+
+    fakes::within(
+        "forced models.dev refresh skips held lock",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            extensions::models_dev::refresh_forced(
+                &home,
+                true,
+                fakes::clock::FakeClock::new().wall(),
+                &fetch,
+            );
+        },
+    );
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(held);
+}
+
+#[test]
 fn models_dev_fetch_decision_respects_switch_and_missing_cache() {
     let setup = Setup::new();
     let now = fakes::clock::FakeClock::new().wall();
