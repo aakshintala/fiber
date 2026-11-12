@@ -2790,6 +2790,39 @@ fn key_choices(
     (fake, login)
 }
 
+/// Up wraps from the first reviewer to the last, and from the middle to the first
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn reviewer_choices_up_wraps_from_first_and_middle() {
+    let (fake, mut first) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["m1", "m2", "m3"], Some("m1")),
+    );
+    assert!(matches!(first.key(&Key::Up, &ctx(&fake)), Act::Stay));
+    save_highlighted(&mut first, &fake);
+    assert_eq!(
+        fake.reviewer_saves()
+            .last()
+            .map(|(_, model)| model.as_str()),
+        Some("m3")
+    );
+
+    let (fake, mut middle) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["m1", "m2", "m3"], Some("m2")),
+    );
+    assert!(matches!(middle.key(&Key::Up, &ctx(&fake)), Act::Stay));
+    save_highlighted(&mut middle, &fake);
+    assert_eq!(
+        fake.reviewer_saves()
+            .last()
+            .map(|(_, model)| model.as_str()),
+        Some("m1")
+    );
+}
+
 /// Whether the view shows the provider rows.
 fn rows_shown(login: &Login) -> bool {
     drawn(login, 80, 24).contains("Providers")

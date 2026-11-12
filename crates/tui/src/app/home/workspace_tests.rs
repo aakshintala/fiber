@@ -506,6 +506,26 @@ fn arrows_walk_completions_then_recents_and_wrap() {
     assert_eq!(focused(&app), Some("/w".to_owned()));
 }
 
+// Non-typing Up wraps within the recent workspaces (`docs/tui.md`, "Swapped views").
+#[test]
+fn non_typing_picker_up_wraps_from_first_and_middle_recent() {
+    let mut app = home_with(80, 24, launch());
+    for (id, path) in [("one", "/one"), ("two", "/two")] {
+        app.on_line(live(id, id, path));
+    }
+    open(&mut app);
+    assert_eq!(recents(&app), ["/w", "/one", "/two"]);
+
+    assert_eq!(key(&mut app, Key::Up), Effect::None);
+    assert_eq!(focused(&app), Some("/two".to_owned()));
+    assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("/w".to_owned()));
+    assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("/one".to_owned()));
+    assert_eq!(key(&mut app, Key::Up), Effect::None);
+    assert_eq!(focused(&app), Some("/w".to_owned()));
+}
+
 #[test]
 fn enter_on_a_completion_chooses_it_for_the_next_start() {
     let mut app = home_with(80, 24, launch());
