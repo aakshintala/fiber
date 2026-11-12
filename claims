@@ -236,3 +236,9 @@ crates/loop/src/lib.rs	fiber-4671	plan	2026-11-12T13:07:04Z	Amoghs-MacBook-Pro:/
 docs/prompt-cache.md	fiber-4671	plan	2026-11-12T13:07:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reload_tests.rs	fiber-4734	plan	2026-11-12T13:07:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/reload_tests.rs	fiber-4734	plan	2026-11-12T13:07:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/lib.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/schedule_tests.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/timed_tests.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/driver_shell_no_timeout.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/driver_shell_sent.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/driver_shell_spill.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
