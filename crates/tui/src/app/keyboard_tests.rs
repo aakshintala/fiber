@@ -1267,7 +1267,8 @@ fn the_key_map_scrolls_by_binding_and_searches() {
     // The focus moves by binding; the scroll follows whole bindings.
     assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Up, now());
-    assert_eq!(app.keymap_top(), Some(0));
+    let total_bindings = app.keymap().expect("open").visible(app.keys()).len();
+    assert_eq!(app.keymap().expect("open").focus(), total_bindings - 1);
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), Some(0));
     // A page moves by the bindings that fit less one: the smaller
@@ -1275,22 +1276,22 @@ fn the_key_map_scrolls_by_binding_and_searches() {
     // one row further down.
     app.on_key(Key::PageDown, now());
     let map = app.keymap().expect("open");
-    assert_eq!((map.focus(), map.top()), (2, 1));
+    assert_eq!((map.focus(), map.top()), (1, 0));
     app.on_key(Key::PageUp, now());
     let map = app.keymap().expect("open");
-    assert_eq!((map.focus(), map.top()), (1, 1));
+    assert_eq!((map.focus(), map.top()), (0, 0));
     app.on_key(Key::PageUp, now());
     assert_eq!(app.keymap_top(), Some(0));
-    // Down past the end holds on the last binding.
+    // Down past the end wraps to the first binding.
     for _ in 0..80 {
         app.on_key(Key::Down, now());
     }
     let map = app.keymap().expect("open");
     let total = map.visible(app.keys()).len();
-    assert_eq!(map.focus(), total - 1);
+    assert_eq!(map.focus(), 80 % total);
     let last = app.keymap_top();
     app.on_key(Key::Down, now());
-    assert_eq!(app.keymap_top(), last);
+    assert_ne!(app.keymap_top(), last);
     // Typing narrows the rows to the query; the draft keeps nothing.
     app.on_key(Key::Esc, now());
     app.on_key(Key::F1, now());

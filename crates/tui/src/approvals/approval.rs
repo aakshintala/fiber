@@ -474,7 +474,9 @@ impl Approval {
                 } else {
                     (now + 1) % len
                 };
-                self.cursor = choices[next];
+                if let Some(choice) = choices.get(next) {
+                    self.cursor = *choice;
+                }
             }
             Key::Enter => return Some(super::PanelKey::Answer),
             // Tab, Shift+Tab, Ctrl+G and Ctrl+R do nothing in the panel,
