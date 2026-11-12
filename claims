@@ -222,3 +222,5 @@ providers/databricks/thinking-overlay.json	fiber-4709	plan	2026-11-12T16:00:37Z	
 docs/performance.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/Cargo.toml	fiber-4755	plan	2026-11-12T16:27:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+Cargo.lock	fiber-4755	plan	2026-11-12T16:27:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
