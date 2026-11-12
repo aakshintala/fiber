@@ -707,7 +707,7 @@ fn reference_was_deprecated(package: &Package, id: &str, models: &Map<String, Va
     package.drop_deprecated
         && models
             .get(id)
-            .is_some_and(|model| callable(model) && deprecated(package, model))
+            .is_some_and(|model| deprecated(package, model))
 }
 
 /// Every package's file from `catalog` (full or trimmed), plus one line

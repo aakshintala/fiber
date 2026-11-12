@@ -1154,11 +1154,26 @@ fn deprecated_table_references_are_skipped_but_absent_ids_fail() {
             .iter()
             .any(|line| line.contains("t/old is deprecated in models.dev; left out"))
     );
-    assert!(
-        notes
-            .iter()
-            .any(|line| line.contains("t/old") && line.contains("by_model"))
-    );
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old by_model entry skipped because the model is deprecated"
+    }));
+
+    // Deprecation is a source-catalog property, even when another leave-out
+    // rule takes precedence for the model's ordinary notice.
+    let non_callable = tool_model(json!({"status": "deprecated", "tool_call": false}));
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", non_callable)]),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old does not call tools with text output in models.dev; left out"
+    }));
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old by_model entry skipped because the model is deprecated"
+    }));
 
     package.only = &["old"];
     let ((outputs, notes), _) = generate(
@@ -1168,9 +1183,33 @@ fn deprecated_table_references_are_skipped_but_absent_ids_fail() {
     )
     .unwrap();
     assert_eq!(outputs[0].models, 0);
-    assert!(notes.iter().any(|line| line.contains("only")));
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old only entry skipped because the model is deprecated"
+    }));
+
+    // `only` may select a different model while a table still refers to the
+    // deprecated source model.
+    package.only = &["current"];
+    package.by_model = &[("old", r#"{"x":1}"#)];
+    let ((outputs, notes), _) = generate(
+        &catalog(
+            package.source,
+            &[
+                ("old", deprecated.clone()),
+                ("current", tool_model(json!({}))),
+            ],
+        ),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 1);
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old by_model entry skipped because the model is deprecated"
+    }));
 
     package.only = &[];
+    package.by_model = &[("old", r#"{"x":1}"#)];
     let correction = Correction {
         package: "t".to_owned(),
         model: "old".to_owned(),
@@ -1216,6 +1255,19 @@ fn a_stale_table_entry_is_an_error_naming_both() {
     let input = catalog(package.source, &[("m", tool_model(json!({})))]);
     assert_eq!(
         generate_err(&package, &input),
+        "t: table entry for `ghost` matches no generated model"
+    );
+    let other_package = fixed_package("elsewhere", "p");
+    let other_catalog = catalogs(&[
+        ("s", &[("m", tool_model(json!({})))]),
+        ("elsewhere", &[("ghost", tool_model(json!({})))]),
+    ]);
+    let error = match generate(&other_catalog, &[package, other_package], &[]) {
+        Err(error) => error,
+        Ok(_) => panic!("cross-package table entry unexpectedly matched"),
+    };
+    assert_eq!(
+        error,
         "t: table entry for `ghost` matches no generated model"
     );
     let mut package = fixed_package("s", "p");
