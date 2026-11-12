@@ -8,7 +8,6 @@
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
 
 use fakes::Deadline;
 
@@ -33,7 +32,7 @@ pub(crate) fn example_path(name: &str) -> fakes::WarmedJig {
 /// its own process group under a watchdog, so a stall fails naming
 /// `finished` and leaves no process behind.
 #[track_caller]
-pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str, within: Duration) -> Output {
+pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str, deadline: Deadline) -> Output {
     let warmed = example_path(binary);
     let child = Command::new(warmed.path())
         .args(args)
@@ -43,7 +42,7 @@ pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str, within: Durat
         .spawn()
         .expect("the jig binary spawns");
     let watchdog = fakes::Watchdog::group(child.id());
-    let output = fakes::finished(finished, child, &[], Deadline::after(within));
-    watchdog.stand_down(Deadline::after(within));
+    let output = fakes::finished(finished, child, &[], deadline);
+    watchdog.stand_down(deadline);
     output
 }

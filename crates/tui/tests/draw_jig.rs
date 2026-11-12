@@ -35,7 +35,7 @@ fn it_reports_usage_without_arguments() {
         "draw",
         &[],
         "the draw jig finished",
-        fakes::MUST_SUCCEED_WITHIN,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_usage(&out);
 }
@@ -48,7 +48,7 @@ fn a_width_that_is_not_a_number_is_a_usage_error() {
         "draw",
         &[arg.as_str(), "wide"],
         "the draw jig finished",
-        fakes::MUST_SUCCEED_WITHIN,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_usage(&out);
 }
@@ -60,7 +60,7 @@ fn it_draws_the_events_file_at_the_given_width() {
         "draw",
         &[arg.as_str(), "80"],
         "the draw jig finished",
-        fakes::MUST_SUCCEED_WITHIN,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
