@@ -98,7 +98,6 @@ crates/loop/src/reviewer.rs	fiber-4699	plan	2026-11-12T05:03:01Z	Amoghs-MacBook-
 crates/loop/tests/fixtures/reviewer_eval/seeded.jsonl	fiber-4699	plan	2026-11-12T05:03:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/reviewer_eval.rs	fiber-4699	plan	2026-11-12T05:03:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop_tests.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/sources.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/sources_tests.rs	fiber-4700	plan	2026-11-12T05:06:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/login_view.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -145,9 +144,6 @@ docs/testing/fakes.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-
 crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/tui/src/screen.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/screen_tests.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/src/main.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4700	plan	2026-11-12T06:25:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -264,3 +260,9 @@ crates/extensions/tests/oauth.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-Mac
 crates/extensions/tests/login_discovery.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/lua_provider.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/panel/quota_tests.rs	fiber-4733	plan	2026-11-12T08:09:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/main.rs:577-578	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
+crates/main/src/main.rs:1324-1324	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
+crates/tui/src/event_loop_tests.rs:71-72	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
+crates/tui/src/event_loop_tests.rs:504-505	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
+crates/tui/src/screen.rs:161-161	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
+crates/tui/src/screen_tests.rs:574-575	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
