@@ -104,3 +104,4 @@ Cargo.lock	fiber-4755	plan	2026-11-12T16:27:12Z	Amoghs-MacBook-Pro:/Users/aakshi
 crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4582	plan	2026-11-12T16:48:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4582	plan	2026-11-12T16:48:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/config_views_tests.rs	fiber-4582	plan	2026-11-12T16:53:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4717	plan	2026-11-12T17:04:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
