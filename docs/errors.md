@@ -185,8 +185,8 @@ The Retried column is the default. A response header `x-should-retry: true`
 or `false` overrides it for that response (`docs/model-routing.md`, "When a
 model call fails"). It never overrides `quota_exceeded`, `unknown_stop_reason` or `paused_too_long`, which are never retried.
 
-A wait longer than 60 seconds fails at once as `rate_limited` with
-`retry_after_ms` set, so a person or a caller can decide.
+A wait longer than `retry.max_delay_ms`, 60 seconds by default, fails at once
+as `rate_limited` with `retry_after_ms` set, so a person or a caller can decide.
 
 ### Recognising a context overflow
 
