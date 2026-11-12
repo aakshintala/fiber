@@ -281,8 +281,9 @@ Exactly one of `outer_action_id` and `command_id` is present.
 
 ## Kinds
 
-Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
-of their own. MCP elicitation, and `ask_user` in a session a person drives,
+Fiber's loop emits the kinds below. On a crash takeover the keeper writes
+`keeper_started` and `keeper_bound` (`docs/tools.md`, "The keeper"). MCP
+elicitation and `ask_user` add no kind of their own. MCP elicitation, and `ask_user` in a session a person drives,
 raise interactions ("Interactions") that every driver answers with `reply`. In
 a session a program drives, `ask_user` ends the turn with `questions` on
 `turn_completed`.
@@ -743,7 +744,7 @@ Durable. The call's outcome.
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
 | `loaded` | array of strings | no | the tools a search loaded, by name, best first, ties by name; `[]` when it matched nothing; absent on every other result, and when an `after_tool` hook failed (`docs/tools.md`, "Tool search") |
-| `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects, one per restore that did not succeed); absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+| `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects); each failed `path` is workspace-relative. There is one entry per restore that did not succeed; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 On a successful `read`, `edit` or `write`, `details` carries the reserved
 `file_seen` object beside the tool's own fields: `path`, the file's resolved
@@ -1470,7 +1471,7 @@ Durable.
 | `output_tail` | string | no | the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
 | `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
 | `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
-| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of strings) and `failed` (array of `path` and `message` objects), as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of workspace-relative paths) and `failed` (array of `path` and `message` objects). Each failed `path` is workspace-relative, with one entry per restore that did not succeed, as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 #### `jobs_pending_notified`
 
@@ -1506,7 +1507,22 @@ boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and
 Their position in the log is the delivery point. The exception is a
 `job_completed` the keeper writes while its session is gone, which carries no
 `output_tail`, `notice` or `changed_by`: its delivery point is the next
-turn's `turn_started` (`docs/tools.md`, "The keeper").
+turn's `turn_started` (`docs/tools.md`, "The keeper"). The keeper also
+appends `keeper_started` when its takeover opens the log and `keeper_bound`
+once `bind` and `listen` succeed, only on a crash takeover, never on the
+normal path.
+
+#### `keeper_started`
+
+Durable. The payload is `{}`. The keeper appends it when its takeover opens
+the session's log, before it binds; only on a crash takeover, never on the
+normal path (`docs/tools.md`, "The keeper").
+
+#### `keeper_bound`
+
+Durable. The payload is `{}`. The keeper appends it once `bind` and `listen`
+succeed on its socket; only on a crash takeover, never on the normal path
+(`docs/tools.md`, "The keeper").
 
 ### Command acknowledgements
 

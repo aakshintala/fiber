@@ -591,6 +591,8 @@ impl Fold {
             | Event::JobDelta(_)
             | Event::JobLine(_)
             | Event::JobsPendingNotified(_)
+            | Event::KeeperStarted(_)
+            | Event::KeeperBound(_)
             | Event::CommandAccepted(_)
             | Event::DirectoryAdded(_)
             | Event::Archived(_)
@@ -1118,6 +1120,8 @@ impl Observer {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => self.fold.observe(line),

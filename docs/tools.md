@@ -1201,9 +1201,12 @@ hub.
 - **A crash hands the log to the keeper.** When its session dies without a
   shutdown, the keeper takes the session's `session.lock` and binds
   `run/<session_id>`, as any lock holder does (`docs/state.md`, "What each
-  part holds"). While it holds the lock it appends to the session's log: a `job_completed`
+  part holds"). While it holds the lock it appends to the session's log: a `keeper_started`
+  when the takeover opens the log and a `keeper_bound` once its socket is bound and
+  listening, then a `job_completed`
   for each job that ends, for a Fiber delegate the `job_completed` its
-  exit gives, and for a delegate on another harness the rule below. It writes no `output_tail`, `notice` or `changed_by`, because it
+  exit gives, and for a delegate on another harness the rule below. The keeper writes
+  both markers only on a crash takeover, never on the normal path. It writes no `output_tail`, `notice` or `changed_by`, because it
   runs no hooks. It writes no file of its own, so the log stays the only
   state of record (`docs/events.md`, "The rule everything else follows
   from").

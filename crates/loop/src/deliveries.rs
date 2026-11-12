@@ -129,6 +129,8 @@ impl Starts {
             | Event::DelegateFinished(_)
             | Event::JobCompleted(_)
             | Event::JobsPendingNotified(_)
+            | Event::KeeperStarted(_)
+            | Event::KeeperBound(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {}
         }

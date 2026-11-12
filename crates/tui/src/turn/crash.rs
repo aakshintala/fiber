@@ -441,6 +441,8 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
         | EventKind::JobLine
         | EventKind::DelegateFinished
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => false,
