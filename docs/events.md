@@ -1470,7 +1470,7 @@ Durable.
 | `output_tail` | string | no | the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
 | `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
 | `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
-| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of strings) and `failed` (array of `path` and `message` objects). Each failed `path` is workspace-relative, with one entry per restore that did not succeed, as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of workspace-relative paths) and `failed` (array of `path` and `message` objects). Each failed `path` is workspace-relative, with one entry per restore that did not succeed, as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 #### `jobs_pending_notified`
 
