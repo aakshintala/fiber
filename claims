@@ -242,3 +242,15 @@ crates/main/src/timed_tests.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBo
 crates/main/tests/tool_calls/driver_shell_no_timeout.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/driver_shell_sent.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/driver_shell_spill.rs	fiber-4731	plan	2026-11-12T13:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/mod.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/hooks.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/hooks_entries.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/opening.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/bedrock.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/databricks.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/provider_request_builtin_tools.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/vertex.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/timings/alloc_stats.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/timings/dhat_heap.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/timings/log_search_timing.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/timings/tool_timing.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
