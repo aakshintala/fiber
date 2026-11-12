@@ -316,6 +316,10 @@ impl<'a> Found<'a> {
     }
 }
 
+fn is_reported(code: &ErrorCode) -> bool {
+    matches!(code, ErrorCode::ModelInvalid | ErrorCode::ModelOmitted)
+}
+
 impl Providers {
     /// A typed model reference without any `:<level>` suffix, and the level
     /// the suffix named, if any: the single strip of a `:<level>` suffix both
@@ -1175,39 +1179,26 @@ impl Providers {
         Some(notices)
     }
 
-    /// Drops up to the number of identical invalid or omitted notices already
-    /// reported for this provider. A repeated admission reports no new
-    /// notices unless it has excess entries.
+    /// Drops identical invalid or omitted notices already reported for this
+    /// provider. A repeated admission reports no new notices unless it has
+    /// excess entries.
     fn filter_recorded(&self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
-        let mut consumed = Vec::<(ErrorCode, String, usize)>::new();
-        let mut kept = Vec::new();
-        for notice in notices {
-            if matches!(
-                notice.code,
-                ErrorCode::ModelInvalid | ErrorCode::ModelOmitted
-            ) {
-                let identity = (notice.code.clone(), notice.message.clone());
-                let already_reported = self.reported_notices.get(name).map_or(0, |reported| {
-                    reported.iter().filter(|entry| *entry == &identity).count()
-                });
-                let used = consumed
-                    .iter_mut()
-                    .find(|(code, message, _)| code == &identity.0 && message == &identity.1);
-                if let Some((_, _, used)) = used {
-                    if *used < already_reported {
-                        *used += 1;
-                        continue;
-                    }
-                } else {
-                    consumed.push((identity.0, identity.1, 1));
-                    if already_reported > 0 {
-                        continue;
-                    }
+        let mut pending = self.reported_notices.get(name).cloned().unwrap_or_default();
+        notices
+            .into_iter()
+            .filter(|notice| {
+                if !is_reported(&notice.code) {
+                    return true;
                 }
-            }
-            kept.push(notice);
-        }
-        kept
+                let identity = (notice.code.clone(), notice.message.clone());
+                if let Some(position) = pending.iter().position(|entry| entry == &identity) {
+                    pending.swap_remove(position);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect()
     }
 
     fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
@@ -1221,12 +1212,6 @@ impl Providers {
         recorded.extend(
             notices
                 .iter()
-                .filter(|notice| {
-                    matches!(
-                        notice.code,
-                        ErrorCode::ModelInvalid | ErrorCode::ModelOmitted
-                    )
-                })
                 .map(|notice| (notice.code.clone(), notice.message.clone())),
         );
     }

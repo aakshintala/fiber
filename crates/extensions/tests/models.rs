@@ -1862,6 +1862,7 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
     assert_eq!(providers.addendum(&model), Some("Fresh.\n"));
 }
 
+// Count assertions follow `docs/model-routing.md`, "Model discovery".
 #[test]
 fn add_lua_addenda_failure_reports_no_omission_yet() {
     let setup = Setup::new();
