@@ -38,6 +38,32 @@ fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
 }
 
 #[test]
+fn models_dev_vendor_metadata_blocks_match_the_committed_provider_files() {
+    let openrouter: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/openrouter/providers/openrouter.json"
+    ))
+    .unwrap();
+    let databricks: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/databricks/providers/databricks.json"
+    ))
+    .unwrap();
+
+    let openrouter = extensions::models_dev::meta_of(&openrouter).unwrap();
+    assert!(openrouter.split_source);
+    assert!(openrouter.source_aliases.is_empty());
+    assert!(openrouter.pins.is_empty());
+
+    let databricks = extensions::models_dev::meta_of(&databricks).unwrap();
+    assert_eq!(databricks.strip_prefix.as_deref(), Some("databricks-"));
+    assert_eq!(
+        databricks.sources,
+        ["anthropic", "google", "google-vertex", "meta", "openai"]
+    );
+    assert!(databricks.source_aliases.is_empty());
+    assert!(databricks.pins.is_empty());
+}
+
+#[test]
 fn models_dev_fills_vendor_context_before_load_admission() {
     let setup = Setup::new();
     let mut data = provider("acme", &["m"]);
