@@ -94,13 +94,6 @@ crates/tools/src/shell_tests.rs	fiber-4361	plan	2026-11-12T18:02:33Z	Amoghs-MacB
 crates/main/tests/extension_host/extension_codemode.rs	fiber-4361	plan	2026-11-12T18:02:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4361	plan	2026-11-12T18:02:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/extensions.md	fiber-4361	plan	2026-11-12T18:02:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/review_jig.rs	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/reviewer_eval.rs	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/support/review.rs	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/support/review_sweep.rs	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/testing/fakes.md	fiber-4699	plan	2026-11-12T18:07:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/tests/provider_deferral.rs:26-27	fiber-4709	plan	2026-11-12T18:00:43Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4709-deprecated-rows	
 crates/extensions/tests/first_party_providers.rs:157-158	fiber-4709	plan	2026-11-12T18:00:43Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4709-deprecated-rows	
 crates/extensions/tests/first_party_providers.rs:168-172	fiber-4709	plan	2026-11-12T18:00:43Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4709-deprecated-rows	
