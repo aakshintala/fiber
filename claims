@@ -258,3 +258,8 @@ scripts/test-leak-scan	fiber-4726	plan	2026-11-12T07:57:37Z	Amoghs-MacBook-Pro:/
 scripts/test-leak-probe	fiber-4726	plan	2026-11-12T07:57:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/leak_probe.rs	fiber-4726	plan	2026-11-12T07:57:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/running.md	fiber-4726	plan	2026-11-12T07:57:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/common/mod.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/lua_tools.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/oauth.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/login_discovery.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/lua_provider.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
