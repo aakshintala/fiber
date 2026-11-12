@@ -4363,6 +4363,7 @@ fn process_tool_runner_threading() {
     use crate::host::admission::CallbackContext;
 
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let deadline = Some(clock.now() + Duration::from_secs(10));
     let services = NativeHostServices {
         runtime: Runtime::new(Arc::clone(&clock)),
         state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
@@ -4386,7 +4387,6 @@ fn process_tool_runner_threading() {
         extension: "fiber.test/proc".to_owned(),
         home: std::path::PathBuf::from("/home"),
     };
-    let deadline = Some(std::time::Instant::now() + Duration::from_secs(10));
     let callback = CallbackContext::request(
         "fiber.test/proc",
         contract::RequestId("tool-runner".to_owned()),
@@ -7000,7 +7000,7 @@ impl contract::extension::HostDelegate for ProcessBindingDelegate {
         _arguments: &serde_json::Map<String, Value>,
         bind: &mut dyn FnMut(&contract::JobId),
     ) -> Result<contract::JobId, contract::shapes::Failure> {
-        let answer = match &*self.answer.lock().unwrap() {
+        match &*self.answer.lock().unwrap() {
             ProcessDelegateAnswer::Started(id) => {
                 bind(id);
                 Ok(id.clone())
@@ -7009,8 +7009,7 @@ impl contract::extension::HostDelegate for ProcessBindingDelegate {
                 bind(id);
                 Err(failure.clone())
             }
-        };
-        answer
+        }
     }
 
     fn retain(&self, _loaded: &[String]) -> usize {
@@ -7201,14 +7200,17 @@ fn process_delegate_bind() {
                 &race_host_call,
                 &callback.cancel,
             );
-            let _ = done.send(answer);
+            done.send(answer)
+                .expect("the test receives the delegate answer");
         }
     });
     fakes::Deadline::after(Duration::from_secs(10))
         .recv(&entered)
         .expect("the delegate reaches the forced bind pause");
     race_callback.cancel.cancel();
-    let _ = release.send(());
+    release
+        .send(())
+        .expect("the delegate bind pause is waiting");
     let answer = fakes::Deadline::after(Duration::from_secs(10))
         .recv(&result)
         .expect("the abandoned delegate start returns");

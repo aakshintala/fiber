@@ -341,9 +341,11 @@ impl Table {
     fn pause_delegate_bind(&self) {
         let pause = support::lock(&self.next_delegate_bind_pause).take();
         if let Some((entered, release)) = pause
-            && entered.send(()).is_ok()
+            && let Ok(()) = entered.send(())
         {
-            let _ = release.recv();
+            fakes::Deadline::after(std::time::Duration::from_secs(10))
+                .recv(&release)
+                .expect("the test releases the delegate bind pause");
         }
     }
 

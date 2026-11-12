@@ -15,41 +15,41 @@ impl ProcessExtension {
     /// Routes delegate events to the process callback that bound the job.
     /// A finish waits for its completion before the one `run` request is sent.
     pub(crate) fn observe_delegate(&self, event: &contract::events::Event) -> bool {
-        match event {
-            contract::events::Event::DelegateFinished(finished) => {
-                self.shared.table.hold_delegate_finish(finished)
-            }
-            contract::events::Event::JobCompleted(completed) => {
-                let Some(route) = self.shared.table.finish_delegate(completed) else {
-                    return false;
-                };
-                if route.run {
-                    let shared = Arc::clone(&self.shared);
-                    let dispatch = requests::Dispatch {
-                        kind: requests::RequestKind::Function,
-                        registration: route.handle,
-                        key: "run".to_owned(),
-                        ran_by: format!("delegate {}", completed.job_id.0),
-                        args: vec![delegate_run_arg(completed, route.finish.as_ref())],
-                        timeout: route.timeout,
-                        state_call: None,
-                        credential: None,
-                        inner_calls: None,
-                    };
-                    let _ = std::thread::Builder::new()
-                        .name(format!("process delegate run {}", self.shared.owner))
-                        .spawn(move || {
-                            let _ = requests::run_request(
-                                &shared,
-                                dispatch,
-                                &support::cancel::Token::new(),
-                            );
-                        });
-                }
-                true
-            }
-            _ => false,
+        if let contract::events::Event::DelegateFinished(finished) = event {
+            return self.shared.table.hold_delegate_finish(finished);
         }
+        let contract::events::Event::JobCompleted(completed) = event else {
+            return false;
+        };
+        let Some(route) = self.shared.table.finish_delegate(completed) else {
+            return false;
+        };
+        if route.run {
+            let shared = Arc::clone(&self.shared);
+            let dispatch = requests::Dispatch {
+                kind: requests::RequestKind::Function,
+                registration: route.handle,
+                key: "run".to_owned(),
+                ran_by: format!("delegate {}", completed.job_id.0),
+                args: vec![delegate_run_arg(completed, route.finish.as_ref())],
+                timeout: route.timeout,
+                state_call: None,
+                credential: None,
+                inner_calls: None,
+            };
+            let spawned = std::thread::Builder::new()
+                .name(format!("process delegate run {}", self.shared.owner))
+                .spawn(move || {
+                    let result =
+                        requests::run_request(&shared, dispatch, &support::cancel::Token::new());
+                    drop(result);
+                });
+            match spawned {
+                Ok(thread) => drop(thread),
+                Err(error) => drop(error),
+            }
+        }
+        true
     }
 
     /// Handles one line or close from the child, answering it. A close
