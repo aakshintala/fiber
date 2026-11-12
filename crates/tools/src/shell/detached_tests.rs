@@ -550,7 +550,7 @@ impl contract::tool::Ask for NoAsk {
 fn restored_fixture(
     dir: &Path,
     ready: &Ready,
-    clock: Arc<FakeClock>,
+    _clock: Arc<FakeClock>,
     command: &str,
 ) -> (
     Arc<FakeJobs>,
