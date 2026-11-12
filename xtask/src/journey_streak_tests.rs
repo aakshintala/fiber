@@ -157,6 +157,54 @@ fn failed_history_view_lookup_leaves_no_companion() {
 }
 
 #[test]
+fn compute_counts_two_prior_failures_and_keeps_oldest_sha() {
+    let dir = TempDir::new("journey-streak-two-prior-failures");
+    let oldest_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let newer_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let current_sha = "cccccccccccccccccccccccccccccccccccccccc";
+    dir.write("failures.txt", "qa\n");
+    dir.write(
+        "runs.json",
+        &format!(
+            r#"[
+                {{"databaseId":1000,"headSha":"{current_sha}","event":"push","headBranch":"main","conclusion":"failure"}},
+                {{"databaseId":999,"headSha":"{newer_sha}","event":"push","headBranch":"main","conclusion":"failure"}},
+                {{"databaseId":998,"headSha":"{oldest_sha}","event":"push","headBranch":"main","conclusion":"failure"}}
+            ]"#
+        ),
+    );
+    for id in ["999", "998"] {
+        dir.write(
+            &format!("history/{id}/view.json"),
+            r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]}"#,
+        );
+        dir.write(&format!("history/{id}/journey-failures.txt"), "qa\n");
+    }
+    let args = [
+        "--current-id",
+        "1000",
+        "--current-sha",
+        current_sha,
+        "--failures",
+        dir.path().join("failures.txt").to_str().unwrap(),
+        "--runs",
+        dir.path().join("runs.json").to_str().unwrap(),
+        "--history-dir",
+        dir.path().join("history").to_str().unwrap(),
+        "--output",
+        dir.path().join("journey-streaks.json").to_str().unwrap(),
+    ]
+    .map(str::to_owned);
+
+    assert!(compute(&args).unwrap());
+    let output: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("journey-streaks.json")).unwrap())
+            .unwrap();
+    assert_eq!(output["qa"]["count"], 3);
+    assert_eq!(output["qa"]["first_sha"], oldest_sha);
+}
+
+#[test]
 fn skipped_producer_does_not_contribute_to_history() {
     let dir = TempDir::new("journey-streak-skipped-producer");
     dir.write("failures.txt", "qa\n");
