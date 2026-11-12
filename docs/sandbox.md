@@ -154,10 +154,12 @@ shell's inherited terminal, which keeps working.
 
 Commits keep working on main checkouts and on worktrees: the worktree's own
 git directory stays writable, as do the shared `objects/`, `refs/` and
-`logs/` directories. Deny wins over those grants, so `.git/config`,
+`logs/` directories. Deny wins over those grants. On macOS, `.git/config`,
 `.git/hooks/`, a worktree's `.git` pointer file, its git directory's
 `commondir` file, `.fiber/`, and the shared hooks and config stay
-unwritable.
+unwritable. On Linux, writes to these paths can succeed during a confined
+call; Fiber records and restores them afterward, reporting each change as
+described in "Protected paths".
 
 ## On Linux
 
