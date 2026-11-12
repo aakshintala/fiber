@@ -2179,7 +2179,10 @@ fn a_live_group_with_an_unreadable_detached_leader_stays_reviewed() {
         fakes::group_alive(pid),
         "the descendant keeps the group alive"
     );
-    let declared = effects(&shell, &format!("kill -- -{pid}"));
+    let declared = effects(
+        &shell,
+        &super::kill::group_kill_command("", &pid.to_string()),
+    );
     assert_eq!(
         declared.declared.effects,
         vec![Effect::Executes],

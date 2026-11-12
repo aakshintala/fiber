@@ -231,6 +231,7 @@ impl DelegateMessage {
             let identity = match super::super::run::process_identity(child.id()) {
                 Ok(identity) => identity,
                 Err(source) => {
+                    // debt: keep the two identity-cleanup paths duplicated unless a shared helper saves lines; extract when a third caller needs this cleanup.
                     let cleanup = match support::group::signal(
                         child.id(),
                         rustix::process::Signal::KILL,

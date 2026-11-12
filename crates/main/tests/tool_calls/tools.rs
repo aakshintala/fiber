@@ -3970,6 +3970,88 @@ fn a_detached_call_reaches_the_reviewer_even_when_a_standing_allow_covers_shell(
 }
 
 #[test]
+fn detached_jobs_stop_and_owned_pid_kill_do_not_reach_the_reviewer() {
+    let setup = Setup::new_with_started_deadline();
+    let first_pid = setup.workspace().join("detached-first-pid");
+    let second_pid = setup.workspace().join("detached-second-pid");
+    let first_command = format!("echo $$ > {}; exec sleep 60", first_pid.display());
+    let second_command = format!("echo $$ > {}; exec sleep 60", second_pid.display());
+    let first_script = first_command.clone();
+    let second_script = second_command.clone();
+    let stage = std::sync::atomic::AtomicUsize::new(0);
+    let server = ProviderServer::start_responding(move |request| {
+        let body = String::from_utf8_lossy(&request.body);
+        if body.contains("You review one tool call") {
+            return text_reply("allow");
+        }
+        match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => stream(&[function_call(
+                "detached_first",
+                "shell",
+                &json!({"command": first_command, "detach": true}),
+            )]),
+            1 => stream(&[function_call(
+                "detached_second",
+                "shell",
+                &json!({"command": second_command, "detach": true}),
+            )]),
+            2 => {
+                let first_pid_wait = first_pid.clone();
+                fakes::wait_until(
+                    "the detached process wrote its pid",
+                    Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                    move || first_pid_wait.exists(),
+                );
+                let pid = fs::read_to_string(&first_pid).unwrap();
+                stream(&[function_call(
+                    "kill_owned_detached_pid",
+                    "shell",
+                    &json!({"command": format!("kill {}", pid.trim())}),
+                )])
+            }
+            3 => {
+                let job = body
+                    .rfind("Started detached. Job ")
+                    .and_then(|at| body[at + "Started detached. Job ".len()..].split_once('.'))
+                    .map(|(job, _)| job.trim().to_owned())
+                    .unwrap_or_else(|| panic!("the second detached receipt is in the model input"));
+                stream(&[function_call(
+                    "stop_detached_job",
+                    "jobs",
+                    &json!({"action": "stop", "job_id": job}),
+                )])
+            }
+            _ => hello(),
+        }
+    })
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    with_reviewer(&setup);
+    let first_watchdog = Watchdog::matching(&first_script);
+    let second_watchdog = Watchdog::matching(&second_script);
+    let run = setup.tools_run(&[
+        "ask",
+        "launch two detached jobs, kill one, and stop the other",
+    ]);
+    first_watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    second_watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        server
+            .requests()
+            .iter()
+            .filter(|request| String::from_utf8_lossy(&request.body)
+                .contains("You review one tool call"))
+            .count(),
+        2,
+        "only the two detached launches reach the reviewer"
+    );
+    assert!(run.kinds().contains(&"job_started"));
+    assert!(run.kinds().contains(&"tool_call_completed"));
+}
+
+#[test]
 fn a_detached_command_outlives_the_session_and_the_receipt_names_its_job_and_log() {
     let setup = Setup::new_with_started_deadline();
     let ready = fakes::children::Ready::new(&setup.workspace());

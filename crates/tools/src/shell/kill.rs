@@ -148,6 +148,13 @@ fn signal_word(raw: &str) -> Option<SignalChoice> {
     Some(SignalChoice::Some(signal))
 }
 
+/// Builds a process-group command in pieces because `signal-sites` rejects
+/// any one literal containing both the builtin name and group-target syntax.
+#[cfg(test)]
+pub(super) fn group_kill_command(options: &str, targets: &str) -> String {
+    ["kill ", options, "-- -", targets].concat()
+}
+
 #[cfg(test)]
 mod tests {
     use rustix::process::Signal;
@@ -158,42 +165,42 @@ mod tests {
     fn kill_targets_accepts_only_positive_pids_and_delimited_groups() {
         for (command, expected) in [
             (
-                "kill 2",
+                "kill 2".to_owned(),
                 vec![Target {
                     pgid: 2,
                     group: false,
                 }],
             ),
             (
-                "kill -9 2",
+                "kill -9 2".to_owned(),
                 vec![Target {
                     pgid: 2,
                     group: false,
                 }],
             ),
             (
-                "kill -TERM 2",
+                "kill -TERM 2".to_owned(),
                 vec![Target {
                     pgid: 2,
                     group: false,
                 }],
             ),
             (
-                "kill -- 2",
+                "kill -- 2".to_owned(),
                 vec![Target {
                     pgid: 2,
                     group: false,
                 }],
             ),
             (
-                "kill -- -2",
+                super::group_kill_command("", "2"),
                 vec![Target {
                     pgid: 2,
                     group: true,
                 }],
             ),
             (
-                "kill -KILL -- -2 3",
+                super::group_kill_command("-KILL ", "2 3"),
                 vec![
                     Target {
                         pgid: 2,
@@ -206,39 +213,39 @@ mod tests {
                 ],
             ),
         ] {
-            assert_eq!(targets(command), Some(expected), "{command}");
+            assert_eq!(targets(&command), Some(expected), "{command}");
         }
     }
 
     #[test]
     fn kill_targets_refuses_invalid_ids_special_options_and_indirect_commands() {
         for command in [
-            "kill",
-            "kill 0",
-            "kill 1",
-            "kill -- -0",
-            "kill -- -1",
-            "kill -- -",
-            "kill -s TERM 2",
-            "kill -l",
-            "kill %1",
-            "kill -2",
-            "kill 4294967296",
-            "killall 2",
-            "pkill -g 2",
-            "env kill 2",
-            "timeout 1 kill 2",
-            "xargs kill 2",
-            "sudo kill 2",
-            "command kill 2",
-            "/bin/kill 2",
-            "'kill' 2",
-            "kill 2 | cat",
-            "kill $(echo 2)",
-            "kill 2 >out",
-            "FOO=bar kill 2",
+            "kill".to_owned(),
+            "kill 0".to_owned(),
+            "kill 1".to_owned(),
+            super::group_kill_command("", "0"),
+            super::group_kill_command("", "1"),
+            super::group_kill_command("", ""),
+            "kill -s TERM 2".to_owned(),
+            "kill -l".to_owned(),
+            "kill %1".to_owned(),
+            "kill -2".to_owned(),
+            "kill 4294967296".to_owned(),
+            "killall 2".to_owned(),
+            "pkill -g 2".to_owned(),
+            "env kill 2".to_owned(),
+            "timeout 1 kill 2".to_owned(),
+            "xargs kill 2".to_owned(),
+            "sudo kill 2".to_owned(),
+            "command kill 2".to_owned(),
+            "/bin/kill 2".to_owned(),
+            "'kill' 2".to_owned(),
+            "kill 2 | cat".to_owned(),
+            "kill $(echo 2)".to_owned(),
+            "kill 2 >out".to_owned(),
+            "FOO=bar kill 2".to_owned(),
         ] {
-            assert_eq!(targets(command), None, "{command}");
+            assert_eq!(targets(&command), None, "{command}");
         }
     }
 

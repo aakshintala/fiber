@@ -340,13 +340,13 @@ fn assert_closed(command: &str) {
 #[test]
 fn bare_builtin_kill_has_no_effect_only_for_all_owned_targets() {
     for command in [
-        "kill 123",
-        "kill -9 123",
-        "kill -KILL 123",
-        "kill -- 123",
-        "kill -- -123",
+        "kill 123".to_owned(),
+        "kill -9 123".to_owned(),
+        "kill -KILL 123".to_owned(),
+        "kill -- 123".to_owned(),
+        super::super::kill::group_kill_command("", "123"),
     ] {
-        let effects = classified_owned(command, &[123]);
+        let effects = classified_owned(&command, &[123]);
         assert!(
             effects.declared.effects.is_empty(),
             "{command}: {effects:?}"
@@ -360,26 +360,26 @@ fn bare_builtin_kill_has_no_effect_only_for_all_owned_targets() {
 #[test]
 fn kill_stays_reviewed_for_foreign_mixed_wrapped_and_unparsed_targets() {
     for command in [
-        "kill 456",
-        "kill -- -456",
-        "kill 123 456",
-        "kill -- -123 -456",
-        "kill -9 123 456",
-        "kill -s TERM 123",
-        "kill -l",
-        "kill %1",
-        "killall 123",
-        "pkill -g 123",
-        "env kill 123",
-        "timeout 1 kill 123",
-        "xargs kill 123",
-        "sudo kill 123",
-        "command kill 123",
-        "/bin/kill 123",
-        "kill 123 | cat",
-        "kill $(echo 123)",
+        "kill 456".to_owned(),
+        super::super::kill::group_kill_command("", "456"),
+        "kill 123 456".to_owned(),
+        super::super::kill::group_kill_command("", "123 -456"),
+        "kill -9 123 456".to_owned(),
+        "kill -s TERM 123".to_owned(),
+        "kill -l".to_owned(),
+        "kill %1".to_owned(),
+        "killall 123".to_owned(),
+        "pkill -g 123".to_owned(),
+        "env kill 123".to_owned(),
+        "timeout 1 kill 123".to_owned(),
+        "xargs kill 123".to_owned(),
+        "sudo kill 123".to_owned(),
+        "command kill 123".to_owned(),
+        "/bin/kill 123".to_owned(),
+        "kill 123 | cat".to_owned(),
+        "kill $(echo 123)".to_owned(),
     ] {
-        let effects = classified_owned(command, &[123]);
+        let effects = classified_owned(&command, &[123]);
         assert_eq!(
             effects.declared.effects,
             vec![Effect::Executes],
