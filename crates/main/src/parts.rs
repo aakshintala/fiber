@@ -543,6 +543,18 @@ fn parts_inner(
         &launch,
     )?;
     startup_notices.extend(notices);
+    startup_notices.extend(extensions::models_dev::apply(
+        &home,
+        config::models_dev_enabled(&config),
+        &mut providers,
+    ));
+    #[cfg(not(test))]
+    let catalog_fetch = extensions::models_dev::live_fetch();
+    #[cfg(test)]
+    let catalog_fetch: extensions::models_dev::Fetch =
+        Arc::new(|_| Err("network disabled in tests".to_owned()));
+    let _detached_catalog_refresh =
+        start_catalog_refresh(home.clone(), &config, clock.wall(), catalog_fetch);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
@@ -858,6 +870,21 @@ fn parts_inner(
     })
 }
 
+fn start_catalog_refresh(
+    home: PathBuf,
+    config: &Config,
+    now: std::time::SystemTime,
+    fetch: extensions::models_dev::Fetch,
+) -> Option<std::thread::JoinHandle<()>> {
+    extensions::models_dev::spawn_if_due(
+        home,
+        config::models_dev_enabled(config),
+        Some(config::refresh_after(config)),
+        now,
+        fetch,
+    )
+}
+
 pub(crate) fn reload_inputs(
     config: &Config,
     home: &std::path::Path,
@@ -958,3 +985,7 @@ pub(crate) fn choose_reviewer(
         chosen.observe,
     ))
 }
+
+#[cfg(test)]
+#[path = "parts_tests.rs"]
+mod tests;
