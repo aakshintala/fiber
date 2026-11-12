@@ -374,3 +374,4 @@ crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBoo
 .github/workflows/ci.yml	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-leak-scan	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/lib.rs	fiber-4598	plan	2026-11-12T20:37:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
