@@ -2296,9 +2296,7 @@ fn a_list_under_two_rows_with_no_model_draws_a_count_and_its_heading_together_or
 fn focus_window_top_is_nonzero_for_a_far_focus() {
     let mut app = choosing(160, 10);
     let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..40 {
-        app.on_key(Key::Down, now);
-    }
+    app.on_key(Key::Up, now);
     let view = app.model_picker_view().expect("open");
     assert!(view.focused.is_some(), "a far focus is set");
     let top = focus_window_top(&view, 10);

@@ -856,21 +856,10 @@ impl Form {
         }
     }
 
-    /// ↑ or ↓: one row, stopping at the first and the last.
+    /// ↑ or ↓: one row, wrapping at the first and the last.
     fn step(&mut self, down: bool) {
         let rows = self.rows();
-        let now = rows
-            .iter()
-            .position(|row| *row == self.at)
-            .unwrap_or_default();
-        let next = if down {
-            now.saturating_add(1)
-        } else {
-            now.saturating_sub(1)
-        };
-        if let Some(row) = rows.get(next) {
-            self.at = *row;
-        }
+        self.at = crate::swapped::wrap_cursor(&rows, self.at, down);
     }
 
     /// The shown tab's rows, top to bottom: the options, the words row, and

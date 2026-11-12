@@ -472,21 +472,10 @@ impl OneQuestion {
         }
     }
 
-    /// Moves up or down one row, stopping at either end.
+    /// Moves up or down one row, wrapping at the first and last.
     fn step(&mut self, down: bool) {
         let rows = self.rows();
-        let now = rows
-            .iter()
-            .position(|row| *row == self.at)
-            .unwrap_or_default();
-        let next = if down {
-            now.saturating_add(1)
-        } else {
-            now.saturating_sub(1)
-        };
-        if let Some(row) = rows.get(next) {
-            self.at = *row;
-        }
+        self.at = crate::swapped::wrap_cursor(&rows, self.at, down);
     }
 
     /// Toggled labels in option order, with repeated labels sent once.
