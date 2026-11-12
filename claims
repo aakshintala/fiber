@@ -408,3 +408,6 @@ crates/main/tests/support/mod.rs:340-340	fiber-4756	plan	2026-11-12T18:25:35Z	ro
 crates/main/tests/support/mod.rs:378-378	fiber-4756	plan	2026-11-12T18:25:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
 crates/main/tests/support/mod.rs:414-414	fiber-4756	plan	2026-11-12T18:25:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4756-models-dev-off	
 scripts/check-docs	fiber-4361	plan	2026-11-12T18:28:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/lua/hub.rs	fiber-4691	plan	2026-11-12T18:34:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/router.rs	fiber-4691	plan	2026-11-12T18:34:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua.rs	fiber-4691	plan	2026-11-12T18:34:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
