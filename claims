@@ -388,3 +388,12 @@ crates/tools/src/shell/detached_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	ro
 crates/main/src/builtin.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/builtin_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4465	plan	2026-11-12T21:40:24Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell.rs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell_tests.rs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/inner_calls.rs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/inner_calls_tests.rs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/extension_host/extension_codemode.rs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tools.md	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/extensions.md	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+extensions/codemode/extension.json	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check-docs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
