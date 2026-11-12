@@ -113,6 +113,7 @@ fn nullable_optional_arguments_parse_as_absent() {
         description.contains("`timeout_ms` is at least 1"),
         "{description}"
     );
+    assert!(description.contains("Stop your own process with `jobs stop`, not `kill`."));
     assert!(description.contains(
         "Any other call with no `timeout_ms` defaults to 600000, or to 300000 for a monitor."
     ));
@@ -2466,11 +2467,7 @@ fn detached_supervisor_spawn_failure_kills_and_reports_once_without_receipt() {
         .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the registry End reports the failed launch");
     assert_eq!(completed.status, Outcome::Failed);
-    assert!(
-        jobs.ended(fakes::Deadline::after(Duration::from_millis(100)))
-            .is_none(),
-        "the End is reported exactly once"
-    );
+    assert_eq!(jobs.end_count(), 1, "the failed launch reports one End");
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 

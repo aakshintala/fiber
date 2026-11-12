@@ -237,6 +237,11 @@ impl FakeJobs {
         deadline.recv(&lock(&self.completed_rx)).ok()
     }
 
+    /// Number of completion callbacks recorded so far.
+    pub fn end_count(&self) -> usize {
+        lock(&self.inner).ended.len()
+    }
+
     /// How many times `stop_delegates` ran: the loop calls it once per
     /// turn that ends `budget_exceeded`.
     pub fn stop_delegates_calls(&self) -> usize {

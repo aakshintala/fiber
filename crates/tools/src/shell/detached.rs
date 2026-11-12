@@ -111,7 +111,7 @@ impl StopControl {
 /// standard output and standard error are the log file and its duplicate,
 /// one shared offset. The leader identity is read before it is admitted to
 /// the registry. If a reaper thread cannot start, this call waits for the
-/// child itself, then returns the same completion channel (Q6).
+/// child itself, then returns the same completion channel so the sole child handle is never dropped without being waited.
 pub(super) fn launch(
     dir: &Path,
     fiber_pid: u32,
@@ -212,7 +212,7 @@ pub(super) fn system_spawner() -> Spawner {
 
 /// Moves a detached supervisor to its thread. If that thread cannot start,
 /// the caller keeps the `End`, kills the group and reports one failure
-/// synchronously rather than leaving an unstopppable running row (Drift-3).
+/// synchronously rather than leaving a running row that has no supervisor to stop it.
 pub(super) fn track(
     opened: Opened,
     started: Started,
@@ -262,51 +262,31 @@ impl Supervisor {
         let Opened {
             started, path, end, ..
         } = self.opened;
-        let failure = failure(ShellError::NotStarted {
-            source: io::Error::other(error.to_string()),
-        });
-        (end.0)(JobCompleted {
-            job_id: started.job_id,
-            status: Outcome::Failed,
-            error: Some(failure),
-            process: None,
-            output_tail: super::background::output_tail(&path),
-            notice: None,
-            changed_by: None,
-            protected_paths: None,
-        });
+        (end.0)(failed(
+            started.job_id,
+            &path,
+            ShellError::NotStarted {
+                source: io::Error::other(error.to_string()),
+            },
+        ));
     }
 
     fn fail_indeterminate(self) {
         let Opened {
             started, path, end, ..
         } = self.opened;
-        (end.0)(JobCompleted {
-            job_id: started.job_id,
-            status: Outcome::Failed,
-            error: Some(failure(ShellError::Indeterminate)),
-            process: None,
-            output_tail: super::background::output_tail(&path),
-            notice: None,
-            changed_by: None,
-            protected_paths: None,
-        });
+        (end.0)(failed(started.job_id, &path, ShellError::Indeterminate));
     }
 
     fn fail_signal(self, source: io::Error) {
         let Opened {
             started, path, end, ..
         } = self.opened;
-        (end.0)(JobCompleted {
-            job_id: started.job_id,
-            status: Outcome::Failed,
-            error: Some(failure(ShellError::NotStarted { source })),
-            process: None,
-            output_tail: super::background::output_tail(&path),
-            notice: None,
-            changed_by: None,
-            protected_paths: None,
-        });
+        (end.0)(failed(
+            started.job_id,
+            &path,
+            ShellError::NotStarted { source },
+        ));
     }
 }
 
@@ -414,16 +394,20 @@ fn completed(
                 protected_paths: None,
             }
         }
-        Err(_) => JobCompleted {
-            job_id,
-            status: Outcome::Failed,
-            error: Some(failure(ShellError::NotReaped)),
-            process: None,
-            output_tail: super::background::output_tail(path),
-            notice: None,
-            changed_by: None,
-            protected_paths: None,
-        },
+        Err(_) => failed(job_id, path, ShellError::NotReaped),
+    }
+}
+
+fn failed(job_id: contract::JobId, path: &Path, error: ShellError) -> JobCompleted {
+    JobCompleted {
+        job_id,
+        status: Outcome::Failed,
+        error: Some(failure(error)),
+        process: None,
+        output_tail: super::background::output_tail(path),
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
     }
 }
 
@@ -462,9 +446,9 @@ fn reap(child: Child, tx: Sender<io::Result<ExitStatus>>, control: Arc<StopContr
             thread_control.wake();
         });
     if spawned.is_err() {
-        // Q6: do not drop the only Child or introduce a fallback reaper.
-        // This rare path waits on the launching thread, then delivers the
-        // same result to the supervisor's channel.
+        // The child handle must have exactly one waiter. If the reaper
+        // thread cannot start, the launching thread waits and delivers the
+        // result through the same channel.
         let result = match support::lock(&child).take() {
             Some(mut child) => child.wait(),
             None => Err(io::Error::other("the detached child was already taken")),

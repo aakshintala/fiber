@@ -432,7 +432,7 @@ impl Tool for Shell {
                  `timeout_ms` defaults to 600000, or to 300000 for a monitor. `timeout_ms` is at least 1. \
                  A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
                  and standard error are one stream, except in a monitor, whose standard error goes to its own file. \
-                 A call with `detach` set starts a command that outlives the session."
+                 Stop your own process with `jobs stop`, not `kill`. A call with `detach` set starts a command that outlives the session."
                 .to_owned();
         let settings = self.selected();
         if settings.enabled && sandbox::check_available(&settings, &self.workspace).is_ok() {

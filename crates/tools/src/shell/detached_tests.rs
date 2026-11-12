@@ -366,11 +366,7 @@ fn detached_stop_escalates_after_the_session_clock_grace() {
         pgid,
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
-    assert!(
-        jobs.ended(fakes::Deadline::after(Duration::from_millis(100)))
-            .is_none(),
-        "the supervisor reports the End exactly once"
-    );
+    assert_eq!(jobs.end_count(), 1, "the supervisor reports one End");
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
