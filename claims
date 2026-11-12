@@ -246,7 +246,6 @@ crates/extensions/tests/lua_tools.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs
 crates/extensions/tests/oauth.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/login_discovery.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/lua_provider.rs	fiber-4730	plan	2026-11-12T08:05:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/panel/quota_tests.rs	fiber-4733	plan	2026-11-12T08:09:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/main.rs:577-578	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/main/src/main.rs:1324-1324	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/event_loop_tests.rs:71-72	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
@@ -268,3 +267,5 @@ scripts/test-leak-scan	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus
 scripts/test-leak-probe	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/leak_probe.rs	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/panel/quota_tests.rs:9-10	fiber-4733	plan	2026-11-12T08:52:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4733-quota-sent	
+crates/tui/src/app/panel/quota_tests.rs:270-300	fiber-4733	plan	2026-11-12T08:52:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4733-quota-sent	
