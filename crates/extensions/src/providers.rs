@@ -858,7 +858,7 @@ impl Providers {
             }
         };
         let admitted = self.admit(&name, extension, &mut models);
-        let notices = self.suppress_recorded(&name, admitted);
+        let notices = self.filter_recorded(&name, admitted);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
         let addenda = match read_addenda(provider.dir(), &models) {
@@ -1168,7 +1168,6 @@ impl Providers {
         let mut models = models;
         let admitted = self.admit(name, &owner, &mut models);
         let notices = self.suppress_recorded(name, admitted);
-        self.record_notices(name, &notices);
         let mut data = self.data(name);
         data.models = models;
         self.by_name.insert(name.to_owned(), data);
@@ -1177,10 +1176,9 @@ impl Providers {
     }
 
     /// Drops up to the number of identical invalid or omitted notices already
-    /// reported for this provider. The caller records notices after admission
-    /// succeeds. A
-    /// repeated admission reports no new notices unless it has excess entries.
-    fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
+    /// reported for this provider. A repeated admission reports no new
+    /// notices unless it has excess entries.
+    fn filter_recorded(&self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
         let mut consumed = Vec::<(ErrorCode, String, usize)>::new();
         let mut kept = Vec::new();
         for notice in notices {
@@ -1210,6 +1208,12 @@ impl Providers {
             kept.push(notice);
         }
         kept
+    }
+
+    fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
+        let notices = self.filter_recorded(name, notices);
+        self.record_notices(name, &notices);
+        notices
     }
 
     fn record_notices(&mut self, name: &str, notices: &[Notice]) {
@@ -1249,13 +1253,10 @@ impl Providers {
             let mut notices = leave_out_omitted(name, name, &mut models);
             notices.extend(leave_out_invalid(name, name, &mut models));
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
-            let notices = self.suppress_recorded(name, notices);
-            self.record_notices(name, &notices);
-            return notices;
+            return self.suppress_recorded(name, notices);
         };
         let admitted = self.admit(name, &owner, &mut models);
         let notices = self.suppress_recorded(name, admitted);
-        self.record_notices(name, &notices);
         match self.by_name.get_mut(name) {
             Some(data) => data.models = models,
             None => {
