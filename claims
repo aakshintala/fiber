@@ -213,8 +213,6 @@ crates/extensions/src/search_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amogh
 crates/tools/src/shell/sandbox/sandbox_tests.rs	fiber-4681	plan	2026-11-11T23:03:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/tool_calls/sandbox.rs	fiber-4681	plan	2026-11-11T23:03:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/calls/decode/model.rs	fiber-4664	plan	2026-11-11T23:20:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-docs/model-routing.md	fiber-4679	plan	2026-11-11T23:29:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/errors.md	fiber-4679	plan	2026-11-11T23:29:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality.md	fiber-4260	plan	2026-11-11T23:50:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/delegate/message/resume.rs	fiber-4260	plan	2026-11-12T00:26:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/release.yml	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
