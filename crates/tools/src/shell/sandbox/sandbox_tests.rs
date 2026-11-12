@@ -60,6 +60,14 @@ fn workspace_settings(fiber_home: &Path) -> Settings {
 }
 
 #[test]
+fn dev_path_check_is_component_wise() {
+    assert!(super::is_dev_path(Path::new("/dev")));
+    assert!(super::is_dev_path(Path::new("/dev/zero")));
+    assert!(!super::is_dev_path(Path::new("/device")));
+    assert!(!super::is_dev_path(Path::new("/var/dev")));
+}
+
+#[test]
 fn disabled_reports_off() {
     let dir = fixture();
     let unavailable =
@@ -673,6 +681,18 @@ fn assert_device_refused(fixture: &HomeFixture, device: &str) {
         null.status.is_some_and(|status| status.success()),
         "/dev/null stays readable"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_prepare_builds_a_landlock_policy() {
+    let dir = fixture();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let settings = workspace_settings(&dir.path().join("fiber-home"));
+    let prepared = super::prepare(&settings, &workspace, None).expect("prepare policy");
+    assert!(prepared.ruleset.is_some(), "Landlock ruleset is installed");
+    assert!(!prepared.program.is_empty(), "seccomp policy is compiled");
 }
 
 #[cfg(target_os = "linux")]
@@ -1318,6 +1338,20 @@ fn macos_profile_denies_devices_but_keeps_null_and_pty() {
     assert!(
         wide < deny && deny < null && null < pty,
         "device deny precedes narrow exceptions"
+    );
+    let dev_workspace = prepare(&fixture.settings, Path::new("/dev"), None)
+        .expect("the device-root profile builds");
+    assert!(
+        !dev_workspace
+            .profile
+            .contains(r#"(allow file-write* (subpath (param "FIBER_WS")))"#),
+        "a /dev workspace receives no write grant"
+    );
+    assert!(
+        !dev_workspace
+            .profile
+            .contains(r#"(allow file-write* (subpath (param "FIBER_GITDIR")))"#),
+        "git roots beneath a /dev workspace receive no write grant"
     );
     assert!(
         !profile.lines().any(|line| line.contains("ttys")

@@ -447,6 +447,11 @@ fn follow_link(
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn is_dev_path(path: &Path) -> bool {
+    path.starts_with(Path::new("/dev"))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn path_components(path: &Path) -> VecDeque<std::ffi::OsString> {
     path.components()
         .filter_map(|component| match component {
@@ -516,7 +521,7 @@ pub fn prepare(
             source,
         })?;
         // Writable roots must not re-grant /dev or anything beneath it.
-        if resolved.starts_with("/dev") {
+        if is_dev_path(&resolved) {
             continue;
         }
         let rule_fd = open_nofollow(&resolved)?;
@@ -726,15 +731,23 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Setu
          (allow file-read* (subpath \"/\"))\n\
          (deny file-read* file-write* (regex #\"^/dev/\"))\n\
          (allow file-read* file-write* (literal \"/dev/null\"))\n\
-         (allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n\
-         (allow file-write* (subpath (param \"FIBER_WS\")))\n\
-         (allow file-write* (subpath (param \"FIBER_TMPDIR\")))\n\
-         (allow file-write* (subpath (param \"FIBER_TMP\")))\n",
+         (allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n",
     );
+    for (name, root) in [
+        ("FIBER_WS", &workspace),
+        ("FIBER_TMPDIR", &temp),
+        ("FIBER_TMP", &slash_tmp),
+    ] {
+        if !is_dev_path(root) {
+            profile.push_str(&format!(
+                "(allow file-write* (subpath (param \"{name}\")))\n"
+            ));
+        }
+    }
     for (index, root) in settings.allow_write.iter().enumerate() {
         let resolved = canonicalize_root("an allow_write path", root)?;
         // Writable roots must not re-grant /dev or anything beneath it.
-        if resolved.starts_with("/dev") {
+        if is_dev_path(&resolved) {
             continue;
         }
         let name = format!("FIBER_ALLOW_{index}");
@@ -748,12 +761,14 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Setu
     let common = git.commondir.unwrap_or_else(|| workspace.join(".git"));
     bindings.push(("FIBER_GITDIR".to_owned(), path_text(&gitdir)));
     bindings.push(("FIBER_COMMONDIR".to_owned(), path_text(&common)));
-    profile.push_str(
-        "(allow file-write* (subpath (param \"FIBER_GITDIR\")))\n\
-         (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/objects\")))\n\
-         (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/refs\")))\n\
-         (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/logs\")))\n",
-    );
+    if !is_dev_path(&gitdir) && !is_dev_path(&common) {
+        profile.push_str(
+            "(allow file-write* (subpath (param \"FIBER_GITDIR\")))\n\
+             (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/objects\")))\n\
+             (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/refs\")))\n\
+             (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/logs\")))\n",
+        );
+    }
     let mut deny_index = 0;
     for deny in resolve_denies(settings)? {
         // Both the lexical path and its resolved target: Seatbelt judges
@@ -1234,7 +1249,7 @@ fn add_ancestor_grants(
             // Skip /dev and its descendants; the walk must not grant devices.
             // Also skip every entry leading to any deny: Landlock unions grants.
             let path = ancestor.join(entry.file_name());
-            if path.starts_with("/dev") {
+            if is_dev_path(&path) {
                 continue;
             }
             if exclusions.iter().any(|denied| denied.starts_with(&path)) {
