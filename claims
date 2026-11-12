@@ -18,10 +18,6 @@ crates/extensions/src/runtime/refs.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amogh
 crates/extensions/src/runtime/queued.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/process/registry.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/runtime_tests.rs	fiber-4664	plan	2026-11-11T21:16:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/extensions/src/providers.rs	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/extensions/tests/models.rs	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/providers/databricks.rs	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/model-routing.md	fiber-4662	plan	2026-11-11T22:11:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/tool.rs	fiber-4664	plan	2026-11-11T22:11:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/lua/host_calls.rs	fiber-4664	plan	2026-11-11T22:11:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/src/host/admission.rs	fiber-4664	plan	2026-11-11T22:11:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
