@@ -280,3 +280,8 @@ crates/main/tests/support/review_sweep.rs:409-409	fiber-4699	plan	2026-11-12T09:
 crates/main/tests/support/review_sweep.rs:414-415	fiber-4699	plan	2026-11-12T09:09:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-reviewer-sudo	
 docs/permissions.md:297-297	fiber-4699	plan	2026-11-12T09:09:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-reviewer-sudo	
 docs/testing/fakes.md:254-254	fiber-4699	plan	2026-11-12T09:09:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-reviewer-sudo	
+crates/tui/src/app/home_tests.rs	fiber-4619	plan	2026-11-12T09:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/keyboard_tests.rs	fiber-4619	plan	2026-11-12T09:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/home_view_tests.rs	fiber-4619	plan	2026-11-12T09:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/request_tests.rs	fiber-4619	plan	2026-11-12T09:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__view__home__tests__home_picker_scrolled.snap	fiber-4619	plan	2026-11-12T09:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
