@@ -1525,6 +1525,11 @@ impl SessionExtensions {
             .push(notice(code, message.clone(), Some(name)));
     }
 
+    /// Fiber home, which anchors the catalog cache and extension data directories.
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// One provider per `fiber.provider` registration, in provider-name
     /// order: the extension's name beside its provider.
     pub fn lua_providers(&self) -> &[(String, Arc<LuaProvider>)] {

@@ -157,6 +157,37 @@ pub fn spawn_if_due(
     })
 }
 
+/// Merge the cached catalog into rows before provider admission validates them.
+pub(crate) fn merge_admission(
+    home: &Path,
+    extension_dir: &Path,
+    provider: &str,
+    models: Vec<ModelData>,
+    enabled: bool,
+) -> Vec<ModelData> {
+    if !enabled {
+        return models;
+    }
+    let Some(catalog) = config::read_models_dev(home)
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return models;
+    };
+    let path = extension_dir
+        .join("providers")
+        .join(format!("{provider}.json"));
+    let Some(meta) = fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|file| meta_of(&file))
+    else {
+        return models;
+    };
+    merge(models, &meta, &catalog)
+}
+
 /// Merge cached catalog fields into installed provider rows without adding models.
 pub fn apply(
     home: &Path,

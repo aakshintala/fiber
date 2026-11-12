@@ -38,6 +38,35 @@ fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
 }
 
 #[test]
+fn models_dev_fills_vendor_context_before_load_admission() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["m"]);
+    data["models"][0]["context_window"] = serde_json::Value::Null;
+    data["models_dev"] = json!({"source": "acme", "pins": {}});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"m":{"limit":{"context":200}}}}"#,
+    )
+    .unwrap();
+    let configuration = config(&setup, &[]);
+
+    let (providers, notices) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.code != ErrorCode::ModelInvalid)
+    );
+    assert_eq!(providers.get("acme").unwrap().models.len(), 1);
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].context_window,
+        Some(200)
+    );
+}
+
+#[test]
 fn models_dev_fetch_decision_respects_switch_and_missing_cache() {
     let setup = Setup::new();
     let now = fakes::clock::FakeClock::new().wall();
