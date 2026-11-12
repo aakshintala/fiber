@@ -12,6 +12,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use crate::extension_harness::{send, until_session, until_session_close};
 use crate::support;
 
 use std::os::unix::fs::PermissionsExt;
@@ -133,6 +134,132 @@ fn hook_spec() -> Value {
 /// A valid `fiber.watch` spec with `run`, as JSON.
 fn watcher_spec() -> Value {
     json!({"timeout": 5000, "run": true})
+}
+
+/// Registers a command. Its callback calls `host.tool`
+/// twice in sequence and records each returned value before replying.
+fn command_tool_plan(first: &str, second: &str) -> Value {
+    let host_tool = |id: &str, marker: &str| {
+        vec![
+            json!({"send": {"id": id, "command": "call", "args": {
+                "call": "host.tool", "args": ["read", {"path": "note.txt"}],
+                "request_id": {"$ref": "req.payload.request_id"}
+            }}}),
+            json!({"read_until": {"path": "payload.command_id", "equals": id}}),
+            json!({"write_file": {"path": marker, "value": {"$ref": "last"}}}),
+        ]
+    };
+    let mut command_callback = Vec::new();
+    command_callback.extend(host_tool("inner-1", first));
+    command_callback.extend(host_tool("inner-2", second));
+    command_callback.push(
+        json!({"send": {"id": "status-call", "command": "call", "args": {
+            "call": "host.status", "args": ["both-returned"],
+            "request_id": {"$ref": "req.payload.request_id"}
+        }}}),
+    );
+    command_callback
+        .push(json!({"read_until": {"path": "payload.command_id", "equals": "status-call"}}));
+    command_callback.push(
+        json!({"send": {"id": "command-result", "command": "reply", "args": {
+            "request_id": {"$ref": "req.payload.request_id"}, "result": "both-returned"
+        }}}),
+    );
+    let callback = Value::Array(command_callback);
+    let serve = json!([
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": callback}}
+    ]);
+    let mut plan = vec![json!({"read": {"as": "hello"}})];
+    for action in register(
+        "fiber.command",
+        "command-reg",
+        json!(["exercise", {"timeout": 5000, "run": true}]),
+    )
+    .as_array()
+    .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}}));
+    plan.push(json!({"loop": serve}));
+    Value::Array(plan)
+}
+
+/// An idle process command can make two sequential inner calls. Each call
+/// is anchored to the admitted driver invocation and logs the documented
+/// per-call event triplet.
+#[test]
+fn process_command_host_tool_runs_alone_while_idle() {
+    let setup = Setup::new();
+    std::fs::write(setup.workspace().join("note.txt"), "read\n").unwrap();
+    let first = setup.workspace().join("first.json");
+    let second = setup.workspace().join("second.json");
+    process_with(
+        &setup,
+        "command-tool",
+        &json!({}),
+        &command_tool_plan(first.to_str().unwrap(), second.to_str().unwrap()),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"cmd","command":"command","args":{"name":"exercise"}}"#,
+    );
+    let events = until_session(&client, "process command inner calls", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/command-tool"
+    });
+    assert_eq!(events.last().unwrap()["payload"]["status"], "both-returned");
+    for marker in [&first, &second] {
+        let answer: Value = serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
+        assert_eq!(answer["kind"], "command_accepted");
+        assert_eq!(answer["payload"]["result"]["status"], "completed");
+    }
+    let inner: Vec<_> = events
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    assert_eq!(inner.len(), 2);
+    for line in &inner {
+        assert_eq!(
+            line["payload"]["ran_by"],
+            json!({"extension":"fiber.test/command-tool", "command_id":"cmd"})
+        );
+    }
+    let action_ids: Vec<_> = inner
+        .iter()
+        .map(|line| line["action_id"].as_str().unwrap())
+        .collect();
+    for action in action_ids {
+        let matching: Vec<_> = events
+            .iter()
+            .filter(|line| line["action_id"] == action)
+            .collect();
+        assert_eq!(
+            matching
+                .iter()
+                .map(|line| line["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed"
+            ]
+        );
+    }
+    send(&client, r#"{"id":"close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
 }
 
 /// Sends one registration call, then waits for its answer.
