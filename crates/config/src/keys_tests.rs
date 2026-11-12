@@ -229,6 +229,7 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
         SettingsTab::Models,
         &[
             "model_lists.refresh_after",
+            "model_lists.models_dev",
             "model",
             "scoped_models",
             "thinking",
@@ -454,5 +455,9 @@ fn scalar_keys_get_boolean_number_and_text_controls() {
     assert_eq!(
         control_of("model_lists.refresh_after"),
         SettingControl::Text
+    );
+    assert_eq!(
+        control_of("model_lists.models_dev"),
+        SettingControl::Boolean
     );
 }

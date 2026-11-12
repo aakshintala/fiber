@@ -79,6 +79,9 @@ mod test_support;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;
+#[cfg(test)]
+#[path = "tui_silent_exit_tests.rs"]
+mod tui_silent_exit_tests;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
@@ -573,6 +576,19 @@ fn fail(e: Failure) -> i32 {
     // A closed stderr leaves nobody to tell.
     writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
     doors::exit_code(&e)
+}
+
+/// Reports a TUI-controlled non-zero status without changing signal exits.
+fn tui_exit(code: i32, stderr: &mut impl Write) -> i32 {
+    if code == 0 || matches!(code, 129 | 130 | 143) {
+        return code;
+    }
+    writeln!(
+        stderr,
+        "fiber: terminal could not continue (TUI exit status {code})"
+    )
+    .unwrap_or(());
+    code
 }
 
 /// The signal registration an entry point runs: its [`read_signals::Register`].
@@ -1321,7 +1337,7 @@ fn terminal(
         Arc::clone(&diag),
         startup,
     ) {
-        Ok(code) => code,
+        Ok(code) => tui_exit(code, &mut io::stderr()),
         Err(error) => {
             let failure = failed(error.code(), error.to_string());
             // The terminal never started: one `error` line in

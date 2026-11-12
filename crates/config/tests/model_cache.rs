@@ -7,9 +7,60 @@
 mod common;
 
 use common::Setup;
-use config::{model_cache_file, read_model_cache, write_model_cache};
+use config::{
+    model_cache_file, models_dev_age, models_dev_cache_file, models_dev_lock_file,
+    read_model_cache, read_models_dev, write_model_cache, write_models_dev,
+};
 use contract::clock::Clock;
 use serde_json::json;
+
+#[test]
+fn models_dev_cache_round_trips_raw_bytes_and_uses_a_separate_lock() {
+    let setup = Setup::new();
+    let home = setup.home();
+    assert_eq!(read_models_dev(&home).unwrap(), None);
+    let bytes = br#"{"provider":{}}"#;
+    write_models_dev(&home, bytes).unwrap();
+    assert_eq!(read_models_dev(&home).unwrap(), Some(bytes.to_vec()));
+    assert_eq!(
+        models_dev_cache_file(&home).unwrap(),
+        home.join("cache/models.dev/api.json")
+    );
+    assert_eq!(
+        models_dev_lock_file(&home).unwrap(),
+        home.join("cache/models.dev/api.lock")
+    );
+}
+
+#[test]
+fn models_dev_age_is_none_when_missing_and_zero_for_future_mtime() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let now = fakes::clock::FakeClock::new().wall();
+    assert_eq!(models_dev_age(&home, now).unwrap(), None);
+    write_models_dev(&home, b"{}").unwrap();
+    let file = models_dev_cache_file(&home).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(now + std::time::Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(
+        models_dev_age(&home, now).unwrap(),
+        Some(std::time::Duration::ZERO)
+    );
+}
+
+#[test]
+fn models_dev_age_reports_non_missing_metadata_errors() {
+    let setup = Setup::new();
+    let home = setup.home();
+    std::fs::create_dir_all(home.join("cache")).unwrap();
+    std::fs::write(home.join("cache/models.dev"), b"not a directory").unwrap();
+    let error = models_dev_age(&home, fakes::clock::FakeClock::new().wall()).unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+}
 
 #[test]
 fn model_cache_file_names_the_file_written_by_the_cache() {

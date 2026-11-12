@@ -2458,6 +2458,265 @@
       ]
     }
   ],
+  "models_dev": {
+    "pins": {
+      "beam-free": [
+        "compat"
+      ],
+      "claude-fable-5": [
+        "compat"
+      ],
+      "claude-fable-5-1": [
+        "compat"
+      ],
+      "claude-fable-5-2": [
+        "compat"
+      ],
+      "claude-haiku-4-5": [
+        "compat"
+      ],
+      "claude-haiku-5-5": [
+        "compat"
+      ],
+      "claude-opus-4-5": [
+        "compat"
+      ],
+      "claude-opus-4-6": [
+        "compat"
+      ],
+      "claude-opus-4-7": [
+        "compat"
+      ],
+      "claude-opus-4-8": [
+        "compat"
+      ],
+      "claude-opus-5": [
+        "compat"
+      ],
+      "claude-opus-5-5": [
+        "compat"
+      ],
+      "claude-sonnet-4": [
+        "compat"
+      ],
+      "claude-sonnet-4-5": [
+        "compat"
+      ],
+      "claude-sonnet-4-6": [
+        "compat"
+      ],
+      "claude-sonnet-5": [
+        "compat"
+      ],
+      "claude-sonnet-5-5": [
+        "compat"
+      ],
+      "deepseek-v4-flash": [
+        "compat"
+      ],
+      "deepseek-v4-pro": [
+        "compat"
+      ],
+      "deepseek-v4.1-flash": [
+        "compat"
+      ],
+      "deepseek-v4.1-flash-free": [
+        "compat"
+      ],
+      "flint-40b-free": [
+        "compat"
+      ],
+      "gemini-3-flash": [
+        "compat"
+      ],
+      "gemini-3.1-pro": [
+        "compat"
+      ],
+      "gemini-3.5-flash": [
+        "compat"
+      ],
+      "gemini-3.5-flash-lite": [
+        "compat"
+      ],
+      "gemini-3.6-flash": [
+        "compat"
+      ],
+      "gemini-3.7-flash": [
+        "compat"
+      ],
+      "gemini-3.8-flash": [
+        "compat"
+      ],
+      "gemini-4-argon": [
+        "compat"
+      ],
+      "gemini-4-carbon": [
+        "compat"
+      ],
+      "glm-5": [
+        "compat"
+      ],
+      "glm-5.1": [
+        "compat"
+      ],
+      "glm-5.2": [
+        "compat"
+      ],
+      "glm-5.3": [
+        "compat"
+      ],
+      "glm-5.3-flash": [
+        "compat"
+      ],
+      "glm-5.3-flash-free": [
+        "compat"
+      ],
+      "gpt-5": [
+        "compat"
+      ],
+      "gpt-5-codex": [
+        "compat"
+      ],
+      "gpt-5-nano": [
+        "compat"
+      ],
+      "gpt-5.1": [
+        "compat"
+      ],
+      "gpt-5.1-codex": [
+        "compat"
+      ],
+      "gpt-5.1-codex-max": [
+        "compat"
+      ],
+      "gpt-5.1-codex-mini": [
+        "compat"
+      ],
+      "gpt-5.2": [
+        "compat"
+      ],
+      "gpt-5.2-codex": [
+        "compat"
+      ],
+      "gpt-5.3-codex": [
+        "compat"
+      ],
+      "gpt-5.3-codex-spark": [
+        "compat"
+      ],
+      "gpt-5.4": [
+        "compat"
+      ],
+      "gpt-5.4-mini": [
+        "compat"
+      ],
+      "gpt-5.4-nano": [
+        "compat"
+      ],
+      "gpt-5.4-pro": [
+        "compat"
+      ],
+      "gpt-5.5": [
+        "compat"
+      ],
+      "gpt-5.5-pro": [
+        "compat"
+      ],
+      "gpt-5.6-luna": [
+        "compat"
+      ],
+      "gpt-5.6-sol": [
+        "compat"
+      ],
+      "gpt-5.6-terra": [
+        "compat"
+      ],
+      "gpt-6-astra": [
+        "compat"
+      ],
+      "gpt-6-luna": [
+        "compat"
+      ],
+      "gpt-6-sol": [
+        "compat"
+      ],
+      "gpt-6.1-sol": [
+        "compat",
+        "extra_body",
+        "web_search"
+      ],
+      "grok-4.5": [
+        "compat"
+      ],
+      "grok-4.6": [
+        "compat"
+      ],
+      "grok-4.7": [
+        "compat"
+      ],
+      "grok-build-0.1": [
+        "compat"
+      ],
+      "inkling-2-small-free": [
+        "compat"
+      ],
+      "kimi-k2.6": [
+        "compat"
+      ],
+      "kimi-k2.7-code": [
+        "compat"
+      ],
+      "kimi-k3": [
+        "compat"
+      ],
+      "longcat-2.5-free": [
+        "compat"
+      ],
+      "minimax-m2.5": [
+        "compat"
+      ],
+      "minimax-m2.7": [
+        "compat"
+      ],
+      "minimax-m3": [
+        "compat"
+      ],
+      "minimax-m3.1-flash-free": [
+        "compat"
+      ],
+      "mistral-large-4": [
+        "compat"
+      ],
+      "muse-ember-1.0": [
+        "compat"
+      ],
+      "muse-spark-1.2": [
+        "compat"
+      ],
+      "muse-spark-1.3": [
+        "compat"
+      ],
+      "muse-wonder-1.0": [
+        "compat"
+      ],
+      "nemotron-3.5-super-vl-free": [
+        "compat"
+      ],
+      "qwen3.5-plus": [
+        "compat"
+      ],
+      "qwen3.6-plus": [
+        "compat"
+      ],
+      "qwen3.8-flash": [
+        "compat"
+      ],
+      "qwen3.8-max": [
+        "compat"
+      ]
+    },
+    "source": "opencode"
+  },
   "name": "opencode-zen",
   "reviewer_model": "muse-spark-1.3"
 }

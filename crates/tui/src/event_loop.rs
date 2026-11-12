@@ -64,7 +64,7 @@ impl Error {
 /// Runs the terminal on `tty` for `launch`, starting sessions in its
 /// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
 /// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
-/// and `Ok(1)` when the terminal cannot be set up or drawn. The terminal
+/// and an error when the terminal cannot be set up or drawn. The terminal
 /// is restored on every return. Timed scopes write through `diag`, the
 /// process's diagnostic writer. `startup` is the startup guard, stamped
 /// once the level is known and dropped at `run_with` entry so its line
@@ -135,34 +135,46 @@ pub(crate) fn run_with(
     // printing the resume lines. Without the registration a signal would
     // kill the process without restoring, so a refused one fails before
     // any frame.
-    let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
-        crate::timing::discard(first_render);
-        crate::timing::discard(attached_frame);
-        timing.discard_attach_spans();
-        return Ok(1);
+    let term_signals = match Signals::new([SIGTERM, SIGHUP]) {
+        Ok(signals) => signals,
+        Err(error) => {
+            crate::timing::discard(first_render);
+            crate::timing::discard(attached_frame);
+            timing.discard_attach_spans();
+            return Err(Error::TimerStart(error));
+        }
     };
     catch_interrupts();
     let restore = term::Guard;
     // The first frame waits for the opening pass and local TUI loading,
     // never a child process or a tty/hub read.
     let hover = launch.hover;
-    let Ok((width, height)) = term::setup(&tty, hover) else {
-        crate::timing::discard(first_render);
-        crate::timing::discard(attached_frame);
-        timing.discard_attach_spans();
-        return Ok(1);
+    let (width, height) = match term::setup(&tty, hover) {
+        Ok(size) => size,
+        Err(error) => {
+            crate::timing::discard(first_render);
+            crate::timing::discard(attached_frame);
+            timing.discard_attach_spans();
+            return Err(Error::TimerStart(error));
+        }
     };
-    let Ok(out) = tty.try_clone() else {
-        crate::timing::discard(first_render);
-        crate::timing::discard(attached_frame);
-        timing.discard_attach_spans();
-        return Ok(1);
+    let out = match tty.try_clone() {
+        Ok(out) => out,
+        Err(error) => {
+            crate::timing::discard(first_render);
+            crate::timing::discard(attached_frame);
+            timing.discard_attach_spans();
+            return Err(Error::TimerStart(error));
+        }
     };
-    let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
-        crate::timing::discard(first_render);
-        crate::timing::discard(attached_frame);
-        timing.discard_attach_spans();
-        return Ok(1);
+    let mut screen = match Screen::new(crate::screen::backend(out), width, height) {
+        Ok(screen) => screen,
+        Err(error) => {
+            crate::timing::discard(first_render);
+            crate::timing::discard(attached_frame);
+            timing.discard_attach_spans();
+            return Err(Error::TimerStart(error));
+        }
     };
     // `App::new` maps an empty launch directory to no workspace, so a
     // remote home carries none.
@@ -294,11 +306,11 @@ pub(crate) fn run_with(
             app.push_notice(ErrorCode::from_name(&code), text);
         }
     }
-    if screen.draw(&mut app, None).is_err() {
+    if let Err(error) = screen.draw(&mut app, None) {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
         timing.discard_attach_spans();
-        return Ok(1);
+        return Err(Error::TimerStart(error));
     }
     // The frame drew: its line stands, whatever the loop meets after.
     // The setup span ends here and the wait span opens: the initial

@@ -69,6 +69,91 @@ fn test_catalogue() -> crate::ReadModels {
     })
 }
 
+#[derive(Default)]
+struct CursorFailure;
+
+impl crate::screen::SyncEmit for CursorFailure {
+    fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl Backend for CursorFailure {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, _content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        Ok(())
+    }
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn get_cursor_position(&mut self) -> Result<ratatui::layout::Position, Self::Error> {
+        Err(io::Error::other("cursor reply stolen by input reader"))
+    }
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        _position: P,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.get_cursor_position()?;
+        Ok(())
+    }
+    fn clear_region(
+        &mut self,
+        _clear_type: ratatui::backend::ClearType,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
+        Ok(ratatui::layout::Size::new(60, 12))
+    }
+    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
+        Ok(ratatui::backend::WindowSize {
+            columns_rows: ratatui::layout::Size::new(60, 12),
+            pixels: ratatui::layout::Size::new(0, 0),
+        })
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[test]
+fn logo_repaint_cursor_failure_exits_one() {
+    let (mut lp, _) = new_loop(CursorFailure, None);
+    lp.app.set_home(launch());
+    let tint = crate::graphics::logo::Tint {
+        wave: (1, 2, 3),
+        stops: [(1, 2, 3); 5],
+    };
+    lp.logo.after_frame(
+        crate::graphics::logo::Protocol::Iterm,
+        Some(ratatui::layout::Rect::new(0, 0, 32, 4)),
+        false,
+        false,
+        Some((tint, [0, 0, 0])),
+    );
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("logo-repaint-test".to_owned())
+        .spawn(move || done.send(lp.logo_step()).unwrap_or(()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for logo repaint: {err}")),
+        None
+    );
+}
+
 #[test]
 fn launch_starts_with_configured_test_catalogue() {
     let launch = launch();
@@ -500,6 +585,14 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
             mods: Mods::NONE,
         })]
     );
+}
+
+#[test]
+fn ctrl_c_once_on_empty_box() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert!(lp.app.hint(), "the first Ctrl+C arms the documented quit");
 }
 
 #[test]
@@ -949,15 +1042,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
 #[test]
 fn run_returns_one_when_the_tty_cannot_be_set_up() {
     // `/dev/null` is no terminal: `term::setup` fails before any frame,
-    // so `run` returns 1 without reading the hub or drawing. The thread
-    // plus [`DEADLINE`] keeps a regression hanging the suite into a
-    // failure instead.
+    // so `run` returns its setup error without reading the hub or drawing.
+    // The thread plus [`DEADLINE`] keeps a regression hanging the suite into
+    // a failure instead.
     let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("open /dev/null: {err}"));
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(
+            let result = super::run(
                 tty,
                 launch(),
                 Box::new(|| Err(io::Error::other("unused"))),
@@ -965,15 +1058,18 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
                 None,
-            )
-            .unwrap_or_else(|error| panic!("run: {error}"));
-            done.send(code).unwrap_or(());
+            );
+            done.send(result).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let code = Deadline::after(DEADLINE)
+    let result = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    assert_eq!(code, 1);
+    let error = result.unwrap_err();
+    assert!(
+        error.to_string().contains("terminal") && !error.to_string().contains("could not continue"),
+        "the returned error keeps the setup cause: {error}"
+    );
 }
 
 #[test]
