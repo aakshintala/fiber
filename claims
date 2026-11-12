@@ -201,3 +201,7 @@ crates/tui/src/approvals/one_question.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Am
 crates/tui/src/app/home/workspace.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/home/typed.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/keymap.rs	fiber-4619	plan	2026-11-12T05:10:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev.rs	fiber-4709	plan	2026-11-12T05:14:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_table.rs	fiber-4709	plan	2026-11-12T05:14:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_table/bedrock.rs	fiber-4709	plan	2026-11-12T05:14:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4709	plan	2026-11-12T05:14:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
