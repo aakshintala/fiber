@@ -260,3 +260,4 @@ crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/eve
 crates/loop/src/notes.rs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4717	grant	2026-11-12T06:01:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
+crates/tools/src/shell/hosted.rs	fiber-4260	grant	2026-11-12T06:07:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
