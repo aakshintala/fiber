@@ -276,6 +276,10 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
                 extension: None,
                 description: "a running job".into(),
                 output_path: "jobs/j_orphan".into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,
@@ -334,6 +338,10 @@ fn a_compaction_started_in_the_new_session_after_a_rewind_names_no_job() {
                 extension: None,
                 description: "a job in the window".into(),
                 output_path: "jobs/j_win".into(),
+
+                pgid: None,
+                start_time: None,
+                kind: None,
             }),
             None,
             None,

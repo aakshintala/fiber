@@ -46,6 +46,10 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
         for extension in self.attached_vms() {
             extension.seal();
         }
+        for live in &self.processes {
+            *lock(&live.services.model) = None;
+            *lock(&live.services.delegate) = None;
+        }
     }
 
     fn reply(

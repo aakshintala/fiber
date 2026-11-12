@@ -70,6 +70,11 @@ pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
 pub use within::{MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN, within};
 
+/// Single-quotes a path for use in a shell command.
+pub fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 /// The check run's nonce for a child process: `("FIBER_CHECK_RUN", value)`
 /// when the test process carries it, and nothing otherwise, so a test that
 /// clears a child's environment puts the nonce back and a leak of that
@@ -81,6 +86,46 @@ pub use within::{MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN, within};
 #[cfg_attr(false, mutants::skip)]
 pub fn check_run() -> Option<(&'static str, std::ffi::OsString)> {
     std::env::var_os("FIBER_CHECK_RUN").map(|value| ("FIBER_CHECK_RUN", value))
+}
+
+/// The nextest identity values available to a test process, for a child whose
+/// environment is cleared. Missing values are omitted.
+pub fn nextest_identity() -> impl Iterator<Item = (&'static str, std::ffi::OsString)> {
+    ["NEXTEST_BINARY_ID", "NEXTEST_TEST_NAME"]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+}
+
+#[cfg(test)]
+mod shell_quote_tests {
+    use std::path::Path;
+
+    #[test]
+    fn quotes_paths_with_spaces_and_single_quotes() {
+        assert_eq!(
+            super::shell_quote(Path::new("/tmp/a path")),
+            "'/tmp/a path'"
+        );
+        assert_eq!(super::shell_quote(Path::new("/tmp/a'b")), "'/tmp/a'\\''b'");
+    }
+}
+
+#[cfg(test)]
+mod nextest_identity_tests {
+    #[test]
+    fn preserves_nextest_identity_variables() {
+        let binary_id = std::env::var_os("NEXTEST_BINARY_ID")
+            .expect("nextest test process must provide NEXTEST_BINARY_ID");
+        let test_name = std::env::var_os("NEXTEST_TEST_NAME")
+            .expect("nextest test process must provide NEXTEST_TEST_NAME");
+        assert_eq!(
+            super::nextest_identity().collect::<Vec<_>>(),
+            vec![
+                ("NEXTEST_BINARY_ID", binary_id),
+                ("NEXTEST_TEST_NAME", test_name),
+            ]
+        );
+    }
 }
 
 /// The context window every fake model declares, in tokens: the window

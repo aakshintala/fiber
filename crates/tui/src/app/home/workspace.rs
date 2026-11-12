@@ -498,7 +498,7 @@ impl App {
     }
 
     /// Moves the picker's selection one row: through the completions,
-    /// then the recents while typing, else clamped to the recents.
+    /// then the recents while typing, else wrapping through the recents.
     fn move_picker(&mut self, down: bool) {
         if let Some(picker) = self.home.chooser.picker.as_mut() {
             picker.untouched = false;
@@ -506,14 +506,9 @@ impl App {
                 let recents = picker.recents.len();
                 picker.typed.move_focus(down, recents);
             } else {
-                picker.selected = if down {
-                    picker
-                        .selected
-                        .saturating_add(1)
-                        .min(picker.recents.len().saturating_sub(1))
-                } else {
-                    picker.selected.saturating_sub(1)
-                };
+                let len = picker.recents.len();
+                picker.selected =
+                    crate::swapped::wrap_step(picker.selected, len, if down { 1 } else { -1 });
             }
         }
     }

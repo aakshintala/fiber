@@ -237,16 +237,57 @@ fn reap(mut child: Child, deadline: Deadline) -> std::process::ExitStatus {
 /// The pid a shell sleep records for itself: keeper-hosted jobs lead
 /// their own group, so the pid is its pgid. `echo $$` runs in the job's
 /// leader before it sleeps, so the file names the group to watch.
+fn pid_from_contents(contents: &str) -> Option<u32> {
+    let complete = contents.strip_suffix('\n')?;
+    let pid = complete.trim();
+    if pid.is_empty() {
+        return None;
+    }
+    Some(
+        pid.parse()
+            .unwrap_or_else(|error| panic!("the pid file parses: {error}")),
+    )
+}
+
 fn read_pid(path: &std::path::Path, deadline: Deadline) -> u32 {
     let watched = path.to_path_buf();
     fakes::wait_until("the sleep to record its pid", deadline, move || {
-        watched.exists()
+        fs::read_to_string(&watched).is_ok_and(|contents| pid_from_contents(&contents).is_some())
     });
-    fs::read_to_string(path)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap_or_else(|error| panic!("the pid file parses: {error}"))
+    pid_from_contents(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn pid_from_contents_handles_boundary_contents() {
+    assert_eq!(pid_from_contents(""), None);
+    assert_eq!(pid_from_contents(" \t "), None);
+    assert_eq!(pid_from_contents("123"), None);
+    assert_eq!(pid_from_contents("123\n"), Some(123));
+}
+
+#[test]
+fn read_pid_times_out_for_empty_file() {
+    let setup = configured();
+    let path = setup.workspace().join("pid");
+    fs::write(&path, "").unwrap();
+
+    let panic = std::panic::catch_unwind(|| {
+        read_pid(&path, Deadline::after(std::time::Duration::ZERO));
+    })
+    .expect_err("an empty pid file never becomes ready");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(
+        message.contains("waited 0ns for the sleep to record its pid"),
+        "expected bounded wait timeout, got: {message}"
+    );
+    assert!(
+        !message.contains("the pid file parses"),
+        "readiness must be checked before parsing: {message}"
+    );
 }
 
 #[test]
