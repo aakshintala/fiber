@@ -20,7 +20,7 @@ use std::process::Output;
 /// minutes in debug, so the test passes an explicit shorter count. Twenty
 /// reports run the exchange in about 0.9 s alone, so at five times that
 /// cost, the contention that pushed fifty reports (about 2.0 s alone) past
-/// the 10 s hang guard, this still finishes inside half the guard.
+/// the 20 s whole-subsystem hang guard, this still finishes inside half the guard.
 const REPORTS: &str = "20";
 
 /// A usage error: exit code 2 with the usage on stderr and no report, so
@@ -42,10 +42,11 @@ fn reports_that_are_not_a_number_are_a_usage_error() {
     // A report count the jig cannot parse is a usage error, not a
     // defaulted measurement.
     let arg = jig::events_file().display().to_string();
-    let out = jig::run_hover_jig(
+    let out = jig::run_jig(
         "hover",
         &[arg.as_str(), "160", "48", "many"],
         "the hover jig finished",
+        fakes::WHOLE_SUBSYSTEM_WITHIN,
     );
     assert_usage(&out);
 }
@@ -55,10 +56,11 @@ fn zero_reports_are_a_usage_error() {
     // Zero reports would divide by zero when printing the time per
     // report, so the jig rejects it before measuring.
     let arg = jig::events_file().display().to_string();
-    let out = jig::run_hover_jig(
+    let out = jig::run_jig(
         "hover",
         &[arg.as_str(), "160", "48", "0"],
         "the hover jig finished",
+        fakes::WHOLE_SUBSYSTEM_WITHIN,
     );
     assert_usage(&out);
 }
@@ -66,10 +68,11 @@ fn zero_reports_are_a_usage_error() {
 #[test]
 fn it_measures_the_four_cases_at_the_given_report_count() {
     let arg = jig::events_file().display().to_string();
-    let out = jig::run_hover_jig(
+    let out = jig::run_jig(
         "hover",
         &[arg.as_str(), "160", "48", REPORTS],
         "the hover jig finished",
+        fakes::WHOLE_SUBSYSTEM_WITHIN,
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");

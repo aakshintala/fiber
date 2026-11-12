@@ -8,8 +8,9 @@
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
-use fakes::{Deadline, MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN as WAIT};
+use fakes::Deadline;
 
 /// The checked-in events file both jig tests draw, so the path never
 /// changes with a checkout.
@@ -31,12 +32,8 @@ pub(crate) fn example_path(name: &str) -> fakes::WarmedJig {
 /// Runs the built `binary` with `args` and waits for it. The child is in
 /// its own process group under a watchdog, so a stall fails naming
 /// `finished` and leaves no process behind.
-#[allow(
-    dead_code,
-    reason = "the hover and draw tests include this shared support separately"
-)]
 #[track_caller]
-pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
+pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str, within: Duration) -> Output {
     let warmed = example_path(binary);
     let child = Command::new(warmed.path())
         .args(args)
@@ -46,28 +43,7 @@ pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
         .spawn()
         .expect("the jig binary spawns");
     let watchdog = fakes::Watchdog::group(child.id());
-    let output = fakes::wait_output(child, finished);
-    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
-    output
-}
-
-/// Runs the complete hover measurement under the documented subsystem bound.
-#[allow(
-    dead_code,
-    reason = "the hover and draw tests include this shared support separately"
-)]
-#[track_caller]
-pub(crate) fn run_hover_jig(binary: &str, args: &[&str], finished: &str) -> Output {
-    let warmed = example_path(binary);
-    let child = Command::new(warmed.path())
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .expect("the jig binary spawns");
-    let watchdog = fakes::Watchdog::group(child.id());
-    let output = fakes::finished(finished, child, &[], Deadline::after(WAIT));
-    watchdog.stand_down(Deadline::after(WAIT));
+    let output = fakes::finished(finished, child, &[], Deadline::after(within));
+    watchdog.stand_down(Deadline::after(within));
     output
 }
