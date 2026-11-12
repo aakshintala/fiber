@@ -195,6 +195,24 @@ fn project_filters_by_exact_key() {
 }
 
 #[test]
+fn retention_candidates_include_only_unarchived_exited_rows_in_newest_order() {
+    let temp = Temp::new();
+    let live = temp.row(1, "p", Left::Crashed, None);
+    let exited = temp.row(2, "p", Left::Exited, None);
+    let archived = temp.row(3, "p", Left::Exited, None);
+    temp.append(&live);
+    temp.append(&exited);
+    let mut archived = archived;
+    archived.archived = true;
+    temp.append(&archived);
+    let newest = newest_first(read_all(&temp.dir));
+    assert_eq!(ids(&newest), [id(3), id(2), id(1)]);
+    assert!(newest[0].archived);
+    assert_eq!(newest[1].how, Left::Exited);
+    assert_eq!(newest[2].how, Left::Crashed);
+}
+
+#[test]
 fn a_row_whose_directory_is_gone_is_skipped() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));
