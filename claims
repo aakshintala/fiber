@@ -436,3 +436,6 @@ crates/tui/tests/draw_jig.rs:63-63	fiber-4742	plan	2026-11-12T19:47:15Z	roundhou
 crates/loop/prompt/reviewer.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer/request.rs	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+.github/workflows/ci.yml	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-flake-report	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
