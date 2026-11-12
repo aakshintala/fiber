@@ -255,3 +255,4 @@ crates/main/tests/timings/tool_timing.rs	fiber-4732	plan	2026-11-12T13:19:27Z	Am
 crates/loop/src/deliveries_tests.rs	fiber-4673	plan	2026-11-12T13:25:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/opencode/providers/opencode-go.json	fiber-4709	plan	2026-11-12T13:33:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/opencode/providers/opencode-zen.json	fiber-4709	plan	2026-11-12T13:33:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/keeper_child_tests.rs	fiber-4726	plan	2026-11-12T13:54:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
