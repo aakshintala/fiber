@@ -242,3 +242,5 @@ docs/mcp.md:193-195	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:
 docs/mcp.md:264-265	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 docs/tools.md:1689-1690	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 crates/main/tests/screens/call_view.rs	fiber-4723	plan	2026-11-12T07:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/leak-scan	fiber-4726	plan	2026-11-12T07:45:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/check	fiber-4726	plan	2026-11-12T07:45:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
