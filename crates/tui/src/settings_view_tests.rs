@@ -1593,6 +1593,12 @@ fn a_value_set_by_dash_c_is_read_only_whatever_opens_it() {
             let act = one(&mut settings, &fake, press_.clone());
             assert!(matches!(act, Act::Stay), "{key} {press_:?}");
         }
+        if matches!(key, "tui.rail.width" | "model_lists.refresh_after") {
+            for arrow in [Edit::Left, Edit::Right] {
+                let act = edit(&mut settings, &fake, arrow.clone());
+                assert!(matches!(act, Act::Stay), "{key} {arrow:?}");
+            }
+        }
         let act = edit(&mut settings, &fake, Edit::Delete);
         assert!(matches!(act, Act::Stay), "{key}");
         assert!(fake.writes().is_empty(), "{key}: wrote {:?}", fake.writes());
@@ -3004,6 +3010,7 @@ fn settings_editing() {
         panic!("no field");
     };
     assert_eq!(field.draft.expand(), "vim5");
+    insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));
     assert!(fake.writes().is_empty());
 }
 
@@ -3084,6 +3091,18 @@ fn a_number_row_shows_its_unit_in_row_text() {
         number("compaction.window_fraction", "0.5"),
         "50% of the context window"
     );
+    assert_eq!(
+        number("compaction.window_fraction", "0.525"),
+        "52.5% of the context window (custom)"
+    );
+    assert_eq!(
+        number("compaction.window_fraction", "0.95"),
+        "95% of the context window (custom)"
+    );
+    assert_eq!(
+        number("compaction.window_fraction", "0.45"),
+        "45% of the context window (custom)"
+    );
     assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
     assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
     assert_eq!(number("cache.warm_cap", "0"), "0 cache lifetimes");
@@ -3099,9 +3118,9 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("compaction.tokens", "1000"), "1k tokens (custom)");
     assert_eq!(number("compaction.tokens", "999"), "999 tokens (custom)");
     assert_eq!(number("compaction.tokens", "0"), "0 tokens (custom)");
-    // Dollars: zero reads "No limit".
+    // A stored zero is custom; the unset row is Default.
     assert_eq!(number("budget.usd", "10"), "$10");
-    assert_eq!(number("budget.usd", "0"), "No limit");
+    assert_eq!(number("budget.usd", "0"), "$0 (custom)");
     assert_eq!(number("budget.usd", "7"), "$7 (custom)");
     assert_eq!(number("budget.usd", "10.5"), "$10.5 (custom)");
     // Block counts, singular against plural.
@@ -3132,6 +3151,10 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("retry.max_delay_ms", "-60000"), "-60 s (custom)");
     // Durations keep their unit word; off-list values read custom.
     assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
+    assert_eq!(
+        text("model_lists.refresh_after", Text, "\"1440m\""),
+        "1440 min"
+    );
     assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
     assert_eq!(
         text("model_lists.refresh_after", Text, "\"90m\""),
@@ -3175,8 +3198,14 @@ fn slider_bar_clamps_its_endpoints_and_rejects_values_outside_the_range() {
         slider_bar(range, &shown("20")),
         Some("▕███░░░░░▏".to_owned())
     );
-    assert_eq!(slider_bar(range, &shown("9.999")), None);
-    assert_eq!(slider_bar(range, &shown("40.001")), None);
+    assert_eq!(
+        slider_bar(range, &shown("9.999")),
+        Some("▕░░░░░░░░▏".to_owned())
+    );
+    assert_eq!(
+        slider_bar(range, &shown("40.001")),
+        Some("▕████████▏".to_owned())
+    );
 }
 
 #[test]
@@ -3272,7 +3301,7 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
             SettingControl::Number
         ))
         .0,
-        "No limit"
+        "$0 (custom)"
     );
 }
 
@@ -3400,19 +3429,76 @@ fn a_custom_number_steps_to_the_next_list_entry_in_requested_direction() {
 }
 
 #[test]
-fn unparseable_and_unset_numeric_rows_are_not_stepped() {
-    for shown in [Shown::Unset, value("\"wide\"")] {
-        let fake = Fake::new(with("tui.rail.width", shown, "project"));
-        let mut settings = at(&fake, "tui.rail.width");
+fn invalid_numeric_values_do_not_write_and_unset_controls_step_from_defaults() {
+    for shown in [value("\"wide\""), value("\"soon\"")] {
+        let key = if shown == value("\"wide\"") {
+            "tui.rail.width"
+        } else {
+            "model_lists.refresh_after"
+        };
+        let fake = Fake::new(with(key, shown, "project"));
+        let mut settings = at(&fake, key);
         one(&mut settings, &fake, Key::Enter);
-        assert!(writes(&fake).is_empty());
+        assert!(writes(&fake).is_empty(), "{key}");
     }
-    for shown in [Shown::Unset, value("\"soon\"")] {
-        let fake = Fake::new(with("model_lists.refresh_after", shown, "project"));
-        let mut settings = at(&fake, "model_lists.refresh_after");
-        edit(&mut settings, &fake, Edit::Right);
-        assert!(writes(&fake).is_empty());
-    }
+
+    let fake = Fake::new(with("tui.rail.width", Shown::Unset, "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "16")]);
+
+    let fake = Fake::new(with("model_lists.refresh_after", Shown::Unset, "project"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "model_lists.refresh_after", "\"3d\"")]
+    );
+}
+
+#[test]
+fn budget_zero_is_custom_and_arrows_move_between_zero_and_unset() {
+    let row = |shown| {
+        on(
+            SettingsTab::Sessions,
+            "Budget",
+            "budget.usd",
+            shown,
+            "project",
+            ANY,
+            SettingControl::Number,
+        )
+    };
+    let fake = Fake::new(vec![row(value("0"))]);
+    let mut settings = at(&fake, "budget.usd");
+    assert_eq!(shown_value(settings.selected().unwrap()).0, "$0 (custom)");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "1")]);
+
+    let fake = Fake::new(vec![row(value("0"))]);
+    let mut settings = at(&fake, "budget.usd");
+    edit(&mut settings, &fake, Edit::Left);
+    assert!(writes(&fake).is_empty());
+    assert_eq!(resets(&fake), [w(Layer::Project, "budget.usd", "0")]);
+
+    let fake = Fake::new(vec![row(Shown::Unset)]);
+    let mut settings = at(&fake, "budget.usd");
+    assert_eq!(shown_value(settings.selected().unwrap()).0, "Default");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "1")]);
+}
+
+#[test]
+fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
+    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, true, false), 0.55);
+    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, false, false), 0.5);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, false), 0.9);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, true), 0.5);
+    assert_eq!(super::slider_step(0.45, 0.5, 0.9, 0.05, true, false), 0.5);
+    let stepped = (0..8).fold(0.5, |value, _| {
+        super::slider_step(value, 0.5, 0.9, 0.05, true, false)
+    });
+    assert!((stepped - 0.9).abs() < 1e-12);
 }
 
 #[test]
