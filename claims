@@ -274,3 +274,12 @@ crates/tui/src/app/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	ro
 crates/tui/src/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:51:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/testkit.rs	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/tests/models_dev.rs	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/architecture.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/code-quality.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/dependencies.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/performance.md	fiber-4674	plan	2026-11-12T06:51:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
