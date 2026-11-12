@@ -71,7 +71,8 @@ is a real child session process, because it is Fiber. The fakes are:
   never draws it, so no concurrent listener can take it
 - a second client on a session's socket
 - test helpers for what many test files share: `fakes::fifo` makes a FIFO
-  by one function, `fakes::tool_args` builds a tool call's argument map
+  by one function, `fakes::shell_quote` single-quotes a path for a shell command,
+  `fakes::tool_args` builds a tool call's argument map
   and `fakes::text_of` reads a tool result's text, `fakes::wait_output`
   returns a spawned system tool's output under a deadline, killing its
   group on expiry, and `fakes::wait_until` waits for a predicate to hold
