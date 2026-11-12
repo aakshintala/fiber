@@ -709,6 +709,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     # The deployment itself; the environment deploys only from main.
     environment: release
     env:
@@ -738,25 +739,51 @@ jobs:
       # The journey suite, against the Linux binary this run just built: a
       # failure reports through the nightly report workflow and never stops
       # the publish, so this step tolerates it (docs/ci.md, "The journey suite").
-      - name: Run the journey suite against the built binary
+      - name: journey-suite
+        id: journey_suite
         continue-on-error: true
         env:
           SUITE_OUT: ${{ runner.temp }}/journey
+          REPORT: ${{ runner.temp }}/journey-report
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/release/fiber-x86_64-unknown-linux-musl.tar.gz"
           [ -f "$archive" ] || { printf 'release: %s\n' "the Linux release archive is missing: $archive." >&2; exit 1; }
-          mkdir -p "$SUITE_OUT"
+          mkdir -p "$SUITE_OUT" "$REPORT"
           tar -xzf "$archive" -C "$SUITE_OUT" fiber
           bin="$SUITE_OUT/fiber"
           [ -x "$bin" ] || { printf 'release: %s\n' "FIBER_JOURNEY_BIN is not executable: $bin." >&2; exit 1; }
-          failures="$SUITE_OUT/journey-failures.txt"
+          failures="$REPORT/journey-failures.txt"
           : > "$failures" || { printf 'release: %s\n' "cannot write FIBER_JOURNEY_FAILURES at $failures." >&2; exit 1; }
           FIBER_JOURNEY_BIN="$bin" FIBER_JOURNEY_FAILURES="$failures" cargo nextest run -p main --test main_journeys
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Compute journey streak metadata
+        if: always() && steps.journey_suite.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HISTORY: ${{ runner.temp }}/journey-history
+          REPORT: ${{ runner.temp }}/journey-report
+        run: |
+          set -u
+          mkdir -p "$HISTORY" "$REPORT"
+          gh run list --workflow release.yml -L 21 --json databaseId,headSha,event,headBranch,conclusion > "$HISTORY/runs.json" || exit 0
+          cargo xtask journey-streak select < "$HISTORY/runs.json" > "$HISTORY/selected.txt" || exit 0
+          while IFS= read -r id || [ -n "$id" ]; do
+            [ -n "$id" ] || continue
+            [ "$id" != "$GITHUB_RUN_ID" ] || continue
+            dir="$HISTORY/$id"
+            mkdir -p "$dir"
+            gh run view "$id" --json jobs > "$dir/view.json" || continue
+            gh run download "$id" --name journey-failures --dir "$dir" >/dev/null 2>&1 || true
+          done < "$HISTORY/selected.txt"
+          cargo xtask journey-streak compute --current-id "$GITHUB_RUN_ID" --current-sha "$GITHUB_SHA" --failures "$REPORT/journey-failures.txt" --runs "$HISTORY/runs.json" --history-dir "$HISTORY" --output "$REPORT/journey-streaks.json" || rm -f "$REPORT/journey-streaks.json"
+      - name: Upload the journey report files
+        if: always() && steps.journey_suite.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: journey-failures
-          path: ${{ runner.temp }}/journey/journey-failures.txt
+          path: ${{ runner.temp }}/journey-report/
           if-no-files-found: error
           retention-days: 7
       - name: Create the draft, upload every asset, publish last

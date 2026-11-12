@@ -59,6 +59,61 @@ strip_trailing "$tmp/ci-step.sh" >"$tmp/ci-step.norm"
 strip_trailing "$tmp/nightly-step.sh" >"$tmp/nightly-step.norm"
 cmp -s "$tmp/ci-step.norm" "$tmp/nightly-step.norm" || fail "the journey report step differs between ci.yml and journey-report.yml"
 
+sha=1111111111111111111111111111111111111111
+url=https://github.example/aakshintala/fiber/actions/runs/1
+prior_sha=2222222222222222222222222222222222222222
+
+# The producer step is wiring: fake cargo supplies selection and canned
+# metadata while fake gh records each raw-history fetch.
+extract "Compute journey streak metadata" .github/workflows/ci.yml "$tmp/compute-step.sh"
+grep -Fq "if: always() && steps.journey_suite.outcome != 'skipped'" .github/workflows/ci.yml || fail "the CI compute condition is missing"
+grep -Fq "if: always() && steps.journey_suite.outcome != 'skipped'" .github/workflows/release.yml || fail "the nightly compute condition is missing"
+cat >"$tmp/producer-stub.sh" <<'EOF'
+cargo() {
+  case "$*" in
+    "xtask journey-streak select") cat "$STUB_SELECTED" ;;
+    "xtask journey-streak compute"*)
+      printf '%s' "$*" >"$STUB_ARGS"
+      while [ $# -gt 0 ]; do
+        if [ "$1" = --output ]; then cat "$CANNED_METADATA" >"$2"; return 0; fi
+        shift
+      done
+      return 1
+      ;;
+    *) echo "unexpected cargo call: $*" >&2; return 1 ;;
+  esac
+}
+gh() {
+  printf '%s\n' "$*" >>"$STUB_GH_CALLS"
+  case "$1 $2" in
+    "run list") cat "$STUB_RUNS" ;;
+    "run view") printf '{"jobs":[]}\n' ;;
+    "run download")
+      id=$3; shift 3
+      while [ $# -gt 0 ]; do
+        if [ "$1" = --dir ]; then mkdir -p "$2"; cp "$STUB_FAILURES" "$2/journey-failures.txt"; return 0; fi
+        shift
+      done
+      return 1
+      ;;
+    *) echo "unexpected gh call: $*" >&2; return 1 ;;
+  esac
+}
+EOF
+cat "$tmp/producer-stub.sh" "$tmp/compute-step.sh" >"$tmp/producer.sh"
+producer="$tmp/producer"
+mkdir -p "$producer"
+printf '[{"databaseId":1001,"headSha":"%s","event":"push","headBranch":"main","conclusion":"failure"}]' "$prior_sha" >"$producer/runs.json"
+printf '1001\n' >"$producer/selected"
+printf 'qa\n' >"$producer/failures.txt"
+printf '{"qa":{"count":2,"first_sha":"%s"}}' "$prior_sha" >"$producer/canned.json"
+: >"$producer/gh-calls"
+GITHUB_RUN_ID=1000 GITHUB_SHA="$sha" RUNNER_TEMP="$producer/tmp" HISTORY="$producer/history" REPORT="$producer/report" GH_TOKEN=test GH_REPO=aakshintala/fiber STUB_SELECTED="$producer/selected" STUB_RUNS="$producer/runs.json" STUB_FAILURES="$producer/failures.txt" STUB_GH_CALLS="$producer/gh-calls" STUB_ARGS="$producer/args" CANNED_METADATA="$producer/canned.json" bash --noprofile --norc -eo pipefail "$tmp/producer.sh" >"$producer/out" 2>"$producer/err" || fail "producer wiring failed: $(cat "$producer/err")"
+cmp -s "$producer/canned.json" "$producer/report/journey-streaks.json" || fail "producer wiring did not pass xtask's metadata output: $(cat "$producer/report/journey-streaks.json" 2>/dev/null || echo missing)"
+grep -Fq 'xtask journey-streak compute --current-id 1000' "$producer/args" || fail "producer did not pass current-run inputs to xtask"
+grep -Fq 'run view 1001 --json jobs' "$producer/gh-calls" || fail "producer did not fetch raw run-view JSON"
+grep -Fq 'run download 1001 --name journey-failures' "$producer/gh-calls" || fail "producer did not download the prior artifact"
+
 # The stub, written ahead of the step so it needs no executable on PATH.
 # A write becomes one file, numbered in order. A comment file holds
 # `comment <number>` then the body exactly; a create file holds
@@ -160,10 +215,6 @@ gh() {
 EOF
 cat "$tmp/stub.sh" "$tmp/ci-step.norm" >"$tmp/run.sh"
 
-sha=1111111111111111111111111111111111111111
-url=https://github.example/aakshintala/fiber/actions/runs/1
-prior_sha=2222222222222222222222222222222222222222
-
 # The expected body for one journey: the commit, the run URL, then every
 # failing journey in this run as a dash list; with a count and a first SHA,
 # the streak line follows.
@@ -188,7 +239,7 @@ run_step() {
   env -i PATH="$PATH" HOME="$dir" \
     GITHUB_STEP_SUMMARY="$dir/summary" \
     GH_TOKEN=test GH_REPO=aakshintala/fiber COMMIT="$sha" RUN_URL="$url" \
-    FAILURES="$dir/failures.txt" \
+    FAILURES="$dir/failures.txt" STREAKS="$dir/streaks.json" \
     STUB_OPEN="$open" STUB_CALLS="$dir/calls" \
     REPORT_WORKFLOW=test-workflow GITHUB_RUN_ID=1000 \
     "$@" \
@@ -344,11 +395,9 @@ expect_writes "$tmp/env-missing" 0
 # listing names this run first, and the step skips it.
 setup_case streak-two-comment
 printf 'qa\n' >"$tmp/streak-two-comment/failures.txt"
-mkdir -p "$tmp/streak-two-comment/history/1001"
-printf 'qa\n' >"$tmp/streak-two-comment/history/1001/journey-failures.txt"
-printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/streak-two-comment/runs"
+printf '{"qa":{"count":2,"first_sha":"%s"}}' "$prior_sha" >"$tmp/streak-two-comment/streaks.json"
 listed_qa=$(printf -- '- %s' qa)
-code=$(run_step "$tmp/streak-two-comment" "9|Journey failure: qa" STUB_RUNS="$tmp/streak-two-comment/runs" STUB_HISTORY="$tmp/streak-two-comment/history")
+code=$(run_step "$tmp/streak-two-comment" "9|Journey failure: qa")
 expect_exit streak-two-comment "$code" 0
 # `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
 expect_writes "$tmp/streak-two-comment" 1
@@ -358,10 +407,8 @@ expect_summary "$tmp/streak-two-comment" ""
 # Without an open issue the streak rides the create instead.
 setup_case streak-two-create
 printf 'qa\n' >"$tmp/streak-two-create/failures.txt"
-mkdir -p "$tmp/streak-two-create/history/1001"
-printf 'qa\n' >"$tmp/streak-two-create/history/1001/journey-failures.txt"
-printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/streak-two-create/runs"
-code=$(run_step "$tmp/streak-two-create" "" STUB_RUNS="$tmp/streak-two-create/runs" STUB_HISTORY="$tmp/streak-two-create/history")
+printf '{"qa":{"count":2,"first_sha":"%s"}}' "$prior_sha" >"$tmp/streak-two-create/streaks.json"
+code=$(run_step "$tmp/streak-two-create" "")
 expect_exit streak-two-create "$code" 0
 # `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
 expect_writes "$tmp/streak-two-create" 1
@@ -391,7 +438,7 @@ expect_exit history-fetch-fail "$code" 0
 # `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
 expect_writes "$tmp/history-fetch-fail" 1
 expect_write "$tmp/history-fetch-fail" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed_qa")")"
-expect_summary "$tmp/history-fetch-fail" "the history lookup for Journey failure: qa failed, so no streak is reported"
+expect_summary "$tmp/history-fetch-fail" ""
 
 # A prior run with no failures artifact ends the walk: the streak restarts
 # at one with the plain sighting and no note.
@@ -408,11 +455,9 @@ expect_summary "$tmp/prior-artifact-missing" ""
 # Mixed streaks in one run: each journey carries its own streak line or none.
 setup_case mixed-streaks
 printf 'qa\nqb\n' >"$tmp/mixed-streaks/failures.txt"
-mkdir -p "$tmp/mixed-streaks/history/1001"
-printf 'qa\n' >"$tmp/mixed-streaks/history/1001/journey-failures.txt"
-printf '1000 %s\n1001 %s\n' "$sha" "$prior_sha" >"$tmp/mixed-streaks/runs"
+printf '{"qa":{"count":2,"first_sha":"%s"}}' "$prior_sha" >"$tmp/mixed-streaks/streaks.json"
 listed_mixed=$(printf -- '- %s\n- %s' qa qb)
-code=$(run_step "$tmp/mixed-streaks" "" STUB_RUNS="$tmp/mixed-streaks/runs" STUB_HISTORY="$tmp/mixed-streaks/history")
+code=$(run_step "$tmp/mixed-streaks" "")
 expect_exit mixed-streaks "$code" 0
 # `docs/ci.md`, "The journey suite": "A failure opens an issue, or comments on the open one" pins this write count (`docs/testing.md`, "Event streams").
 expect_writes "$tmp/mixed-streaks" 2
