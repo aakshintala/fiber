@@ -668,10 +668,12 @@ match and every build recompiles the dependencies.
 After the backstop passes on `main`, and in the nightly before it publishes,
 the journey suite drives that commit's release binary through the paths a
 person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
-comments on the open one. After 2 consecutive failures of the same journey,
-the comment states the streak length and the first failing commit. It never
-blocks a merge, and it is not part of the gate. In the nightly, a failure
-reports and does not stop the publish.
+comments on the open one. After two or more consecutive failures of the same
+journey, the comment appends `Streak: <n> consecutive failures since
+<first-sha>.`, counting this run and using the full SHA of the first failing
+commit; incomplete history keeps the plain sighting. It never blocks a merge,
+and it is not part of the gate. In the nightly, a failure reports and does
+not stop the publish.
 
 ## Toolchain
 
