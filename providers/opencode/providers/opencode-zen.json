@@ -2460,10 +2460,16 @@
   ],
   "models_dev": {
     "pins": {
+      "beam-free": [
+        "compat"
+      ],
       "claude-fable-5": [
         "compat"
       ],
       "claude-fable-5-1": [
+        "compat"
+      ],
+      "claude-fable-5-2": [
         "compat"
       ],
       "claude-haiku-4-5": [
@@ -2514,6 +2520,12 @@
       "deepseek-v4.1-flash": [
         "compat"
       ],
+      "deepseek-v4.1-flash-free": [
+        "compat"
+      ],
+      "flint-40b-free": [
+        "compat"
+      ],
       "gemini-3-flash": [
         "compat"
       ],
@@ -2535,6 +2547,12 @@
       "gemini-3.8-flash": [
         "compat"
       ],
+      "gemini-4-argon": [
+        "compat"
+      ],
+      "gemini-4-carbon": [
+        "compat"
+      ],
       "glm-5": [
         "compat"
       ],
@@ -2548,6 +2566,9 @@
         "compat"
       ],
       "glm-5.3-flash": [
+        "compat"
+      ],
+      "glm-5.3-flash-free": [
         "compat"
       ],
       "gpt-5": [
@@ -2636,6 +2657,9 @@
       "grok-build-0.1": [
         "compat"
       ],
+      "inkling-2-small-free": [
+        "compat"
+      ],
       "kimi-k2.6": [
         "compat"
       ],
@@ -2643,6 +2667,9 @@
         "compat"
       ],
       "kimi-k3": [
+        "compat"
+      ],
+      "longcat-2.5-free": [
         "compat"
       ],
       "minimax-m2.5": [
@@ -2654,13 +2681,25 @@
       "minimax-m3": [
         "compat"
       ],
+      "minimax-m3.1-flash-free": [
+        "compat"
+      ],
       "mistral-large-4": [
+        "compat"
+      ],
+      "muse-ember-1.0": [
         "compat"
       ],
       "muse-spark-1.2": [
         "compat"
       ],
       "muse-spark-1.3": [
+        "compat"
+      ],
+      "muse-wonder-1.0": [
+        "compat"
+      ],
+      "nemotron-3.5-super-vl-free": [
         "compat"
       ],
       "qwen3.5-plus": [
