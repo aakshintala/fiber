@@ -239,42 +239,46 @@ fn fail(e: Failure) -> i32 {
 }
 
 /// Maps a command result to its exit code through the one error branch.
-fn finish<E: Into<Failure>>(result: Result<(), E>) -> i32 {
+fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
     finish_code(result.map(|()| 0))
 }
 
 /// Maps an integer command result to its exit code: the value on success,
 /// the failure's code once printed on error.
-fn finish_code<E: Into<Failure>>(result: Result<i32, E>) -> i32 {
-    match result {
+fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
+    match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(e) => fail(e.into()),
+        Err(CliError::StandardOutput(error)) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+        Err(error) => fail(error.into()),
     }
 }
 
 /// Writes one line to `out`: the line plus one line feed. A write failure
 /// is the shared standard-output failure, for the caller to propagate or
 /// ignore as it already did.
-fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Failure> {
-    writeln!(out, "{line}")
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+fn write_line(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
+    writeln!(out, "{line}").map_err(CliError::StandardOutput)
 }
 
 /// Runs `run` with Fiber home and the current directory, mapping any
 /// failure to its exit code.
-fn with_dirs<E: Into<Failure>>(run: impl FnOnce(&Path, &Path) -> Result<(), E>) -> i32 {
+fn with_dirs<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<(), E>) -> i32 {
     with_dirs_code(|home, workspace| run(home, workspace).map(|()| 0))
 }
 
 /// Runs `run` with Fiber home and the current directory, keeping its
 /// integer success code and mapping any failure to its exit code. Home
 /// is read before the current directory, as each wrapper did.
-fn with_dirs_code<E: Into<Failure>>(run: impl FnOnce(&Path, &Path) -> Result<i32, E>) -> i32 {
+fn with_dirs_code<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<i32, E>) -> i32 {
     let ran = ::config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(|e| CliError::Forwarded(failed(e.code(), e)))
         .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+            let workspace = std::env::current_dir().map_err(|e| {
+                CliError::Forwarded(failed(
+                    ErrorCode::IoFailed,
+                    format!("the current directory: {e}"),
+                ))
+            })?;
             run(&home, &workspace).map_err(Into::into)
         });
     finish_code(ran)
