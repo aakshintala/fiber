@@ -1126,18 +1126,6 @@ jobs:
             fi
             [ -f "$1" ] && [ "$(cat "$2" 2>/dev/null)" = true ]
           }
-          linux_feeds=false
-          if readable "$FLAKY_DIR/flaky-tests-ubuntu-24.04.txt" "$FLAKY_DIR/collection-complete-ubuntu-24.04.txt"; then
-            linux_feeds=true
-          fi
-          arm_feeds=false
-          if readable "$FLAKY_DIR/flaky-tests-ubuntu-24.04-arm.txt" "$FLAKY_DIR/collection-complete-ubuntu-24.04-arm.txt"; then
-            arm_feeds=true
-          fi
-          macos_feeds=false
-          if readable "$FLAKY_DIR/flaky-tests-macos-26.txt" "$FLAKY_DIR/collection-complete-macos-26.txt"; then
-            macos_feeds=true
-          fi
           # Walk each selected producer once. Missing or placeholder lists
           # warn when another leg feeds the report; no-report fails closed
           # only after the walk proves that no readable list feeds.
@@ -1151,18 +1139,22 @@ jobs:
               if [ "$LINUX_FLAKES" = true ] || [ "$LINUX_COMPLETE" != true ]; then
                 expected=true
               fi
-              feeds=$linux_feeds
+              list="$FLAKY_DIR/flaky-tests-$runner.txt"
+              marker="$FLAKY_DIR/collection-complete-$runner.txt"
+              feeds=false
+              if readable "$list" "$marker"; then
+                feeds=true
+              fi
             else
               [ "$TEST_SELECTED" = true ] || continue
               expected=true
-              if [ "$runner" = ubuntu-24.04-arm ]; then
-                feeds=$arm_feeds
-              else
-                feeds=$macos_feeds
-              fi
             fi
             list="$FLAKY_DIR/flaky-tests-$runner.txt"
             marker="$FLAKY_DIR/collection-complete-$runner.txt"
+            feeds=false
+            if readable "$list" "$marker"; then
+              feeds=true
+            fi
             if [ "$feeds" = true ]; then
               any_feeds=true
               if [ "$(cat "$marker" 2>/dev/null)" != true ]; then

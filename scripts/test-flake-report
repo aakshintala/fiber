@@ -877,7 +877,8 @@ expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only'
 # The partial collate artifact carries only the available titles: with
 # one decision plus one classification for the available title, the
 # writer files exactly once for it and names no missing leg as an
-# error in the summary.
+# error in the summary. `docs/testing/running.md`, "Flaky tests":
+# "Within one report job a file's title files or comments once; a repeat is skipped"
 setup_case partial-available-title
 printf '%s\n' "$decide_new" >"$tmp/partial-available-title/decisions.jsonl"
 code=$(classify_case "$tmp/partial-available-title" push "" "" "")
