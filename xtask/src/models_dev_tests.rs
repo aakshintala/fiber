@@ -1136,6 +1136,80 @@ fn a_by_protocol_entry_no_model_uses_is_allowed() {
 }
 
 #[test]
+fn deprecated_table_references_are_skipped_but_absent_ids_fail() {
+    let deprecated = tool_model(json!({"status": "deprecated"}));
+
+    let mut package = fixed_package("s", "openai-responses");
+    package.drop_deprecated = true;
+    package.by_model = &[("old", r#"{"x":1}"#)];
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", deprecated.clone())]),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(
+        notes
+            .iter()
+            .any(|line| line.contains("t/old is deprecated in models.dev; left out"))
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|line| line.contains("t/old") && line.contains("by_model"))
+    );
+
+    package.only = &["old"];
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", deprecated.clone())]),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(notes.iter().any(|line| line.contains("only")));
+
+    package.only = &[];
+    let correction = Correction {
+        package: "t".to_owned(),
+        model: "old".to_owned(),
+        fields: serde_json::from_value(json!({"name":"Old"})).unwrap(),
+        source: "https://vendor.example/old".to_owned(),
+        upstream: "https://github.com/models-dev/models.dev/pull/1".to_owned(),
+    };
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", deprecated)]),
+        std::slice::from_ref(&package),
+        &[correction],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(notes.iter().any(|line| line.contains("correction")));
+
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: table entry for `old` matches no generated model"
+    );
+}
+
+#[test]
+fn a_deprecated_reviewer_model_is_an_error() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.drop_deprecated = true;
+    package.provider = r#"{"name":"t","reviewer_model":"old"}"#;
+    let input = catalog(
+        package.source,
+        &[("old", tool_model(json!({"status":"deprecated"})))],
+    );
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: reviewer_model `old` is not a generated model"
+    );
+}
+
+#[test]
 fn a_stale_table_entry_is_an_error_naming_both() {
     let mut package = fixed_package("s", "p");
     package.by_model = &[("ghost", r#"{"x":1}"#)];
