@@ -235,6 +235,14 @@ fn rows() -> Vec<Row> {
             message: "No job has id `j_gone`.",
         },
         Row {
+            name: "stop needs review",
+            error: JobsError::StopNeedsReview {
+                id: job("j_detached"),
+            },
+            code: ErrorCode::InvalidArguments,
+            message: "The detached process identity for job `j_detached` is no longer confirmed. Retry the stop to request review.",
+        },
+        Row {
             name: "not delegate",
             error: JobsError::NotDelegate { id: job("j_shell") },
             code: ErrorCode::InvalidArguments,

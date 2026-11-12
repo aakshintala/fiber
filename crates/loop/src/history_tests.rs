@@ -1909,6 +1909,10 @@ fn a_turn_start_history_seed_keeps_extension_job_ownership() {
         extension: Some("test/scan".into()),
         description: "scan".into(),
         output_path: "/child/events.jsonl".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     });
     write_log(
         &sessions,

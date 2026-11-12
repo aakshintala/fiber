@@ -50,7 +50,9 @@ impl Starts {
     /// Anything else leaves it.
     pub(crate) fn fold(&mut self, event: &Event) {
         match event {
-            Event::JobStarted(started) => {
+            Event::JobStarted(started)
+                if started.kind != Some(contract::events::JobKind::Detached) =>
+            {
                 let entry = self.jobs.entry(started.job_id.clone()).or_default();
                 entry.tool = started.tool.clone().unwrap_or_default();
                 entry.output_path = PathBuf::from(&started.output_path);
@@ -123,6 +125,7 @@ impl Starts {
             | Event::ExtensionLog(_)
             | Event::ExtensionHello(_)
             | Event::ExtensionRequest(_)
+            | Event::JobStarted(_)
             | Event::ExtensionExec(_)
             | Event::JobDelta(_)
             | Event::JobLine(_)

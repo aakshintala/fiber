@@ -33,6 +33,11 @@ impl Jobs for StubJobs {
 }
 
 #[test]
+fn owned_identities_defaults_to_empty() {
+    assert!(StubJobs.owned_identities().is_empty());
+}
+
+#[test]
 fn default_write_reports_not_running() {
     let jobs = StubJobs;
     assert!(
