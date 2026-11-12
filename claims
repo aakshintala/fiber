@@ -3,17 +3,6 @@ scripts/test-flake-report	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pr
 docs/ci.md	fiber-4522	plan	2026-11-10T17:51:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/flake_report.rs	fiber-4522	plan	2026-11-10T17:56:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/src/keeper_child.rs	fiber-4628	plan	2026-11-11T11:10:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/changed_files_view.rs	fiber-4592	plan	2026-11-11T12:26:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/changed_files_view_tests.rs	fiber-4592	plan	2026-11-11T12:26:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/session_views.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/tui/src/swapped.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/tui/src/app/session_views_tests.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/tui/src/snapshots/tui__changed_files_view__tests__changed_files_80x24.snap	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/tui/src/snapshots/tui__changed_files_view__tests__changed_files_diff_80x24.snap	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/tests/hub_daemon/changed_files_remote.rs	fiber-4592	plan	2026-11-11T12:52:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/tests/screen_looks/search_look.rs	fiber-4592	plan	2026-11-11T14:47:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/tests/commands/changed_files_editor.rs	fiber-4592	plan	2026-11-11T14:47:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/contract/src/events.rs	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/events_tests.rs	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/write.rs	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
