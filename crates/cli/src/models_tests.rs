@@ -1136,7 +1136,7 @@ fn the_refresh_child_writes_the_catalogue_and_keeps_it_on_failure() {
         refresh_run_with_fetch(
             &setup.home(),
             &setup.workspace(),
-            &["--models-dev".to_owned()],
+            &["models.dev".to_owned()],
             clock,
             locks,
             &fakes::children::grouped_output,
@@ -1282,7 +1282,7 @@ fn a_due_models_dev_catalogue_schedules_the_refresh_child() {
     result.unwrap();
     assert_eq!(err, "");
     assert!(out.contains("acme/m"), "{out:?}");
-    assert_eq!(spawner.calls(), [vec!["--models-dev"]]);
+    assert_eq!(spawner.calls(), [vec!["models.dev"]]);
 }
 
 #[test]

@@ -79,7 +79,7 @@ fn stale_lists(
 }
 
 /// What `fiber models` says when no provider is installed.
-const MODELS_DEV_REFRESH: &str = "--models-dev";
+const MODELS_DEV_REFRESH: &str = "models.dev";
 
 const NO_PROVIDER: &str =
     "No provider is installed. Run `fiber extension install <name>` to install one.";
