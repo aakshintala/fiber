@@ -210,19 +210,16 @@ fn a_line_past_65535_rows_scrolls_to_its_end() {
     let text = format!("{}FINALCHUNK", "0123456789".repeat(70_000));
     assert_eq!(text.len(), 700_010);
     let mut app = source_app(10, 100, Some(Ok(&text)));
-    let mut passes = 0;
     let (mut rows, mut top) = app.offer_rows(10).unwrap();
     let total: usize = rows.iter().map(|row| row.height(10)).sum();
     // Four halvings move top past 65,535 for this 70,006-row source.
-    while top <= 65_535 {
+    for _ in 0..4 {
         let remaining = total - top;
         let height = u16::try_from(remaining.div_ceil(2)).unwrap();
         app.set_size(10, height);
         press(&mut app, Key::PageDown);
-        passes += 1;
         (rows, top) = app.offer_rows(10).unwrap();
     }
-    assert_eq!(passes, 4, "fixed PageDown pass count for this source");
     assert!(top > 65_535, "scroll top {top} is past 65,535 source rows");
 
     let area = Rect::new(0, 0, 10, u16::try_from(total - top).unwrap());
