@@ -258,3 +258,4 @@ crates/extensions/src/providers.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-M
 crates/main/src/parts.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/models.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/hub_start.rs	fiber-4756	plan	2026-11-12T15:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/leak-scan	fiber-4754	plan	2026-11-12T15:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
