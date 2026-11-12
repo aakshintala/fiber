@@ -100,8 +100,6 @@ crates/tui/src/rebind_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundho
 crates/tui/src/model_picker_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4700	plan	2026-11-12T06:25:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/tests/hover_jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/tests/support/jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/main/tests/screens/call_view.rs	fiber-4723	plan	2026-11-12T07:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/history_page_failed.rs	fiber-4724	plan	2026-11-12T07:52:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -198,13 +196,8 @@ crates/tui/src/event_loop_tests.rs:71-72	fiber-4700	plan	2026-11-12T08:09:58Z	ro
 crates/tui/src/event_loop_tests.rs:504-505	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/screen.rs:161-161	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
 crates/tui/src/screen_tests.rs:574-575	fiber-4700	plan	2026-11-12T08:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4700-tui-silent-exit	
-crates/tui/tests/draw_jig.rs	fiber-4719	plan	2026-11-12T08:30:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/leak_probe.rs	fiber-4726	plan	2026-11-12T08:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/fakes/src/finished.rs	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/fakes/src/within.rs	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing.md	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/prompt/reviewer.md:29-30	fiber-4699	plan	2026-11-12T09:09:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-reviewer-sudo	
 crates/loop/prompt/reviewer.md:85-85	fiber-4699	plan	2026-11-12T09:09:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-reviewer-sudo	
 crates/loop/src/prompt_tests.rs:243-244	fiber-4699	plan	2026-11-12T09:09:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-reviewer-sudo	
