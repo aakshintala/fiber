@@ -181,6 +181,10 @@ pub struct Compat {
     /// `x-api-key`, as the Databricks gateway's Anthropic route takes it
     /// (`docs/configuration.md`, "A provider's data").
     pub bearer: bool,
+    /// `anthropic-messages`: the request carries no `strict` key on any
+    /// tool. The Databricks gateway rejects `strict` even as `false` on
+    /// `claude-opus-4-1`.
+    pub no_strict: bool,
     /// `anthropic-messages`: the model is Claude on AWS Bedrock's Invoke
     /// API. The request goes to `<base_url>/model/<id>/invoke-with-response-stream`
     /// with `anthropic_version` in the body and no `model` or `stream`, the
@@ -234,6 +238,7 @@ impl Compat {
                 .map(str::to_owned),
             thinking_budget: flag("thinking_budget").unwrap_or(false),
             bearer: flag("bearer").unwrap_or(false),
+            no_strict: flag("no_strict").unwrap_or(false),
             bedrock_invoke: flag("bedrock_invoke").unwrap_or(false),
             vertex_raw_predict: flag("vertex_raw_predict").unwrap_or(false),
             cache_point: flag("cache_point").unwrap_or(false),

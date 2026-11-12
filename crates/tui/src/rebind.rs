@@ -325,6 +325,8 @@ impl KeysScreen {
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -534,6 +536,7 @@ impl KeysScreen {
             rows,
             joins,
             list: List::gutter(),
+            gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
             footer: self.footer(),

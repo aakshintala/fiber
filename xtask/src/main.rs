@@ -152,6 +152,7 @@ mod docs;
 mod flake_report;
 mod logo;
 mod models_dev;
+mod models_dev_corrections;
 mod models_dev_table;
 mod must_succeed;
 mod narrating_comments;

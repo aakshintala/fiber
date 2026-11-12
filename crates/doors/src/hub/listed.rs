@@ -282,6 +282,7 @@ pub(crate) fn authenticate(
             | HubEventKind::SessionArchived
             | HubEventKind::StreamClosed
             | HubEventKind::StreamReopened
+            | HubEventKind::Keepers
             | HubEventKind::Unknown(_) => continue,
         }
     }

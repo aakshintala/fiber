@@ -76,7 +76,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
   true` only when its schema fits the vendor's strict subset, and with
   `strict: false` otherwise, a built-in tool included (`docs/model-routing.md`,
-  "Protocols and providers").
+  "Protocols and providers"). A model whose data sets `compat.no_strict`
+  sends no `strict` key at all.
 
 ## Before a call runs
 
@@ -2006,7 +2007,7 @@ its tools are deferred, change only when the preamble is built.
   probe: pass
   spend: 19470 input, 153 output tokens
   ```
-- The other Databricks Claude rows follow their `providers/anthropic` counterparts: set when that row has `deferred_tools`, unset when unset or inconclusive (`databricks-claude-opus-5`); `databricks-claude-opus-5-5` is set from its direct 2026-11-04 probe. Pass-through was proved only on that model; uniform handling across rows is assumed.
+- The other Databricks Claude rows follow their `providers/anthropic` counterparts: set when that row has `deferred_tools`, unset when unset or inconclusive (`databricks-claude-opus-5`); `databricks-claude-opus-5-5` is set from its direct 2026-11-04 probe. Exception: the `claude-sonnet-4-5` / `claude-sonnet-4-5-20250929` Databricks rows do not follow their Anthropic counterparts — those Anthropic rows carry `deferred_tools`, but the Databricks rows don't, because the gateway rejects their deferred load (probed 2026-11-11, #4617). Pass-through was proved only on that model; uniform handling across rows is assumed.
 - Anthropic and OpenAI Responses (gpt-5.4 and later) both defer natively.
   `openai-completions` and `google-generative-ai` do not.
 - On a model without deferral, every tool is declared in full and

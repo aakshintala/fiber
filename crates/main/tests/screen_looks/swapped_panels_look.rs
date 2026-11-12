@@ -31,7 +31,7 @@ const ERROR: Colour = Colour::Rgb(255, 93, 115);
 /// The dark page: the panel tint (`docs/tui.md`, "Themes").
 const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
-/// `accent` in the dark theme: a focused row's mark and label.
+/// `accent` in the dark theme: a focused row's label and mark.
 const ACCENT: Colour = Colour::Rgb(110, 170, 254);
 
 /// The prompt tokens the scripted turns report: what a reload rebuilds.
@@ -532,8 +532,8 @@ fn the_settings_view_matches_the_doc() {
             return false;
         };
         focused_label(grid).as_deref() == Some("Compaction tokens")
-            && grid.rows[usize::from(compaction)].contains("400000")
-            && is_plain_of_reverse(grid, compaction, "Compaction tokens")
+            && grid.rows[usize::from(compaction)].contains("400k tokens")
+            && is_focused_label(grid, compaction, "Compaction tokens")
             && grid.rows[usize::from(detail)].trim() == reload
             && is_dim(grid, detail, reload)
             && detail + 1 == footer
@@ -543,12 +543,12 @@ fn the_settings_view_matches_the_doc() {
     let compaction = row_with(&grid, "Compaction tokens");
     assert!(
         // settled: "the Compaction tokens row whole" checked the value.
-        grid.rows[usize::from(compaction)].contains("400000"),
+        grid.rows[usize::from(compaction)].contains("400k tokens"),
         "{}",
         // settled: "the Compaction tokens row whole" checked the value.
         grid.contents
     );
-    assert!(is_plain_of_reverse(&grid, compaction, "Compaction tokens"));
+    assert!(is_focused_label(&grid, compaction, "Compaction tokens"));
     let detail = row_with(&grid, "compaction.tokens ·");
     assert_eq!(
         // settled: "the Compaction tokens row whole" checked the detail row.

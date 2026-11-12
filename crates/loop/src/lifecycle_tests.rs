@@ -1011,6 +1011,8 @@ fn state_lines_resumed_approval_carries_only_the_matching_calls_rewrite() {
                 escalation: None,
                 rule: None,
             },
+            arguments: None,
+            changed_by: None,
         };
         let mut looped = world.looped.take().unwrap().answerable(true);
         looped.ensure_preamble().unwrap();

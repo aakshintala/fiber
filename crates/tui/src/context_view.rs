@@ -498,6 +498,7 @@ pub(crate) fn frame(
         command: "/context".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
         footer: String::new(),

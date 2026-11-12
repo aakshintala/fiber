@@ -149,8 +149,10 @@ impl List {
 
     /// Moves the selection by ↑ or ↓ onto the next row in `takes`
     /// (ascending) in that direction: the rows that take Enter or a
-    /// switch. Any other key, and a list with none in `takes`, moves as
-    /// [`List::key`] does. Whether it moved.
+    /// switch. Past either end it wraps: ↓ on the last entry goes to
+    /// the first, ↑ on the first to the last. Any other key, and a
+    /// list with none in `takes`, moves as [`List::key`] does.
+    /// Whether it moved.
     pub(crate) fn key_over(
         &mut self,
         key: &Key,
@@ -162,10 +164,20 @@ impl List {
             return self.key(key, rows, height);
         }
         let at = self.selected;
+        // `takes` is not empty, so the wrap arm always finds a row.
         let to = if *key == Key::Down {
-            takes.iter().copied().find(|row| *row > at)
+            takes
+                .iter()
+                .copied()
+                .find(|row| *row > at)
+                .or_else(|| takes.first().copied())
         } else if *key == Key::Up {
-            takes.iter().rev().copied().find(|row| *row < at)
+            takes
+                .iter()
+                .rev()
+                .copied()
+                .find(|row| *row < at)
+                .or_else(|| takes.last().copied())
         } else {
             return self.key(key, rows, height);
         };
@@ -189,15 +201,33 @@ impl List {
     }
 
     /// Moves the selection by `key` over `rows` rows shown `height` at a
-    /// time: ↑ and ↓ by one, PageUp and PageDown by the height less one,
-    /// clamped at both ends, scrolling to keep it shown. Whether it moved;
-    /// any other key, and an empty list or area, leaves it.
+    /// time: ↑ and ↓ by one, wrapping past either end (↑ on the first
+    /// row goes to the last, ↓ on the last to the first); PageUp and
+    /// PageDown by the height less one, clamped at both ends; scrolling
+    /// to keep it shown. Whether it moved; any other key, and an empty
+    /// list or area, leaves it.
     pub(crate) fn key(&mut self, key: &Key, rows: usize, height: usize) -> bool {
+        if rows == 0 || height == 0 {
+            return false;
+        }
         let page = height.saturating_sub(1).max(1);
+        let last = rows - 1;
         let to = if *key == Key::Up {
-            self.selected.saturating_sub(1)
+            if self.selected == 0 {
+                last
+            } else {
+                // Past the end (a blurred or stale selection) still steps
+                // down one; the clamp below keeps it, as before.
+                self.selected.saturating_sub(1)
+            }
         } else if *key == Key::Down {
-            self.selected.saturating_add(1)
+            if self.selected == last {
+                0
+            } else {
+                // Past the end (a blurred or stale selection) still steps
+                // up one; the clamp below keeps it, as before.
+                self.selected.saturating_add(1)
+            }
         } else if *key == Key::PageUp {
             self.selected.saturating_sub(page)
         } else if *key == Key::PageDown {
@@ -382,6 +412,10 @@ pub(crate) struct Frame {
     pub(crate) joins: Vec<Join>,
     /// The selection and the first row shown.
     pub(crate) list: List,
+    /// How the gutter mark on the focused row draws. Views that mark
+    /// their focused row with "› " set this; the default draws it
+    /// plain, as before.
+    pub(crate) gutter_mark: Style,
     /// Lines below the rows: what a write said, when a key applies.
     pub(crate) below: Vec<String>,
     /// The edit field while it is open: its text and the caret's place in
@@ -745,15 +779,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         let mut x = area.x;
         if gutter {
             if at == frame.list.selected() {
-                // The Changed files list's focused row takes its mark in
-                // accent; every other gutter list keeps the plain mark
-                // (`docs/tui.md`, "Swapped views").
-                let mark = if frame.list.is_accent() {
-                    Style::new().fg(Role::Accent.color())
-                } else {
-                    Style::default()
-                };
-                buf.set_stringn(x, y, "› ", GUTTER, mark);
+                buf.set_stringn(x, y, "› ", GUTTER, frame.gutter_mark);
             }
             x = x
                 .saturating_add(crate::text::to_u16(GUTTER))

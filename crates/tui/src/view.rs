@@ -686,6 +686,10 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if let Some(screen) = app.home_screen() {
         return home::cursor(app, &screen, area);
     }
+    // A read-only attach draws its bar instead of the box: no cursor.
+    if app.unwritable().is_some() {
+        return None;
+    }
     let area = app.chrome().layout().map_or(area, |layout| layout.column);
     if app.focused().is_some() {
         return None;

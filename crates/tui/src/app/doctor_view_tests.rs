@@ -227,8 +227,17 @@ fn slash_doctor_pages_a_report_taller_than_the_view() {
     assert_eq!(frame.list.selected(), 0);
     assert_eq!(frame.list.top(), 0);
     assert_eq!(frame.rows.len(), 60);
-    // Up at the top stays: the selection clamps at both ends.
+    // Up at the top wraps to the last row; Down returns to the top,
+    // where the paging walk below starts.
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        59
+    );
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(
         app.config_view_screen()
             .expect("the view is open")

@@ -767,6 +767,20 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "read"},
+            "arguments": {"path": "b.txt"}, "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "read"},
+            "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
             json!({"request_id": "r", "effects": ["executes"],
             "reversible": false, "always_reviewed": true, "step": "review"}),
         ),
@@ -983,6 +997,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"servers": {"kept": ["a"], "restarted": [], "started": [],
             "stopped": []}, "extensions": ["e"],
             "failed": [{"server": "m", "reason": "died", "error": error}]}),
+        ),
+        (
+            "reloaded",
+            json!({"servers": {"kept": [], "restarted": [], "started": [],
+            "stopped": []}, "extensions": ["e"],
+            "extension_failures": [{"provider": "acme", "extension": "acme-ext",
+            "error": {"code": "extension_failed", "message": "boom"}}]}),
         ),
         (
             "extensions_loaded",
@@ -1334,6 +1355,54 @@ fn a_usage_recorded_round_trips_warming_and_omits_it_when_absent() {
 }
 
 #[test]
+fn a_reloaded_round_trips_extension_failures_and_omits_them_when_absent() {
+    // (`docs/events.md`, "`reloaded`"): one entry per failing
+    // registration, each naming its provider; `extension` is absent when
+    // the mirrored notice names none, never null.
+    let error = json!({"code": "extension_failed", "message": "boom"});
+    let servers = json!({"kept": [], "restarted": [], "started": [], "stopped": []});
+    let with_failures = json!({"servers": servers, "extensions": ["e"],
+        "extension_failures": [{"provider": "acme", "extension": "acme-ext",
+        "error": error}]});
+    let Some(Event::Reloaded(reloaded)) = read("reloaded", with_failures.clone()).unwrap() else {
+        panic!("not a reloaded");
+    };
+    assert_eq!(reloaded.failed, None);
+    let failures = reloaded.extension_failures.as_ref().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].provider, "acme");
+    assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(failures[0].error.code, ErrorCode::ExtensionFailed);
+    assert_eq!(failures[0].error.message, "boom");
+    assert_eq!(serde_json::to_value(&reloaded).unwrap(), with_failures);
+    // An old line without the key reads as absent.
+    let mut old = with_failures.clone();
+    old.as_object_mut().unwrap().remove("extension_failures");
+    let Some(Event::Reloaded(old_line)) = read("reloaded", old.clone()).unwrap() else {
+        panic!("not a reloaded");
+    };
+    assert_eq!(old_line.extension_failures, None);
+    assert_eq!(serde_json::to_value(&old_line).unwrap(), old);
+    // An entry without `extension` reads as absent and stays absent on
+    // the wire, never null.
+    let mut bare = with_failures;
+    bare["extension_failures"] = json!([{"provider": "bare", "error": error}]);
+    let Some(Event::Reloaded(bare_line)) = read("reloaded", bare.clone()).unwrap() else {
+        panic!("not a reloaded");
+    };
+    let failures = bare_line.extension_failures.as_ref().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].provider, "bare");
+    assert_eq!(failures[0].extension, None);
+    let written = serde_json::to_value(&bare_line).unwrap();
+    assert!(
+        written["extension_failures"][0].get("extension").is_none(),
+        "{written}"
+    );
+    assert_eq!(written, bare);
+}
+
+#[test]
 fn the_samples_cover_every_key_each_kind_lists() {
     let mut covered: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     for (kind, payload) in samples() {
@@ -1415,6 +1484,56 @@ fn a_compaction_note_is_the_actions_or_a_hook_text_never_both() {
     let extension_without_hook = json!({"outcome": "completed", "extension": "e",
         "tokens_before": 9});
     assert!(read("compaction_completed", extension_without_hook).is_err());
+}
+
+#[test]
+fn permission_requested_arguments_read_with_and_without_changed_by() {
+    let base = || {
+        json!({"request_id": "r", "effects": ["reads"], "reversible": true,
+        "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "read"}})
+    };
+    let read_request = |payload: Value| match read("permission_requested", payload).unwrap() {
+        Some(Event::PermissionRequested(requested)) => requested,
+        other => panic!("not a permission_requested: {other:?}"),
+    };
+    // Arguments with changed_by: the rewrite and who rewrote it.
+    let mut rewritten = base();
+    rewritten["arguments"] = json!({"path": "b.txt"});
+    rewritten["changed_by"] = json!(["fiber.test/guard"]);
+    let requested = read_request(rewritten.clone());
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("path".to_owned(), json!("b.txt"));
+    assert_eq!(requested.arguments, Some(arguments));
+    assert_eq!(
+        requested.changed_by,
+        Some(vec!["fiber.test/guard".to_owned()])
+    );
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        rewritten
+    );
+    // Changed_by alone: no arguments, and the key stays on the wire.
+    let mut unattributed = base();
+    unattributed["changed_by"] = json!(["fiber.test/guard"]);
+    let requested = read_request(unattributed.clone());
+    assert_eq!(requested.arguments, None);
+    assert_eq!(
+        requested.changed_by,
+        Some(vec!["fiber.test/guard".to_owned()])
+    );
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        unattributed
+    );
+    // Neither key: an old payload reads with both absent and writes back
+    // unchanged.
+    let requested = read_request(base());
+    assert_eq!(requested.arguments, None);
+    assert_eq!(requested.changed_by, None);
+    assert_eq!(
+        Value::Object(Event::PermissionRequested(requested).payload().unwrap()),
+        base()
+    );
 }
 
 #[test]
@@ -2096,7 +2215,8 @@ fn a_subscribe_result_names_the_last_fold_line() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
         CommandResult::Subscribe {
-            last_seq: crate::Seq(41)
+            last_seq: crate::Seq(41),
+            workspace_gone: None,
         }
     );
     let Some(Event::CommandAccepted(accepted)) =
@@ -2105,6 +2225,31 @@ fn a_subscribe_result_names_the_last_fold_line() {
         panic!("not an acceptance");
     };
     assert_eq!(accepted.result, None);
+    // A result omitting the missing path reads as a live open, and a
+    // live open stays byte-identical on the wire: the path is absent,
+    // never null (`docs/invocation.md`, "Lifecycle").
+    let written = serde_json::to_value(result_of(
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    ))
+    .unwrap();
+    assert!(
+        written["result"].get("workspace_gone").is_none(),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_subscribe_result_carries_the_missing_workspace_path() {
+    // The hub names the missing workspace when it replays the log of a
+    // session whose workspace is gone (`docs/invocation.md`,
+    // "Lifecycle"); the terminal opens that accept read only.
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"last_seq": 41, "workspace_gone": "/w"}})),
+        CommandResult::Subscribe {
+            last_seq: crate::Seq(41),
+            workspace_gone: Some("/w".into()),
+        }
+    );
 }
 
 #[test]
@@ -2472,9 +2617,44 @@ fn a_credential_switch_result_writes_and_reads_only_its_provider() {
 }
 
 #[test]
+fn a_stop_result_with_keepers_writes_both_counts_and_reads_an_old_shape_as_zero() {
+    // `docs/invocation.md`, "Commands and flags": `stop` answers both counts.
+    // Old hubs omit `keepers_stopped`, which reads as zero.
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+        keepers_stopped: 2,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3, "keepers_stopped": 2})
+    );
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"sessions_stopped": 3}})),
+        CommandResult::Stop {
+            sessions_stopped: 3,
+            keepers_stopped: 0,
+        }
+    );
+}
+
+#[test]
+fn a_stop_result_without_keepers_omits_the_keeper_count() {
+    // Zero keepers stay byte-identical to the old shape on the wire.
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+        keepers_stopped: 0,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3})
+    );
+}
+
+#[test]
 fn a_sessions_stopped_result_round_trips_as_stop() {
     let result = CommandResult::Stop {
         sessions_stopped: 3,
+        keepers_stopped: 0,
     };
     assert_eq!(
         serde_json::to_value(&result).unwrap(),

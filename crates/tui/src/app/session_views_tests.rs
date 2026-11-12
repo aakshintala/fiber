@@ -1454,14 +1454,26 @@ fn arrow_keys_move_over_file_rows_only() {
     open_files_from_totals(&mut app, 120, 35);
     let selected = |app: &App| app.session_view_screen(0).unwrap().list.selected();
     assert_eq!(selected(&app), 1);
+    // Folder and rule rows never take the selection: past either end the
+    // keys wrap to the farthest file row (`docs/tui.md`, "Swapped views").
     app.on_key(Key::Up, now());
-    assert_eq!(selected(&app), 1, "no file sits above the first");
+    assert_eq!(
+        selected(&app),
+        2,
+        "up from the first file wraps to the last"
+    );
+    app.on_key(Key::Down, now());
+    assert_eq!(
+        selected(&app),
+        1,
+        "down from the last file wraps to the first"
+    );
     app.on_key(Key::Down, now());
     assert_eq!(selected(&app), 2);
     app.on_key(Key::Down, now());
-    assert_eq!(selected(&app), 2, "the rule never takes the selection");
+    assert_eq!(selected(&app), 1, "the rule never takes the selection");
     app.on_key(Key::Up, now());
-    assert_eq!(selected(&app), 1);
+    assert_eq!(selected(&app), 2);
 }
 
 /// Folds a plain job as `job`.

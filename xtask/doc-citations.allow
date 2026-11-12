@@ -44,6 +44,10 @@ crates/loop/src/resume.rs	1	docs/extensions.md`, "`before_tool`"
 crates/loop/src/status.rs	1	docs/prompt-cache.md`, "Reload"
 crates/tools/src/shell/hosted_tests.rs	1	docs/tools.md, "Stopping a command"
 crates/tools/src/shell/hosted_tests.rs	1	docs/tools.md, "The keeper"
+crates/tui/src/settings_view_tests.rs	1	docs/tui.md:1108-1109
+crates/tui/src/settings_view_tests.rs	1	docs/tui.md:1123-1124
+crates/tui/src/settings_view_tests.rs	2	docs/tui.md:666-667
+crates/tui/src/swapped_tests.rs	2	docs/tui.md:666-667
 xtask/src/rules_tests.rs	2	docs/architecture.md:6
 xtask/src/rules_tests.rs	4	docs/architecture.md:7
 xtask/src/rules_tests.rs	2	docs/architecture.md:8

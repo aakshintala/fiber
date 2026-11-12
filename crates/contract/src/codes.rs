@@ -162,6 +162,9 @@ codes! {
     /// `web_search` names a type its protocol does not read, so the model is
     /// left out of the model list.
     ModelInvalid = "model_invalid",
+    /// A provider's discovery found a model and left it out on purpose;
+    /// the message names the model and the provider's reason.
+    ModelOmitted = "model_omitted",
     /// The provider does not know the model.
     ModelNotFound = "model_not_found",
     /// A model's base URL names a per-account host whose setting has no

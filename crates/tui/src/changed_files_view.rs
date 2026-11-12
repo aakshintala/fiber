@@ -8,6 +8,7 @@ use contract::events::CommandResult;
 use crate::diff::{DiffLine, diff_lines, gutter_prefix, gutter_width, ink_spans, safe_line};
 use crate::format;
 use crate::swapped::{Chrome, Frame, Ink, List, Span, Spot};
+use crate::theme::Role;
 use ratatui::style::{Modifier, Style};
 
 /// Every changed path, most lines changed first, ties by path ascending.
@@ -675,6 +676,14 @@ pub(crate) fn frame(
         format!("+{added}"),
         format!("−{removed}"),
     );
+    // The Changed-files frame opts into the accent mark only for its
+    // accent list; a plain gutter list keeps the uncoloured mark
+    // (`docs/tui.md`, "Swapped views").
+    let gutter_mark = if list.is_accent() {
+        Style::new().fg(Role::Accent.color())
+    } else {
+        Style::default()
+    };
     Frame {
         joins: Vec::new(),
         chrome: Some(Chrome {
@@ -686,6 +695,7 @@ pub(crate) fn frame(
         command: "diff against HEAD".to_owned(),
         rows,
         list,
+        gutter_mark,
         below: vec![below],
         field: None,
         footer: "↑↓ file · Ctrl+G open in editor".to_owned(),
@@ -845,6 +855,7 @@ fn diff_frame(path: &str, diff: &Diff, list: List, width: u16) -> Frame {
         command: "diff against HEAD".to_owned(),
         rows: framed,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
         footer: "↑↓ scroll · Ctrl+G edits · ← files · Esc close".to_owned(),

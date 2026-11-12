@@ -482,11 +482,12 @@ fn up_and_down_move_only_between_the_rows_that_take_a_switch() {
     let second = selected_name(&tools);
     assert!(["t", "x"].contains(&second.as_str()), "{second}");
     assert_ne!(first, second);
-    // At the end Down stays; Up returns, and at the start Up stays.
+    // At the end Down returns to the first take; Up wraps past either
+    // end.
     tools.key(&Key::Down, &ctx(&fake, None));
-    assert_eq!(selected_name(&tools), second);
-    tools.key(&Key::Up, &ctx(&fake, None));
     assert_eq!(selected_name(&tools), first);
+    tools.key(&Key::Up, &ctx(&fake, None));
+    assert_eq!(selected_name(&tools), second);
     tools.key(&Key::Up, &ctx(&fake, None));
     assert_eq!(selected_name(&tools), first);
 }

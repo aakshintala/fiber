@@ -2447,6 +2447,8 @@ fn review_step(request_id: &str) -> Event {
             escalation: None,
             rule: None,
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
@@ -2467,6 +2469,8 @@ fn standing_ask() -> Event {
                 prefix: "run tests".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 

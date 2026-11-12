@@ -13,7 +13,7 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers,
+    as_typed, layers, shown_value,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -301,7 +301,12 @@ fn resets(fake: &Fake) -> Vec<(Layer, String, String)> {
 fn drawn(settings: &Settings, usage: Option<u64>, width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(usize::from(width), usize::from(height), usage);
+    let frame = settings.frame(
+        usize::from(width),
+        usize::from(height),
+        usage,
+        usize::from(width),
+    );
     render(&frame, area, &mut buf, &mut Vec::new());
     text_of(&buf, width, height)
 }
@@ -371,7 +376,7 @@ fn the_view_opens_on_appearance_with_the_autosave_line_and_tab_bar() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30  project
+|  Rail width    30% of screen width · 24 columns  project
 |
 |  Theme         Default
 |
@@ -405,7 +410,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30  project
+|  Rail width    30% of screen width · 24 columns  project
 |
 |  Theme         Default
 |
@@ -463,7 +468,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Default model       a/b ›
 |
-|  Model list refresh  24h
+|  Model list refresh  24 h
 |
 |  Scoped models       a/b, c/d ›
 |
@@ -519,7 +524,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 | Appearance   Notifications   Models   Permissions   Sessions   Advanced
 |
-|› Compaction tokens      400000
+|› Compaction tokens      400k tokens
 |
 |  Repository extensions  none ›
 |
@@ -572,13 +577,13 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 }
 
 #[test]
-fn the_open_tab_is_bold_on_the_surface_tint_and_the_footer_keys_are_bold() {
+fn the_open_tab_is_bold_on_an_accent_fill() {
     use crate::theme::Role;
     let fake = Fake::new(rows());
     let settings = tab(&fake, SettingsTab::Models);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     render(&frame, area, &mut buf, &mut Vec::new());
     let bar = (0..24u16)
         .find(|y| {
@@ -595,14 +600,17 @@ fn the_open_tab_is_bold_on_the_surface_tint_and_the_footer_keys_are_bold() {
         let x = u16::try_from(joined[..byte].chars().count()).unwrap();
         buf[(x, y)].clone()
     };
+    // The open tab is bold in `background` on an `accent` fill.
     let open = cell_at("Models", bar);
     assert!(open.modifier.contains(Modifier::BOLD));
-    assert_eq!(open.bg, Role::Surface.color());
-    // The other tabs are plain: neither bold nor tinted.
+    assert_eq!(open.fg, Role::Background.color());
+    assert_eq!(open.bg, Role::Accent.color());
+    // The other tabs are dim, with no accent fill and no bold.
     for name in ["Appearance", "Notifications", "Permissions", "Advanced"] {
         let cell = cell_at(name, bar);
+        assert!(cell.modifier.contains(Modifier::DIM), "{name}");
         assert!(!cell.modifier.contains(Modifier::BOLD), "{name}");
-        assert_ne!(cell.bg, Role::Surface.color(), "{name}");
+        assert_ne!(cell.bg, Role::Accent.color(), "{name}");
     }
     // The footer keys are bold and the words between them are dim.
     let last = 23u16;
@@ -615,18 +623,146 @@ fn the_open_tab_is_bold_on_the_surface_tint_and_the_footer_keys_are_bold() {
     assert!(cell_at("change", last).modifier.contains(Modifier::DIM));
 }
 
+/// The Models tab paints each cell by meaning: the focused label bold
+/// in `accent`, the focused value bold in `info`, other values plain
+/// in `info`, "Default" dim, the screen row's value in `secondary`,
+/// and the gutter mark bold in `accent`.
 #[test]
-fn left_and_right_move_between_tabs_and_stop_at_the_ends() {
+fn a_models_tab_pins_each_cell_style_by_meaning() {
+    use crate::theme::Role;
+    use ratatui::style::Color;
+    let fake = Fake::new(rows());
+    let settings = tab(&fake, SettingsTab::Models);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None, 80);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let row_of = |label: &str| {
+        (0..24u16)
+            .find(|y| {
+                text_of(&buf, 80, 24)
+                    .lines()
+                    .nth(usize::from(*y))
+                    .is_some_and(|l| l.contains(label))
+            })
+            .unwrap_or_else(|| panic!("no row with {label}"))
+    };
+    let cell_at = |x: u16, y: u16| buf[(x, y)].clone();
+    // The focused row carries the gutter mark, bold in `accent`.
+    let focused = row_of("› Default model");
+    assert_eq!(cell_at(0, focused).symbol(), "›");
+    assert_eq!(cell_at(0, focused).fg, Role::Accent.color());
+    assert!(
+        cell_at(0, focused).modifier.contains(Modifier::BOLD),
+        "gutter mark not bold"
+    );
+    // Its label is bold in `accent`; other labels are plain.
+    let label = cell_at(2, focused);
+    assert_eq!(label.fg, Role::Accent.color());
+    assert!(label.modifier.contains(Modifier::BOLD), "label not bold");
+    let plain_row = row_of("Model list refresh");
+    let plain_label = cell_at(2, plain_row);
+    assert_eq!(plain_label.fg, Color::Reset, "unfocused label tinted");
+    assert!(
+        !plain_label.modifier.contains(Modifier::BOLD),
+        "unfocused label bold"
+    );
+    // Its value is bold in `info`; other values are plain `info`.
+    let line_of = |y: u16| {
+        let line: String = (0..80u16).map(|x| buf[(x, y)].symbol()).collect();
+        line
+    };
+    let at_in = |y: u16, text: &str| {
+        u16::try_from(line_of(y).find(text).unwrap_or_else(|| panic!("no {text}"))).unwrap()
+    };
+    let value = cell_at(at_in(focused, "a/b"), focused);
+    assert_eq!(value.fg, Role::Info.color());
+    assert!(value.modifier.contains(Modifier::BOLD), "value not bold");
+    let plain_value = cell_at(at_in(plain_row, "24 h"), plain_row);
+    assert_eq!(plain_value.fg, Role::Info.color());
+    assert!(
+        !plain_value.modifier.contains(Modifier::BOLD),
+        "unfocused value bold"
+    );
+    // An unset value reads dim.
+    let default_row = row_of("Thinking level");
+    let default = cell_at(at_in(default_row, "Default"), default_row);
+    assert_eq!(default.fg, Role::Muted.color());
+    assert!(default.modifier.contains(Modifier::DIM), "Default not dim");
+    assert!(!default.modifier.contains(Modifier::BOLD), "Default bold");
+    // A screen row's value is in `secondary`.
+    let screen_row = row_of("Credentials");
+    let screen_value = cell_at(at_in(screen_row, "Open"), screen_row);
+    assert_eq!(screen_value.fg, Role::Secondary.color());
+}
+
+/// A layer tag reads in `attention`, `[x] On` in `added`, and `[ ]
+/// Off` dim, whatever the focus.
+#[test]
+fn a_layer_tag_and_a_boolean_keep_their_roles() {
+    use crate::theme::Role;
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "sandbox.enabled");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None, 80);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let row_of = |label: &str| {
+        (0..24u16)
+            .find(|y| {
+                text_of(&buf, 80, 24)
+                    .lines()
+                    .nth(usize::from(*y))
+                    .is_some_and(|l| l.contains(label))
+            })
+            .unwrap_or_else(|| panic!("no row with {label}"))
+    };
+    let row = row_of("› Sandbox");
+    let line: String = (0..80u16).map(|x| buf[(x, row)].symbol()).collect();
+    let on_at = u16::try_from(line.find("[x] On").unwrap()).unwrap();
+    let on = buf[(on_at, row)].clone();
+    assert_eq!(on.fg, Role::Added.color());
+    let tag_at = u16::try_from(line.find("repository").unwrap()).unwrap();
+    let tag = buf[(tag_at, row)].clone();
+    assert_eq!(tag.fg, Role::Attention.color());
+    // `[ ] Off` stays dim on its own row.
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "tui.attention.bell");
+    let mut buf = Buffer::empty(area);
+    let frame = settings.frame(80, 24, None, 80);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let row = (0..24u16)
+        .find(|y| {
+            text_of(&buf, 80, 24)
+                .lines()
+                .nth(usize::from(*y))
+                .is_some_and(|l| l.contains("› Terminal bell"))
+        })
+        .unwrap();
+    let line: String = (0..80u16).map(|x| buf[(x, row)].symbol()).collect();
+    let off_at = u16::try_from(line.find("[ ] Off").unwrap()).unwrap();
+    let off = buf[(off_at, row)].clone();
+    assert!(off.modifier.contains(Modifier::DIM), "[ ] Off not dim");
+    assert!(!off.modifier.contains(Modifier::BOLD), "[ ] Off bold");
+}
+
+/// ←→ moves between tabs and wraps from the last tab to the first
+/// and back (`docs/tui.md:1108-1109`, `/settings`).
+#[test]
+fn left_and_right_wrap_between_the_first_and_last_tabs() {
     let fake = Fake::new(rows());
     let mut settings = open(&fake);
+    // Left on the first tab wraps to the last.
     edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(settings.tab, SettingsTab::Advanced);
+    // Right on the last tab wraps to the first.
+    edit(&mut settings, &fake, Edit::Right);
     assert_eq!(settings.tab, SettingsTab::Appearance);
+    // Between tabs it still steps one at a time.
     for want in &SettingsTab::ALL[1..] {
         edit(&mut settings, &fake, Edit::Right);
         assert_eq!(settings.tab, *want);
     }
-    edit(&mut settings, &fake, Edit::Right);
-    assert_eq!(settings.tab, SettingsTab::Advanced);
     edit(&mut settings, &fake, Edit::Left);
     assert_eq!(settings.tab, SettingsTab::Sessions);
 }
@@ -1171,7 +1307,7 @@ fn a_saved_write_rereads_and_says_the_file() {
     assert!(matches!(settings.mode, super::Mode::Rows));
     assert_eq!(fake.reads().len(), reads + 1);
     assert_eq!(settings.said, ["Saved to project config."]);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     assert!(frame.below.iter().any(|line| {
         line.contains("compaction.tokens")
             && line.contains("changing compaction.tokens needs a reload")
@@ -1667,7 +1803,7 @@ fn a_refused_reset_says_why_and_leaves_the_row() {
     assert_eq!(settings.said, ["changed meanwhile"]);
     assert_eq!(
         row_of(&screen(&settings), "Rail width"),
-        "› Rail width 30 project"
+        "› Rail width 30% of screen width · 24 columns project"
     );
 }
 
@@ -1754,8 +1890,10 @@ fn ctrl_g_opens_the_focused_rows_file_and_the_global_one_for_a_default() {
     assert!(matches!(act, Act::OpenLocal(None)), "{act:?}");
 }
 
+/// ↑↓ move between rows and wrap from the last row to the first and
+/// back (`docs/tui.md:1123-1124`, `/settings`).
 #[test]
-fn up_and_down_move_the_focus_by_row_and_a_move_clears_what_was_said() {
+fn up_and_down_wrap_between_the_first_and_last_rows() {
     let fake = Fake::new(rows());
     let mut settings = tab(&fake, SettingsTab::Models);
     one(&mut settings, &fake, Key::Down);
@@ -1763,21 +1901,78 @@ fn up_and_down_move_the_focus_by_row_and_a_move_clears_what_was_said() {
         settings.focus,
         Some(super::Focus::Key("model_lists.refresh_after".to_owned()))
     );
+    // A move clears what was said.
     settings.said = vec!["Saved.".to_owned()];
     one(&mut settings, &fake, Key::Down);
     assert!(settings.said.is_empty());
-    // Past the last row the focus stays; past the first too.
-    for _ in 0..10 {
+    // Down the last two rows to the screen row ending the tab.
+    for _ in 0..2 {
         one(&mut settings, &fake, Key::Down);
     }
     assert_eq!(
         settings.focus,
         Some(super::Focus::Screen(Screen::Credentials))
     );
-    for _ in 0..10 {
-        one(&mut settings, &fake, Key::Up);
-    }
+    // ↓ on the last row wraps to the first.
+    one(&mut settings, &fake, Key::Down);
     assert_eq!(settings.focus, Some(super::Focus::Key("model".to_owned())));
+    // ↑ on the first row wraps to the last.
+    one(&mut settings, &fake, Key::Up);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(Screen::Credentials))
+    );
+    // Pages stay clamped at either end.
+    one(&mut settings, &fake, Key::PageDown);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Screen(Screen::Credentials))
+    );
+    one(&mut settings, &fake, Key::Up);
+    one(&mut settings, &fake, Key::PageUp);
+    assert_eq!(settings.focus, Some(super::Focus::Key("model".to_owned())));
+}
+
+/// The list sub-page wraps ↑↓ past either end while pages stay
+/// clamped (`docs/tui.md:666-667`, "Swapped views").
+#[test]
+fn a_sub_page_wraps_up_and_down_past_either_end() {
+    let fake = Fake::new(rows());
+    let mut settings = page(&fake, "scoped_models");
+    assert_eq!(page_at(&settings), 0);
+    // ↑ on the first entry wraps to "+ Add" past the last.
+    one(&mut settings, &fake, Key::Up);
+    assert_eq!(page_at(&settings), 2);
+    // ↓ on "+ Add" wraps to the first entry.
+    one(&mut settings, &fake, Key::Down);
+    assert_eq!(page_at(&settings), 0);
+    // Between entries it still steps.
+    one(&mut settings, &fake, Key::Down);
+    assert_eq!(page_at(&settings), 1);
+    // Pages stay clamped at either end.
+    one(&mut settings, &fake, Key::PageUp);
+    assert_eq!(page_at(&settings), 0);
+    one(&mut settings, &fake, Key::PageDown);
+    assert_eq!(page_at(&settings), 2);
+    one(&mut settings, &fake, Key::PageDown);
+    assert_eq!(page_at(&settings), 2);
+}
+
+/// The theme choices wrap ↑↓ past either end, and the preview
+/// follows the wrapped choice (`docs/tui.md:666-667`, "Swapped views").
+#[test]
+fn the_theme_choices_wrap_up_and_down_past_either_end() {
+    let fake = themed(rows());
+    let mut settings = theme_choices(&fake);
+    assert_eq!(choice_at(&settings), 0);
+    // ↑ on the first choice wraps to the last and previews it.
+    let act = one(&mut settings, &fake, Key::Up);
+    assert_eq!(choice_at(&settings), 4);
+    assert!(matches!(act, Act::Theme(_)), "{act:?}");
+    // ↓ on the last choice wraps to the first.
+    let act = one(&mut settings, &fake, Key::Down);
+    assert_eq!(choice_at(&settings), 0);
+    assert!(matches!(act, Act::Theme(_)), "{act:?}");
 }
 
 #[test]
@@ -1834,7 +2029,12 @@ fn the_renderer_targets_each_drawn_line_so_a_click_lands_on_the_row_it_shows() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    render(&settings.frame(80, 24, None), area, &mut buf, &mut targets);
+    render(
+        &settings.frame(80, 24, None, 80),
+        area,
+        &mut buf,
+        &mut targets,
+    );
     let shown = text_of(&buf, 80, 24);
     for label in ["Default model", "Scoped models", "Credentials"] {
         let y =
@@ -1903,6 +2103,11 @@ fn entries(settings: &Settings) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// The sub-page's focused row.
+fn page_at(settings: &Settings) -> usize {
+    settings.page.as_ref().unwrap().list.selected()
+}
+
 fn extensions(shown: &str) -> Vec<SettingRow> {
     with("repository_extensions", value(shown), "repository")
 }
@@ -1940,7 +2145,7 @@ fn a_list_opens_its_own_page_titled_with_its_label() {
 |Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back
 "#,
     );
-    assert_eq!(settings.frame(80, 24, None).title, "Scoped models");
+    assert_eq!(settings.frame(80, 24, None, 80).title, "Scoped models");
 }
 
 #[test]
@@ -2015,7 +2220,7 @@ fn an_empty_list_shows_only_add_and_an_object_list_shows_path_and_required() {
 fn the_pages_footer_has_the_documented_words_with_bold_keys() {
     let fake = Fake::new(rows());
     let settings = page(&fake, "scoped_models");
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     assert_eq!(
         frame.footer,
         "Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back"
@@ -2423,6 +2628,14 @@ fn names(settings: &Settings) -> Vec<String> {
     }
 }
 
+/// The theme choices' focused row.
+fn choice_at(settings: &Settings) -> usize {
+    let super::Mode::Choices { list, .. } = &settings.mode else {
+        panic!("no choices");
+    };
+    list.selected()
+}
+
 #[test]
 fn the_theme_command_opens_on_auto_dark_light_then_the_theme_files() {
     let fake = themed(rows());
@@ -2503,7 +2716,7 @@ fn choosing_a_theme_writes_the_global_tui_theme_queues_it_and_returns_to_the_tab
 |
 |  Hover         [x] On
 |
-|  Rail width    30  project
+|  Rail width    30% of screen width · 24 columns  project
 |
 |› Theme         Default
 |
@@ -2829,6 +3042,160 @@ fn the_lines_under_the_list_leave_the_controls_their_rows() {
     assert_eq!(layout.body, 3);
 }
 
+/// Every number row shows its unit in its row text, word for word as
+/// the `/settings` tables spell it; a file value outside a list reads
+/// with "(custom)" after it (`docs/tui.md`, `/settings`, "Controls").
+#[test]
+fn a_number_row_shows_its_unit_in_row_text() {
+    use SettingControl::{Number, Text};
+    let text = |key: &str, control: SettingControl, json: &str| {
+        let row = on(
+            SettingsTab::Advanced,
+            "label",
+            key,
+            value(json),
+            "default",
+            ANY,
+            control,
+        );
+        shown_value(&row).0
+    };
+    let number = |key: &str, json: &str| text(key, Number, json);
+    // Sliders: any value shows plain with its unit.
+    assert_eq!(number("tui.rail.width", "15"), "15% of screen width");
+    assert_eq!(number("tui.panel.width", "21"), "21% of screen width");
+    assert_eq!(number("quota.notice_at", "80"), "80% used");
+    // The stored value is a fraction: the built-in 0.7 reads as 70%.
+    assert_eq!(
+        number("compaction.window_fraction", "0.7"),
+        "70% of the context window"
+    );
+    assert_eq!(
+        number("compaction.window_fraction", "0.5"),
+        "50% of the context window"
+    );
+    assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
+    assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
+    assert_eq!(number("cache.warm_cap", "0"), "0 cache lifetimes");
+    assert_eq!(number("retry.attempts", "3"), "3 retries");
+    assert_eq!(number("retry.attempts", "1"), "1 retry");
+    // Token counts.
+    assert_eq!(number("compaction.tokens", "400000"), "400k tokens");
+    assert_eq!(number("compaction.tokens", "1000000"), "1M tokens");
+    assert_eq!(
+        number("compaction.tokens", "300000"),
+        "300k tokens (custom)"
+    );
+    assert_eq!(number("compaction.tokens", "1000"), "1k tokens (custom)");
+    assert_eq!(number("compaction.tokens", "999"), "999 tokens (custom)");
+    assert_eq!(number("compaction.tokens", "0"), "0 tokens (custom)");
+    // Dollars: zero reads "No limit".
+    assert_eq!(number("budget.usd", "10"), "$10");
+    assert_eq!(number("budget.usd", "0"), "No limit");
+    assert_eq!(number("budget.usd", "7"), "$7 (custom)");
+    assert_eq!(number("budget.usd", "10.5"), "$10.5 (custom)");
+    // Block counts, singular against plural.
+    assert_eq!(number("reviewer.block_limits.consecutive", "2"), "2 blocks");
+    assert_eq!(number("reviewer.block_limits.consecutive", "1"), "1 block");
+    assert_eq!(
+        number("reviewer.block_limits.consecutive", "4"),
+        "4 blocks (custom)"
+    );
+    assert_eq!(number("reviewer.block_limits.session", "20"), "20 blocks");
+    // Millisecond delays: half seconds, whole seconds, minutes, hours.
+    assert_eq!(number("retry.initial_delay_ms", "500"), "0.5 s");
+    assert_eq!(number("retry.initial_delay_ms", "1000"), "1 s");
+    assert_eq!(number("retry.initial_delay_ms", "999"), "0.999 s (custom)");
+    assert_eq!(number("retry.initial_delay_ms", "1500"), "1.5 s (custom)");
+    assert_eq!(number("retry.max_delay_ms", "10000"), "10 s");
+    assert_eq!(number("retry.max_delay_ms", "60000"), "1 min");
+    assert_eq!(number("retry.max_delay_ms", "300000"), "5 min");
+    assert_eq!(number("hub.idle_exit_ms", "300000"), "5 min");
+    assert_eq!(number("hub.idle_exit_ms", "1800000"), "30 min");
+    assert_eq!(number("session.idle_exit_ms", "3600000"), "1 h");
+    assert_eq!(number("session.idle_exit_ms", "7200000"), "2 h");
+    assert_eq!(number("hub.idle_exit_ms", "3540000"), "59 min (custom)");
+    assert_eq!(number("hub.idle_exit_ms", "86400000"), "24 h (custom)");
+    assert_eq!(number("retry.max_delay_ms", "0"), "0 min (custom)");
+    // A negative delay stays in seconds: the whole-unit words are for
+    // values the stepping lists hold.
+    assert_eq!(number("retry.max_delay_ms", "-60000"), "-60 s (custom)");
+    // Durations keep their unit word; off-list values read custom.
+    assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
+    assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
+    assert_eq!(
+        text("model_lists.refresh_after", Text, "\"90m\""),
+        "90 min (custom)"
+    );
+    assert_eq!(
+        text("model_lists.refresh_after", Text, "\"90s\""),
+        "90 s (custom)"
+    );
+    // A lone unit with no count keeps its raw text.
+    assert_eq!(text("model_lists.refresh_after", Text, "\"h\""), "h");
+    assert_eq!(text("model_lists.refresh_after", Text, "\"soon\""), "soon");
+    // Only the refresh row reads duration words: any other Text row keeps
+    // its raw text even when it ends in a duration unit.
+    assert_eq!(text("tui.editor", Text, "\"24h\""), "24h");
+    // A non-ASCII value never splits a character boundary: it keeps its
+    // raw text instead of panicking.
+    assert_eq!(text("model_lists.refresh_after", Text, "\"é\""), "é");
+    // Anything else keeps its raw text with no unit.
+    assert_eq!(number("hub.port", "8080"), "8080");
+    assert_eq!(number("tui.rail.width", "\"wide\""), "wide");
+}
+
+/// A width row ends with its columns on the terminal: the share's
+/// columns after the region's limits, read from the terminal width
+/// while the draw width keeps the room and the cut (`docs/tui.md`,
+/// `/settings`, "Controls").
+#[test]
+fn a_width_row_counts_columns_for_its_width() {
+    use SettingControl::Number;
+    let mut all = with("tui.rail.width", value("15"), "project");
+    all.push(on(
+        SettingsTab::Appearance,
+        "Panel width",
+        "tui.panel.width",
+        value("21"),
+        "project",
+        PERSON,
+        Number,
+    ));
+    let fake = Fake::new(all);
+    let settings = tab(&fake, SettingsTab::Appearance);
+    let row_text = |terminal: usize, draw: u16, label: &str| {
+        let area = Rect::new(0, 0, draw, 24);
+        let mut buf = Buffer::empty(area);
+        let frame = settings.frame(usize::from(draw), 24, None, terminal);
+        render(&frame, area, &mut buf, &mut Vec::new());
+        text_of(&buf, draw, 24)
+            .lines()
+            .map(str::to_owned)
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("no {label} row"))
+    };
+    // The rail's 15% reads 33 columns on 220 and 24 on 160.
+    let rail = row_text(220, 220, "Rail width");
+    assert!(rail.contains("15% of screen width · 33 columns"), "{rail}");
+    let rail = row_text(160, 160, "Rail width");
+    assert!(rail.contains("· 24 columns"), "{rail}");
+    // The panel's 21% reads 46 columns on 220.
+    let panel = row_text(220, 220, "Panel width");
+    assert!(
+        panel.contains("21% of screen width · 46 columns"),
+        "{panel}"
+    );
+    // Rail attached: the suffix reads the terminal width while the
+    // draw width keeps the room and the cut.
+    let attached = row_text(220, 44, "Rail width");
+    assert!(attached.contains("· 33 columns"), "{attached}");
+    assert!(attached.contains('…'), "{attached}");
+    // A terminal wider than u16 saturates instead of wrapping.
+    let wide = row_text(100_000, 220, "Rail width");
+    assert!(wide.contains("· 48 columns"), "{wide}");
+}
+
 #[test]
 fn a_value_is_cut_to_the_room_left_after_the_label_and_the_layer_tag() {
     let long = "a".repeat(40);
@@ -2843,7 +3210,8 @@ fn a_value_is_cut_to_the_room_left_after_the_label_and_the_layer_tag() {
     // The gutter and the gap twice, the label column and the tag
     // "project" and its gap leave 13 columns of the 26 past the label.
     let width = layout.label_col + 26;
-    let cells = settings.cells(item, &layout, width, false);
+    // `at` focused this row above.
+    let cells = settings.cells(item, &layout, width, false, true, width);
     assert_eq!(cells[1].0.chars().count(), 13, "{cells:?}");
     assert!(cells[1].0.ends_with('…'), "{cells:?}");
     assert_eq!(cells[2].0, "  project");
@@ -2997,7 +3365,12 @@ fn query_of(settings: &Settings) -> String {
 fn assert_annotation(settings: &Settings, width: u16, height: u16, name: &str) {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(usize::from(width), usize::from(height), None);
+    let frame = settings.frame(
+        usize::from(width),
+        usize::from(height),
+        None,
+        usize::from(width),
+    );
     render(&frame, area, &mut buf, &mut Vec::new());
     let found = (0..height).find_map(|y| {
         let line: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
@@ -3410,7 +3783,7 @@ fn settings_search_escape_keeps_the_match_in_its_tab_and_closes_next() {
 |
 |  Hover          [x] On                                               Appearance
 |
-|  Rail width     30  project                                          Appearance
+|  Rail width     30% of screen width · 24 columns  project            Appearance
 |
 |  Theme          Default                                              Appearance
 |
@@ -3824,7 +4197,7 @@ fn settings_search_controls_pointer_and_wheel_follow_the_displayed_rows() {
     // for it.
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(80, 24, None);
+    let frame = settings.frame(80, 24, None, 80);
     let mut targets = Vec::new();
     render(&frame, area, &mut buf, &mut targets);
     let at = frame
