@@ -347,3 +347,5 @@ crates/hub/src/connection_tests.rs:3195-3196	fiber-4716	plan	2026-11-12T11:08:37
 crates/hub/src/connection_tests.rs:3200-3201	fiber-4716	plan	2026-11-12T11:08:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4716-keepers-order	
 crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/events.jsonl	fiber-4699	grant	2026-11-12T11:26:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-eval-cases	
 crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	grant	2026-11-12T11:26:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4699-eval-cases	
+crates/tui/src/swapped.rs	fiber-4619	plan	2026-11-12T11:49:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/swapped_tests.rs	fiber-4619	plan	2026-11-12T11:49:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
