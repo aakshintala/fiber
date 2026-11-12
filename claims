@@ -4,12 +4,10 @@ crates/tui/src/settings_view_tests.rs	fiber-4582	plan	2026-11-12T12:29:33Z	Amogh
 crates/tui/src/snapshots/tui__settings_view__tests__settings_slider_row.snap	fiber-4582	plan	2026-11-12T12:36:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_list_row.snap	fiber-4582	plan	2026-11-12T12:36:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/tests/models_dev.rs	fiber-4709	plan	2026-11-12T14:11:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/test-leak-scan	fiber-4754	plan	2026-11-12T14:53:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/models_dev.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/providers.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/parts.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/models.rs	fiber-4755	plan	2026-11-12T14:59:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/leak-scan	fiber-4754	plan	2026-11-12T15:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/bench/examples/bench/main.rs:295-296	fiber-4673	plan	2026-11-12T15:40:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4673-debt-cleanup	
 crates/bench/examples/bench/main.rs:428-429	fiber-4673	plan	2026-11-12T15:40:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4673-debt-cleanup	
 crates/bench/examples/bench/main.rs:487-490	fiber-4673	plan	2026-11-12T15:40:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4673-debt-cleanup	
