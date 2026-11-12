@@ -209,24 +209,20 @@ fn confirmed_delete_draws_only_the_relisted_rows() {
     assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
 
     let area = Rect::new(0, 0, 80, 24);
-    let mut buf = Buffer::empty(area);
-    let _ = logout.draw(area, &mut buf, &mut Vec::new());
-    let rendered = buf
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect::<String>();
-    assert!(
-        rendered.contains("remaining"),
-        "re-listed row must be drawn: {rendered}"
-    );
-    assert!(
-        !rendered.contains("removed"),
-        "deleted row must not remain: {rendered}"
-    );
-    assert_eq!(
-        rendered.matches("remaining").count(),
-        1,
-        "no stale extra target row: {rendered}"
-    );
+    let mut actual = Buffer::empty(area);
+    let _ = logout.draw(area, &mut actual, &mut Vec::new());
+
+    let mut expected = Logout::open(&ctx_h(
+        &fake_with(vec![LoginTarget {
+            name: "remaining".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        }]),
+        24,
+    ));
+    expected.said = logout.said.clone();
+    let mut expected_buf = Buffer::empty(area);
+    let _ = expected.draw(area, &mut expected_buf, &mut Vec::new());
+
+    assert_eq!(actual, expected_buf, "the complete relisted screen");
 }
