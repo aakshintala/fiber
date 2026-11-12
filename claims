@@ -265,3 +265,6 @@ crates/fakes/src/lib.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plu
 crates/main/tests/support/mod.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/extension_host/hooks_entries.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/extension_host/opening.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/screen.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/screen_tests.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/main.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
