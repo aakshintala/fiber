@@ -18,6 +18,28 @@ fn selector_filters_and_orders_mixed_runs() {
 }
 
 #[test]
+fn selector_caps_prior_candidates_at_twenty() {
+    let runs = Value::Array(
+        (1..=21)
+            .rev()
+            .map(|id| {
+                serde_json::json!({
+                    "databaseId": id,
+                    "headSha": format!("{id:040x}"),
+                    "event": "push",
+                    "headBranch": "main",
+                    "conclusion": "failure"
+                })
+            })
+            .collect(),
+    );
+    let selected = select(&runs);
+    assert_eq!(selected.len(), 20);
+    assert_eq!(selected.first().map(String::as_str), Some("21"));
+    assert_eq!(selected.last().map(String::as_str), Some("2"));
+}
+
+#[test]
 fn current_run_counts_once_and_threshold_and_first_sha_are_exact() {
     let current_sha = "0123456789abcdef0123456789abcdef01234567";
     let prior_sha = "abcdef0123456789abcdef0123456789abcdef01";
