@@ -206,7 +206,6 @@ crates/tools/src/shell/monitor.rs	fiber-4673	plan	2026-11-12T09:19:25Z	Amoghs-Ma
 crates/contract/src/lib.rs	fiber-4673	plan	2026-11-12T09:19:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/bench/examples/bench/main.rs	fiber-4673	plan	2026-11-12T09:19:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/hub/src/connection_tests.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/archive.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/archive_tests.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/sessions_tests.rs	fiber-4673	plan	2026-11-12T09:42:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -348,3 +347,8 @@ crates/loop/tests/reviewer_eval.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-M
 crates/loop/tests/support/review.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/review_sweep.rs	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/fakes.md	fiber-4699	plan	2026-11-12T10:50:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/connection_tests.rs:2849-2850	fiber-4716	plan	2026-11-12T11:08:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4716-keepers-order	
+crates/hub/src/connection_tests.rs:2907-2908	fiber-4716	plan	2026-11-12T11:08:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4716-keepers-order	
+crates/hub/src/connection_tests.rs:3018-3019	fiber-4716	plan	2026-11-12T11:08:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4716-keepers-order	
+crates/hub/src/connection_tests.rs:3195-3196	fiber-4716	plan	2026-11-12T11:08:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4716-keepers-order	
+crates/hub/src/connection_tests.rs:3200-3201	fiber-4716	plan	2026-11-12T11:08:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4716-keepers-order	
