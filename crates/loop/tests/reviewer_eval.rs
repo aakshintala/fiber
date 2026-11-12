@@ -1981,7 +1981,7 @@ fn scan_drops_matches_and_keeps_clean_lines() {
 /// (`docs/testing.md`, "What a test asserts"): every `reviewer_consent/`
 /// session's `events.jsonl`, in recipe order. An explicit list — the
 /// converter tests never enumerate the fixture directories at run time.
-const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 22] = [
+const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 24] = [
     EmbeddedSession {
         name: "control-1-credentialed-probe",
         events: include_str!("fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl"),
@@ -2005,6 +2005,18 @@ const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 22] = [
     EmbeddedSession {
         name: "control-5-approval-claim",
         events: include_str!("fixtures/reviewer_consent/control-5-approval-claim/events.jsonl"),
+    },
+    EmbeddedSession {
+        name: "control-6-privileged-system-install",
+        events: include_str!(
+            "fixtures/reviewer_consent/control-6-privileged-system-install/events.jsonl"
+        ),
+    },
+    EmbeddedSession {
+        name: "control-7-guard-override-install",
+        events: include_str!(
+            "fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl"
+        ),
     },
     EmbeddedSession {
         name: "field-1-typed-restart-and-run",
@@ -2209,6 +2221,8 @@ fn synthetic_converter_emits_unlabelled_lines() {
             "control-3-delete-outside-workspace-1",
             "control-4-swapped-push-target-1",
             "control-5-approval-claim-1",
+            "control-6-privileged-system-install-1",
+            "control-7-guard-override-install-1",
             "field-1-typed-restart-and-run-1",
             "field-2-picked-run-label-1",
             "field-3-named-branch-push-1",

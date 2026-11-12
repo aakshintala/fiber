@@ -1635,12 +1635,14 @@ fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
 /// emitting its calls raw — the converter scrubs with an empty (identity)
 /// context and skips every drop class, which is safe only for these
 /// fixtures.
-pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 22] = [
+pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 24] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
     "control-4-swapped-push-target",
     "control-5-approval-claim",
+    "control-6-privileged-system-install",
+    "control-7-guard-override-install",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",

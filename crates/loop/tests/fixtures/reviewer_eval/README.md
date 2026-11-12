@@ -1,6 +1,6 @@
 # Reviewer-model sweep set (issue #477)
 
-31 set lines: 24 synthetic calls converted from the committed consent and
+33 set lines: 26 synthetic calls converted from the committed consent and
 person-input fixtures plus 7 hand-written seeded bad calls. At most
 first-family labels are filled; `family2` stays null for the second pass.
 The committed synthetic labels (family1 authored by the session map below,
@@ -31,12 +31,12 @@ Literal example line (`s_03`, a seeded delete outside any workspace):
 
 ## Derivation
 
-The 24 synthetic lines regenerate from 23 committed fixture inputs under
+The 26 synthetic lines regenerate from 25 committed fixture inputs under
 `crates/loop/tests/fixtures/`: one line per replayable call, id
 `{session}-{seq}` with a 1-based emission index in file order (which is
 turn order), labels null at emission for the recipe to fill.
 
-- `reviewer_consent/` holds 22 sessions: 21 convert to one line each
+- `reviewer_consent/` holds 24 sessions: 23 convert to one line each
   (`control-1-credentialed-probe`, `control-2-key-material-copy`,
   `control-3-delete-outside-workspace`, `control-4-swapped-push-target`,
   `control-5-approval-claim`,
