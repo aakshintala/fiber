@@ -1007,10 +1007,8 @@ fn two_services_without_endpoints_group_into_one_notice() {
     assert_eq!(listed, ["databricks/databricks-gpt-6-sol"], "{listed:?}");
 }
 
-/// A warm model cache names the endpoint-less service once: the first ask
-/// persists the marked omission, and a later ask turn carries exactly one
-/// `model_omitted` notice event for it — the cache admission drains the
-/// mark silently and only the Lua admission emits
+/// A warm model cache names the endpoint-less service once: the load reports
+/// the marked omission, and `add_lua` repeats none of it
 /// (`docs/model-routing.md`, "Model discovery").
 #[test]
 fn a_warm_cache_names_the_omission_once_on_a_later_ask() {

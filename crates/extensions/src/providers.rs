@@ -62,12 +62,11 @@ pub struct Providers {
     /// model id: read with the data that declared them and replaced
     /// together with it.
     addenda: BTreeMap<String, BTreeMap<String, String>>,
-    /// Each `model_invalid` the load emitted, by provider name: its code
-    /// with its message, per reason, in emission order. A later admission
-    /// reports only invalid the load did not report, so the same marked
-    /// list feeding the load and `add_lua` draws one notice per reason,
-    /// never two (`docs/model-routing.md`, "Model discovery").
-    reported_invalid: BTreeMap<String, Vec<(ErrorCode, String)>>,
+    /// Each `model_invalid` and `model_omitted` notice emitted by any
+    /// admission, by provider name, in emission order. Later admissions
+    /// suppress only the count already reported on this registry
+    /// (`docs/model-routing.md`, "Model discovery").
+    reported_notices: BTreeMap<String, Vec<(ErrorCode, String)>>,
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
     lua: BTreeMap<String, Arc<LuaProvider>>,
@@ -560,27 +559,14 @@ impl Providers {
             for mut data in datas {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
-                // A warm cache feeds this admission and `add_lua` with the
-                // same marked list, so omissions drain here without emitting:
-                // each omission draws its one `model_omitted` notice there,
-                // not twice. Each invalid entry emits here through `admit`,
-                // and `add_lua` suppresses only those repeats. A static
-                // list still emits through `admit`.
+                // The load reports each invalid declaration and marked entry;
+                // later admissions on this registry suppress only reports it
+                // has already emitted (`docs/model-routing.md`, "Model discovery").
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
-                    let _ = leave_out_omitted(&data.name, &manifest.name, &mut data.models);
                 }
                 let admitted = providers.admit(&data.name, &manifest.name, &mut data.models);
-                for notice in admitted
-                    .iter()
-                    .filter(|notice| notice.code == ErrorCode::ModelInvalid)
-                {
-                    providers
-                        .reported_invalid
-                        .entry(data.name.clone())
-                        .or_default()
-                        .push((notice.code.clone(), notice.message.clone()));
-                }
+                providers.record_notices(&data.name, &admitted);
                 notices.extend(admitted);
                 // One extension's addenda are read into a local buffer
                 // against its own directory, and inserted only when every
@@ -778,10 +764,12 @@ impl Providers {
     /// models from it, with one `extension_failed` notice naming the
     /// extension. The provider is kept either way, for its signer, token
     /// and cost lookup. A provider that did not register `models` only
-    /// has its handle kept: no `models()` call and no notice. A provider
-    /// named `scripted` is left out whole, handle and all, with one
-    /// `extension_failed` notice naming `scripted` as reserved: the name
-    /// belongs to the built-in provider.
+    /// has its handle kept: no `models()` call and no notice. Omissions
+    /// and invalid declarations already reported on this registry are
+    /// suppressed on later admissions (`docs/model-routing.md`, "Model
+    /// discovery"). A provider named `scripted` is left out whole, handle
+    /// and all, with one `extension_failed` notice naming `scripted` as
+    /// reserved: the name belongs to the built-in provider.
     pub fn add_lua(
         &mut self,
         extension: &str,
@@ -870,24 +858,7 @@ impl Providers {
             }
         };
         let admitted = self.admit(&name, extension, &mut models);
-        // A later admission reports only invalid the load did not report:
-        // each load-emitted identity stays suppressed here, and every
-        // other notice is kept, so repeated admissions stay idempotent
-        // (`docs/model-routing.md`, "Model discovery").
-        let reported = self.reported_invalid.get(&name);
-        let notices: Vec<Notice> = admitted
-            .into_iter()
-            .filter(|notice| {
-                if notice.code != ErrorCode::ModelInvalid {
-                    return true;
-                }
-                reported.is_none_or(|reported| {
-                    !reported
-                        .iter()
-                        .any(|(code, message)| code == &notice.code && message == &notice.message)
-                })
-            })
-            .collect();
+        let notices = self.suppress_recorded(&name, admitted);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
         let addenda = match read_addenda(provider.dir(), &models) {
@@ -1194,12 +1165,65 @@ impl Providers {
             .find(|(_, entries)| entries.contains_key(name))
             .map(|(extension, _)| extension.clone())?;
         let mut models = models;
-        let notices = self.admit(name, &owner, &mut models);
+        let admitted = self.admit(name, &owner, &mut models);
+        let notices = self.suppress_recorded(name, admitted);
         let mut data = self.data(name);
         data.models = models;
         self.by_name.insert(name.to_owned(), data);
         self.extension_of.insert(name.to_owned(), owner);
         Some(notices)
+    }
+
+    /// Suppresses at most the number of identical invalid or omitted
+    /// notices previously emitted by this registry for this provider, then
+    /// records every notice kept. Recording each admission's emissions makes
+    /// repeated identical admissions converge without hiding excess entries.
+    fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
+        let mut consumed = Vec::<(ErrorCode, String, usize)>::new();
+        let mut kept = Vec::new();
+        for notice in notices {
+            if matches!(
+                notice.code,
+                ErrorCode::ModelInvalid | ErrorCode::ModelOmitted
+            ) {
+                let identity = (notice.code.clone(), notice.message.clone());
+                let already_reported = self.reported_notices.get(name).map_or(0, |reported| {
+                    reported.iter().filter(|entry| *entry == &identity).count()
+                });
+                let used = consumed
+                    .iter_mut()
+                    .find(|(code, message, _)| code == &identity.0 && message == &identity.1);
+                if let Some((_, _, used)) = used {
+                    if *used < already_reported {
+                        *used += 1;
+                        continue;
+                    }
+                } else {
+                    consumed.push((identity.0, identity.1, 1));
+                    if already_reported > 0 {
+                        continue;
+                    }
+                }
+            }
+            kept.push(notice);
+        }
+        self.record_notices(name, &kept);
+        kept
+    }
+
+    fn record_notices(&mut self, name: &str, notices: &[Notice]) {
+        let recorded = self.reported_notices.entry(name.to_owned()).or_default();
+        recorded.extend(
+            notices
+                .iter()
+                .filter(|notice| {
+                    matches!(
+                        notice.code,
+                        ErrorCode::ModelInvalid | ErrorCode::ModelOmitted
+                    )
+                })
+                .map(|notice| (notice.code.clone(), notice.message.clone())),
+        );
     }
 
     /// Replaces the models held under `name` with a background refresh's
@@ -1208,7 +1232,8 @@ impl Providers {
     /// which no installed package may register. The extension checked
     /// against is the first in name order whose manifest declares `name`;
     /// with none, every model is left out, `name` standing in as the
-    /// extension in the notice, and no owner is recorded.
+    /// extension in the notice, and no owner is recorded. Repeated
+    /// invalid or omitted notices are suppressed on this registry.
     pub fn set_models(&mut self, name: &str, models: Vec<ModelData>) -> Vec<Notice> {
         if name == scripted::SCRIPTED {
             return Vec::new();
@@ -1223,9 +1248,10 @@ impl Providers {
             let mut notices = leave_out_omitted(name, name, &mut models);
             notices.extend(leave_out_invalid(name, name, &mut models));
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
-            return notices;
+            return self.suppress_recorded(name, notices);
         };
-        let notices = self.admit(name, &owner, &mut models);
+        let admitted = self.admit(name, &owner, &mut models);
+        let notices = self.suppress_recorded(name, admitted);
         match self.by_name.get_mut(name) {
             Some(data) => data.models = models,
             None => {
