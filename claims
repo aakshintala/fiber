@@ -281,3 +281,6 @@ docs/system-prompt.md	fiber-4682	plan	2026-11-12T07:04:14Z	Amoghs-MacBook-Pro:/U
 docs/compaction.md	fiber-4682	plan	2026-11-12T07:04:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/tests/hover_jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/tests/support/jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/sandbox.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/permissions.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/events.md	fiber-4680	plan	2026-11-12T07:10:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
