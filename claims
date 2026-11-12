@@ -261,3 +261,7 @@ crates/loop/src/notes.rs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-pl
 scripts/check-docs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4717	grant	2026-11-12T06:01:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4717-macos-private-var	
 crates/extensions/src/process/tests.rs	fiber-4664	plan	2026-11-12T06:13:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/fakes/src/lib.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/mod.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/extension_host/hooks_entries.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/extension_host/opening.rs	fiber-4674	plan	2026-11-12T06:17:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
