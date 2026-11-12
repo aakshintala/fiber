@@ -152,9 +152,6 @@ crates/tui/src/view/model_picker/install_tests.rs	fiber-4619	plan	2026-11-12T06:
 crates/tui/tests/hover_jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/tests/support/jig.rs	fiber-4719	plan	2026-11-12T07:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/moved.rs	fiber-4260	grant	2026-11-12T07:21:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
-docs/mcp.md:193-195	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
-docs/mcp.md:264-265	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
-docs/tools.md:1689-1690	fiber-4683	plan	2026-11-12T07:30:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
 crates/main/tests/screens/call_view.rs	fiber-4723	plan	2026-11-12T07:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/history_page_failed.rs	fiber-4724	plan	2026-11-12T07:52:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/model_lists.rs:75-77	fiber-4635	plan	2026-11-12T07:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4635	
@@ -259,3 +256,6 @@ crates/tui/src/screen_tests.rs:574-575	fiber-4700	plan	2026-11-12T08:09:58Z	roun
 crates/extensions/tests/common/mod.rs,crates/extensions/tests/lua_tools.rs,crates/extensions/tests/oauth.rs,crates/extensions/tests/login_discovery.rs,crates/extensions/tests/lua_provider.rs	fiber-4730	grant	2026-11-12T08:22:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/tests/draw_jig.rs	fiber-4719	plan	2026-11-12T08:30:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/support/mod.rs	fiber-4726	plan	2026-11-12T08:38:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/mcp.md:193-195	fiber-4683	plan	2026-11-12T08:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
+docs/mcp.md:264-265	fiber-4683	plan	2026-11-12T08:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
+docs/tools.md:1692-1693	fiber-4683	plan	2026-11-12T08:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4683-docs-mcp-messaging	
