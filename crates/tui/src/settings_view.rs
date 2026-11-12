@@ -1192,6 +1192,19 @@ impl Settings {
             }
             Mode::Choices { .. } => Act::Stay,
             Mode::Rows => match &edit {
+                Edit::Left | Edit::Right
+                    if self.search.is_none()
+                        && self.selected().is_some_and(|row| {
+                            number_slider(&row.key).is_some()
+                                || number_list(&row.key).is_some()
+                                || text_list(&row.key).is_some()
+                        }) =>
+                {
+                    let row = self.selected().cloned();
+                    row.map_or(Act::Stay, |row| {
+                        self.step_number(ctx, &row, edit == Edit::Right, false)
+                    })
+                }
                 // Left and Right never switch tabs with a search open:
                 // they edit the query instead.
                 Edit::Left | Edit::Right if self.search.is_some() => {
@@ -1389,6 +1402,14 @@ impl Settings {
                 self.request = Some(Request::Model);
                 Act::Stay
             }
+            (SettingControl::Number, _) if number_slider(&row.key).is_some() => {
+                self.step_number(ctx, &row, true, true)
+            }
+            (SettingControl::Number | SettingControl::Text, _)
+                if number_list(&row.key).is_some() =>
+            {
+                self.step_number(ctx, &row, true, true)
+            }
             (SettingControl::Number | SettingControl::Text, value) => {
                 let mut draft = Draft::default();
                 draft.set(&current_text(value).unwrap_or_default());
@@ -1419,6 +1440,59 @@ impl Settings {
                 Act::Stay
             }
         }
+    }
+
+    /// Steps one numeric setting by its documented slider or list control.
+    fn step_number(&mut self, ctx: &Ctx<'_>, row: &SettingRow, forward: bool, enter: bool) -> Act {
+        if is_run(row) {
+            return Act::Stay;
+        }
+        let Some(text) = current_text(&row.value) else {
+            return Act::Stay;
+        };
+        let layer = Self::write_layer(row);
+        if let Some(values) = text_list(&row.key) {
+            let Some(next) = next_text_value(values, &text, forward) else {
+                return Act::Stay;
+            };
+            self.save(ctx, layer, &row.key, &quoted(next));
+            return Act::Stay;
+        }
+        let Some(value) = as_number(&text) else {
+            return Act::Stay;
+        };
+        if let Some((minimum, maximum, step)) = number_slider(&row.key) {
+            let direction = if forward { step } else { -step };
+            let mut next = value + direction;
+            if next < minimum {
+                next = minimum;
+            } else if next > maximum {
+                next = if enter && forward { minimum } else { maximum };
+            }
+            if next == value {
+                return Act::Stay;
+            }
+            self.save(ctx, layer, &row.key, &trimmed(next));
+            return Act::Stay;
+        }
+        let Some(values) = number_list(&row.key) else {
+            return Act::Stay;
+        };
+        let Some(next) = next_number_value(values, value, forward) else {
+            return Act::Stay;
+        };
+        if row.key == "budget.usd" && next == 0.0 {
+            let Some(expected) = layer_named(&row.layer).map(|_| text.as_str()) else {
+                return Act::Stay;
+            };
+            match ctx.seam.reset(ctx.workspace, layer, &row.key, expected) {
+                Ok(_) => self.reread(ctx),
+                Err(error) => self.said = vec![error.message],
+            }
+        } else {
+            self.save(ctx, layer, &row.key, &trimmed(next));
+        }
+        Act::Stay
     }
 
     /// Writes one fixed value, and applies the theme once it saved.
@@ -2073,6 +2147,17 @@ impl Settings {
                     .map(|columns| format!(" · {columns} columns"))
             }),
         };
+        let value = match item {
+            Item::Key(at) => self.row(at).map_or_else(
+                || value.clone(),
+                |row| {
+                    number_slider(&row.key)
+                        .and_then(|range| slider_bar(range, &row.value))
+                        .map_or_else(|| value.clone(), |bar| format!("{bar} {value}"))
+                },
+            ),
+            Item::Screen(_) => value,
+        };
         let annotation_room = annotation
             .as_ref()
             .map_or(0, |name| text::width(name) + GAP);
@@ -2255,6 +2340,131 @@ fn tokens_text(n: f64) -> String {
     format!("{} tokens", trimmed(n))
 }
 
+const COMPACTION_TOKEN_VALUES: &[f64] = &[
+    100_000.0,
+    200_000.0,
+    400_000.0,
+    600_000.0,
+    800_000.0,
+    1_000_000.0,
+];
+const BUDGET_VALUES: &[f64] = &[0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0];
+const REVIEWER_CONSECUTIVE_VALUES: &[f64] = &[1.0, 2.0, 3.0, 5.0, 10.0];
+const REVIEWER_SESSION_VALUES: &[f64] = &[5.0, 10.0, 20.0, 50.0, 100.0];
+const INITIAL_DELAY_VALUES: &[f64] = &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0];
+const MAX_DELAY_VALUES: &[f64] = &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0];
+const SESSION_IDLE_VALUES: &[f64] = &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0];
+const REFRESH_AFTER_VALUES: &[&str] = &["1h", "6h", "12h", "24h", "3d", "7d"];
+
+/// A number list's choices, shared by display and stepping.
+fn number_list(key: &str) -> Option<&'static [f64]> {
+    match key {
+        "compaction.tokens" => Some(COMPACTION_TOKEN_VALUES),
+        "budget.usd" => Some(BUDGET_VALUES),
+        "reviewer.block_limits.consecutive" => Some(REVIEWER_CONSECUTIVE_VALUES),
+        "reviewer.block_limits.session" => Some(REVIEWER_SESSION_VALUES),
+        "retry.initial_delay_ms" => Some(INITIAL_DELAY_VALUES),
+        "retry.max_delay_ms" => Some(MAX_DELAY_VALUES),
+        "session.idle_exit_ms" => Some(SESSION_IDLE_VALUES),
+        _ => None,
+    }
+}
+
+fn text_list(key: &str) -> Option<&'static [&'static str]> {
+    match key {
+        "model_lists.refresh_after" => Some(REFRESH_AFTER_VALUES),
+        _ => None,
+    }
+}
+
+/// A slider's inclusive minimum, maximum and step.
+fn slider_bar((minimum, maximum, _step): (f64, f64, f64), shown: &Shown) -> Option<String> {
+    let Shown::Value(text) = shown else {
+        return None;
+    };
+    let value = as_number(text)?;
+    if value < minimum || value > maximum {
+        return None;
+    }
+    let fraction = (value - minimum) / (maximum - minimum);
+    let fill = (0_u32..8)
+        .take_while(|tick| fraction >= (f64::from(*tick) + 0.5) / 8.0)
+        .count();
+    Some(format!(
+        "▕{}{}▏",
+        "█".repeat(fill.min(8)),
+        "░".repeat(8usize.saturating_sub(fill))
+    ))
+}
+
+/// Slider minimum, maximum and step for a documented numeric key.
+fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
+    match key {
+        "tui.rail.width" => Some((10.0, 40.0, 1.0)),
+        "tui.panel.width" => Some((15.0, 45.0, 1.0)),
+        "quota.notice_at" => Some((50.0, 95.0, 5.0)),
+        "compaction.window_fraction" => Some((0.5, 0.9, 0.05)),
+        "cache.warm_cap" => Some((0.0, 11.0, 1.0)),
+        "retry.attempts" => Some((0.0, 10.0, 1.0)),
+        _ => None,
+    }
+}
+
+/// A list's next value, with directional selection for custom values.
+fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
+    let at = values.iter().position(|value| *value == current);
+    let to = match at {
+        Some(at) if forward => (at + 1) % values.len(),
+        Some(at) => (at + values.len() - 1) % values.len(),
+        None if forward => values
+            .iter()
+            .position(|value| *value > current)
+            .unwrap_or(0),
+        None => values
+            .iter()
+            .rposition(|value| *value < current)
+            .unwrap_or(values.len() - 1),
+    };
+    values.get(to).copied()
+}
+
+fn refresh_millis(text: &str) -> Option<u64> {
+    let raw = as_typed(text);
+    let (count, unit) = raw.split_at(raw.len().checked_sub(1)?);
+    let count = count.parse::<u64>().ok()?;
+    count.checked_mul(match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    })
+}
+
+fn next_text_value(
+    values: &'static [&'static str],
+    current: &str,
+    forward: bool,
+) -> Option<&'static str> {
+    let current_ms = refresh_millis(current)?;
+    let at = values.iter().position(|value| *value == current);
+    let to = match at {
+        Some(at) if forward => (at + 1) % values.len(),
+        Some(at) => (at + values.len() - 1) % values.len(),
+        None if forward => values
+            .iter()
+            .position(|value| refresh_millis(value).is_some_and(|candidate| candidate > current_ms))
+            .unwrap_or(0),
+        None => values
+            .iter()
+            .rposition(|value| {
+                refresh_millis(value).is_some_and(|candidate| candidate < current_ms)
+            })
+            .unwrap_or(values.len() - 1),
+    };
+    values.get(to).copied()
+}
+
 /// A listed value as given, anything else with "(custom)" after it.
 fn listed(n: f64, values: &[f64], text: String) -> String {
     if values.contains(&n) {
@@ -2280,52 +2490,25 @@ fn number_text(key: &str, text: &str) -> String {
         }
         "cache.warm_cap" => counted(n, "cache lifetime", "cache lifetimes"),
         "retry.attempts" => counted(n, "retry", "retries"),
-        "compaction.tokens" => listed(
-            n,
-            &[
-                100_000.0,
-                200_000.0,
-                400_000.0,
-                600_000.0,
-                800_000.0,
-                1_000_000.0,
-            ],
-            tokens_text(n),
-        ),
+        "compaction.tokens" => listed(n, COMPACTION_TOKEN_VALUES, tokens_text(n)),
         "budget.usd" => {
             if n == 0.0 {
                 "No limit".to_owned()
             } else {
-                listed(
-                    n,
-                    &[1.0, 5.0, 10.0, 25.0, 50.0, 100.0],
-                    format!("${}", trimmed(n)),
-                )
+                listed(n, BUDGET_VALUES, format!("${}", trimmed(n)))
             }
         }
         "reviewer.block_limits.consecutive" => listed(
             n,
-            &[1.0, 2.0, 3.0, 5.0, 10.0],
+            REVIEWER_CONSECUTIVE_VALUES,
             counted(n, "block", "blocks"),
         ),
-        "reviewer.block_limits.session" => listed(
-            n,
-            &[5.0, 10.0, 20.0, 50.0, 100.0],
-            counted(n, "block", "blocks"),
-        ),
-        "retry.initial_delay_ms" => {
-            listed(n, &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0], ms_text(n))
+        "reviewer.block_limits.session" => {
+            listed(n, REVIEWER_SESSION_VALUES, counted(n, "block", "blocks"))
         }
-        "retry.max_delay_ms" => listed(
-            n,
-            &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0],
-            ms_text(n),
-        ),
-        "hub.idle_exit_ms" | "session.idle_exit_ms" => listed(
-            n,
-            &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
-            ms_text(n),
-        ),
+        "retry.initial_delay_ms" => listed(n, INITIAL_DELAY_VALUES, ms_text(n)),
+        "retry.max_delay_ms" => listed(n, MAX_DELAY_VALUES, ms_text(n)),
+        "hub.idle_exit_ms" | "session.idle_exit_ms" => listed(n, SESSION_IDLE_VALUES, ms_text(n)),
         _ => as_typed(text),
     }
 }
@@ -2351,7 +2534,7 @@ fn refresh_text(text: &str) -> String {
         return raw;
     }
     let shown = format!("{count} {word}");
-    if ["1h", "6h", "12h", "24h", "3d", "7d"].contains(&raw.as_str()) {
+    if text_list("model_lists.refresh_after").is_some_and(|values| values.contains(&raw.as_str())) {
         shown
     } else {
         format!("{shown} (custom)")
