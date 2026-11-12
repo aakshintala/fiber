@@ -468,14 +468,13 @@ impl Approval {
                     .iter()
                     .position(|choice| *choice == self.cursor)
                     .unwrap_or_default();
+                let len = choices.len();
                 let next = if *key == Key::Up {
-                    now.saturating_sub(1)
+                    now.checked_sub(1).unwrap_or(len - 1)
                 } else {
-                    now.saturating_add(1)
+                    (now + 1) % len
                 };
-                if let Some(choice) = choices.get(next) {
-                    self.cursor = *choice;
-                }
+                self.cursor = choices[next];
             }
             Key::Enter => return Some(super::PanelKey::Answer),
             // Tab, Shift+Tab, Ctrl+G and Ctrl+R do nothing in the panel,
