@@ -231,3 +231,6 @@ crates/tui/src/logout_view.rs:592-619	fiber-4673	plan	2026-11-12T15:40:06Z	round
 crates/main/tests/extension_host/extension_project.rs	fiber-4756	plan	2026-11-12T15:58:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 providers/databricks/thinking.lua	fiber-4709	plan	2026-11-12T16:00:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/databricks/thinking-overlay.json	fiber-4709	plan	2026-11-12T16:00:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/performance.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4755	plan	2026-11-12T16:03:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
