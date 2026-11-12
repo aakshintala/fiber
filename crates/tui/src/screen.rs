@@ -159,6 +159,11 @@ impl<B: Backend> Screen<B> {
     /// once, never a blank screen (`docs/tui.md`, "The logo").
     pub(crate) fn repaint(&mut self) -> Result<(), B::Error> {
         self.terminal.backend_mut().clear_region(ClearType::All)?;
+        // Reset the diff baseline without querying the cursor. One swap
+        // would promote the stale frame to the baseline, so restore the
+        // current buffer after resetting both buffers.
+        self.terminal.swap_buffers();
+        self.terminal.swap_buffers();
         self.last = None;
         Ok(())
     }
