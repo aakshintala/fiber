@@ -384,6 +384,9 @@ pub(crate) enum ListLine {
     },
     Exited {
         key: u64,
+        /// Whether the row draws its ✕: an exited row does, an
+        /// archived row drawn as an exited row does not.
+        stop: bool,
         glyph: &'static str,
         name: String,
         id: String,

@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/app/overlay_tests.rs
+assertion_line: 4714
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
@@ -15,14 +16,14 @@ expression: text
   ⌥1 ⌥2 ⌥3   server4                                                l card N
   ⌥6 ⌥7 ⌥8   server5
   Delete,    server6                                                or a live
-  Backspace  server7                                                he session
+  Shift+Bac  server7                                                he session
              server8
   ⌥I         server9                                                , whatever
              server10                                               /keys screen
-  ↑          server11                                               m the
-             server12                                               reen
-  ←          server13                                               ut box into
+  Backspace  server11                                               session in
+             server12
+  ↑          server13                                               m the
+                                                                    reen
+  ←          Imported items apply on the next /reload · Esc closes  ut box into
 
-  Ctrl+R     Imported items apply on the next /reload · Esc closes
-  ⌥← ⌥→, Ct
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

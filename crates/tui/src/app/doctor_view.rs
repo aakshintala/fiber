@@ -66,6 +66,7 @@ impl Doctor {
                 .map(|line| vec![(line.clone(), None, Ink::Plain)])
                 .collect(),
             list: self.list,
+            gutter_mark: ratatui::style::Style::default(),
             below: Vec::new(),
             field: None,
             footer: String::new(),

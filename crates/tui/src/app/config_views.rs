@@ -1052,9 +1052,12 @@ impl App {
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
-            Open::Settings(settings) => {
-                settings.frame(self.config_view_width(), self.config_view_height(), usage)
-            }
+            Open::Settings(settings) => settings.frame(
+                self.config_view_width(),
+                self.config_view_height(),
+                usage,
+                usize::from(self.screen.width()),
+            ),
             Open::Tools(tools) => {
                 tools.frame(self.config_view_width(), self.reload_cost().as_deref())
             }
@@ -1200,10 +1203,14 @@ impl App {
                 | super::Waiting::Subscribe { .. }
                 | super::Waiting::Stop
                 | super::Waiting::Delete
+                | super::Waiting::Archive
                 | super::Waiting::OfferImport
                 | super::Waiting::DeleteDiscovery(..)
                 | super::Waiting::DeleteStop { .. }
                 | super::Waiting::DeleteFinal(..)
+                | super::Waiting::ArchiveDiscovery(..)
+                | super::Waiting::ArchiveStop { .. }
+                | super::Waiting::ArchiveFinal(..)
                 | super::Waiting::Feed
                 | super::Waiting::Recent(..)
                 | super::Waiting::Close,

@@ -2,20 +2,20 @@
 source: crates/tui/src/view/model_picker/install_tests.rs
 expression: "screen(&picker, 100, 30)"
 ---
-   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-     Type to search █
-     2 models                                                                     ⟳ refresh all
-     acme
-     › m1
-           fixed thinking
+          Type to search █
+          2 models                                                           ⟳ refresh all
+          acme
+          › m1
+                fixed thinking
 
-     zeta
-       z1
-           fixed thinking
+          zeta
+            z1
+                fixed thinking
 
-       databricks ⟳ installing ●
+            databricks ⟳ installing ●
 
-     ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close
+          ↑↓ move · ←→ levels · Enter choose · Ctrl+S session · Ctrl+R refresh · Esc close
 
-   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
