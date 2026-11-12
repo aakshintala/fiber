@@ -83,6 +83,14 @@ pub fn check_run() -> Option<(&'static str, std::ffi::OsString)> {
     std::env::var_os("FIBER_CHECK_RUN").map(|value| ("FIBER_CHECK_RUN", value))
 }
 
+/// The nextest identity values available to a test process, for a child whose
+/// environment is cleared. Missing values are omitted.
+pub fn nextest_identity() -> impl Iterator<Item = (&'static str, std::ffi::OsString)> {
+    ["NEXTEST_BINARY_ID", "NEXTEST_TEST_NAME"]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+}
+
 /// The context window every fake model declares, in tokens: the window
 /// fixtures build sessions with, so size notices and the compaction trigger
 /// run as they do in production.

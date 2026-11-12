@@ -143,7 +143,7 @@ secret="leak-secret-$$-$(date +%s)-$RANDOM"
 # environment of python but not of sh or sleep, so only a python leaker
 # proves the scan names it. It ignores SIGTERM like the fixtures, and
 # stops when the stop file exists (or after 120 s on its own).
-FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
+FIBER_CHECK_RUN=$n NEXTEST_BINARY_ID=main::leak_probe NEXTEST_TEST_NAME=the_shell_tool_leak_is_named_by_pid LEAK_SCAN_SECRET="$secret" STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
 leaker1=$!
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
@@ -152,6 +152,12 @@ if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; t
 fi
 if ! grep -Fq "leaked process $leaker1:" "$err"; then
   echo "scripts/test-leak-scan: leak-scan did not name leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+if ! grep -Fq "test: main::leak_probe::the_shell_tool_leak_is_named_by_pid" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not attribute leaker $leaker1:" >&2
   cat "$err" >&2
   exit 1
 fi
@@ -181,6 +187,11 @@ if ! grep -Fq "leaked process $leaker1:" "$err"; then
 fi
 if ! grep -Fq "leaked process $leaker2:" "$err"; then
   echo "scripts/test-leak-scan: leak-scan did not name group-escaping leaker $leaker2:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker2:" "$err" || ! grep -Fq "test: unknown (not in env)" "$err"; then
+  echo "scripts/test-leak-scan: nonce-only leaker $leaker2 did not get unknown attribution:" >&2
   cat "$err" >&2
   exit 1
 fi
@@ -396,7 +407,7 @@ if grep -Fq 'grep -Fxq' scripts/leak-scan; then
   echo "scripts/test-leak-scan: leak-scan uses grep -Fxq (SIGPIPEs tr under pipefail)" >&2
   exit 1
 fi
-if ! grep -Fq 'grep -Fx "FIBER_CHECK_RUN=' scripts/leak-scan; then
+if ! grep -Fq "env_value \"\$env_block\" FIBER_CHECK_RUN" scripts/leak-scan; then
   echo "scripts/test-leak-scan: leak-scan lost its exact environ match" >&2
   exit 1
 fi

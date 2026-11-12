@@ -23,7 +23,9 @@ tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 
 `scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
 fails the run when a process still carries it after the tests, listing each
-leak's PID and command. The scan only reports: reaping stays the test's job,
+leak's PID, command, and nextest test identity (`NEXTEST_BINARY_ID` and
+`NEXTEST_TEST_NAME`). A process without either identity value is reported as
+`test: unknown (not in env)`. The scan only reports: reaping stays the test's job,
 above. A process carrying the nonce whose executable is a shared build-cache
 server the toolchain starts (today only `sccache`) is listed in a warning and
 does not fail the run, since such a server outlives the run by design; a new
