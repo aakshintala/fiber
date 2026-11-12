@@ -26,7 +26,8 @@ when its diff touches a file containing `target_os`, and
 `scripts_self_test_macos` when its diff touches `scripts/`; the latter two
 run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
-Linux-side job changes. Draft and ready pull requests select
+Linux-side job changes. The scripts job is selected only for pull requests
+with a path under `scripts/`, never on the backstop. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
@@ -219,11 +220,11 @@ macOS-only error in a file containing no `target_os` does not trigger the
 job.
 
 When a pull request's names-only diff contains a path under `scripts/`, a
-`scripts_self_test_macos` job runs `scripts/check` with the runner's system
-`/bin/bash` on macOS arm64. This runs the full scripts self-test block,
-including the leak-scan self-test. It triggers only on pull requests, never
-on the backstop; the backstop already runs the macOS test leg. The job holds
-one macOS slot while it runs.
+`scripts_self_test_macos` job runs the same eleven `scripts/test-*` commands
+as the self-test block in `scripts/check`, invoking each with the runner's
+system `/bin/bash` on macOS arm64. This includes the leak-scan self-test. It
+triggers only on pull requests, never on the backstop; the backstop already
+runs the macOS test leg. The job holds one macOS slot while it runs.
 
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
