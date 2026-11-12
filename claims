@@ -378,3 +378,4 @@ crates/extensions/src/runtime/queued.rs	fiber-4691	grant	2026-11-12T20:23:11Z	ro
 crates/extensions/src/hooks.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/extensions/src/hooks/door_tests.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/extensions/src/runtime_tests.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
+crates/main/src/hub_command_tests.rs	fiber-4598	plan	2026-11-12T20:24:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
