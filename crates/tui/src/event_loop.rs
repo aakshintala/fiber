@@ -61,10 +61,18 @@ pub struct ExitCause {
 }
 
 impl ExitCause {
-    #[cfg(test)]
     fn new(message: &'static str, source: Option<io::Error>) -> Self {
         Self { message, source }
     }
+}
+
+type LoopResult = Result<Option<i32>, ExitCause>;
+
+fn draw_cause(error: impl std::fmt::Display) -> ExitCause {
+    ExitCause::new(
+        "terminal: could not draw the screen",
+        Some(io::Error::other(error.to_string())),
+    )
 }
 
 impl std::fmt::Display for ExitCause {
@@ -451,7 +459,7 @@ pub(crate) fn run_with(
     for line in &lines {
         writeln!(tty, "{line}").unwrap_or(());
     }
-    Ok(code)
+    code.map_err(Error::from)
 }
 
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
@@ -581,11 +589,11 @@ impl<B: Backend> Loop<B> {
     /// frame held while it waited first, then the channel's. Ready hub
     /// lines and ticks share one frame; anything else ends the batch
     /// for its own. The only wait is `recv` with no timeout.
-    fn run(&mut self, rx: &Receiver<Input>) -> i32 {
+    fn run(&mut self, rx: &Receiver<Input>) -> Result<i32, ExitCause> {
         loop {
             // Nothing stashed and every sender gone ends the loop.
             let Some(first) = self.hub.take_batch(rx) else {
-                return 0;
+                return Ok(0);
             };
             // Only a batch starting with a hub line or tick holds: a
             // key, click or resize folds nothing into a held page, and
@@ -624,20 +632,19 @@ impl<B: Backend> Loop<B> {
                     if let Input::Bytes(bytes) = input {
                         let events = self.parser.feed(&bytes);
                         let wheel = Self::wheel_only(&events);
-                        if framed
-                            && !(wheel_prev && wheel)
-                            && let Some(quit) = self.frame(rx)
-                        {
-                            code = Some(quit);
-                            break;
+                        if framed && !(wheel_prev && wheel) {
+                            if let Some(quit) = self.frame(rx)? {
+                                code = Some(quit);
+                                break;
+                            }
                         }
                         framed = true;
                         wheel_prev = wheel;
-                        if let Some(quit) = self.handle_events(events) {
+                        if let Some(quit) = self.handle_events(events)? {
                             code = Some(quit);
                             break;
                         }
-                    } else if let Some(quit) = self.handle(input) {
+                    } else if let Some(quit) = self.handle(input)? {
                         code = Some(quit);
                         break;
                     }
@@ -659,10 +666,10 @@ impl<B: Backend> Loop<B> {
                 pause::batch_ended(taken);
             }
             if let Some(code) = code {
-                return code;
+                return Ok(code);
             }
-            if let Some(code) = self.frame(rx) {
-                return code;
+            if let Some(code) = self.frame(rx)? {
+                return Ok(code);
             }
         }
     }
@@ -685,20 +692,20 @@ impl<B: Backend> Loop<B> {
     /// batch can share a frame across a run of wheel steps; `handle`
     /// parses reads itself. Returns the exit code when the terminal
     /// quits, before any frame.
-    fn handle_events(&mut self, events: Vec<Event>) -> Option<i32> {
-        let result = self.handle_events_inner(events);
+    fn handle_events(&mut self, events: Vec<Event>) -> LoopResult {
+        let result = self.handle_events_inner(events)?;
         self.settle_and_send(result)
     }
 
     /// Settles a Loop boundary and sends the outgoing lines unless it quits.
-    fn settle_and_send(&mut self, result: Option<i32>) -> Option<i32> {
+    fn settle_and_send(&mut self, result: Option<i32>) -> LoopResult {
         let lines = self.app.settle_and_find_outgoing_if_up();
         if result.is_none()
             && let Some(unsent) = self.hub.send(&lines, &mut self.app)
         {
-            self.handle(Input::WriteFailed(unsent));
+            return self.handle(Input::WriteFailed(unsent));
         }
-        result
+        Ok(result)
     }
 
     /// Sends lines during an input route, before that input's settlement.
@@ -717,7 +724,7 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Dispatches parsed events without settling; the input boundary owns the layout pass.
-    fn handle_events_inner(&mut self, events: Vec<Event>) -> Option<i32> {
+    fn handle_events_inner(&mut self, events: Vec<Event>) -> LoopResult {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -795,13 +802,13 @@ impl<B: Backend> Loop<B> {
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.send_inner(&lines),
                 Effect::SendTracked(lines) => self.send_tracked_inner(&lines),
-                Effect::Quit => return Some(0),
+                Effect::Quit => return Ok(Some(0)),
                 Effect::ExitTracked(lines) => {
                     // The quit question's tracked closes go out, then
                     // the terminal quits, failure or not: a close never
                     // written keeps its resume line.
                     self.send_tracked_inner(&lines);
-                    return Some(0);
+                    return Ok(Some(0));
                 }
                 Effect::ListFiles => self.list_files(),
                 Effect::ReadImage(ticket) => {
@@ -847,13 +854,13 @@ impl<B: Backend> Loop<B> {
                     }
                 }
                 Effect::Editor { target, text } => {
-                    if let Some(code) = self.open_editor(target, &text) {
-                        return Some(code);
+                    if let Some(code) = self.open_editor(target, &text)? {
+                        return Ok(Some(code));
                     }
                 }
                 Effect::OpenFile(file) => {
-                    if let Some(code) = self.open_file(file) {
-                        return Some(code);
+                    if let Some(code) = self.open_file(file)? {
+                        return Ok(Some(code));
                     }
                 }
             }
@@ -865,7 +872,7 @@ impl<B: Backend> Loop<B> {
     /// the input brought, firing the focus handlers a session change
     /// calls for, dropping a closed panel worker, asking a read
     /// the picker owes, and starting a login that waits.
-    fn after_input(&mut self, before: Option<SessionId>) -> Option<i32> {
+    fn after_input(&mut self, before: Option<SessionId>) -> LoopResult {
         // An attach the input brought is reported once: the session
         // changed to one, from none.
         if before.is_none()
@@ -911,13 +918,13 @@ impl<B: Backend> Loop<B> {
             );
         }
         self.save_shares();
-        None
+        Ok(None)
     }
 
     /// Handles one input: the time, what it does to the app, and what it
     /// sends. Returns the exit code when the terminal quits, before any
     /// frame, as handling every input in `step` did.
-    fn handle(&mut self, input: Input) -> Option<i32> {
+    fn handle(&mut self, input: Input) -> LoopResult {
         match input {
             Input::WriteFailed(unsent) => {
                 self.app.set_now(
@@ -926,7 +933,7 @@ impl<B: Backend> Loop<B> {
                 );
                 self.app.on_write_failed(&unsent);
                 self.save_shares();
-                None
+                Ok(None)
             }
             input @ (Input::Bytes(_)
             | Input::Hub(_)
@@ -949,13 +956,13 @@ impl<B: Backend> Loop<B> {
             | Input::Signal(_)
             | Input::KittyFailed) => {
                 let result = self.handle_inner(input);
-                self.settle_and_send(result)
+                self.settle_and_send(result?)
             }
         }
     }
 
     /// Dispatches one input without settling; the input boundary owns the layout pass.
-    fn handle_inner(&mut self, input: Input) -> Option<i32> {
+    fn handle_inner(&mut self, input: Input) -> LoopResult {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -964,11 +971,16 @@ impl<B: Backend> Loop<B> {
         match input {
             // A signal quits with 128 plus its number, closing nothing
             // first: live sessions keep their resume lines.
-            Input::Signal(signal) => return Some(128 + signal),
+            Input::Signal(signal) => return Ok(Some(128 + signal)),
             // A failed Kitty write drops every pending image and writes
             // nothing further: the loop quits through the failed-draw
             // exit, closing nothing first.
-            Input::KittyFailed => return Some(1),
+            Input::KittyFailed => {
+                return Err(ExitCause::new(
+                    "terminal: could not send an image to the terminal",
+                    None,
+                ));
+            }
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
                 return self.handle_events_inner(events);
@@ -1070,8 +1082,8 @@ impl<B: Backend> Loop<B> {
                     self.app.set_size_inner(width, height);
                     let lock = Arc::clone(&self.tty_lock);
                     let _guard = lock.loop_write();
-                    if self.screen.resize(width, height).is_err() {
-                        return Some(1);
+                    if let Err(error) = self.screen.resize(width, height) {
+                        return Err(draw_cause(error));
                     }
                 }
             }
@@ -1082,19 +1094,22 @@ impl<B: Backend> Loop<B> {
     /// Loads the pages the frame needs, and draws what changed: once per
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
-    fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
-        let result = self.frame_inner(rx);
+    fn frame(&mut self, rx: &Receiver<Input>) -> LoopResult {
+        let result = self.frame_inner(rx)?;
         self.settle_and_send(result)
     }
 
     /// Runs the frame without settling; the frame boundary owns the layout pass.
-    fn frame_inner(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+    fn frame_inner(&mut self, rx: &Receiver<Input>) -> LoopResult {
         // A failed Kitty write ends the loop from the next frame top: no
         // further frame, title, shape, alert or delete write starts. A
         // loop write already running may be attempted before this check,
         // but a failed tty contributes no bytes.
         if self.kitty_failed.load(std::sync::atomic::Ordering::SeqCst) {
-            return Some(1);
+            return Err(ExitCause::new(
+                "terminal: could not send an image to the terminal",
+                None,
+            ));
         }
         // The summary span opens and closes here: every handled batch
         // ends in a frame, so the send is seen on the next frame top
@@ -1176,13 +1191,13 @@ impl<B: Backend> Loop<B> {
             self.timing.start_attach_draw();
         }
         let lock = Arc::clone(&self.tty_lock);
-        let draw_failed = {
+        let draw_result = {
             let _guard = lock.loop_write();
-            self.screen.draw(&mut self.app, self.pointer.at).is_err()
+            self.screen.draw(&mut self.app, self.pointer.at)
         };
-        if draw_failed {
+        if let Err(error) = draw_result {
             self.timing.discard_attach_spans();
-            return Some(1);
+            return Err(draw_cause(error));
         }
         // The attached-session history has landed in the drawn frame:
         // the tail read completed and installed its preview before this
@@ -1214,8 +1229,8 @@ impl<B: Backend> Loop<B> {
         // The logo's image follows the drawn frame: its bytes position
         // at the drawn rect, or a lost rect repaints and redraws at once
         // (`docs/tui.md`, "The logo").
-        if let Some(code) = self.logo_step() {
-            return Some(code);
+        if let Some(code) = self.logo_step()? {
+            return Ok(Some(code));
         }
         self.app.sweep_notices(self.clock.now());
         // The open's `full` raise goes out after the first frame draws,
@@ -1229,20 +1244,20 @@ impl<B: Backend> Loop<B> {
         self.write_title();
         self.write_shape();
         self.write_alerts();
-        None
+        Ok(None)
     }
 
     /// Handles one input and draws the frame. Tests only: production
     /// code draws once per batch through `run`.
     #[cfg(test)]
-    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> LoopResult {
         if let Input::Bytes(bytes) = input {
             let events = self.parser.feed(&bytes);
-            if let Some(code) = self.handle_events(events) {
-                return Some(code);
+            if let Some(code) = self.handle_events(events)? {
+                return Ok(Some(code));
             }
-        } else if let Some(code) = self.handle(input) {
-            return Some(code);
+        } else if let Some(code) = self.handle(input)? {
+            return Ok(Some(code));
         }
         self.frame(rx)
     }
@@ -1505,16 +1520,22 @@ impl<B: Backend> Loop<B> {
     /// positioned write goes out for the drawn rect, or a lost rect
     /// repaints and the current screen redraws at once. Returns the
     /// quit code when a tty write fails (`docs/tui.md`, "The logo").
-    fn logo_step(&mut self) -> Option<i32> {
+    fn logo_step(&mut self) -> LoopResult {
         let (protocol, after) = self.logo_after(false);
         if after.repaint {
             let lock = Arc::clone(&self.tty_lock);
             let _guard = lock.loop_write();
-            if self.screen.repaint().is_err() {
-                return Some(1);
+            if let Err(error) = self.screen.repaint() {
+                return Err(ExitCause::new(
+                    "terminal: could not draw the logo",
+                    Some(io::Error::other(error.to_string())),
+                ));
             }
-            if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
-                return Some(1);
+            if let Err(error) = self.screen.draw(&mut self.app, self.pointer.at) {
+                return Err(ExitCause::new(
+                    "terminal: could not draw the logo",
+                    Some(io::Error::other(error.to_string())),
+                ));
             }
             let (protocol, after) = self.logo_after(true);
             return self.logo_write(protocol, after);
@@ -1525,19 +1546,21 @@ impl<B: Backend> Loop<B> {
     /// Writes one logo emission: the kitty transmit beside its place
     /// bytes through the chunk writer, else the positioned write
     /// straight to the tty.
-    fn logo_write(&mut self, protocol: logo::Protocol, after: logo::After) -> Option<i32> {
+    fn logo_write(&mut self, protocol: logo::Protocol, after: logo::After) -> LoopResult {
         if after.bytes.is_empty() {
-            return None;
+            return Ok(None);
         }
         if protocol == logo::Protocol::Kitty {
-            let (tint, _) = self.screen.logo_tint()?;
+            let Some((tint, _)) = self.screen.logo_tint() else {
+                return Ok(None);
+            };
             if !self.ensure_kitty_writer() {
-                return None;
+                return Ok(None);
             }
             let chunks = Self::kitty_logo_chunks(&logo::kitty(&tint));
             let place = after.bytes;
             let Some(writer) = &self.kitty_writer else {
-                return None;
+                return Ok(None);
             };
             // Best-effort: a dead writer already reported `KittyFailed`,
             // which quits the loop, so the logo returns `None` either way.
@@ -1546,14 +1569,17 @@ impl<B: Backend> Loop<B> {
                 chunks,
                 place,
             });
-            return None;
+            return Ok(None);
         }
         let lock = Arc::clone(&self.tty_lock);
         let _guard = lock.loop_write();
-        if self.tty.write_all(&after.bytes).is_err() {
-            return Some(1);
+        if let Err(error) = self.tty.write_all(&after.bytes) {
+            return Err(ExitCause::new(
+                "terminal: could not draw the logo",
+                Some(error),
+            ));
         }
-        None
+        Ok(None)
     }
 
     /// Splits the logo's base64 payload into kitty transmit chunks: the
@@ -1815,14 +1841,14 @@ impl<B: Backend> Loop<B> {
 
     /// Ctrl+G: opens `text` in the editor `$VISUAL` or `$EDITOR` names,
     /// with the terminal handed over, and gives the app what it returned.
-    /// `Some(1)` when the terminal cannot be taken back. A shutdown signal
+    /// An error when the terminal cannot be taken back. A shutdown signal
     /// while the editor runs quits with 128 plus its number instead, with
     /// no resume: the run's own restore takes the terminal back.
-    fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
+    fn open_editor(&mut self, target: editor::Target, text: &str) -> LoopResult {
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
-            return None;
+            return Ok(None);
         };
         // The writer pauses before the loop takes its terminal-output
         // priority: the pause closes a partial upload at the next chunk
@@ -1840,7 +1866,7 @@ impl<B: Backend> Loop<B> {
                 editor::Outcome::Stopped(signal) => Some(128 + signal),
                 editor::Outcome::Done(_) => None,
             }
-        });
+        })?;
         if code.is_none() {
             // A stop converts to the quit code in the handover above,
             // so only Done reaches here: the draft is unchanged on a
@@ -1849,21 +1875,21 @@ impl<B: Backend> Loop<B> {
                 self.app.editor_returned_inner(target, done);
             }
         }
-        code
+        Ok(code)
     }
 
     /// Ctrl+G on a configuration view's file or a Changed files row or
     /// diff: opens `file` in the editor `$VISUAL` or `$EDITOR` names, at
     /// its first changed line when one is given, with the terminal handed
-    /// over, and tells the app it returned. `Some(1)` when the terminal
+    /// over, and tells the app it returned. An error when the terminal
     /// cannot be taken back. A shutdown signal while the editor runs
     /// quits with 128 plus its number instead, with no resume, as above.
-    fn open_file(&mut self, file: editor::OpenFile) -> Option<i32> {
+    fn open_file(&mut self, file: editor::OpenFile) -> LoopResult {
         let editor::OpenFile { path, line } = file;
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
-            return None;
+            return Ok(None);
         };
         // As in [`Loop::open_editor`]: pause the writer first so no upload
         // stays open across the foreground program.
@@ -1880,7 +1906,7 @@ impl<B: Backend> Loop<B> {
                 editor::Outcome::Stopped(signal) => Some(128 + signal),
                 editor::Outcome::Done(_) => None,
             }
-        });
+        })?;
         if code.is_none() {
             // A stop converts to the quit code in the handover above,
             // so only Done reaches here: quit with the signal's code,
@@ -1899,7 +1925,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
         }
-        code
+        Ok(code)
     }
 
     /// Applies a theme `/settings` chose, without a restart: the next
@@ -1942,7 +1968,7 @@ impl<B: Backend> Loop<B> {
 
     /// Hands the terminal to `program`, run in the foreground on this
     /// thread: the reader paused, the terminal restored, then both taken
-    /// back and the whole screen repainted at the size read again. `Some(1)`
+    /// back and the whole screen repainted at the size read again. An error
     /// when the terminal cannot be taken back. The caller holds the
     /// loop-priority terminal-output guard across the handover, which the
     /// resize below reuses. After a successful resume the writer's retained
@@ -1961,7 +1987,7 @@ impl<B: Backend> Loop<B> {
         self.pending_resume = true;
     }
 
-    fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
+    fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> LoopResult {
         self.reader.pause();
         // A failed suspend still runs the program: the terminal may be
         // left part set up, and resume sets it up whole.
@@ -1972,12 +1998,15 @@ impl<B: Backend> Loop<B> {
         // with the test instead of parking past it.
         if let Some(code) = program() {
             self.reader.resume();
-            return Some(code);
+            return Ok(Some(code));
         }
-        if term::resume(self.parser.kitty(), self.hover).is_err() {
+        if let Err(error) = term::resume(self.parser.kitty(), self.hover) {
             // A failed resume or a shutdown leaves the writer paused for
             // Stop and join: no Resume is sent.
-            return Some(1);
+            return Err(ExitCause::new(
+                "terminal: could not take the terminal back",
+                Some(error),
+            ));
         }
         // The restore popped the title: the next frame writes it again.
         self.title.forget();
@@ -1989,7 +2018,13 @@ impl<B: Backend> Loop<B> {
             .unwrap_or_else(|_| (self.screen.area().width, self.screen.area().height));
         self.app.set_size(width, height);
         self.note_handover_resumed();
-        self.screen.resize(width, height).err().map(|_| 1)
+        match self.screen.resize(width, height) {
+            Ok(()) => Ok(None),
+            Err(error) => Err(ExitCause::new(
+                "terminal: could not take the terminal back",
+                Some(io::Error::other(error.to_string())),
+            )),
+        }
     }
 }
 

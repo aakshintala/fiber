@@ -366,7 +366,7 @@ fn frame_over_budget_writes_through_the_loop() {
     lp.clock = Arc::clone(&clock);
     lp.timing = crate::timing::Timing::new(debug_diag(home.path(), Arc::clone(&clock)));
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame(&rx), None);
+    assert_eq!((lp.frame(&rx)).expect("event loop result succeeds"), None);
     let lines = op_lines(home.path());
     // `docs/state.md`, "What each part holds" promises an over-budget frame line.
     assert_terminal_wire(&lines, "tui.frame");
@@ -387,7 +387,7 @@ fn frame_within_budget_writes_nothing() {
     lp.clock = dyn_clock(&clock);
     lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame(&rx), None);
+    assert_eq!((lp.frame(&rx)).expect("event loop result succeeds"), None);
     // `docs/state.md`, "What each part holds" says an in-budget frame writes none.
     assert!(
         !log_file(home.path()).exists(),
@@ -913,7 +913,10 @@ fn attached_frame_waits_for_the_tail_install_and_draw() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "the draw before summary acceptance leaves the guard open"
@@ -928,7 +931,10 @@ fn attached_frame_waits_for_the_tail_install_and_draw() {
         .name("timing-open-tail".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            assert_eq!(lp.frame_inner(&rx), None);
+            assert_eq!(
+                (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+                None
+            );
             done.send(lp).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -987,7 +993,10 @@ fn attached_frame_stays_open_when_tail_is_due_without_a_stream() {
     lp.attached_frame = lp.timing.attached_frame();
     accept_summary(&mut lp, &id);
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a due open without a stream does not end the guard"
@@ -1026,7 +1035,7 @@ fn attached_frame_stays_open_when_tail_fetch_is_lost() {
     let (lp, result) = Deadline::after(Duration::from_secs(10))
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the lost tail frame: {err}"));
-    assert_eq!(result, None);
+    assert_eq!((result).expect("event loop result succeeds"), None);
     assert!(
         lp.attached_frame.is_some(),
         "a lost tail read does not end the guard"

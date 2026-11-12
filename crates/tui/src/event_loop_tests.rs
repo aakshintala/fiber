@@ -147,9 +147,10 @@ fn logo_repaint_cursor_failure_exits_one() {
         .spawn(move || done.send(lp.logo_step()).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        Deadline::after(DEADLINE)
+        (Deadline::after(DEADLINE)
             .recv(&finished)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for logo repaint: {err}")),
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for logo repaint: {err}")))
+        .expect("event loop result succeeds"),
         None
     );
 }
@@ -384,7 +385,9 @@ fn taken<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> (i32, usize) {
         tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
     }
     drop(tx);
-    let code = lp.run(&rx);
+    let code = lp
+        .run(&rx)
+        .expect("loop completes without a terminal failure");
     (code, sent - rx.try_iter().count())
 }
 
@@ -591,7 +594,10 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
 fn ctrl_c_once_on_empty_box() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x03]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.hint(), "the first Ctrl+C arms the documented quit");
 }
 
@@ -605,7 +611,7 @@ fn ctrl_c_twice_quits_with_zero() {
         .unwrap_or_else(|err| panic!("send: {err}"));
     // The sender stays: the loop returns on the quit, not on a closed
     // channel.
-    assert_eq!(lp.run(&rx), 0);
+    assert_eq!((lp.run(&rx)).expect("event loop result succeeds"), 0);
     assert_eq!(rx.try_iter().count(), 0);
     drop(tx);
 }
@@ -620,10 +626,16 @@ fn a_rebound_new_session_answers_its_new_key() {
     lp.app.set_keys(crate::KeysSetup { user });
     let (_, rx) = mpsc::channel();
     // `0x0e` is Ctrl+N: with `new_session` rebound it does nothing.
-    assert_eq!(lp.step(Input::Bytes(vec![0x0e]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x0e]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.session().is_some());
     // `0x14` is Ctrl+T: it goes home.
-    assert_eq!(lp.step(Input::Bytes(vec![0x14]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x14]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.session().is_none());
 }
 
@@ -1611,7 +1623,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         (lp, code, seen)
     });
     drop(lp);
-    assert_eq!(code, None);
+    assert_eq!((code).expect("event loop result succeeds"), None);
     assert_eq!(seen, Some((true, "typed\n".to_owned())));
     assert!(!is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
@@ -1649,12 +1661,15 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
 fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let mut ran = false;
-    assert_eq!(
-        lp.hand_over(|| {
+    let error = lp
+        .hand_over(|| {
             ran = true;
             None
-        }),
-        Some(1)
+        })
+        .expect_err("a missing terminal setup prevents handover");
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not take the terminal back: the terminal was never set up"
     );
     assert!(ran);
 }
@@ -1712,9 +1727,17 @@ fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
 /// Runs `lp` over `inputs` on a thread with one deadline: the exit code
 /// and the draft.
 #[track_caller]
-fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
+fn feed_within(
+    mut lp: Loop<TestBackend>,
+    inputs: Vec<Input>,
+) -> (Result<i32, super::ExitCause>, String) {
     fakes::within("the loop", Deadline::after(DEADLINE), move || {
-        let code = feed(&mut lp, inputs);
+        let (tx, rx) = mpsc::channel();
+        for input in inputs {
+            tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
+        }
+        drop(tx);
+        let code = lp.run(&rx);
         (code, lp.app.draft())
     })
 }
@@ -1733,7 +1756,9 @@ fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
     let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
     lp.var = var;
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
-    assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
+    let (code, draft) = feed_within(lp, inputs.into());
+    assert_eq!(code.expect("editor returns the terminal"), 0);
+    assert_eq!(draft, "edited!");
     editor.assert_gone();
     crate::term::restore();
 }
@@ -1873,7 +1898,7 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
     let code = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the file editor to quit: {err}"));
-    assert_eq!(code, Some(143));
+    assert_eq!((code).expect("event loop result succeeds"), Some(143));
     // As above: suspended, not resumed, and the acknowledged editor pid
     // is gone.
     assert!(is_cooked(
@@ -1922,10 +1947,11 @@ fn a_clean_file_editor_return_without_a_line_rereads_the_config_view() {
     assert!(lp.app.config_view_open());
     let before = seam.reads().len();
     assert_eq!(
-        lp.open_file(crate::editor::OpenFile {
+        (lp.open_file(crate::editor::OpenFile {
             path: PathBuf::from("/w/settings.json"),
             line: None,
-        }),
+        }))
+        .expect("event loop result succeeds"),
         None
     );
     assert_eq!(lp.app.notices.newest(), None);
@@ -1973,10 +1999,11 @@ fn a_changed_file_return_while_offline_marks_the_diff_not_connected() {
     );
     assert!(lp.app.session_view_open());
     assert_eq!(
-        lp.open_file(crate::editor::OpenFile {
+        (lp.open_file(crate::editor::OpenFile {
             path: PathBuf::from("/w/src/file-0.rs"),
             line: Some(1),
-        }),
+        }))
+        .expect("event loop result succeeds"),
         None
     );
     assert_eq!(lp.app.notices.newest(), None);
@@ -2108,7 +2135,7 @@ fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
     let (code, lp) =
         Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "the editor return");
     handle.join().unwrap();
-    assert_eq!(code, None);
+    assert_eq!((code).expect("event loop result succeeds"), None);
     assert_eq!(lp.app.notices.newest(), None);
     drop(editor);
     crate::term::restore();
@@ -2120,7 +2147,13 @@ fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
     lp.var = var;
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
-    assert_eq!(feed_within(lp, inputs.into()), (1, "a".to_owned()));
+    let (error, draft) = feed_within(lp, inputs.into());
+    let error = error.expect_err("the terminal cannot be resumed without setup");
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not take the terminal back: the terminal was never set up"
+    );
+    assert_eq!(draft, "a");
     editor.assert_gone();
 }
 
@@ -2419,17 +2452,27 @@ fn an_exit_sends_its_lines_then_quits() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let reader = BufReader::new(theirs);
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
     assert_eq!(
-        lp.step(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(
             Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "streaming")),
             &rx
-        ),
+        ))
+        .expect("event loop result succeeds"),
         None
     );
     // Ctrl+C twice asks while the session works, and `c` closes all.
-    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
-    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x03]), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x03]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     // The hello fanned out feed and an unscoped recent; no doc promises
     // their order or count, so collect until both kinds appear.
     let mut reader = reader;
@@ -2468,7 +2511,10 @@ fn an_exit_sends_its_lines_then_quits() {
     // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
-    assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
+    assert_eq!(
+        (lp.step(Input::Bytes(b"c".to_vec()), &rx)).expect("event loop result succeeds"),
+        Some(0)
+    );
     // The archived scoped ask rides beside the scoped one; `command_past_reads`
     // steps past both `recent` lines.
     let (reader, subscribe) = command_past_reads(reader, "the subscribe");
@@ -2837,13 +2883,20 @@ fn run_writes_the_title_once_until_it_changes() {
     let (_tx, rx) = mpsc::channel();
     // Two frames on home, one title; a status for the attached session
     // renames it, and the same status again writes nothing.
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     for _ in 0..2 {
         assert_eq!(
-            lp.step(Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "idle")), &rx),
+            (lp.step(Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "idle")), &rx))
+                .expect("event loop result succeeds"),
             None
         );
     }
@@ -2923,7 +2976,10 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     lp.files_out = out;
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"@".to_vec()), &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.search.is_some());
     let (generation, result) = next_result(
         &rx,
@@ -2931,14 +2987,26 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         &Deadline::after(DEADLINE),
     );
     assert_eq!(generation, lp.app.generation());
-    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    assert_eq!(
+        (lp.step(Input::Files { generation, result }, &idle)).expect("event loop result succeeds"),
+        None
+    );
     let shown = lp.app.completions().map(|c| c.lines()).unwrap_or_default();
     assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
-    assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"b".to_vec()), &idle)).expect("event loop result succeeds"),
+        None
+    );
     let (generation, result) = next_result(&rx, "the search for b", &Deadline::after(DEADLINE));
     assert_eq!(result, Ok(owned(&["sub/b.rs"])));
-    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
-    assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Files { generation, result }, &idle)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\t".to_vec()), &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert_eq!(lp.app.draft(), "sub/b.rs ");
     assert!(lp.search.is_none());
 }
@@ -3015,7 +3083,8 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     // Ctrl+F and three keystrokes in one read: three pauses, one
     // generation each.
     assert_eq!(
-        lp.step(Input::Bytes(vec![0x06, b'x', b'y', b'z']), &main),
+        (lp.step(Input::Bytes(vec![0x06, b'x', b'y', b'z']), &main))
+            .expect("event loop result succeeds"),
         None
     );
     // Each pause sleeps on the injected clock, then sends its generation.
@@ -3062,7 +3131,10 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     // A mutant that drops the send fails above, within `DEADLINE`.
     let (_, main) = mpsc::channel::<Input>();
     for generation in generations {
-        assert_eq!(lp.step(Input::FindDue(generation), &main), None);
+        assert_eq!(
+            (lp.step(Input::FindDue(generation), &main)).expect("event loop result succeeds"),
+            None
+        );
     }
     // Only the current generation scans: exactly one `history` command
     // reaches the hub.
@@ -3222,7 +3294,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
     let (code, lp) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
-    assert_eq!(code, 0);
+    assert_eq!((code).expect("event loop result succeeds"), 0);
     assert!(lp.app.pages().part(0).is_some(), "the revealed page loaded");
     assert_eq!(
         lp.app.find_bar().map(|bar| bar.query).unwrap_or_default(),
@@ -3370,7 +3442,10 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     let (tx, rx) = mpsc::channel();
     lp.files_out = tx;
     let (_, idle) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x0c]), &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.model_picker_open());
     let answer = Deadline::after(DEADLINE)
         .recv(&rx)
@@ -3378,7 +3453,10 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     assert!(matches!(answer, Input::Models(Ok(_))));
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Stale]);
     // The answer folds with no read owed.
-    assert_eq!(lp.step(answer, &idle), None);
+    assert_eq!(
+        (lp.step(answer, &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert_eq!(lp.app.take_reads(), None);
 }
 
@@ -3688,7 +3766,10 @@ fn attached_frame_waits_for_a_completed_tail_read() {
     lp.timing = crate::timing::Timing::new(diag);
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a session draw before the open tail read leaves the guard open"
@@ -3720,7 +3801,10 @@ fn attached_frame_waits_for_an_attached_session() {
     lp.timing = crate::timing::Timing::new(diag);
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a home draw does not stop the guard"
@@ -3753,7 +3837,10 @@ fn attached_frame_is_discarded_without_a_stream() {
     lp.timing = crate::timing::Timing::new(diag);
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a missing stream leaves the guard open"
@@ -3799,7 +3886,10 @@ fn feedback_hands_the_screen_ring_to_the_writer() {
         .map(|ch| crate::keys::Event::Key(crate::keys::Key::Char(ch)))
         .collect();
     events.push(crate::keys::Event::Key(crate::keys::Key::Enter));
-    assert_eq!(lp.handle_events_inner(events), None);
+    assert_eq!(
+        (lp.handle_events_inner(events)).expect("event loop result succeeds"),
+        None
+    );
     let (description, session, shapes) =
         Deadline::after(DEADLINE).recv_or_fail(&rx, "feedback shapes");
     assert_eq!(description, "hi");
