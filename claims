@@ -360,3 +360,7 @@ crates/tui/src/view/model_picker/install_tests.rs:375-375	fiber-4619	plan	2026-1
 crates/tui/src/view/model_picker_tests.rs:2299-2301	fiber-4619	plan	2026-11-12T09:19:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
 crates/tui/src/view/request_tests.rs:241-241	fiber-4619	plan	2026-11-12T09:19:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
 crates/tui/src/view/request_tests.rs:262-262	fiber-4619	plan	2026-11-12T09:19:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4619-wrap-views	
+crates/hub/src/connection.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/connection_tests.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/archive.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/archive_tests.rs	fiber-4716	plan	2026-11-12T09:42:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
