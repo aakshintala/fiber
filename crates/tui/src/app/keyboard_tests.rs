@@ -1911,3 +1911,132 @@ fn the_default_key_methods_bind_no_key() {
         KeyOutcome::NotHandled
     );
 }
+
+/// A renderer counting focus runs with the session each saw.
+#[derive(Debug, Default)]
+struct Focused {
+    seen: RefCell<Vec<Option<String>>>,
+    pending: RefCell<Vec<(String, String)>>,
+}
+
+impl Renderer for Focused {
+    fn name(&self) -> &str {
+        "focused"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn on_focus(&self, ctx: &SessionCtx) {
+        self.seen
+            .borrow_mut()
+            .push(ctx.session_id.as_ref().map(|id| id.0.clone()));
+    }
+
+    fn take_pending(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.pending.borrow_mut())
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+}
+
+/// An attached app with `focused` installed for focus counting.
+fn focused_app(focused: &Rc<Focused>) -> App {
+    let mut app = homed(80, 24);
+    app.install_renderer(focused.clone());
+    app
+}
+
+#[test]
+fn focus_attach_fires_once_with_the_session() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    // `docs/tui.md`, "Input and focus": the session on screen fires once, carrying its id.
+    let session = app.session().cloned();
+    app.fire_focus_change(session);
+    assert_eq!(*focused.seen.borrow(), vec![Some(SESSION.to_owned())]);
+}
+
+#[test]
+fn focus_home_fires_once_with_no_session() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    // Home fires once with the key omitted: no previous session's
+    // identity is reused.
+    app.fire_focus_change(None);
+    assert_eq!(*focused.seen.borrow(), vec![None]);
+}
+
+#[test]
+fn focus_switch_fires_once_with_the_new_session() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    // `docs/tui.md`, "Input and focus": a switch fires once, with the session on screen now.
+    app.fire_focus_change(Some(other));
+    assert_eq!(
+        *focused.seen.borrow(),
+        vec![Some("s_bbbbbbbbbbbbbbbb".to_owned())]
+    );
+}
+
+#[test]
+fn focus_drains_failure_notices_to_the_screen() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    focused
+        .pending
+        .borrow_mut()
+        .push(("hook_failed".into(), "focus broke".to_owned()));
+    focused
+        .pending
+        .borrow_mut()
+        .push(("extension_failed".into(), "focus timed out".to_owned()));
+    app.fire_focus_change(app.session().cloned());
+    // The run queued both failure kinds, and neither is dropped.
+    assert_eq!(app.notices().len(), 2);
+    assert_eq!(app.notice(), Some("focus timed out"));
+}
+
+#[test]
+fn kitty_dispatch_reaches_both_the_kitty_and_fallback_bindings() {
+    let canned = Keyed::canned();
+    canned.run_handled.set(true);
+    let mut app = keyed_app(&canned);
+    // The kitty-protocol bytes and the fallback key each parse to one
+    // stroke, and each stroke reaches the fake's `run` binding: the
+    // fixture binds both, so every action keeps a key on any terminal.
+    for bytes in [b"\x1b[13;2u".as_slice(), b"\r".as_slice()] {
+        let mut strokes = Vec::new();
+        for event in crate::keys::Parser::default().feed(bytes) {
+            if let crate::keys::Event::Stroke(stroke) = event {
+                strokes.push(stroke);
+            }
+        }
+        assert_eq!(strokes.len(), 1, "{bytes:?}");
+        assert_eq!(app.on_press(strokes.pop().unwrap(), now()), Effect::None);
+    }
+    // `docs/tui.md`, "Keys": the kitty binding dispatches once detection
+    // finishes, and its fallback dispatches without the protocol.
+    assert_eq!(
+        *canned.runs.borrow(),
+        vec![
+            ("shift+enter".to_owned(), false),
+            ("enter".to_owned(), false)
+        ]
+    );
+}

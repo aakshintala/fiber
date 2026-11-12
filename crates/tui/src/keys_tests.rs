@@ -1628,3 +1628,47 @@ fn device_attributes_sixel_bit() {
         );
     }
 }
+
+/// Feeds `chunks` in order with the kitty flags pushed, returning the
+/// strokes before `default_event` maps them.
+fn feed_flagged_strokes(chunks: &[&[u8]]) -> Vec<Stroke> {
+    let mut parser = Parser::default();
+    parser.set_kitty();
+    let mut out = Vec::new();
+    for chunk in chunks {
+        for event in parser.feed(chunk) {
+            if let Event::Stroke(stroke) = event {
+                out.push(stroke);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn kitty_shift_enter_decodes_with_and_without_the_flag() {
+    let shift = Mods::SHIFT;
+    // `CSI 13;2u` reads as shift+enter whether or not the flags are
+    // pushed: decode is unconditional, and detection gates only whether
+    // the terminal sends these bytes.
+    for chunks in [vec![b"\x1b[13;2u".as_slice()], vec![b"\x1b[13;", b"2u"]] {
+        assert_eq!(
+            feed_strokes(&chunks),
+            vec![modified(Code::Enter, shift)],
+            "{chunks:?}"
+        );
+        assert_eq!(
+            feed_flagged_strokes(&chunks),
+            vec![modified(Code::Enter, shift)],
+            "{chunks:?}"
+        );
+    }
+}
+
+#[test]
+fn kitty_legacy_enter_still_decodes_without_the_protocol() {
+    // The fallback key needs no protocol: carriage return reads as
+    // Enter with and without the pushed flags.
+    assert_eq!(feed_strokes(&[b"\r"]), vec![plain(Code::Enter)]);
+    assert_eq!(feed_flagged_strokes(&[b"\r"]), vec![plain(Code::Enter)]);
+}

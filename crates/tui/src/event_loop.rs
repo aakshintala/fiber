@@ -819,7 +819,8 @@ impl<B: Backend> Loop<B> {
     }
 
     /// The bookkeeping every handled input ends with: reporting an attach
-    /// the input brought, dropping a closed panel worker, asking a read
+    /// the input brought, firing the focus handlers a session change
+    /// calls for, dropping a closed panel worker, asking a read
     /// the picker owes, and starting a login that waits.
     fn after_input(&mut self, before: Option<SessionId>) -> Option<i32> {
         // An attach the input brought is reported once: the session
@@ -828,6 +829,14 @@ impl<B: Backend> Loop<B> {
             && let Some(session) = self.app.session()
         {
             (self.on_attach)(session);
+        }
+        // A changed session fires the focus handlers once, with the
+        // session on screen now: attach, home entry and switches each
+        // fire once, while a batch that lands where it started fires
+        // nothing (`docs/tui.md`, "Input and focus").
+        let after = self.app.session().cloned();
+        if before != after {
+            self.app.fire_focus_change(after);
         }
         // A closed `@` panel drops its worker and the listing it holds.
         if !self.app.files_open() {

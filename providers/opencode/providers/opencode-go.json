@@ -7,6 +7,35 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "beam-free",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Beam Free",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
         "cache_key_header": "x-opencode-session"
       },
       "context_window": 1000000,
@@ -166,6 +195,32 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.1,
+        "input": 2,
+        "output": 10
+      },
+      "id": "gemini-4-argon",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Argon",
+      "protocol": "google-generative-ai",
+      "subscription": true,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
       ]
     },
     {
@@ -452,6 +507,33 @@
         "max_tokens": true,
         "store": false
       },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.042,
+        "input": 0.834,
+        "output": 2.501
+      },
+      "id": "hy4",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Hy4",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "off",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
       "context_window": 1024000,
       "cost": {
         "cache_read": 0.042,
@@ -474,6 +556,34 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
+      "context_window": 262144,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "iceman-contributor-free",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Iceman Contributor Free",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
       ]
     },
     {
@@ -542,6 +652,35 @@
         "max_tokens": true,
         "store": false
       },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 2,
+        "input": 2,
+        "output": 10
+      },
+      "id": "kimi-k3.1-pro",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Kimi K3.1 Pro",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
       "context_window": 1000000,
       "cost": {
         "cache_read": 0.006,
@@ -554,6 +693,38 @@
       ],
       "max_output_tokens": 131072,
       "name": "LongCat-2.0",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "longcat-2.5-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 262144,
+      "name": "LongCat 2.5 Free",
       "protocol": "openai-completions",
       "subscription": true,
       "thinking_levels": [
@@ -792,6 +963,36 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.015,
+        "input": 0.15,
+        "output": 0.6
+      },
+      "id": "minimax-m3.1-flash",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 512000,
+      "name": "MiniMax M3.1 Flash",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
         "store": false
       },
       "context_window": 1048576,
@@ -976,6 +1177,34 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true,
+        "store": false
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.1,
+        "input": 1,
+        "output": 2.7
+      },
+      "id": "step-5-preview",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Step 5 Preview",
+      "protocol": "openai-completions",
+      "subscription": true,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
       ]
     },
     {

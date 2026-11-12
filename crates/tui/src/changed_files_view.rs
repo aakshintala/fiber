@@ -7,7 +7,9 @@ use contract::events::CommandResult;
 
 use crate::diff::{DiffLine, diff_lines, gutter_prefix, gutter_width, ink_spans, safe_line};
 use crate::format;
-use crate::swapped::{Frame, Ink, List, Spot};
+use crate::swapped::{Chrome, Frame, Ink, List, Span, Spot};
+use crate::theme::Role;
+use ratatui::style::{Modifier, Style};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
@@ -118,12 +120,100 @@ pub(crate) struct NumstatAnswer {
     pub(crate) lines: BTreeMap<String, u64>,
 }
 
+/// The shell line for the view-open tracking query over the listed
+/// paths: one `git status --porcelain` limited to the listed paths,
+/// sent on the same side and channel as the numstat query. Each listed
+/// path the query reports unstaged-clean stays silent; anything else
+/// reports its class with hub-side line counts for untracked paths, so
+/// the fold needs no path parsing: the rows stay absolute card paths.
+pub(crate) fn tracking_command(paths: &[&str]) -> String {
+    let quoted: Vec<String> = paths
+        .iter()
+        .map(|path| format!("'{}'", path.replace('\'', "'\\''")))
+        .collect();
+    let each = quoted.join(" ");
+    // `awk 'END{print NR}'` counts lines with semantics that include a
+    // final unterminated line (`issue-4592.md:70` requires one added
+    // line for it): `wc -l` counts newline characters, so it reads 0.
+    format!(
+        "for p in {each}; do s=$(git --no-optional-locks status --porcelain=v1 --no-renames -- \"$p\" 2>/dev/null | head -c 2); case \"$s\" in '??'*) c=$(awk 'END{{print NR}}' < \"$p\" 2>/dev/null | tr -d '[:space:]'); printf 'untracked\\t%s\\t%s\\0' \"$c\" \"$p\";; A*) printf 'added\\t\\t%s\\0' \"$p\";; *D*) printf 'deleted\\t\\t%s\\0' \"$p\";; esac; done"
+    )
+}
+
+/// One listed path's tracking class, folded with the figures answer:
+/// `untracked` (with hub-side line counts) and `added` (staged-new)
+/// draw `A`; `deleted` with a numstat row draws `D`; anything the
+/// numstat answer omits outside `untracked` joins no-diff.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Tracking {
+    /// Paths git does not track, with their line counts at query time.
+    pub(crate) untracked: BTreeSet<String>,
+    /// Paths staged new in the index.
+    pub(crate) added: BTreeSet<String>,
+    /// Paths deleted against `HEAD`.
+    pub(crate) deleted: BTreeSet<String>,
+    /// Line counts for untracked paths: the answer carries hub-side
+    /// counts, since `count_lines` runs only against a local root.
+    pub(crate) counts: BTreeMap<String, u64>,
+}
+
+/// Folds a tracking answer into per-path classes. Records are NUL
+/// separated `class`, count, path fields; an empty count means the
+/// count did not survive, a missing or malformed record rejects the
+/// whole answer, and blank fragments (the closing-line strip's
+/// trailing newline, an empty answer) are valid: every path is clean.
+pub(crate) fn parse_tracking(output: &str) -> Option<Tracking> {
+    let mut tracking = Tracking::default();
+    for record in output.split('\0') {
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut fields = record.splitn(3, '\t');
+        let (Some(class), Some(count), Some(path)) = (fields.next(), fields.next(), fields.next())
+        else {
+            return None;
+        };
+        if path.is_empty() {
+            return None;
+        }
+        let count = if count.trim().is_empty() {
+            None
+        } else {
+            Some(count.trim().parse::<u64>().ok()?)
+        };
+        match class {
+            "untracked" => {
+                tracking.untracked.insert(path.to_owned());
+                if let Some(lines) = count {
+                    tracking.counts.insert(path.to_owned(), lines);
+                }
+            }
+            "added" if count.is_none() => {
+                tracking.added.insert(path.to_owned());
+            }
+            "deleted" if count.is_none() => {
+                tracking.deleted.insert(path.to_owned());
+            }
+            _ => return None,
+        }
+    }
+    Some(tracking)
+}
+
 /// Displayed figures for the card's paths, with the paths the
 /// numstat answer omits marked untracked for the row form.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedFigures {
     pub(crate) figures: BTreeMap<String, (u64, u64)>,
+    /// Paths new relative to `HEAD`, per the tracking answer.
     pub(crate) untracked: BTreeSet<String>,
+    /// Staged-new paths: `A` with numstat figures.
+    pub(crate) added: BTreeSet<String>,
+    /// Deleted paths with a numstat row: `D`.
+    pub(crate) deleted: BTreeSet<String>,
+    /// Tracked paths the numstat answer omits: no-diff candidates the
+    /// fold marks at answer time.
+    pub(crate) dim: BTreeSet<String>,
 }
 
 /// Counts lines for `paths` under `root`: the added figure for
@@ -157,10 +247,19 @@ pub(crate) fn count_lines(root: &std::path::Path, paths: &[&str]) -> BTreeMap<St
 /// On a remote terminal the card holds hub workspace paths, so a path
 /// the launch workspace does not strip also matches by its viewed
 /// workspace-relative form.
+///
+/// The tracking answer classifies each listed path as well: `untracked`
+/// paths resolve to their line counts (the answer's hub-side counts
+/// first, the local line counts where those never ran); `added` keeps
+/// numstat figures with `A`; `deleted` with a numstat row draws `D`.
+/// Omitted paths outside `untracked` join `dim` for the no-diff fold —
+/// no-diff beats `D`, since only an uncommitted deletion carries a
+/// numstat row. Without tracking no class applies.
 pub(crate) fn resolve_figures(
     changes: &BTreeMap<String, (u64, u64)>,
     numstat: Option<&str>,
     untracked_lines: &BTreeMap<String, u64>,
+    tracking: Option<&Tracking>,
     workspace: Option<&std::path::Path>,
     viewed: Option<&std::path::Path>,
 ) -> ResolvedFigures {
@@ -168,22 +267,64 @@ pub(crate) fn resolve_figures(
     let answered = numstat.is_some();
     let mut figures = BTreeMap::new();
     let mut untracked = BTreeSet::new();
+    let mut added = BTreeSet::new();
+    let mut deleted = BTreeSet::new();
+    let mut dim = BTreeSet::new();
+    if let Some(tracking) = tracking {
+        for path in changes.keys() {
+            if tracking.added.contains(path.as_str()) {
+                added.insert(path.clone());
+            }
+            if tracking.deleted.contains(path.as_str()) {
+                deleted.insert(path.clone());
+            }
+        }
+    }
     for (path, card) in changes.iter() {
         let figure = match lookup(&parsed, path, workspace, viewed) {
-            Some(NumstatFigure::Counted(added, removed)) => (*added, *removed),
+            Some(NumstatFigure::Counted(added_count, removed_count)) => {
+                (*added_count, *removed_count)
+            }
             Some(NumstatFigure::Binary) => *card,
-            None if answered => match untracked_lines.get(path) {
-                Some(lines) => {
-                    untracked.insert(path.clone());
-                    (*lines, 0)
+            None if answered => match tracking {
+                Some(tracking) if tracking.untracked.contains(path.as_str()) => {
+                    match tracking
+                        .counts
+                        .get(path.as_str())
+                        .or_else(|| untracked_lines.get(path.as_str()))
+                    {
+                        Some(lines) => {
+                            untracked.insert(path.clone());
+                            (*lines, 0)
+                        }
+                        // Undone-new: tracking saw it untracked, but no
+                        // count survived, so it joins no-diff, not A.
+                        None => {
+                            dim.insert(path.clone());
+                            *card
+                        }
+                    }
                 }
+                Some(_) if added.contains(path.as_str()) => *card,
+                Some(_) => {
+                    dim.insert(path.clone());
+                    *card
+                }
+                // Without tracking no class applies: the card's figures
+                // with no letter and no no-diff marking.
                 None => *card,
             },
             None => *card,
         };
         figures.insert(path.clone(), figure);
     }
-    ResolvedFigures { figures, untracked }
+    ResolvedFigures {
+        figures,
+        untracked,
+        added,
+        deleted,
+        dim,
+    }
 }
 
 /// The answer's figure for a card path: the path as listed, its launch
@@ -228,7 +369,11 @@ pub(crate) enum Diff {
     Failed(String),
 }
 
-/// Folds a shell answer into a safe diff display.
+/// Folds a shell answer into a safe diff display. The shell tool
+/// appends its closing "Exit code N." line to the command's own output,
+/// which is the driver's, not the diff's: strip it like the numstat
+/// answer does, so a committed file's reply reads empty and no "Exit
+/// code" text reaches any diff.
 pub(crate) fn answer(result: Option<&CommandResult>) -> Diff {
     let Some(CommandResult::Shell {
         output,
@@ -238,9 +383,10 @@ pub(crate) fn answer(result: Option<&CommandResult>) -> Diff {
     else {
         return failed();
     };
-    if !output.is_empty() {
+    let body = numstat_body(output, process.exit_code);
+    if !body.is_empty() {
         return Diff::Lines {
-            lines: output.lines().map(safe_line).collect(),
+            lines: body.lines().map(safe_line).collect(),
             cut: artifact.as_deref().map(safe_line),
         };
     }
@@ -269,21 +415,178 @@ fn hunk_start(line: &str) -> Option<u64> {
     start.parse::<u64>().ok().map(|start| start.max(1))
 }
 
+/// One body row of the grouped Changed files list, in display order:
+/// each folder holding a listed file with its files under it, then the
+/// rule above the totals. Folder and rule rows hold no path; file rows
+/// hold their path, so selection, Enter and clicks share this map and
+/// never send a diff request for a folder or the rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ListRow {
+    /// A dim folder row with its trailing slash, or `"./"` for files at
+    /// the workspace's top level.
+    Folder(String),
+    /// A file row: its path in the displayed figures.
+    File(String),
+    /// The rule above the totals.
+    Rule,
+}
+
+/// The grouped list's body rows for `changes`: each folder holding a
+/// listed file in path order with its files under it in name order,
+/// then the rule above the totals. Folders group the workspace-relative
+/// display paths; file rows hold the card's own path, which Enter, the
+/// editor and the figures read. With no files the plan holds no rule,
+/// since the totals have no last file to follow.
+pub(crate) fn list_rows(
+    changes: &BTreeMap<String, (u64, u64)>,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> Vec<ListRow> {
+    let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in changes.keys() {
+        folders
+            .entry(folder_of(display_path(path, workspace, viewed)))
+            .or_default()
+            .push(path.clone());
+    }
+    let mut rows = Vec::new();
+    for (folder, mut paths) in folders {
+        rows.push(ListRow::Folder(folder));
+        paths.sort();
+        rows.extend(paths.into_iter().map(ListRow::File));
+    }
+    if rows.iter().any(|row| matches!(row, ListRow::File(_))) {
+        rows.push(ListRow::Rule);
+    }
+    rows
+}
+
+/// The display rows holding files: the rows selection, Enter and clicks
+/// move over, so folder and rule rows never send a diff request.
+pub(crate) fn file_takes(
+    changes: &BTreeMap<String, (u64, u64)>,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> Vec<usize> {
+    list_rows(changes, workspace, viewed)
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| matches!(row, ListRow::File(_)))
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// The grouped row's path: the file's path on a file row, `None` on a
+/// folder or rule row, which Enter and clicks leave alone.
+pub(crate) fn row_path(rows: &[ListRow], at: usize) -> Option<&str> {
+    match rows.get(at) {
+        Some(ListRow::File(path)) => Some(path),
+        _ => None,
+    }
+}
+
+/// The folder row a path groups under: its directory with the trailing
+/// slash, or `"./"` for a file at the workspace's top level.
+fn folder_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(at) => path[..=at].to_owned(),
+        None => "./".to_owned(),
+    }
+}
+
+/// The file name a file row shows: the path past its last slash.
+fn name_of(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(at) => &path[at + 1..],
+        None => path,
+    }
+}
+
+/// The path the list shows: workspace-relative, since the card holds
+/// absolute workspace paths (`docs/tui.md`, "Swapped views"). Strips
+/// the first root that prefixes it — the local launch workspace, else
+/// the viewed one — like the figures lookup does; anything else, such
+/// as a path outside the workspace, shows whole.
+fn display_path<'a>(
+    path: &'a str,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> &'a str {
+    for root in [workspace, viewed].into_iter().flatten() {
+        if let Some(relative) = std::path::Path::new(path)
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.to_str())
+        {
+            return relative;
+        }
+    }
+    path
+}
+
+/// A file row's letter: `A` in `added` for a path the answered figures
+/// count as untracked, `D` in `removed` for a path missing from the
+/// local workspace root at frame time, `M` in `attention` otherwise,
+/// including on a remote terminal with no local root to stat.
+fn letter(
+    path: &str,
+    untracked: &BTreeSet<String>,
+    added: &BTreeSet<String>,
+    deleted: &BTreeSet<String>,
+    root: Option<&std::path::Path>,
+) -> (String, Ink) {
+    if untracked.contains(path) || added.contains(path) {
+        ("A  ".to_owned(), Ink::Role(crate::theme::Role::Added))
+    } else if deleted.contains(path) || root.is_some_and(|root| !root.join(path).exists()) {
+        // A query-reported deletion and a frame-time absence draw the
+        // same D; each side has its own test.
+        ("D  ".to_owned(), Ink::Role(crate::theme::Role::Removed))
+    } else {
+        ("M  ".to_owned(), Ink::Role(crate::theme::Role::Attention))
+    }
+}
+
+/// A figured row's figures: git's where the answer counts the path, the
+/// card's everywhere else.
+fn display_figures(
+    figures: &ResolvedFigures,
+    changes: &BTreeMap<String, (u64, u64)>,
+    path: &str,
+) -> (u64, u64) {
+    figures
+        .figures
+        .get(path)
+        .or_else(|| changes.get(path))
+        .copied()
+        .unwrap_or((0, 0))
+}
+
 /// Builds the file list or the selected file's diff frame. The list
-/// rows show `figures` where answered, the card's figures until
-/// then; an untracked path draws its line count with
-/// "· untracked, wholly added" dim. Ctrl+G edits the shown file on a
-/// local terminal, and fetches the hub file to edit on a remote one:
-/// either way the footer keeps the hint.
+/// groups the displayed figures' paths by folder, each file row a
+/// letter, its name and its figures right-aligned in one column; a
+/// no-diff path stays listed with "no changes" dim. Ctrl+G edits the
+/// shown file on a local terminal, and fetches the hub file to edit on
+/// a remote one: either way the footer keeps the hint.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the frame reads the figures, the chosen diff, the list, the no-diff set, both workspace roots and the view width for the editor target"
+)]
 pub(crate) fn frame(
     changes: &BTreeMap<String, (u64, u64)>,
     figures: Option<&ResolvedFigures>,
     chosen: Option<(&str, &Diff)>,
     list: List,
+    no_diff: &BTreeSet<String>,
+    root: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+    width: u16,
 ) -> Frame {
     if let Some((path, diff)) = chosen {
-        return diff_frame(path, diff, list);
+        return diff_frame(path, diff, list, width);
     }
+    // Until the figures answer arrives the rows show the card's figures
+    // with M: the presence read stays off, so nothing draws D early.
+    let answered = figures.is_some();
     let resolved;
     let figures = match figures {
         Some(figures) => figures,
@@ -291,58 +594,209 @@ pub(crate) fn frame(
             resolved = ResolvedFigures {
                 figures: changes.clone(),
                 untracked: BTreeSet::new(),
+                added: BTreeSet::new(),
+                deleted: BTreeSet::new(),
+                dim: BTreeSet::new(),
             };
             &resolved
         }
     };
-    let paths = ranked(&figures.figures);
-    let rows = paths
-        .iter()
-        .map(|(path, added, removed)| {
-            if figures.untracked.contains(*path) {
-                return vec![
-                    (safe_line(path), None, Ink::Heading),
-                    (" · ".to_owned(), None, Ink::Muted),
-                    ("untracked, wholly added".to_owned(), None, Ink::Muted),
-                ];
+    let presence = if answered { root } else { None };
+    let plan = list_rows(changes, root, viewed);
+    // The name column's width: every file row pads its name to it, so
+    // rows with different filename widths still place their figures at
+    // the same columns (`issue-4592.md:70` right-aligns the figures in
+    // one column). The figures column's widths: every figured row
+    // right-aligns its counts in them, and the totals reuse them below.
+    let mut name_w = 0;
+    for row in &plan {
+        let ListRow::File(path) = row else {
+            continue;
+        };
+        let shown = display_path(path, root, viewed);
+        name_w = name_w.max(crate::text::width(&safe_line(name_of(shown))));
+    }
+    let mut added_w = 0;
+    let mut removed_w = 0;
+    for row in &plan {
+        let ListRow::File(path) = row else {
+            continue;
+        };
+        if no_diff.contains(path.as_str()) {
+            continue;
+        }
+        let (added, removed) = display_figures(figures, changes, path);
+        added_w = added_w.max(crate::text::width(&format!("+{added}")));
+        removed_w = removed_w.max(crate::text::width(&format!("−{removed}")));
+    }
+    // The content's width so far: the rule spans it, since the frame
+    // knows no terminal width to span instead.
+    let mut content_w = 0;
+    let mut rows = Vec::new();
+    for (at, row) in plan.iter().enumerate() {
+        match row {
+            ListRow::Folder(folder) => {
+                let folder = safe_line(folder);
+                content_w = content_w.max(crate::text::width(&folder));
+                rows.push(vec![(folder, None, Ink::Muted)]);
             }
-            vec![
-                (safe_line(path), None, Ink::Heading),
-                (" · ".to_owned(), None, Ink::Muted),
-                (
-                    format!("+{added}"),
+            ListRow::Rule => {
+                rows.push(vec![(
+                    "─".repeat(content_w),
                     None,
-                    Ink::Role(crate::theme::Role::Added),
-                ),
-                (" ".to_owned(), None, Ink::Plain),
-                (
-                    format!("−{removed}"),
-                    None,
-                    Ink::Role(crate::theme::Role::Removed),
-                ),
-            ]
-        })
-        .collect();
+                    Ink::Role(crate::theme::Role::Rule),
+                )]);
+            }
+            ListRow::File(path) => {
+                // The focused name draws bold in accent only for the
+                // accent list: any other list keeps its plain names, so
+                // the focus stays scoped to the Changed files list.
+                let row = file_row(
+                    path,
+                    figures,
+                    changes,
+                    no_diff,
+                    root,
+                    viewed,
+                    presence,
+                    at == list.selected() && list.is_accent(),
+                    name_w,
+                    added_w,
+                    removed_w,
+                );
+                content_w = content_w.max(row_width(&row));
+                rows.push(row);
+            }
+        }
+    }
     let (files, added, removed) = totals(&figures.figures);
+    let below = format!(
+        "{}  {:>added_w$} {:>removed_w$}",
+        format::count(files, "file", "files"),
+        format!("+{added}"),
+        format!("−{removed}"),
+    );
+    // The Changed-files frame opts into the accent mark only for its
+    // accent list; a plain gutter list keeps the uncoloured mark
+    // (`docs/tui.md`, "Swapped views").
+    let gutter_mark = if list.is_accent() {
+        Style::new().fg(Role::Accent.color())
+    } else {
+        Style::default()
+    };
     Frame {
         joins: Vec::new(),
-        chrome: None,
+        chrome: Some(Chrome {
+            top: Vec::new(),
+            draft: None,
+            footer: footer_spans(),
+        }),
         title: "Changed files".to_owned(),
         command: "diff against HEAD".to_owned(),
         rows,
         list,
-        gutter_mark: ratatui::style::Style::default(),
-        below: vec![format!(
-            "{} changed  +{added} −{removed}",
-            format::count(files, "file", "files")
-        )],
+        gutter_mark,
+        below: vec![below],
         field: None,
-        footer: "↑↓ move · Enter show diff · Ctrl+G edits · Esc close".to_owned(),
+        footer: "↑↓ file · Ctrl+G open in editor".to_owned(),
     }
 }
 
-/// The current diff frame, with its file in the title.
-fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
+/// One file row: the indent, the letter, the workspace-relative name,
+/// then the figures right-aligned in the column's widths. The card's
+/// own path drives the letter, the figures and the no-diff set; only
+/// the shown name relativizes. A no-diff path draws wholly dim with
+/// "no changes" where the figures go; the focused name draws bold in
+/// accent. The presence root stays off until the figures answer
+/// arrives, so no row draws D early.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the row reads the figures, the no-diff set, both workspace roots, the presence read, the focus and the column widths"
+)]
+fn file_row(
+    path: &str,
+    figures: &ResolvedFigures,
+    changes: &BTreeMap<String, (u64, u64)>,
+    no_diff: &BTreeSet<String>,
+    root: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+    presence: Option<&std::path::Path>,
+    focused: bool,
+    name_w: usize,
+    added_w: usize,
+    removed_w: usize,
+) -> Vec<(String, Option<Spot>, Ink)> {
+    let shown = display_path(path, root, viewed);
+    let raw_name = safe_line(name_of(shown));
+    let padded_name = {
+        let pad = name_w.saturating_sub(crate::text::width(&raw_name));
+        format!("{raw_name}{}", " ".repeat(pad))
+    };
+    if no_diff.contains(path) {
+        return vec![
+            ("    ".to_owned(), None, Ink::Muted),
+            ("·  ".to_owned(), None, Ink::Muted),
+            (padded_name, None, Ink::Muted),
+            ("  ".to_owned(), None, Ink::Muted),
+            ("no changes".to_owned(), None, Ink::Muted),
+        ];
+    }
+    let (letter, letter_ink) = letter(
+        path,
+        &figures.untracked,
+        &figures.added,
+        &figures.deleted,
+        presence,
+    );
+    let name_ink = if focused {
+        Ink::Bold(crate::theme::Role::Accent)
+    } else {
+        Ink::Heading
+    };
+    let (added, removed) = display_figures(figures, changes, path);
+    vec![
+        ("    ".to_owned(), None, Ink::Plain),
+        (letter, None, letter_ink),
+        (padded_name, None, name_ink),
+        ("  ".to_owned(), None, Ink::Plain),
+        (
+            format!("{:>added_w$}", format!("+{added}")),
+            None,
+            Ink::Role(crate::theme::Role::Added),
+        ),
+        (" ".to_owned(), None, Ink::Plain),
+        (
+            format!("{:>removed_w$}", format!("−{removed}")),
+            None,
+            Ink::Role(crate::theme::Role::Removed),
+        ),
+    ]
+}
+
+/// A row's drawn width: its cells' display widths joined.
+fn row_width(row: &[(String, Option<Spot>, Ink)]) -> usize {
+    row.iter()
+        .map(|(text, _, _)| crate::text::width(text))
+        .sum()
+}
+
+/// The list footer's styled keys: the keys bold, what they do dim.
+fn footer_spans() -> Vec<Span> {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    vec![
+        ("↑↓".to_owned(), bold),
+        (" file · ".to_owned(), Ink::Muted.style()),
+        ("Ctrl+G".to_owned(), bold),
+        (" open in editor".to_owned(), Ink::Muted.style()),
+    ]
+}
+
+/// The current diff frame, with its file in the title. Above the
+/// hunks, the path row names the file bold with the editor target in
+/// `secondary` right-aligned to the view width: a click on it runs the
+/// same editor path as Ctrl+G (`docs/tui.md`, "Swapped views" Changed
+/// files Hunks).
+fn diff_frame(path: &str, diff: &Diff, list: List, width: u16) -> Frame {
     let (rows, below) = match diff {
         Diff::Reading => (
             vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
@@ -363,9 +817,9 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
         }
         Diff::Empty => (
             vec![vec![(
-                "No changes against HEAD.".to_owned(),
+                "No changes against HEAD: committed or undone since Fiber changed it.".to_owned(),
                 None,
-                Ink::Plain,
+                Ink::Muted,
             )]],
             Vec::new(),
         ),
@@ -374,12 +828,32 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
             Vec::new(),
         ),
     };
+    // Right-align the target to the view width (`issue-4592.md:75`):
+    // the gap pads the path row to the width, with at least two spaces
+    // so a zero width (a metrics call, not a draw) keeps the old gap.
+    let target = "Open in editor ›";
+    let gap = {
+        let gap_w = usize::from(width)
+            .saturating_sub(crate::text::width(&safe_line(path)) + crate::text::width(target))
+            .max(2);
+        " ".repeat(gap_w)
+    };
+    let mut framed = vec![vec![
+        (safe_line(path), None, Ink::Heading),
+        (gap, None, Ink::Plain),
+        (
+            target.to_owned(),
+            Some(Spot::Cell(0, 1)),
+            Ink::Role(crate::theme::Role::Secondary),
+        ),
+    ]];
+    framed.extend(rows);
     Frame {
         joins: Vec::new(),
         chrome: None,
         title: format!("Changed files › {} · diff against HEAD", safe_line(path)),
         command: "diff against HEAD".to_owned(),
-        rows,
+        rows: framed,
         list,
         gutter_mark: ratatui::style::Style::default(),
         below,

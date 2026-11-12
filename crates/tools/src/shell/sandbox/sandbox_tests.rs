@@ -60,6 +60,14 @@ fn workspace_settings(fiber_home: &Path) -> Settings {
 }
 
 #[test]
+fn dev_path_check_is_component_wise() {
+    assert!(super::is_dev_path(Path::new("/dev")));
+    assert!(super::is_dev_path(Path::new("/dev/zero")));
+    assert!(!super::is_dev_path(Path::new("/device")));
+    assert!(!super::is_dev_path(Path::new("/var/dev")));
+}
+
+#[test]
 fn disabled_reports_off() {
     let dir = fixture();
     let unavailable =
@@ -642,6 +650,76 @@ fn a_symlink_loop_makes_the_sandbox_unavailable() {
 /// device becomes writable (writes are never granted outside the profile's
 /// roots; /dev/null is a sink, so its grant carries no information).
 #[cfg(target_os = "linux")]
+fn readable_device() -> &'static str {
+    if Path::new("/dev/zero").exists() {
+        "/dev/zero"
+    } else {
+        "/dev/urandom"
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn assert_device_refused(fixture: &HomeFixture, device: &str) {
+    let read = fixture.confined(&format!("head -c 1 {device}"));
+    assert!(
+        read.status.is_some_and(|status| !status.success()),
+        "reading {device} must be refused"
+    );
+    let super::super::command::Kept::Whole(bytes) = read.output else {
+        panic!("a one-byte device read keeps output whole");
+    };
+    let output = String::from_utf8_lossy(&bytes);
+    assert!(
+        output.contains("Permission denied"),
+        "the refusal is reported: {output}"
+    );
+    if device == "/dev/zero" {
+        assert!(!bytes.contains(&0), "no NUL device byte reaches output");
+    }
+    let null = fixture.confined("cat /dev/null");
+    assert!(
+        null.status.is_some_and(|status| status.success()),
+        "/dev/null stays readable"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_prepare_builds_a_landlock_policy() {
+    let dir = fixture();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let settings = workspace_settings(&dir.path().join("fiber-home"));
+    let prepared = super::prepare(&settings, &workspace, None).expect("prepare policy");
+    assert!(prepared.ruleset.is_some(), "Landlock ruleset is installed");
+    assert!(!prepared.program.is_empty(), "seccomp policy is compiled");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_read_of_another_device_is_refused() {
+    let fixture = HomeFixture::new(&[]);
+    assert_device_refused(&fixture, readable_device());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_allow_write_of_dev_grants_no_device() {
+    let mut fixture = HomeFixture::new(&[]);
+    fixture.settings.allow_write.push(PathBuf::from("/dev"));
+    assert_device_refused(&fixture, readable_device());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_allow_write_beneath_dev_grants_no_device() {
+    let mut fixture = HomeFixture::new(&[]);
+    let device = readable_device();
+    fixture.settings.allow_write.push(PathBuf::from(device));
+    assert_device_refused(&fixture, device);
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn a_confined_commit_reaches_only_the_null_device() {
     let fixture = HomeFixture::new(&[]);
@@ -1187,7 +1265,7 @@ fn macos_profile_grants_roots_denies_and_names_no_paths() {
         "(allow process-fork)",
         "(allow sysctl-read)",
         "(allow file-read* (subpath \"/\"))",
-        "(allow file-read* file-write* file-ioctl",
+        "(allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))",
         "(deny network-outbound)",
         "(deny network-inbound)",
         "(deny network-bind)",
@@ -1239,6 +1317,49 @@ fn macos_profile_grants_roots_denies_and_names_no_paths() {
 
 /// A quote, parentheses and a newline stay literal through `-D`: the
 /// profile source never sees them and the binding carries them whole.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_profile_denies_devices_but_keeps_null_and_pty() {
+    let fixture = MacosFixture::new();
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("profile builds");
+    let profile = &prepared.profile;
+    let wide = profile
+        .find("(allow file-read* (subpath \"/\"))")
+        .expect("wide read");
+    let deny = profile
+        .find("(deny file-read* file-write* (regex #\"^/dev/\"))")
+        .expect("device deny");
+    let null = profile
+        .find("(allow file-read* file-write* (literal \"/dev/null\"))")
+        .expect("null reallow");
+    let pty = profile
+        .find("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))")
+        .expect("pty ioctl reallow");
+    assert!(
+        wide < deny && deny < null && null < pty,
+        "device deny precedes narrow exceptions"
+    );
+    let dev_workspace = prepare(&fixture.settings, Path::new("/dev"), None)
+        .expect("the device-root profile builds");
+    assert!(
+        !dev_workspace
+            .profile
+            .contains(r#"(allow file-write* (subpath (param "FIBER_WS")))"#),
+        "a /dev workspace receives no write grant"
+    );
+    assert!(
+        !dev_workspace
+            .profile
+            .contains(r#"(allow file-write* (subpath (param "FIBER_GITDIR")))"#),
+        "git roots beneath a /dev workspace receive no write grant"
+    );
+    assert!(
+        !profile.lines().any(|line| line.contains("ttys")
+            && (line.contains("file-read*") || line.contains("file-write*"))),
+        "tty paths receive no read or write grant"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_keeps_hostile_paths_literal() {

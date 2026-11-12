@@ -3626,8 +3626,6 @@ built-in rather than drawing the row again.
   whole-screen slots (`layout`, `input_box`, keys, slash commands) receive the
   session on screen.
 
-Not built yet (`on_focus`): see #2720.
-
 - **Only for a session that loaded its session half,** at a version inside
   the range the TUI extension declares. For any other session it draws
   nothing and the built-in rendering stands, with one notice naming the
@@ -3802,7 +3800,11 @@ and a timeout switches the extension off as a still one does.
   each extension and command until `/reload` (`true`, `false` and `nil`
   returns are ignored); a key or command handler that passes its timeout
   switches the extension off until `/reload`, with one `extension_failed`
-  notice, as a still renderer does.
+  notice, as a still renderer does. A focus handler that errors or returns
+  the wrong shape counts as not having handled the input, with one
+  `hook_failed` notice for each extension until `/reload`; a focus handler
+  that passes its timeout switches the extension off until `/reload`, with
+  one `extension_failed` notice.
 
 Not built yet (focused-slot key handlers): see #2720.
 

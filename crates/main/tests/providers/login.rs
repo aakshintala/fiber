@@ -1482,7 +1482,7 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     let config = global_config(&setup);
     assert_eq!(
         config["providers"]["opencode-go"]["reviewer_model"],
-        json!("claude-haiku-5-5"),
+        json!("beam-free"),
         "the first provider's pick stands: {config}"
     );
     assert_eq!(
