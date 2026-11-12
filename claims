@@ -269,3 +269,4 @@ crates/main/src/main.rs	fiber-4700	plan	2026-11-12T06:25:00Z	roundhouse-7010-plu
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4700	plan	2026-11-12T06:25:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/src/lib.rs:327-327	fiber-4671	plan	2026-11-12T06:34:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4671-notes-cache-key	
 docs/prompt-cache.md:352-353	fiber-4671	plan	2026-11-12T06:34:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4671-notes-cache-key	
+crates/main/src/reload_tests.rs	fiber-4674	plan	2026-11-12T06:41:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
