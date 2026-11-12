@@ -716,18 +716,20 @@ impl Login {
         }
         let before = self.selected;
         if *key == Key::Up {
-            // The nearest target above, clamped at the first.
+            // The nearest target above, wrapping to the last.
             self.selected = targets
                 .iter()
                 .copied()
                 .rfind(|at| *at < before)
+                .or_else(|| targets.last().copied())
                 .unwrap_or(before);
         } else if *key == Key::Down {
-            // The nearest target below, clamped at the last.
+            // The nearest target below, wrapping to the first.
             self.selected = targets
                 .iter()
                 .copied()
                 .find(|at| *at > before)
+                .or_else(|| targets.first().copied())
                 .unwrap_or(before);
         } else {
             // A page is the shown body rows less one, at least one.

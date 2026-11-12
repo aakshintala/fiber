@@ -698,17 +698,32 @@ fn down_and_up_step_over_targets_only() {
     // Down from codex skips the gap and the Secrets heading.
     press(&mut login, &fake, &[Key::Down]);
     assert_eq!(login.selected, 5);
-    // Down on the last target stays.
-    press(&mut login, &fake, &[Key::Down]);
-    assert_eq!(login.selected, 5);
     // Up from the secret skips back past the gap.
     press(&mut login, &fake, &[Key::Up]);
     assert_eq!(login.selected, 2);
     press(&mut login, &fake, &[Key::Up]);
     assert_eq!(login.selected, 1);
-    // Up on the first target stays.
+    // Up on the first target wraps to the last, and Down wraps back.
     press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 5);
+    press(&mut login, &fake, &[Key::Down]);
     assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn arrows_wrap_between_target_rows() {
+    let fake = fake_with(targets());
+    let mut login = at(&fake, 1);
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(
+        login.selected, 5,
+        "Up from the first target wraps to the last"
+    );
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(
+        login.selected, 1,
+        "Down from the last target wraps to the first"
+    );
 }
 
 #[test]
