@@ -613,13 +613,7 @@ impl ModelPicker {
         let next = match self.focus() {
             Some(now) => {
                 let at = stops.iter().position(|stop| *stop == now).unwrap_or(0);
-                let len = stops.len();
-                let shift = delta.unsigned_abs() % len;
-                if delta < 0 {
-                    (at + len - shift) % len
-                } else {
-                    (at + shift) % len
-                }
+                crate::swapped::wrap_step(at, stops.len(), delta)
             }
             None if delta > 0 => 0,
             None => return,

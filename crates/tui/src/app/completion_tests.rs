@@ -126,6 +126,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn slash_arrows_wrap_and_render_the_selected_row() {
     let table = table_lines();
     let mut app = connected();

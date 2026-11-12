@@ -100,10 +100,10 @@ impl KeyMap {
         let total = self.visible(keys).len();
         match key {
             Key::Up => {
-                self.focus = self.focus.checked_sub(1).unwrap_or(total.saturating_sub(1));
+                self.focus = crate::swapped::wrap_step(self.focus, total, -1);
             }
             Key::Down => {
-                self.focus = self.focus.saturating_add(1) % total.max(1);
+                self.focus = crate::swapped::wrap_step(self.focus, total, 1);
             }
             Key::PageUp => {
                 let page = fits(self.top).saturating_sub(1).max(1);

@@ -404,6 +404,7 @@ fn backspace_deletes_on_the_words_row_only() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn up_and_down_wrap_at_the_first_and_last_rows() {
     let mut form = base_and_name(true);
     press(&mut form, &[Key::Up]);

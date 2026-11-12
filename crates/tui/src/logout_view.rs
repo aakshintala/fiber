@@ -160,20 +160,10 @@ impl Logout {
         let before = self.selected;
         if *key == Key::Up {
             // The nearest target above, wrapping to the last.
-            self.selected = targets
-                .iter()
-                .copied()
-                .rfind(|at| *at < before)
-                .or_else(|| targets.last().copied())
-                .unwrap_or(before);
+            self.selected = crate::swapped::step_target(&targets, before, false);
         } else if *key == Key::Down {
             // The nearest target below, wrapping to the first.
-            self.selected = targets
-                .iter()
-                .copied()
-                .find(|at| *at > before)
-                .or_else(|| targets.first().copied())
-                .unwrap_or(before);
+            self.selected = crate::swapped::step_target(&targets, before, true);
         } else {
             // A page is the shown body rows less one, at least one.
             let page = shown_body_rows(ctx.height).saturating_sub(1).max(1);

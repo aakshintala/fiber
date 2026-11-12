@@ -483,6 +483,7 @@ fn slash_sends_one_directories_and_enter_waits_for_its_answer() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn arrows_walk_completions_then_recents_and_wrap() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);

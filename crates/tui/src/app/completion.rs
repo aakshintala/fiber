@@ -471,15 +471,13 @@ impl App {
         match key {
             Key::Up if names.is_empty() => {}
             Key::Up => {
-                self.completion.selected = self
-                    .completion
-                    .selected
-                    .checked_sub(1)
-                    .unwrap_or(names.len() - 1);
+                self.completion.selected =
+                    crate::swapped::wrap_step(self.completion.selected, names.len(), -1);
             }
             Key::Down if names.is_empty() => {}
             Key::Down => {
-                self.completion.selected = (self.completion.selected + 1) % names.len();
+                self.completion.selected =
+                    crate::swapped::wrap_step(self.completion.selected, names.len(), 1);
             }
             Key::Esc => {
                 if theme {

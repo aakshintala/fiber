@@ -201,19 +201,6 @@ fn one_question_titles_carry_no_question_count() {
 }
 
 #[test]
-fn up_and_down_wrap_at_the_first_and_last_rows() {
-    let mut question = select();
-    press(&mut question, &[Key::Up]);
-    assert_eq!(panel(&question).cursor, Some(7));
-    press(&mut question, &[Key::Down]);
-    assert_eq!(panel(&question).cursor, Some(4));
-    press(&mut question, &[Key::Down, Key::Down, Key::Down]);
-    assert_eq!(panel(&question).cursor, Some(7));
-    press(&mut question, &[Key::Up]);
-    assert_eq!(panel(&question).cursor, Some(6));
-}
-
-#[test]
 fn initial_cursor_is_on_the_first_actionable_row() {
     for (question, at) in [
         (OneQuestion::confirm("Continue?".to_owned()), 4),
@@ -597,6 +584,7 @@ fn esc_and_chat_decline_each_kind() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn up_and_down_wrap_at_the_first_and_last_row_for_each_kind() {
     let constructors: [fn() -> OneQuestion; 4] = [
         || OneQuestion::confirm("Continue?".to_owned()),

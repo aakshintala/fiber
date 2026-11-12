@@ -159,11 +159,7 @@ impl Typed {
             self.focus = Focus::Nothing;
             return;
         };
-        let next = if down {
-            (at + 1) % total
-        } else {
-            at.checked_sub(1).unwrap_or(total - 1)
-        };
+        let next = crate::swapped::wrap_step(at, total, if down { 1 } else { -1 });
         self.focus = Self::row_focus(next, &completions);
     }
 

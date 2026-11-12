@@ -469,11 +469,8 @@ impl Approval {
                     .position(|choice| *choice == self.cursor)
                     .unwrap_or_default();
                 let len = choices.len();
-                let next = if *key == Key::Up {
-                    now.checked_sub(1).unwrap_or(len - 1)
-                } else {
-                    (now + 1) % len
-                };
+                let next =
+                    crate::swapped::wrap_step(now, len, if *key == Key::Up { -1 } else { 1 });
                 if let Some(choice) = choices.get(next) {
                     self.cursor = *choice;
                 }

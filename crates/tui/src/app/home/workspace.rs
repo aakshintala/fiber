@@ -507,13 +507,8 @@ impl App {
                 picker.typed.move_focus(down, recents);
             } else {
                 let len = picker.recents.len();
-                if len > 0 {
-                    picker.selected = if down {
-                        (picker.selected + 1) % len
-                    } else {
-                        picker.selected.checked_sub(1).unwrap_or(len - 1)
-                    };
-                }
+                picker.selected =
+                    crate::swapped::wrap_step(picker.selected, len, if down { 1 } else { -1 });
             }
         }
     }

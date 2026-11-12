@@ -81,6 +81,7 @@ fn select(screen: &mut KeysScreen, keys: &Keyset, at: usize) {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn moving_wraps_at_both_ends() {
     let keys = keys();
     let mut screen = keys_screen();

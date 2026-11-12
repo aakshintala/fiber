@@ -299,6 +299,7 @@ fn editing_the_query_resets_focus_and_scroll() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn up_and_down_wrap_at_the_ends() {
     let keys = Keyset::default();
     let fits = |_: usize| 40;

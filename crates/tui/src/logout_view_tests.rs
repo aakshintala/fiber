@@ -95,6 +95,7 @@ fn wheel_clamps_a_leaving_focus_to_the_window() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn arrows_wrap_between_target_rows() {
     let fake = fake_with(many_targets());
     let context = ctx_h(&fake, 24);

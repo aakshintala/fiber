@@ -84,6 +84,7 @@ fn first_run_picker_has_no_choice_until_explicit_navigation() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn arrows_wrap_over_model_stops_only() {
     let mut picker = ModelPicker::default();
     picker.catalogue.models = catalogue();

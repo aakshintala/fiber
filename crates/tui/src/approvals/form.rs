@@ -867,11 +867,7 @@ impl Form {
             .iter()
             .position(|row| *row == self.at)
             .unwrap_or_default();
-        let next = if down {
-            (now + 1) % len
-        } else {
-            now.checked_sub(1).unwrap_or(len - 1)
-        };
+        let next = crate::swapped::wrap_step(now, len, if down { 1 } else { -1 });
         if let Some(row) = rows.get(next) {
             self.at = *row;
         }

@@ -333,6 +333,7 @@ fn down_stops_at_send() {
 }
 
 #[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 fn arrows_wrap_between_items_and_send() {
     let mut offer = holding(2);
     assert_eq!(press(&mut offer, &Key::Up, 40), Some(OfferKey::Handled));
