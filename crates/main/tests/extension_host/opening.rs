@@ -12,8 +12,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use crate::hooks::run_from;
 use crate::support;
+use crate::support::run_from;
 
 use std::fs;
 use std::path::{Path, PathBuf};

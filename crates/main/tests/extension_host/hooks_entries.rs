@@ -15,8 +15,8 @@
 )]
 
 use crate::extension_harness;
-use crate::hooks::run_from;
 use crate::support;
+use crate::support::run_from;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
