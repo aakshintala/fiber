@@ -375,3 +375,5 @@ crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBoo
 docs/ci.md	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-leak-scan	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/lib.rs	fiber-4598	plan	2026-11-12T20:37:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop/kitty_writer.rs	fiber-4746	plan	2026-11-12T20:38:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/running.md	fiber-4746	plan	2026-11-12T20:38:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
