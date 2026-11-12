@@ -483,7 +483,7 @@ fn slash_sends_one_directories_and_enter_waits_for_its_answer() {
 }
 
 #[test]
-fn arrows_walk_completions_then_recents_and_clamp() {
+fn arrows_walk_completions_then_recents_and_wrap() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
@@ -494,13 +494,15 @@ fn arrows_walk_completions_then_recents_and_clamp() {
     assert_eq!(key(&mut app, Key::Down), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
     assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("a1".to_owned()));
+    assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("a2".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("a1".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
-    assert_eq!(focused(&app), Some("a1".to_owned()));
+    assert_eq!(focused(&app), Some("/w".to_owned()));
 }
 
 #[test]
