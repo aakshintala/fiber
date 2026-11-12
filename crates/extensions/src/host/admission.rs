@@ -64,7 +64,6 @@ pub(crate) struct CallbackContext {
     pub inner_calls: Option<std::sync::Arc<dyn contract::tool::InnerCalls>>,
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl CallbackContext {
     /// A call made while the entry script runs, before `ready`.
     pub(crate) fn entry(extension: &str) -> Self {

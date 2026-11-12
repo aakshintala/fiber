@@ -16,6 +16,7 @@ use std::time::Duration;
 use config::{Config, ProjectKey, Sources};
 use contract::events::{CallStatus, Event, ExtensionReason};
 use contract::hook::{AfterToolCall, Hooks};
+use contract::tool::{Answered, Ask, Asking, InnerCalls};
 use extensions::{
     DataDirBases, Origin, RepositorySet, Request, SessionExtensions, StartContext, plan,
 };
@@ -245,6 +246,11 @@ impl Env {
             std::collections::BTreeSet::new(),
         ))
     }
+}
+
+fn read_marker(path: &Path) -> Value {
+    let text = std::fs::read_to_string(path).expect("the acknowledged probe writes its marker");
+    serde_json::from_str(&text).expect("the marker is one JSON object")
 }
 
 fn write(path: &Path, text: &str) {
@@ -529,6 +535,56 @@ impl contract::extension::HostDelegate for FakeDelegate {
     }
 }
 
+struct ProcessAsk(Arc<dyn InnerCalls>);
+
+impl Ask for ProcessAsk {
+    fn action(&self) -> contract::ActionId {
+        contract::ActionId("a_process_test".to_owned())
+    }
+
+    fn answerable(&self) -> bool {
+        false
+    }
+
+    fn ask(&self, _asking: Asking) -> Answered {
+        Answered::NoAnswer
+    }
+
+    fn inner_calls(&self) -> Option<Arc<dyn InnerCalls>> {
+        Some(Arc::clone(&self.0))
+    }
+}
+
+#[derive(Default)]
+struct ProcessInnerCalls;
+
+impl InnerCalls for ProcessInnerCalls {
+    fn run(
+        &self,
+        _extension: &str,
+        _name: &str,
+        _arguments: Value,
+    ) -> Result<Box<contract::events::ToolCallCompleted>, String> {
+        Ok(Box::new(contract::events::ToolCallCompleted {
+            status: CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: Vec::new(),
+            details: None,
+            artifact: None,
+            kept: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            hosts_surfaced: Vec::new(),
+            provider_item: None,
+            loaded: None,
+            protected_paths: None,
+        }))
+    }
+}
+
 struct PairDelegate(std::sync::atomic::AtomicUsize);
 
 impl contract::extension::HostDelegate for PairDelegate {
@@ -780,7 +836,8 @@ fn process_host_tool_model_delegate_live_and_sealed() {
         .unwrap();
     let cancel = CancelToken::new();
 
-    let first = tool.run(&Map::new(), &cancel, &*emit);
+    let ask = ProcessAsk(Arc::new(ProcessInnerCalls));
+    let first = tool.run_asking(&Map::new(), &cancel, &*emit, &ask);
     assert!(
         first.error.is_none(),
         "the live probe runs: {:?}",
@@ -798,6 +855,10 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     assert_eq!(
         ack("delegate-two.json")["payload"]["result"]["value"],
         "j_pair_2"
+    );
+    assert_eq!(
+        ack("inner-ack.json")["payload"]["result"]["value"]["status"],
+        "completed"
     );
 
     let finish = |job: &str, text: &str| {
@@ -849,7 +910,7 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     }
 
     contract::extension::ExtensionDoor::seal(session.as_ref());
-    let second = tool.run(&Map::new(), &cancel, &*emit);
+    let second = tool.run_asking(&Map::new(), &cancel, &*emit, &ask);
     assert!(
         second.error.is_none(),
         "the draining probe runs: {:?}",
@@ -861,20 +922,24 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     assert_eq!(ack("delegate-one.json")["payload"]["code"], "closing");
     assert_eq!(ack("delegate-two.json")["kind"], "command_rejected");
     assert_eq!(ack("delegate-two.json")["payload"]["code"], "closing");
+    assert_eq!(
+        ack("inner-ack.json")["payload"]["result"]["value"]["status"],
+        "completed"
+    );
 
     let drain = notice_envelope("s_proc", 1, "after-seal");
     let Ok(Some(drain_event)) = Event::from_envelope(&drain) else {
         panic!("the drain notice parses");
     };
     session.deliver_event(&drain_event, &drain);
-    let watcher_delegate = read_json_file(&markers.join("watch-delegate.json"), "watch delegate");
+    let watcher_delegate = read_marker(&markers.join("watch-delegate.json"));
     assert_eq!(watcher_delegate["kind"], "command_rejected");
     assert_eq!(watcher_delegate["payload"]["code"], "invalid_arguments");
     assert_eq!(
         watcher_delegate["payload"]["message"],
         "host.delegate: not available here"
     );
-    let watcher_tool = read_json_file(&markers.join("watch-tool.json"), "watch tool");
+    let watcher_tool = read_marker(&markers.join("watch-tool.json"));
     assert_eq!(watcher_tool["kind"], "command_rejected");
     assert_eq!(watcher_tool["payload"]["code"], "invalid_arguments");
     assert_eq!(

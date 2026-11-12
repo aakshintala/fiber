@@ -4451,6 +4451,7 @@ fn process_tool_runner_threading() {
     };
     assert_eq!(code, ErrorCode::InvalidArguments);
     assert_eq!(message, "host.tool: called outside a running tool call");
+    // `docs/extensions.md`, "Running a tool": host.tool records one inner call.
     assert_eq!(runner.0.lock().unwrap().len(), 1);
 }
 
@@ -7180,6 +7181,33 @@ fn process_delegate_bind() {
     );
 }
 
+/// Delegate run failures use the same notice reporting path as process
+/// callback dispatch, preserving the extension identity for the session.
+#[test]
+fn process_delegate_run_failure_notice() {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let runtime = Runtime::new(clock);
+    let emitted = Arc::new(ProcessUsageEmitter::default());
+    runtime.set_emit(emitted.clone());
+
+    super::process::calls::dispatch::report_delegate_run_failure(
+        &runtime,
+        "fiber.test/proc",
+        &super::Error::Case("callback returned an error".to_owned()),
+    );
+
+    let events = emitted.0.lock().unwrap();
+    let [contract::events::Event::Notice(notice)] = events.as_slice() else {
+        panic!("the run failure emits one notice: {events:?}");
+    };
+    assert_eq!(notice.code, ErrorCode::HookFailed);
+    assert_eq!(notice.extension.as_deref(), Some("fiber.test/proc"));
+    assert_eq!(
+        notice.message,
+        "The delegate `run` failed, so its result was dropped: callback returned an error"
+    );
+}
+
 struct ProcessUsageModel;
 
 impl contract::model::HostModel for ProcessUsageModel {
@@ -7232,7 +7260,7 @@ impl contract::emit::Emit for ProcessUsageEmitter {
 
 /// Process host.model usage lines carry the calling extension's identity.
 #[test]
-fn process_delegate_bind_model_usage_attribution() {
+fn process_model_usage_attribution() {
     use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
     use super::process::requests::HostCallHandle;
     use crate::host::admission::CallbackContext;
@@ -7291,6 +7319,7 @@ fn process_delegate_bind_model_usage_attribution() {
     .expect("the host model answers");
     assert_eq!(answer.unwrap()["text"], "routed");
     let events = emitted.0.lock().unwrap();
+    // `docs/extensions.md`, "Process extensions": host.model writes `usage_recorded`.
     let [contract::events::Event::UsageRecorded(record)] = events.as_slice() else {
         panic!("one usage event is attributed: {events:?}");
     };

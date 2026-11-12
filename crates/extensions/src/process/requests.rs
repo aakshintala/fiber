@@ -232,7 +232,6 @@ struct MintSpec<'a> {
     inner_calls: Option<Arc<dyn InnerCalls>>,
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl Table {
     /// An empty table at its first generation.
     pub(crate) fn new() -> Self {
@@ -418,6 +417,7 @@ impl Table {
 
     /// Whether `id` names a live request of this generation: answered,
     /// timed out, cancelled or retired ids read stale.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn is_live(&self, id: &RequestId) -> bool {
         let inner = support::lock(&self.inner);
         inner.pending.get(id).is_some_and(|pending| !pending.done)
@@ -483,6 +483,7 @@ impl Table {
     }
 
     /// The live request's kind. A stale id names none.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn kind(&self, id: &RequestId) -> Option<RequestKind> {
         let inner = support::lock(&self.inner);
         let pending = inner.pending.get(id)?;
@@ -546,6 +547,7 @@ impl Table {
     /// Times `id` out: completes it without firing its cancel signal — a
     /// missed hook timeout stops nothing, the hook has failed and a late
     /// reply is dropped. The first settler wins.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn timeout(&self, id: &RequestId) -> Settled {
         self.settle(id, Outcome::TimedOut)
     }

@@ -10,7 +10,18 @@ use crate::process::{
     oauth, requests, transport,
 };
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn report_delegate_run_failure(
+    runtime: &crate::runtime::Runtime,
+    owner: &str,
+    error: &crate::Error,
+) {
+    runtime.emit(&contract::events::Event::Notice(contract::events::Notice {
+        code: contract::ErrorCode::HookFailed,
+        message: format!("The delegate `run` failed, so its result was dropped: {error}"),
+        extension: Some(owner.to_owned()),
+    }));
+}
+
 impl ProcessExtension {
     /// Routes delegate events to the process callback that bound the job.
     /// A finish waits for its completion before the one `run` request is sent.
@@ -40,13 +51,15 @@ impl ProcessExtension {
             let spawned = std::thread::Builder::new()
                 .name(format!("process delegate run {}", self.shared.owner))
                 .spawn(move || {
-                    let result =
-                        requests::run_request(&shared, dispatch, &support::cancel::Token::new());
-                    drop(result);
+                    if let Err(error) =
+                        requests::run_request(&shared, dispatch, &support::cancel::Token::new())
+                    {
+                        report_delegate_run_failure(&shared.runtime, &shared.owner, &error);
+                    }
                 });
             match spawned {
-                Ok(thread) => drop(thread),
-                Err(error) => drop(error),
+                Ok(thread) => drop(thread), // Detach: the callback completes independently.
+                Err(error) => drop(error), // `package.rs` likewise does not report pump spawn failure; it holds `_pumped`.
             }
         }
         true
