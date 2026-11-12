@@ -870,6 +870,8 @@ pub(crate) fn fold_line(
         | EventKind::FiberExited
         | EventKind::JobStarted
         | EventKind::JobCompleted
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::Rewound => crash::fold(turns, fold, envelope),
         EventKind::PreambleBuilt
         | EventKind::CompactionStarted
@@ -1074,6 +1076,8 @@ fn fold_action(
         | EventKind::DelegateFinished
         | EventKind::JobCompleted
         | EventKind::JobsPendingNotified
+        | EventKind::KeeperStarted
+        | EventKind::KeeperBound
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_)) => {
@@ -1165,6 +1169,8 @@ fn fold_action(
                 | EventKind::DelegateFinished
                 | EventKind::JobCompleted
                 | EventKind::JobsPendingNotified
+                | EventKind::KeeperStarted
+                | EventKind::KeeperBound
                 | EventKind::CommandAccepted
                 | EventKind::CommandRejected
                 | EventKind::Unknown(_) => false,

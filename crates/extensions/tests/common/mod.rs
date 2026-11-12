@@ -812,3 +812,21 @@ pub(crate) fn outside_names(dir: &Path) -> Vec<String> {
     names.sort();
     names
 }
+
+/// The thread parked at `at`: exactly one thread waits there.
+#[track_caller]
+pub(crate) fn thread_parked_at(clock: &FakeClock, at: std::time::Instant) -> std::thread::ThreadId {
+    let mark = clock
+        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
+    let threads = mark.threads();
+    assert_eq!(
+        threads.len(),
+        1,
+        "only one thread parks at {at:?}: {threads:?}"
+    );
+    match threads.into_iter().next() {
+        Some(id) => id,
+        None => panic!("one parked thread"),
+    }
+}

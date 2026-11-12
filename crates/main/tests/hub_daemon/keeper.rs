@@ -20,6 +20,7 @@ use std::sync::{
     mpsc,
 };
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
@@ -136,19 +137,202 @@ fn read_bounded_tail(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The kill marker: the pre-kill `seq` ceiling for the takeover-record scan.
+///
+/// Written immediately before the kill, it snapshots the log's max `seq`,
+/// so only records with a greater `seq` count as the current generation: a
+/// pair from an earlier takeover belongs to that earlier generation and is
+/// ignored. Order takes `seq`, never wall-clock. Returns the marker path;
+/// its mtime is read with `fs::metadata`, never `SystemTime::now`.
+pub(super) fn kill_marker_file(setup: &Setup, id: &str) -> PathBuf {
+    let path = setup.home().join("kill_probe");
+    let log = session_dir(setup, id).join("events.jsonl");
+    let text = read_bounded_tail(&log)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    let max = text
+        .as_deref()
+        .and_then(|text| {
+            let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+            complete
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|line| line.get("seq").and_then(Value::as_u64))
+                .max()
+        })
+        .unwrap_or(0);
+    fs::write(&path, max.to_string()).unwrap();
+    path
+}
+
+/// The unknown bind window: no kill marker anchors the current generation.
+const BIND_WINDOW_UNKNOWN: &str = "bind window: unknown (no kill marker)";
+
+/// The expiry-time refinement over the takeover records: the dead branch
+/// names a case only when the records-plus-mtime show it.
+///
+/// `start` is the current-generation `keeper_started` line's `ts` as a
+/// `SystemTime`, `None` when the current generation has no start record.
+/// Only a socket mtime at least a second newer than the start record
+/// contradicts "died before bind": an older, absent or unreadable mtime
+/// keeps the default reading. A sub-second gap either way, and a socket
+/// mtime equal to the kill mtime, read indeterminate instead of a case:
+/// the mtimes cannot tell whether this keeper bound. With no kill marker
+/// the window is unknown.
+fn bind_window_line(
+    kill: Option<SystemTime>,
+    start: Option<SystemTime>,
+    socket_mtime: Option<SystemTime>,
+) -> String {
+    let case = match start {
+        None => "never spawned, died before opening the log, or failed to record its start",
+        Some(start) => {
+            let indeterminate = socket_mtime.is_some_and(|mtime| {
+                mtime
+                    .duration_since(start)
+                    .or_else(|_| start.duration_since(mtime))
+                    .is_ok_and(|gap| gap < Duration::from_secs(1))
+                    || kill.is_some_and(|k| k == mtime)
+            });
+            if indeterminate {
+                "indeterminate whether this keeper bound: the mtimes are within a second of each other"
+            } else if socket_mtime.is_some_and(|mtime| mtime > start) {
+                "bound per mtime, died before the bound record, or failed to record its bind"
+            } else {
+                "died before bind, or failed to record its bind"
+            }
+        }
+    };
+    match kill {
+        None => format!("{case}\n{BIND_WINDOW_UNKNOWN}"),
+        Some(_) => case.to_owned(),
+    }
+}
+
 /// The expiry-time keeper sample: one `fakes::matching` listing under the
 /// session's keeper pattern plus one bounded tail read of the session
 /// events log, each run once on the expiry path, never in a loop. No
-/// exit-wait, no second wait, no sleep, no retry.
-fn keeper_state_at_expiry(pattern: &str, setup: &Setup, id: &str) -> String {
+/// exit-wait, no second wait, no sleep, no retry. The dead branch reads the
+/// takeover records alongside the mtime and the alive/dead sampling: a
+/// current-generation bound record reports bound-then-died, a
+/// current-generation start without a later bound splits on the socket mtime,
+/// and no current-generation start in a complete window names the
+/// never-spawned disjunction. A truncated window without a current-generation
+/// start names nothing, and a malformed tail names nothing.
+fn keeper_state_at_expiry(
+    pattern: &str,
+    setup: &Setup,
+    id: &str,
+    kill_marker: Option<&std::path::Path>,
+) -> String {
     // One-shot sample spelling the fakes per-`pgrep` budget (2500 ms).
     let listing = fakes::matching(pattern, std::time::Duration::from_millis(2_500));
-    let log = read_bounded_tail(&session_dir(setup, id).join("events.jsonl"));
-    format!(
-        "{}\n{}",
-        keeper_sample_line(&listing),
-        session_log_tail(&log)
-    )
+    let events = session_dir(setup, id).join("events.jsonl");
+    let log = read_bounded_tail(&events);
+    // Past the cap the window's leading fragment drops: a tail that short no
+    // longer covers the kill onward, so it names no no-start case. An
+    // unreadable log suppresses the case the same way.
+    let truncated = fs::metadata(&events)
+        .map(|metadata| metadata.len())
+        .unwrap_or(u64::MAX)
+        > SESSION_LOG_TAIL_CAP as u64;
+    // The recency gate: only tail lines with a `seq` greater than the stored
+    // cutoff count; earlier-generation pairs are ignored. A missing or
+    // unreadable marker lifts the gate: every visible record counts.
+    let cutoff = kill_marker
+        .and_then(|marker| fs::read_to_string(marker).ok())
+        .and_then(|text| text.trim().parse::<u64>().ok());
+    // A malformed complete line is corrupt evidence: it suppresses the case.
+    // A trailing fragment still being written drops, like the tail render
+    // drops it.
+    let mut malformed = log.is_err();
+    let mut records: Vec<(String, u64, u64)> = Vec::new();
+    if let Ok(bytes) = &log {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+                for line in complete.lines() {
+                    match serde_json::from_str::<Value>(line) {
+                        Ok(value) => {
+                            if let (Some(kind), Some(seq)) = (
+                                value.get("kind").and_then(Value::as_str),
+                                value.get("seq").and_then(Value::as_u64),
+                            ) {
+                                let ts = value.get("ts").and_then(Value::as_u64).unwrap_or(0);
+                                records.push((kind.to_owned(), seq, ts));
+                            }
+                        }
+                        Err(_) => {
+                            malformed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(_) => malformed = true,
+        }
+    }
+    // The latest current-generation takeover: bound means a `keeper_bound`
+    // after that start, and a current-generation bound with no visible start
+    // counts as bound (the bounded tail can drop the earlier start line at
+    // the cap boundary), while a stale-generation bound counts for nothing.
+    let mut last_start: Option<(u64, u64)> = None;
+    let mut bounds: Vec<u64> = Vec::new();
+    if !malformed {
+        for (kind, seq, ts) in &records {
+            if !cutoff.is_none_or(|cut| *seq > cut) {
+                continue;
+            }
+            if kind == "keeper_started" {
+                match last_start {
+                    Some((s, _)) if *seq < s => {}
+                    _ => last_start = Some((*seq, *ts)),
+                }
+            } else if kind == "keeper_bound" {
+                bounds.push(*seq);
+            }
+        }
+    }
+    let bound = match last_start {
+        Some((start_seq, _)) => bounds.iter().any(|seq| *seq > start_seq),
+        None => !bounds.is_empty(),
+    };
+    // The start record's `ts` is milliseconds since the epoch
+    // (`docs/events.md`, "Kinds"); the socket comparison uses the start
+    // record's time, never the kill-marker mtime.
+    let start = last_start.and_then(|(_, ts)| UNIX_EPOCH.checked_add(Duration::from_millis(ts)));
+    let socket_mtime = fs::metadata(setup.session_socket(id))
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    let kill = kill_marker
+        .and_then(|marker| fs::metadata(marker).ok())
+        .and_then(|metadata| metadata.modified().ok());
+    let tail = session_log_tail(&log);
+    let sample = keeper_sample_line(&listing);
+    // Records are consulted only for a keeper known dead; an alive keeper
+    // renders only the alive sentence, and an unknown listing renders the
+    // sample with no case.
+    if !matches!(&listing, Ok(pids) if pids.is_empty()) {
+        return format!("{sample}\n{tail}");
+    }
+    let case = if bound {
+        "bound, then died".to_owned()
+    } else if last_start.is_some() {
+        bind_window_line(kill, start, socket_mtime)
+    } else if !truncated && !malformed {
+        bind_window_line(kill, None, socket_mtime)
+    } else {
+        "keeper dead (no process under the keeper pattern); bind history unobservable".to_owned()
+    };
+    // `bind_window_line` already carries the unknown window when the marker
+    // is absent; the bound-then-died and fallback branches gain it here.
+    let window_case = bound || last_start.is_none() && (truncated || malformed);
+    let window = if kill.is_none() && window_case {
+        format!("\n{BIND_WINDOW_UNKNOWN}")
+    } else {
+        String::new()
+    };
+    format!("{sample}\n{case}{window}\n{tail}")
 }
 
 fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf, keeper_state: &str) -> String {
@@ -167,6 +351,7 @@ fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf, keeper_state: 
 pub(super) fn wait_for_refuse_only_socket(
     deadline: Deadline,
     path: PathBuf,
+    kill_marker: Option<PathBuf>,
     setup: &Setup,
     id: &str,
 ) {
@@ -185,7 +370,12 @@ pub(super) fn wait_for_refuse_only_socket(
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone(),
             &path,
-            &keeper_state_at_expiry(&format!("keeper --id {id}"), setup, id),
+            &keeper_state_at_expiry(
+                &format!("keeper --id {id}"),
+                setup,
+                id,
+                kill_marker.as_deref(),
+            ),
         );
         panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
     }
@@ -428,6 +618,7 @@ fn crash_after(
     let output =
         session_dir(setup, &fixture.id).join(started["payload"]["output_path"].as_str().unwrap());
     settle(&output);
+    let kill_marker = kill_marker_file(setup, &fixture.id);
     fakes::kill_group(group, "KILL").unwrap();
     assert!(!reap(child, setup.deadline).success());
     assert!(fakes::group_empties(group, setup.deadline.start_wait()));
@@ -436,7 +627,13 @@ fn crash_after(
     // The bind comes after the killed session released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(&fixture.id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, setup, &fixture.id);
+    wait_for_refuse_only_socket(
+        setup.deadline.start_wait(),
+        socket,
+        Some(kill_marker),
+        setup,
+        &fixture.id,
+    );
     Crashed {
         job: started["payload"]["job_id"].as_str().unwrap().to_owned(),
         output: session_dir(setup, &fixture.id)
@@ -998,10 +1195,46 @@ fn a_second_crash_leaves_one_keeper_the_log_and_the_third_resume_orphans_the_oth
         move || !alive(loser)
     });
     assert!(alive(winner));
+    // A test waits for the signal that proves the operation it needs: a
+    // socket accepting a connection only proves the acceptor runs, which
+    // races the bound append, so wait for the bound record past the bytes
+    // the log held at the crash instead.
+    let crashed_len = crashed_log.len();
+    fakes::wait_until(
+        "the winner to append its bound record",
+        setup.deadline.start_wait(),
+        {
+            let dir = dir.clone();
+            move || {
+                fs::read(dir.join("events.jsonl"))
+                    .map(|bytes| {
+                        bytes.get(crashed_len..).is_some_and(|tail| {
+                            String::from_utf8_lossy(tail).contains("keeper_bound")
+                        })
+                    })
+                    .unwrap_or(false)
+            }
+        },
+    );
+    // The winner's takeover appends only its two marker records: no job
+    // ended, so no ending was written. The wait above holds until the bound
+    // record lands past the crash, so the tail below is the whole takeover.
+    let after = fs::read(dir.join("events.jsonl")).unwrap();
+    let Some(new) = after.strip_prefix(crashed_log.as_slice()) else {
+        panic!("the takeover appends to the log, never rewrites it");
+    };
+    let new_lines = complete_lines(std::str::from_utf8(new).expect("takeover records are UTF-8"));
+    let kinds: Vec<&str> = new_lines
+        .iter()
+        .filter_map(|line| line.get("kind").and_then(Value::as_str))
+        .collect();
+    // `docs/events.md`, "Jobs" and `docs/tools.md`, "The keeper" promise
+    // the takeover markers: a crash takeover writes `keeper_started`,
+    // then `keeper_bound`.
     assert_eq!(
-        fs::read(dir.join("events.jsonl")).unwrap(),
-        crashed_log,
-        "neither keeper appended: no job ended"
+        kinds,
+        ["keeper_started", "keeper_bound"],
+        "the winner appends only its takeover markers: no job ended"
     );
     // Its job runs on, with no keeper left to account for it.
     assert!(fakes::group_alive(lost_group));
@@ -2178,6 +2411,616 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
     assert_eq!(read_bounded_tail(&noeol).unwrap(), b"");
 }
 
+/// One fabricated takeover record line: `kind` with `seq` and a `ts` in
+/// milliseconds since the epoch, the shape the expiry scan reads.
+fn takeover_record(kind: &str, seq: u64, ts: u64) -> String {
+    format!("{{\"kind\":\"{kind}\",\"seq\":{seq},\"ts\":{ts}}}\n")
+}
+
+/// A fabricated `SystemTime`: the tests drive the expiry scan with fixed
+/// timestamps, never the real clock.
+fn at_ms(millis: u64) -> SystemTime {
+    UNIX_EPOCH
+        .checked_add(Duration::from_millis(millis))
+        .unwrap()
+}
+
+/// A fabricated expiry for a dead keeper: `body` is the whole events log,
+/// `cutoff` the kill marker contents (written when `Some`), and `socket`
+/// plants a present socket file. The keeper pattern matches nothing, so the
+/// sample is dead and the one-shot `pgrep` returns fast.
+fn fabricated_expiry(body: &str, cutoff: Option<&str>, socket: bool) -> String {
+    let setup = Setup::new();
+    let id = "s_0123456789abcdef";
+    let dir = session_dir(&setup, id);
+    std::fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("events.jsonl"), body).unwrap();
+    let marker = cutoff.map(|cut| {
+        let path = setup.home().join("kill_probe");
+        fs::write(&path, cut).unwrap();
+        path
+    });
+    if socket {
+        let path = setup.session_socket(id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"socket").unwrap();
+        // Backdate the marker past any filesystem timestamp tick: the kill
+        // marker predates the socket by construction, and same-tick mtimes
+        // would read as unanchored instead of exercising the mtime split.
+        if let Some(marker) = marker.as_ref() {
+            let socket_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(marker)
+                .unwrap()
+                .set_modified(socket_mtime - Duration::from_secs(3600))
+                .unwrap();
+        }
+    }
+    keeper_state_at_expiry(&format!("keeper --id {id}"), &setup, id, marker.as_deref())
+}
+
+#[test]
+fn bind_window_unknown_without_marker() {
+    // With no kill marker the window is unknown; with no records either the
+    // case is the never-spawned disjunction, never a picked cause.
+    let line = bind_window_line(None, None, None);
+    assert!(
+        line.contains("never spawned, died before opening the log"),
+        "{line}"
+    );
+    assert!(line.contains("or failed to record its start"), "{line}");
+    assert!(
+        line.contains("bind window: unknown (no kill marker)"),
+        "{line}"
+    );
+}
+
+#[test]
+fn bind_window_no_start_with_marker() {
+    // A complete window with no current-generation start names the
+    // disjunction and no unknown window: the marker anchors the generation.
+    let line = bind_window_line(Some(at_ms(500)), None, None);
+    assert!(
+        line.contains("never spawned, died before opening the log"),
+        "{line}"
+    );
+    assert!(line.contains("or failed to record its start"), "{line}");
+    assert!(!line.contains("unknown"), "{line}");
+}
+
+#[test]
+fn bind_window_newer_names_bound_per_mtime() {
+    // A socket mtime at least a second newer than the start record
+    // contradicts died before bind, with the failed-append disjunct; a gap
+    // of exactly one second counts as decided.
+    for (socket, start) in [(2000, 1000), (11000, 10000)] {
+        let line = bind_window_line(Some(at_ms(500)), Some(at_ms(start)), Some(at_ms(socket)));
+        assert!(line.contains("bound per mtime"), "{line}");
+        assert!(line.contains("died before the bound record"), "{line}");
+        assert!(line.contains("or failed to record its bind"), "{line}");
+        assert!(!line.contains("died before bind,"), "{line}");
+        assert!(!line.contains("indeterminate"), "{line}");
+    }
+}
+
+#[test]
+fn bind_window_older_names_died_before_bind() {
+    // An older mtime keeps the default reading, with the failed-append
+    // disjunct; a gap of exactly one second counts as decided.
+    for (socket, start) in [(1000, 2000), (10000, 11000)] {
+        let line = bind_window_line(Some(at_ms(500)), Some(at_ms(start)), Some(at_ms(socket)));
+        assert!(
+            line.contains("died before bind, or failed to record its bind"),
+            "{line}"
+        );
+        assert!(!line.contains("bound per mtime"), "{line}");
+        assert!(!line.contains("indeterminate"), "{line}");
+    }
+}
+
+#[test]
+fn bind_window_absent_names_died_before_bind() {
+    // An absent mtime keeps the default reading, and there is nothing to
+    // compare the kill mtime against.
+    let line = bind_window_line(Some(at_ms(500)), Some(at_ms(1000)), None);
+    assert!(
+        line.contains("died before bind, or failed to record its bind"),
+        "{line}"
+    );
+    assert!(!line.contains("bound per mtime"), "{line}");
+    assert!(!line.contains("indeterminate"), "{line}");
+}
+
+#[test]
+fn bind_window_subsecond_gap_reads_indeterminate() {
+    // A sub-second gap either way cannot separate this keeper's bind from
+    // its start record: the state is indeterminate, never died before bind
+    // and never bound per mtime. Equal mtimes count: a zero gap is the
+    // closest of all.
+    for (socket, start) in [
+        (10900, 10000),
+        (1001, 1000),
+        (1000, 1001),
+        (1000, 1000),
+        (10999, 10000),
+        (10000, 10999),
+    ] {
+        let line = bind_window_line(Some(at_ms(500)), Some(at_ms(start)), Some(at_ms(socket)));
+        assert!(
+            line.contains("indeterminate whether this keeper bound"),
+            "{line}"
+        );
+        assert!(!line.contains("died before bind,"), "{line}");
+        assert!(!line.contains("died before the bound record"), "{line}");
+        assert!(!line.contains("bound per mtime"), "{line}");
+        assert!(!line.contains("never spawned"), "{line}");
+    }
+}
+
+#[test]
+fn bind_window_kill_mtime_equality_reads_indeterminate() {
+    // A socket mtime equal to the kill mtime cannot anchor the generation:
+    // indeterminate, even though the mtime is far newer than the start and
+    // would otherwise read bound per mtime.
+    let line = bind_window_line(Some(at_ms(5000)), Some(at_ms(1000)), Some(at_ms(5000)));
+    assert!(
+        line.contains("indeterminate whether this keeper bound"),
+        "{line}"
+    );
+    assert!(!line.contains("died before bind,"), "{line}");
+    assert!(!line.contains("bound per mtime"), "{line}");
+}
+
+#[test]
+fn keeper_case_kill_marker_file_captures_max_seq() {
+    let setup = Setup::new();
+    let id = "s_0123456789abcdef";
+    let dir = session_dir(&setup, id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = takeover_record("session_started", 0, 1)
+        + &takeover_record("job_completed", 5, 2)
+        + &takeover_record("job_completed", 3, 3);
+    fs::write(dir.join("events.jsonl"), &body).unwrap();
+    let marker = kill_marker_file(&setup, id);
+    // The ceiling is the max `seq`, not the last line's.
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "5");
+    assert!(fs::metadata(&marker).unwrap().modified().is_ok());
+}
+
+#[test]
+fn record_scan_stale_generation_reads_disjunction() {
+    // The recency gate: the pre-kill pair belongs to the earlier generation
+    // and is ignored, so with no post-kill records the complete window names
+    // the never-spawned disjunction.
+    let body = takeover_record("session_started", 0, 1)
+        + &takeover_record("keeper_started", 1, 1000)
+        + &takeover_record("keeper_bound", 2, 1000);
+    let state = fabricated_expiry(&body, Some("2"), false);
+    assert!(
+        state.contains("never spawned, died before opening the log, or failed to record its start"),
+        "{state}"
+    );
+    assert!(!state.contains("bound, then died"), "{state}");
+}
+
+#[test]
+fn keeper_case_latest_takeover_wins_across_generations() {
+    // Pre-kill pairs are ignored; of the two post-kill takeovers the latest
+    // start has no later bound, so bound means a bound after that start: the
+    // earlier bound belongs to the earlier start, and the case is
+    // died-before-bind, never bound-then-died. The cutoff sits at the
+    // pre-kill pair, with seqs at, below and above it all sorting correctly.
+    let body = takeover_record("session_started", 0, 1)
+        + &takeover_record("keeper_started", 1, 1000)
+        + &takeover_record("keeper_bound", 2, 1000)
+        + &takeover_record("keeper_started", 3, 1000)
+        + &takeover_record("keeper_bound", 4, 1000)
+        + &takeover_record("keeper_started", 5, 1000);
+    let state = fabricated_expiry(&body, Some("2"), false);
+    assert!(
+        state.contains("died before bind, or failed to record its bind"),
+        "{state}"
+    );
+    assert!(!state.contains("bound, then died"), "{state}");
+    assert!(!state.contains("bound per mtime"), "{state}");
+}
+
+#[test]
+fn keeper_case_truncated_no_start_falls_back() {
+    // A truncated window without a current-generation start never names the
+    // no-start case: the start may sit outside the window.
+    let setup = Setup::new();
+    let id = "s_0123456789abcdef";
+    let dir = session_dir(&setup, id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = takeover_record("session_started", 0, 1);
+    fs::write(dir.join("events.jsonl"), &body).unwrap();
+    let marker = kill_marker_file(&setup, id);
+    for seq in 1..=2000u64 {
+        body.push_str(&takeover_record("job_line", seq, 1));
+    }
+    fs::write(dir.join("events.jsonl"), &body).unwrap();
+    assert!(body.len() > SESSION_LOG_TAIL_CAP, "the window is truncated");
+    let state = keeper_state_at_expiry(
+        &format!("keeper --id {id}"),
+        &setup,
+        id,
+        Some(marker.as_path()),
+    );
+    assert!(
+        state.contains(
+            "keeper dead (no process under the keeper pattern); bind history unobservable"
+        ),
+        "{state}"
+    );
+    assert!(!state.contains("never spawned"), "{state}");
+}
+
+#[test]
+fn record_scan_socket_newer_than_start() {
+    // The socket mtime is newer than the current-generation start record, so
+    // the message says the socket was bound per its mtime and the keeper died
+    // before the bound record, never died before bind. The start record is
+    // ancient; the planted socket's real mtime is newer by construction.
+    let body =
+        takeover_record("session_started", 0, 1) + &takeover_record("keeper_started", 1, 1000);
+    let state = fabricated_expiry(&body, Some("0"), true);
+    assert!(state.contains("bound per mtime"), "{state}");
+    assert!(state.contains("died before the bound record"), "{state}");
+    assert!(state.contains("or failed to record its bind"), "{state}");
+    assert!(!state.contains("died before bind,"), "{state}");
+    assert!(!state.contains("never spawned"), "{state}");
+}
+
+#[test]
+fn record_scan_socket_older_than_start() {
+    // The socket mtime is older than the current-generation start record, so
+    // the message keeps the died-before-bind reading with the failed-append
+    // disjunct. The start record is far in the future; the planted socket's
+    // real mtime is older by construction.
+    let body = takeover_record("session_started", 0, 1)
+        + &takeover_record("keeper_started", 1, 4102444800000);
+    let state = fabricated_expiry(&body, Some("0"), true);
+    assert!(
+        state.contains("died before bind, or failed to record its bind"),
+        "{state}"
+    );
+    assert!(!state.contains("bound per mtime"), "{state}");
+    assert!(!state.contains("never spawned"), "{state}");
+}
+
+#[test]
+fn record_scan_subsecond_gap_reads_indeterminate() {
+    // A start record stamped at the socket's own mtime sits within a second
+    // of it by construction: the mtime cannot tell bind from died-before, so
+    // the expiry names the indeterminacy instead of a case. The start's
+    // millisecond stamp is the mtime truncated, so the gap stays sub-second
+    // on any filesystem granularity.
+    let setup = Setup::new();
+    let id = "s_0123456789abcdef";
+    let dir = session_dir(&setup, id);
+    std::fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        takeover_record("session_started", 0, 1),
+    )
+    .unwrap();
+    let marker = kill_marker_file(&setup, id);
+    let socket = setup.session_socket(id);
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    fs::write(&socket, b"socket").unwrap();
+    let socket_mtime = fs::metadata(&socket).unwrap().modified().unwrap();
+    // Backdate the marker past any filesystem timestamp tick so the
+    // sub-second gap, not a same-tick kill equality, drives the verdict.
+    std::fs::File::options()
+        .write(true)
+        .open(&marker)
+        .unwrap()
+        .set_modified(socket_mtime - Duration::from_secs(3600))
+        .unwrap();
+    let ts = u64::try_from(socket_mtime.duration_since(UNIX_EPOCH).unwrap().as_millis()).unwrap();
+    let body = takeover_record("session_started", 0, 1) + &takeover_record("keeper_started", 1, ts);
+    fs::write(dir.join("events.jsonl"), &body).unwrap();
+    let state = keeper_state_at_expiry(
+        &format!("keeper --id {id}"),
+        &setup,
+        id,
+        Some(marker.as_path()),
+    );
+    assert!(
+        state.contains("indeterminate whether this keeper bound"),
+        "{state}"
+    );
+    assert!(!state.contains("died before bind,"), "{state}");
+    assert!(!state.contains("bound per mtime"), "{state}");
+}
+
+#[test]
+fn record_scan_truncated_tail_lone_bound() {
+    // The bounded tail drops the earlier start line at the cap boundary: a
+    // current-generation bound record whose start fell outside the tail reads
+    // bound-then-died. A stale-generation bound record is ignored and falls
+    // back, naming nothing.
+    let setup = Setup::new();
+    let id = "s_0123456789abcdef";
+    let dir = session_dir(&setup, id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = takeover_record("session_started", 0, 1);
+    fs::write(dir.join("events.jsonl"), &body).unwrap();
+    let marker = kill_marker_file(&setup, id);
+    body.push_str(&takeover_record("keeper_started", 1, 1000));
+    for seq in 2..=2000u64 {
+        body.push_str(&takeover_record("job_line", seq, 1));
+    }
+    body.push_str(&takeover_record("keeper_bound", 2001, 1000));
+    fs::write(dir.join("events.jsonl"), &body).unwrap();
+    assert!(
+        body.len() > SESSION_LOG_TAIL_CAP,
+        "the start falls outside the window"
+    );
+    let state = keeper_state_at_expiry(
+        &format!("keeper --id {id}"),
+        &setup,
+        id,
+        Some(marker.as_path()),
+    );
+    assert!(state.contains("bound, then died"), "{state}");
+    assert!(!state.contains("never spawned"), "{state}");
+    // The same bound record under a stale generation counts for nothing: the
+    // truncated window names nothing.
+    let stale = setup.home().join("stale_probe");
+    fs::write(&stale, "2001").unwrap();
+    let state = keeper_state_at_expiry(
+        &format!("keeper --id {id}"),
+        &setup,
+        id,
+        Some(stale.as_path()),
+    );
+    assert!(
+        state.contains(
+            "keeper dead (no process under the keeper pattern); bind history unobservable"
+        ),
+        "{state}"
+    );
+    assert!(!state.contains("bound, then died"), "{state}");
+    assert!(!state.contains("never spawned"), "{state}");
+}
+
+/// One filler line of exactly `total` bytes: valid JSON the scan ignores by
+/// kind, so the cap matrix below pins the truncation flag, not the content.
+fn sized_filler(kind: &str, seq: u64, total: usize) -> String {
+    let fixed = format!("{{\"kind\":\"{kind}\",\"seq\":{seq},\"ts\":1,\"pad\":\"");
+    let pad = "x".repeat(total - fixed.len() - 3);
+    format!("{fixed}{pad}\"}}\n")
+}
+
+#[test]
+fn keeper_case_cap_truncation_matrix() {
+    // At one byte below the cap and exactly at it the window is complete, so
+    // with no current-generation records either names the disjunction; one
+    // byte past it the window is truncated and names nothing. The reader
+    // itself moves by `saturating_sub` and `take`: the test pins outcomes at
+    // the three sizes, never a size of its own.
+    for (extra, names_case) in [(63, true), (64, true), (65, false)] {
+        let setup = Setup::new();
+        let id = "s_0123456789abcdef";
+        let dir = session_dir(&setup, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = String::new();
+        for seq in 0..1023u64 {
+            body.push_str(&sized_filler("session_started", seq, 64));
+        }
+        body.push_str(&sized_filler("job_line", 1023, extra));
+        fs::write(dir.join("events.jsonl"), &body).unwrap();
+        assert_eq!(body.len(), 1023 * 64 + extra);
+        let marker = kill_marker_file(&setup, id);
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "1023");
+        let state = keeper_state_at_expiry(
+            &format!("keeper --id {id}"),
+            &setup,
+            id,
+            Some(marker.as_path()),
+        );
+        if names_case {
+            assert!(
+                state.contains(
+                    "never spawned, died before opening the log, or failed to record its start"
+                ),
+                "size {extra}: {state}"
+            );
+        } else {
+            assert!(
+                state.contains(
+                    "keeper dead (no process under the keeper pattern); bind history unobservable"
+                ),
+                "size {extra}: {state}"
+            );
+            assert!(!state.contains("never spawned"), "size {extra}: {state}");
+        }
+    }
+}
+
+#[test]
+fn record_scan_malformed_tail_falls_back() {
+    // A malformed complete line is corrupt evidence: the scan names nothing,
+    // and the tail renders unknown.
+    let body = takeover_record("session_started", 0, 1) + "not json\n";
+    let state = fabricated_expiry(&body, Some("0"), false);
+    assert!(
+        state.contains(
+            "keeper dead (no process under the keeper pattern); bind history unobservable"
+        ),
+        "{state}"
+    );
+    assert!(!state.contains("never spawned"), "{state}");
+    assert!(state.contains("session log tail: unknown"), "{state}");
+}
+
+#[test]
+fn record_scan_empty_tail_reads_disjunction() {
+    // An empty log holds no records in a complete window: the uniform rule
+    // names the disjunction. No real log is empty; this pins the rule.
+    let state = fabricated_expiry("", Some("0"), false);
+    assert!(
+        state.contains("never spawned, died before opening the log, or failed to record its start"),
+        "{state}"
+    );
+}
+
+#[test]
+fn record_scan_trailing_fragment_drops() {
+    // A trailing fragment still being written drops like the tail render
+    // drops it, leaving no complete records in a complete window.
+    let state = fabricated_expiry(
+        "{\"kind\":\"session_started\",\"seq\":0,\"ts\":1",
+        Some("0"),
+        false,
+    );
+    assert!(
+        state.contains("never spawned, died before opening the log, or failed to record its start"),
+        "{state}"
+    );
+}
+
+#[test]
+fn keeper_dead_at_expiry_with_no_takeover_names_never_spawned_died_before_opening_or_failed_to_record()
+ {
+    // A text-only scripted session runs to clean exit: no command ever runs,
+    // so per `docs/tools.md`, "The keeper" no keeper ever
+    // spawns. The re-created leftover socket (bound path, no listener) is the
+    // exact filesystem state a SIGKILLed keeperless session leaves, so expiry
+    // is certain, not raced.
+    let setup = configured();
+    let id = "s_0123456789abcdef";
+    let keeper_pattern = format!("keeper --id {id}");
+    let keeper_watchdog = Watchdog::matching(&keeper_pattern);
+    let workspace = setup.workspace();
+    let mut command = setup.fiber(&[
+        "session",
+        "--id",
+        id,
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    command.current_dir(&workspace);
+    let (mut child, session_watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let guard = KillGroup(group);
+    let lines = stdout(&mut child);
+    event(&lines, "fiber_started", setup.deadline);
+    let client = Socket::connect(setup.deadline, &setup.session_socket(id));
+    let sub = subscribe_direct(&client);
+    // A text-only turn: the scripted model answers with no shell command, so
+    // no keeper ever spawns for this session.
+    client.send(r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hello"}]}}"#);
+    assert_eq!(
+        recv_answer(&client, "c_prompt", "prompt accepted")["kind"],
+        "command_accepted"
+    );
+    let live = until_after(&client, &sub, "text-only turn completion", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(live.iter().any(|line| line["kind"] == "turn_completed"));
+    client.send(r#"{"id":"c_close","command":"close"}"#);
+    assert_eq!(
+        recv_answer(&client, "c_close", "close accepted")["kind"],
+        "command_accepted"
+    );
+    assert!(reap(child, setup.deadline).success());
+    assert!(fakes::group_empties(group, setup.deadline.start_wait()));
+    std::mem::forget(guard);
+    session_watchdog.stand_down(setup.deadline.cleanup_phase());
+    keeper_watchdog.stand_down(setup.deadline.cleanup_phase());
+    // The leftover refusing socket: bound path, no listener.
+    let socket = setup.session_socket(id);
+    // The session may have unlinked its socket on exit; a stale one goes too.
+    drop(fs::remove_file(&socket));
+    let listener = UnixListener::bind(&socket).unwrap();
+    drop(listener);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_refuse_only_socket(
+            setup.deadline.start_wait().within(Duration::from_millis(1)),
+            socket,
+            None,
+            &setup,
+            id,
+        );
+    }));
+    let message = outcome
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| panic!("expiry must panic with a diagnostic message"));
+    assert!(
+        message
+            .contains("never spawned, died before opening the log, or failed to record its start"),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "keeper dead (no process under the keeper pattern); bind history unobservable"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains("bind window: unknown (no kill marker)"),
+        "{message}"
+    );
+}
+
+#[test]
+fn keeper_takeover_records_started_then_bound_in_the_resumed_log() {
+    // The presence branch: after a crash takeover the resumed log shows
+    // `keeper_started` before `keeper_bound`. Without the fix no such kinds
+    // exist in the log, so the positions do not resolve and this fails.
+    let fixture = bound_fixture();
+    let crashed = crash(&fixture, None);
+    let setup = &fixture.setup;
+    let id = fixture.id.as_str();
+    // The job ends while no session is there to take the log.
+    release(&fixture.gate, setup.deadline);
+    assert!(fakes::matching_exits(
+        &fixture.keeper_pattern,
+        setup.deadline.start_wait()
+    ));
+    script(setup, "done.json", json!([{"text":"Recovered."}]));
+    let resumed = run(
+        setup,
+        &["ask", "--resume", id, "--model", "scripted/done.json", "go"],
+    );
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let lines = log_lines(setup, id);
+    let started_at = lines
+        .iter()
+        .position(|line| line["kind"] == "keeper_started");
+    let bound_at = lines.iter().position(|line| line["kind"] == "keeper_bound");
+    // `docs/events.md`, "Jobs" and `docs/tools.md`, "The keeper" promise
+    // the takeover order: the start record lands before the bound record.
+    match (started_at, bound_at) {
+        (Some(started_at), Some(bound_at)) => assert!(
+            started_at < bound_at,
+            "keeper_started precedes keeper_bound: {lines:?}"
+        ),
+        _ => panic!("the resumed log holds both takeover records: {lines:?}"),
+    }
+    assert!(
+        fs::read_to_string(&crashed.output)
+            .unwrap()
+            .contains(&format!("done-{}", fixture.marker))
+    );
+    fixture
+        .keeper_watchdog
+        .stand_down(setup.deadline.cleanup_phase());
+    fixture
+        .job_watchdog
+        .stand_down(setup.deadline.cleanup_phase());
+}
+
 #[test]
 fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
     let BoundFixture {
@@ -2337,6 +3180,7 @@ fn keeper_bound_holds_job_in_bound_without_resume() {
     let job = started["payload"]["job_id"].as_str().unwrap().to_owned();
     event(&lines, "tool_call_started", setup.deadline);
     assert!(!ready.wait(setup.deadline.start_wait()).is_empty());
+    let kill_marker = kill_marker_file(&setup, id);
     fakes::kill_group(group, "KILL").unwrap();
     assert!(!reap(child, setup.deadline).success());
     assert!(fakes::group_empties(group, setup.deadline.start_wait()));
@@ -2346,7 +3190,13 @@ fn keeper_bound_holds_job_in_bound_without_resume() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket, &setup, id);
+    wait_for_refuse_only_socket(
+        setup.deadline.start_wait(),
+        socket,
+        Some(kill_marker),
+        &setup,
+        id,
+    );
     // Inside the bound, with no resume: the keeper still runs and still
     // holds its job, and no ending is written yet.
     assert!(
