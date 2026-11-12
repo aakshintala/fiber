@@ -46,9 +46,6 @@ crates/tui/src/timing_tests.rs	fiber-4746	plan	2026-11-12T19:46:41Z	Amoghs-MacBo
 crates/loop/prompt/reviewer.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer/request.rs	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/permissions.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-.github/workflows/ci.yml	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/test-flake-report	fiber-4663	plan	2026-11-12T19:52:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/errors.md	fiber-4746	plan	2026-11-12T19:53:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer_tests.rs	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/src/prompt_tests.rs	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -397,3 +394,10 @@ docs/tools.md	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/
 docs/extensions.md	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 extensions/codemode/extension.json	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/ci.yml:1084-1085	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1087-1088	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1093-1093	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1095-1096	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1100-1101	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+docs/ci.md:260-265	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
