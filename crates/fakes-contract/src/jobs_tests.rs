@@ -90,6 +90,7 @@ fn owned_identities_returns_the_identity_recorded_by_open() {
         start_time: 456,
     });
     let opened = jobs.open(opening).unwrap();
+    assert_eq!(jobs.end_count(), 0, "no End has been reported yet");
     assert_eq!(
         jobs.owned_identities(),
         vec![JobIdentity {
@@ -97,7 +98,9 @@ fn owned_identities_returns_the_identity_recorded_by_open() {
             start_time: 456,
         }]
     );
-    drop(opened.end);
+    let id = opened.started.job_id.0.clone();
+    opened.end.0(completed(&id, Outcome::Completed));
+    assert_eq!(jobs.end_count(), 1, "one reported End is counted once");
 }
 
 #[test]

@@ -62,10 +62,32 @@ fn reap(mut child: std::process::Child) -> std::process::ExitStatus {
 }
 
 #[test]
+fn start_time_composes_seconds_and_microseconds() {
+    let seconds = 3_u64;
+    let microseconds = 5_u64;
+    assert_eq!(
+        super::compose_start_time(seconds, microseconds),
+        (seconds << 32) + microseconds
+    );
+}
+
+#[test]
 fn start_time_is_stable_for_the_callers_process() {
-    let first = start_time(std::process::id()).expect("own process has a start time");
-    let second = start_time(std::process::id()).expect("own process has a start time");
+    let pid = std::process::id();
+    let first = start_time(pid).expect("own process has a start time");
+    let second = start_time(pid).expect("own process has a start time");
     assert_eq!(first, second);
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let fields: Vec<_> = stat
+            .split_once(") ")
+            .unwrap()
+            .1
+            .split_ascii_whitespace()
+            .collect();
+        assert_eq!(first, fields[19].parse::<u64>().unwrap());
+    }
 }
 
 #[test]

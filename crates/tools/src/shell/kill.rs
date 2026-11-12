@@ -101,9 +101,6 @@ pub(super) fn targets(command: &str) -> Option<Vec<Target>> {
 }
 
 fn signal_word(raw: &str) -> Option<SignalChoice> {
-    if raw == "s" || raw == "l" {
-        return None;
-    }
     if raw.bytes().all(|byte| byte.is_ascii_digit()) {
         let number = raw.parse::<i32>().ok()?;
         return if number == 0 {
@@ -250,7 +247,53 @@ mod tests {
     }
 
     #[test]
-    fn kill_signal_parsing_preserves_the_default_and_common_spellings() {
+    fn kill_signal_words_are_parsed() {
+        for (word, expected) in [
+            ("HUP", Signal::HUP),
+            ("INT", Signal::INT),
+            ("QUIT", Signal::QUIT),
+            ("ILL", Signal::ILL),
+            ("TRAP", Signal::TRAP),
+            ("ABRT", Signal::ABORT),
+            ("IOT", Signal::ABORT),
+            ("BUS", Signal::BUS),
+            ("FPE", Signal::FPE),
+            ("KILL", Signal::KILL),
+            ("USR1", Signal::USR1),
+            ("SEGV", Signal::SEGV),
+            ("USR2", Signal::USR2),
+            ("PIPE", Signal::PIPE),
+            ("ALRM", Signal::ALARM),
+            ("TERM", Signal::TERM),
+            ("CHLD", Signal::CHILD),
+            ("CLD", Signal::CHILD),
+            ("CONT", Signal::CONT),
+            ("STOP", Signal::STOP),
+            ("TSTP", Signal::TSTP),
+            ("TTIN", Signal::TTIN),
+            ("TTOU", Signal::TTOU),
+            ("URG", Signal::URG),
+            ("XCPU", Signal::XCPU),
+            ("XFSZ", Signal::XFSZ),
+            ("VTALRM", Signal::VTALARM),
+            ("PROF", Signal::PROF),
+            ("WINCH", Signal::WINCH),
+            ("IO", Signal::IO),
+            ("POLL", Signal::IO),
+            ("SYS", Signal::SYS),
+        ] {
+            for spelling in [
+                word.to_owned(),
+                format!("SIG{word}"),
+                word.to_ascii_lowercase(),
+            ] {
+                assert_eq!(
+                    parse(&format!("kill -{spelling} 2")).unwrap().signal,
+                    SignalChoice::Some(expected),
+                    "{spelling}"
+                );
+            }
+        }
         for (command, signal) in [
             ("kill 2", SignalChoice::Some(Signal::TERM)),
             ("kill -9 2", SignalChoice::Some(Signal::KILL)),

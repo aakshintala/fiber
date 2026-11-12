@@ -106,6 +106,8 @@ pub fn start_time(pid: u32) -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where this macOS-only function is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[allow(
     unsafe_code,
     reason = "proc_pidinfo reads one caller-sized proc_bsdinfo for the checked pid and fixed flavor"
@@ -130,7 +132,15 @@ fn macos_start_time(pid: u32) -> Option<u64> {
     }
     // SAFETY: proc_pidinfo returned exactly the structure's size.
     let info = unsafe { info.assume_init() };
-    Some((info.pbi_start_tvsec << 32) | info.pbi_start_tvusec)
+    Some(compose_start_time(
+        info.pbi_start_tvsec,
+        info.pbi_start_tvusec,
+    ))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn compose_start_time(seconds: u64, microseconds: u64) -> u64 {
+    (seconds << 32) + microseconds
 }
 
 /// Whether the process `pid` still runs, through `kill(pid, 0)`, with the

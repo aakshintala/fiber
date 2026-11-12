@@ -1795,7 +1795,11 @@ fn an_unreadable_detached_leader_needs_review_and_can_be_stopped() {
     let effects = tool.effects(&args(arguments.clone())).unwrap();
     assert_eq!(effects.declared.effects, vec![Effect::Executes]);
     let output = run_with_effects(&tool, arguments, &effects, &CancelToken::new());
-    assert!(output.error.is_none(), "{}", text_of(&output));
+    assert!(
+        output.error.is_none(),
+        "reviewed stop: {}",
+        text_of(&output)
+    );
     assert!(
         text_of(&output).contains("cancelled"),
         "{}",
@@ -1803,6 +1807,74 @@ fn an_unreadable_detached_leader_needs_review_and_can_be_stopped() {
     );
     kill_group(pgid, "KILL").unwrap();
     assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn stopping_an_ordinary_running_job_does_not_need_review() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let opened = open(&registry, "sleep 60", idle_stop());
+    let effects = tool
+        .effects(&args(
+            json!({"action":"stop", "job_id":opened.started.job_id.0}),
+        ))
+        .unwrap();
+    assert!(
+        effects.declared.effects.is_empty(),
+        "ordinary stop is not reviewed"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn a_gone_detached_job_is_not_reported_as_needing_review() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "exec sleep 60"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let start_time = support::group::start_time(pgid).unwrap();
+    let log = _dir.path().join("artifacts/gone-leader.log");
+    std::fs::write(&log, "running\n").unwrap();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep 60".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: None,
+            identity: Some(contract::jobs::JobIdentity { pgid, start_time }),
+            detached: Some(log),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let arguments = json!({"action":"stop", "job_id":id});
+    kill_group(pgid, "KILL").unwrap();
+    assert!(
+        !child.wait().unwrap().success(),
+        "the detached process is reaped"
+    );
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    let effects = tool.effects(&args(arguments.clone())).unwrap();
+    assert!(
+        effects.declared.effects.is_empty(),
+        "a gone job needs no review"
+    );
+    let output = run_with_effects(&tool, arguments, &effects, &CancelToken::new());
+    assert!(
+        text_of(&output).contains("No job has id"),
+        "{}",
+        text_of(&output)
+    );
+    drop(opened.end);
     watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 

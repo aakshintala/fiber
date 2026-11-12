@@ -78,6 +78,8 @@ impl StopControl {
         })
     }
 
+    // The supervisor's poll cap observes clock changes without subscription; this avoids only a bounded poll delay.
+    #[cfg_attr(false, mutants::skip)]
     fn subscribe(&self, clock: &dyn Clock) {
         let wake: Arc<dyn Wake> = self.parker.clone();
         clock.subscribe(Arc::downgrade(&wake));
@@ -101,6 +103,8 @@ impl StopControl {
         support::lock(&self.stop).result.take()
     }
 
+    // The supervisor's poll cap observes reaper completion without this wake; this avoids only a bounded poll delay.
+    #[cfg_attr(false, mutants::skip)]
     fn wake(&self) {
         self.parker.bump();
     }

@@ -370,6 +370,95 @@ fn detached_stop_escalates_after_the_session_clock_grace() {
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
+fn failed_supervisor_fixture() -> (
+    super::Supervisor,
+    mpsc::Receiver<contract::events::JobCompleted>,
+    String,
+) {
+    let dir = fakes::TempDir::new("fiber-detached-supervisor-failure");
+    let jobs = FakeJobs::new(dir.path());
+    let mut opened = jobs
+        .open(contract::jobs::Opening {
+            tool: "shell".into(),
+            description: "detached command".into(),
+            stop: contract::jobs::Stop(Box::new(|| {})),
+            lines: false,
+            input: None,
+            identity: None,
+            detached: None,
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let (report_tx, report_rx) = mpsc::channel();
+    let old_end = std::mem::replace(&mut opened.end, contract::jobs::End(Box::new(|_| {})));
+    old_end.0(contract::events::JobCompleted {
+        job_id: opened.started.job_id.clone(),
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    opened.end = contract::jobs::End(Box::new(move |completed| {
+        let _sent = report_tx.send(completed);
+    }));
+    let (done_tx, done) = mpsc::channel();
+    drop(done_tx);
+    let started = super::Started {
+        pid: 2,
+        log: opened.path.clone(),
+        identity: contract::jobs::JobIdentity {
+            pgid: 2,
+            start_time: 3,
+        },
+        done,
+        control: super::StopControl::new(),
+    };
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    (
+        super::Supervisor {
+            opened,
+            started,
+            clock,
+        },
+        report_rx,
+        id,
+    )
+}
+
+#[test]
+fn supervisor_indeterminate_failure_reports_one_failed_end() {
+    let (supervisor, reported, id) = failed_supervisor_fixture();
+    supervisor.fail_indeterminate();
+    let completed = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reported)
+        .expect("indeterminate supervisor failure reports an End");
+    assert_eq!(completed.job_id.0, id);
+    assert_eq!(completed.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        completed.error.unwrap().code,
+        contract::ErrorCode::Indeterminate
+    );
+    assert!(reported.try_recv().is_err(), "one End is reported");
+}
+
+#[test]
+fn supervisor_signal_failure_reports_one_failed_end() {
+    let (supervisor, reported, id) = failed_supervisor_fixture();
+    supervisor.fail_signal(std::io::Error::other("signal denied"));
+    let completed = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reported)
+        .expect("signal failure reports an End");
+    assert_eq!(completed.job_id.0, id);
+    assert_eq!(completed.status, contract::events::Outcome::Failed);
+    let error = completed.error.unwrap();
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert!(error.message.contains("signal denied"), "{}", error.message);
+    assert!(reported.try_recv().is_err(), "one End is reported");
+}
+
 #[test]
 fn receipt_names_the_job_log_and_stop_action() {
     assert_eq!(

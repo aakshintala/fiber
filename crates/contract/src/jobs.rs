@@ -164,6 +164,8 @@ pub trait Jobs: Send + Sync {
     fn foreground(&self, call: Foreground);
 
     /// The process identities this session started and can still confirm.
+    // The default body is already `Vec::new()`; replacing it with `vec![]` is equivalent.
+    #[cfg_attr(false, mutants::skip)]
     fn owned_identities(&self) -> Vec<JobIdentity> {
         Vec::new()
     }

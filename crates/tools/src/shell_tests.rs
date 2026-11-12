@@ -1848,6 +1848,46 @@ fn one_ms_is_accepted_on_every_mode() {
     }
 }
 
+struct RefusingJobs {
+    ready: std::sync::Mutex<fakes::children::Ready>,
+    pid_tx: std::sync::mpsc::Sender<u32>,
+}
+
+impl contract::jobs::Jobs for RefusingJobs {
+    fn open(&self, _opening: Opening) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
+        let pid = self
+            .ready
+            .lock()
+            .unwrap()
+            .wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+        let _sent = self.pid_tx.send(pid);
+        Err(contract::jobs::OpenError {
+            path: std::path::PathBuf::from("artifacts/refused.log"),
+            source: std::io::Error::other("test refuses admission"),
+        })
+    }
+
+    fn stop(&self, _job_id: &contract::JobId) -> bool {
+        false
+    }
+
+    fn background(&self) -> usize {
+        0
+    }
+
+    fn foreground(&self, _call: contract::jobs::Foreground) {}
+
+    fn running(&self) -> Vec<contract::JobId> {
+        Vec::new()
+    }
+
+    fn stop_delegates(&self) -> usize {
+        0
+    }
+
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<contract::inbox::Delivery>) {}
+}
+
 fn detached_arguments(command: &str) -> Map<String, Value> {
     let mut arguments = args(command);
     arguments.insert("detach".into(), json!(true));
@@ -2433,6 +2473,45 @@ fn a_detached_call_takes_no_protected_path_transaction() {
     );
     let pid = detached_pid(&jobs);
     stand_down_group(pid, fakes::Watchdog::group(pid), &jobs);
+}
+
+#[test]
+fn failed_detached_admission_kills_the_unregistered_group() {
+    let dir = fakes::TempDir::new("fiber-shell-detached-admission-failure");
+    let ready = fakes::children::Ready::new(dir.path());
+    let ready_path = ready.path().to_path_buf();
+    let (pid_tx, pid_rx) = std::sync::mpsc::channel();
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(std::sync::Arc::new(RefusingJobs {
+            ready: std::sync::Mutex::new(ready),
+            pid_tx,
+        }))
+        .with_detached(dir.path().join("detached"));
+    let command = format!("echo $$ > '{}'; exec sleep 60", ready_path.display());
+    let output = shell.run(
+        &detached_arguments(&command),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert!(
+        output.jobs.is_empty(),
+        "failed admission has no job receipt"
+    );
+    let pgid = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&pid_rx)
+        .expect("the failed admission observed the child pid");
+    let watchdog = fakes::Watchdog::group(pgid);
+    let stopped = fakes::group_empties(pgid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    if !stopped {
+        fakes::kill_group(pgid, "KILL").unwrap();
+        assert!(fakes::group_empties(
+            pgid,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ));
+    }
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    assert!(stopped, "the rejected detached group was killed");
 }
 
 #[test]
