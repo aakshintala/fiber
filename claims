@@ -103,7 +103,6 @@ crates/tools/src/shell/detached_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	ro
 crates/main/src/builtin.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/builtin_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4465	plan	2026-11-12T21:40:24Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/check-docs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 .github/workflows/ci.yml:1084-1085	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 .github/workflows/ci.yml:1087-1088	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 .github/workflows/ci.yml:1093-1093	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
@@ -112,19 +111,3 @@ scripts/check-docs	fiber-4361	plan	2026-11-12T21:42:27Z	roundhouse-7010-plus-1:/
 docs/ci.md:260-265	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-12T21:51:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 crates/hub/src/feed.rs,crates/hub/src/feed_tests.rs,crates/hub/src/sessions.rs,crates/hub/src/sessions_tests.rs,crates/hub/src/archive.rs,crates/hub/src/archive_tests.rs,crates/hub/src/recent.rs,crates/hub/src/recent_tests.rs,crates/hub/src/connection.rs,crates/hub/src/lib.rs,crates/hub/src/lib_tests.rs,crates/hub/src/idle_tests.rs,crates/hub/src/directories_tests.rs,crates/config/src/keys.rs,crates/config/src/keys_tests.rs,crates/main/src/hub_command.rs,crates/main/src/hub_command_tests.rs,crates/main/src/settings.rs,crates/tui/src/settings_view.rs,crates/tui/src/settings_view_tests.rs,crates/main/tests/hub_daemon/hub_resume.rs	fiber-4598	grant	2026-11-12T22:23:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
-crates/loop/src/inner_calls.rs:234-240	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/loop/src/inner_calls.rs:242-244	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/loop/src/inner_calls.rs:493-502	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/loop/src/inner_calls_tests.rs:890-892	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/loop/src/inner_calls_tests.rs:913-913	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/main/tests/extension_host/extension_codemode.rs:281-281	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/main/tests/extension_host/extension_codemode.rs:317-317	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/main/tests/extension_host/extension_codemode.rs:341-342	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/tools/src/shell.rs:626-627	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/tools/src/shell.rs:630-632	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-crates/tools/src/shell_tests.rs:1213-1214	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-docs/extensions.md:538-541	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-docs/extensions.md:598-598	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-docs/tools.md:209-210	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-docs/tools.md:789-793	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
-extensions/codemode/extension.json:5-5	fiber-4361	plan	2026-11-12T22:24:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4361-inner-shell-uncut	
