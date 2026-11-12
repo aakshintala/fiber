@@ -468,6 +468,17 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
+        "session.keep_exited",
+        Count,
+        NO,
+        Some("10"),
+        tabbed(
+            SettingsTab::Advanced,
+            "Keep exited sessions",
+            "How many exited sessions each project keeps on home before the hub archives the older ones; 0 keeps them all.",
+        ),
+    ),
+    key(
         "reviewer.model",
         Model,
         NO,
