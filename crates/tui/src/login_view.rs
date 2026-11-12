@@ -1209,12 +1209,12 @@ impl Login {
         if *key == Key::Down {
             choices.cursor = Some(match choices.cursor {
                 None => 0,
-                Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
+                Some(at) => (at + 1) % choices.models.len(),
             });
         } else if *key == Key::Up {
             choices.cursor = Some(match choices.cursor {
                 None => choices.models.len().saturating_sub(1),
-                Some(at) => at.saturating_sub(1),
+                Some(at) => at.checked_sub(1).unwrap_or(choices.models.len() - 1),
             });
         } else if *key == Key::Enter {
             let pick = choices

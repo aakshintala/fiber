@@ -3323,7 +3323,7 @@ fn without_a_preselection_no_row_opens_highlighted() {
     let row: String = (0..80)
         .map(|x| buf[(x, barred_rows(&buf, 80, 24)[0])].symbol())
         .collect();
-    assert!(row.contains("m1"), "down clamps, up steps back: {row}");
+    assert!(row.contains("m2"), "Up wraps from first to last: {row}");
     // Up from no highlight reaches the last row.
     let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
     press(&mut login, &fake, &[Key::Up]);
@@ -3404,10 +3404,10 @@ fn arrows_move_and_clamp_over_the_models() {
     for (keys, shown) in [
         (vec![Key::Down], "m1"),
         (vec![Key::Down, Key::Down], "m2"),
-        (vec![Key::Down, Key::Down, Key::Down], "m2"),
+        (vec![Key::Down, Key::Down, Key::Down], "m1"),
         (vec![Key::Up], "m2"),
         (vec![Key::Down, Key::Up, Key::Up], "m1"),
-        (vec![Key::Up, Key::Up, Key::Up], "m1"),
+        (vec![Key::Up, Key::Up, Key::Up], "m2"),
     ] {
         let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
         press(&mut login, &fake, &keys);
