@@ -596,7 +596,10 @@ jobs:
       # flake_decide closed before any lookup. The marker travels in the
       # leg's artifact on the two-leg matrix, and in this job's outputs on
       # the one-leg test_linux matrix, whose list upload stays conditional
-      # on a non-empty list.
+      # on a non-empty list. A record step skipped after an earlier
+      # failure leaves no output, so its completeness condition applies
+      # only when its execution ran; a record that ran but whose parser
+      # failed still marks the collection incomplete.
       - name: Mark the collection complete or not
         id: collection
         if: always()
@@ -608,10 +611,10 @@ jobs:
           if [ "${{ matrix.runner }}" = ubuntu-24.04 ] && [ "${{ steps.flaky_hub.outputs.complete }}" = false ]; then
             complete=false
           fi
-          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.alloc_tests.outcome }}" != skipped ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
             complete=false
           fi
-          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.dhat_tests.outcome }}" != skipped ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
             complete=false
           fi
           if [ "$complete" = true ]; then
@@ -1111,26 +1114,63 @@ jobs:
             echo "$1" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           }
-          # The one-leg matrix reports its marker as a job output: an
-          # incomplete collection fails closed here, before any lookup.
-          if [ "$LINUX_SELECTED" = true ] && [ "$LINUX_COMPLETE" != true ]; then
-            fail_closed "test_linux collection is incomplete: no report"
+          # A readable list always feeds the scan below, whatever its
+          # marker says: a leg whose tests failed but whose list was
+          # written still feeds the collate. Readable is a non-empty
+          # list, or an empty list with a true marker; an existing but
+          # empty list with a false marker is the parser-error
+          # placeholder, which is no report.
+          readable() {
+            if [ -s "$1" ]; then
+              return 0
+            fi
+            [ -f "$1" ] && [ "$(cat "$2" 2>/dev/null)" = true ]
+          }
+          # Walk each selected producer once. Missing or placeholder lists
+          # warn when another leg feeds the report; no-report fails closed
+          # only after the walk proves that no readable list feeds.
+          first_no_report=""
+          partial_reports=""
+          any_feeds=false
+          for runner in ubuntu-24.04-arm macos-26 ubuntu-24.04; do
+            if [ "$runner" = ubuntu-24.04 ]; then
+              [ "$LINUX_SELECTED" = true ] || continue
+              expected=false
+              if [ "$LINUX_FLAKES" = true ] || [ "$LINUX_COMPLETE" != true ]; then
+                expected=true
+              fi
+            else
+              [ "$TEST_SELECTED" = true ] || continue
+              expected=true
+            fi
+            list="$FLAKY_DIR/flaky-tests-$runner.txt"
+            marker="$FLAKY_DIR/collection-complete-$runner.txt"
+            feeds=false
+            if readable "$list" "$marker"; then
+              feeds=true
+            fi
+            if [ "$feeds" = true ]; then
+              any_feeds=true
+              if [ "$(cat "$marker" 2>/dev/null)" != true ]; then
+                partial_reports+="the $runner collection is incomplete: partial report"$'\n'
+              fi
+            elif [ "$expected" = true ]; then
+              if [ -f "$list" ]; then
+                message="the $runner collection is incomplete"
+              else
+                message="the flaky-tests-$runner list is missing"
+              fi
+              partial_reports+="$message: partial report"$'\n'
+              if [ -z "$first_no_report" ]; then
+                first_no_report="$message: no report"
+              fi
+            fi
+          done
+          if [ -n "$first_no_report" ] && [ "$any_feeds" = false ]; then
+            fail_closed "$first_no_report"
           fi
-          # Each selected two-leg matrix leg uploads its list plus a true
-          # marker; a missing list, a missing marker or a false marker
-          # fails closed. An empty list with a true marker is a complete
-          # empty result.
-          if [ "$TEST_SELECTED" = true ]; then
-            for runner in ubuntu-24.04-arm macos-26; do
-              list="$FLAKY_DIR/flaky-tests-$runner.txt"
-              marker="$FLAKY_DIR/collection-complete-$runner.txt"
-              [ -f "$list" ] || fail_closed "the flaky-tests-$runner list is missing: no report"
-              [ "$(cat "$marker" 2>/dev/null)" = true ] || fail_closed "the $runner collection is incomplete: no report"
-            done
-          fi
-          if [ "$LINUX_SELECTED" = true ] && [ "$LINUX_FLAKES" = true ]; then
-            [ -f "$FLAKY_DIR/flaky-tests-ubuntu-24.04.txt" ] || fail_closed "the flaky-tests-ubuntu-24.04 list is missing: no report"
-            [ "$(cat "$FLAKY_DIR/collection-complete-ubuntu-24.04.txt" 2>/dev/null)" = true ] || fail_closed "the ubuntu-24.04 collection is incomplete: no report"
+          if [ -n "$partial_reports" ]; then
+            printf '%s' "$partial_reports" >> "$GITHUB_STEP_SUMMARY"
           fi
           has_flakes=false
           if [ -d "$FLAKY_DIR" ]; then

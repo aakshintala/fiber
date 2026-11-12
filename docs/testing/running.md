@@ -23,14 +23,17 @@ tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 
 `scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
 fails the run when a process still carries it after the tests, listing each
-leak's PID and command. The scan only reports: reaping stays the test's job,
+leak's PID, command, and nextest test identity (`NEXTEST_BINARY_ID` and
+`NEXTEST_TEST_NAME`). A process without either identity value is reported as
+`test: unknown (not in env)`. The scan only reports: reaping stays the test's job,
 above. A process carrying the nonce whose executable is a shared build-cache
 server the toolchain starts (today only `sccache`) is listed in a warning and
 does not fail the run, since such a server outlives the run by design; a new
 name joins the list in `scripts/leak-scan` only through a pull request that
 cites the process.
 A test that clears a child's environment puts `FIBER_CHECK_RUN`
-back (`fakes::check_run`), so `fiber` and the processes it starts carry
+back (`fakes::check_run`) and the available nextest identity variables
+(`fakes::nextest_identity`), so `fiber` and the processes it starts carry
 the nonce. The exception is the case processes of `fiber extension test`,
 which Fiber starts with a cleared environment. A shell-tool command gets
 the nonce through the session's environment: `fiber ask` passes its

@@ -213,6 +213,39 @@
       "web_search": "web_search"
     }
   ],
+  "models_dev": {
+    "pins": {
+      "muse-ember-1.0": [
+        "extra_body",
+        "web_search"
+      ],
+      "muse-spark-1.1": [
+        "extra_body",
+        "web_search"
+      ],
+      "muse-spark-1.2": [
+        "extra_body",
+        "web_search"
+      ],
+      "muse-spark-1.2-contributor": [
+        "extra_body",
+        "web_search"
+      ],
+      "muse-spark-1.3": [
+        "extra_body",
+        "web_search"
+      ],
+      "muse-spark-1.3-contributor": [
+        "extra_body",
+        "web_search"
+      ],
+      "muse-wonder-1.0": [
+        "extra_body",
+        "web_search"
+      ]
+    },
+    "source": "meta"
+  },
   "name": "muse",
   "reviewer_model": "muse-spark-1.3"
 }

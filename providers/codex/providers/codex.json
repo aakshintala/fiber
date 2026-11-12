@@ -205,6 +205,36 @@
       ]
     }
   ],
+  "models_dev": {
+    "pins": {
+      "gpt-6-astra": [
+        "compat",
+        "context_window",
+        "subscription"
+      ],
+      "gpt-6-luna": [
+        "compat",
+        "context_window",
+        "subscription"
+      ],
+      "gpt-6-sol": [
+        "compat",
+        "context_window",
+        "subscription"
+      ],
+      "gpt-6.1-sol": [
+        "compat",
+        "context_window",
+        "subscription"
+      ],
+      "gpt-6.1-terra": [
+        "compat",
+        "context_window",
+        "subscription"
+      ]
+    },
+    "source": "openai"
+  },
   "name": "codex",
   "reviewer_model": "gpt-6-luna"
 }

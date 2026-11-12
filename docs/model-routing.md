@@ -923,8 +923,9 @@ Each omission is also named once in the diagnostic log. The mark applies to
 static provider data too: a static entry carrying `omit_reason` drains the
 same way.
 
-The load reports each `model_invalid` once per reason; a later admission
-reports only invalid the load did not report.
+The load reports each `model_invalid` once per reason and each
+`model_omitted` once per marked entry; a later admission on the same registry
+reports only what the registry has not already reported.
 
 #### Which models exist, and what Fiber knows about them
 
