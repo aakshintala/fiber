@@ -871,6 +871,7 @@ impl Providers {
                 }];
             }
         };
+        self.record_notices(&name, &notices);
         match self.by_name.get_mut(&name) {
             Some(data) => {
                 data.models = models;
@@ -1167,6 +1168,7 @@ impl Providers {
         let mut models = models;
         let admitted = self.admit(name, &owner, &mut models);
         let notices = self.suppress_recorded(name, admitted);
+        self.record_notices(name, &notices);
         let mut data = self.data(name);
         data.models = models;
         self.by_name.insert(name.to_owned(), data);
@@ -1175,7 +1177,8 @@ impl Providers {
     }
 
     /// Drops up to the number of identical invalid or omitted notices already
-    /// reported for this provider, then records every notice it keeps. A
+    /// reported for this provider. The caller records notices after admission
+    /// succeeds. A
     /// repeated admission reports no new notices unless it has excess entries.
     fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
         let mut consumed = Vec::<(ErrorCode, String, usize)>::new();
@@ -1206,7 +1209,6 @@ impl Providers {
             }
             kept.push(notice);
         }
-        self.record_notices(name, &kept);
         kept
     }
 
@@ -1247,10 +1249,13 @@ impl Providers {
             let mut notices = leave_out_omitted(name, name, &mut models);
             notices.extend(leave_out_invalid(name, name, &mut models));
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
-            return self.suppress_recorded(name, notices);
+            let notices = self.suppress_recorded(name, notices);
+            self.record_notices(name, &notices);
+            return notices;
         };
         let admitted = self.admit(name, &owner, &mut models);
         let notices = self.suppress_recorded(name, admitted);
+        self.record_notices(name, &notices);
         match self.by_name.get_mut(name) {
             Some(data) => data.models = models,
             None => {
