@@ -6,7 +6,7 @@ use super::super::super::{App, Effect};
 use super::State;
 use crate::app::testkit::{hello, home_with, sent};
 use crate::home::{Launch, Spot};
-use crate::keys::{Button, Key, Mouse, MouseKind};
+use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
 use contract::SessionId;
@@ -1406,7 +1406,13 @@ fn cancelling_does_not_turn_a_later_row_delete_into_a_stop() {
     app.on_line(left(A, "exited"));
     app.go_home();
     let key = app.home.sessions.row(&SessionId(A.to_owned())).unwrap().key;
-    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    // The Stop click set no focus: clear it so the rest of the flow
+    // matches, since a stale home focus would steer later keys.
+    app.focus = None;
     assert!(frame(&app).contains("Delete session"));
     let lines = sent(app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()));
     // The session-list delete sends one delete and no stops
@@ -1529,7 +1535,13 @@ fn another_rows_delete_answer_does_not_finish_the_command() {
     app.on_line(left(B, "exited"));
     app.go_home();
     let key = app.home.sessions.row(&SessionId(B.to_owned())).unwrap().key;
-    app.home_click(Spot::Stop(key));
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    // The Stop click set no focus: clear it so the rest of the flow
+    // matches, since a stale home focus would steer later keys.
+    app.focus = None;
     let old = confirm(&mut app);
     let old: Value = serde_json::from_str(&old[0]).unwrap();
     app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());

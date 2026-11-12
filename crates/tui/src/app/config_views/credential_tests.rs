@@ -57,8 +57,8 @@ fn empty_answer_and_selection_edges() {
     assert_eq!(picker.key(&Key::Down, 24), Pick::Stay);
     assert_eq!(picker.frame().list.selected(), 2);
     assert_eq!(picker.key(&Key::Down, 24), Pick::Stay);
-    assert_eq!(picker.frame().list.selected(), 2);
-    for selected in [1, 0, 0] {
+    assert_eq!(picker.frame().list.selected(), 0);
+    for selected in [2, 1, 0] {
         picker.key(&Key::Up, 24);
         assert_eq!(picker.frame().list.selected(), selected);
     }

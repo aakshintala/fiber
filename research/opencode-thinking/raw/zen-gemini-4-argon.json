@@ -1,0 +1,225 @@
+{
+ "route": "zen",
+ "protocol": "google",
+ "model": "gemini-4-argon",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 402,
+   "elapsed_s": 0.36,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingBudget": 0,
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MINIMAL",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 402,
+   "elapsed_s": 0.32,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "LOW",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 402,
+   "elapsed_s": 0.27,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MEDIUM",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 402,
+   "elapsed_s": 0.27,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "HIGH",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 402,
+   "elapsed_s": 0.27,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "XHIGH",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 402,
+   "elapsed_s": 0.3,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MAX",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 402,
+     "status": "UNKNOWN",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  }
+ ]
+}

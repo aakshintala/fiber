@@ -3,21 +3,21 @@ source: crates/tui/src/view/model_picker_tests.rs
 expression: "screen(&app, 100, 40)"
 ---
   Models  /model                                                                         Esc returns
-   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-     Type to search █
-     scoped · 2 of 4 [show all]                                                   ⟳ refresh all
-     acme
-     › m1 [deep] [review] $3.00 in · $15.00 out /M
-           thinking low [high]
+   Type to search █
+   scoped · 2 of 4 [show all]                                                        ⟳ refresh all
+   acme
+   › m1 [deep] [review] $3.00 in · $15.00 out /M
+         thinking low [high]
 
-     zeta
-       z2 [chat] $2.00 in · $8.00 out /M
-           thinking low [high]
+   zeta
+     z2 [chat] $2.00 in · $8.00 out /M
+         thinking low [high]
 
-     ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close
+   ↑↓ move · ←→ levels · Enter choose · Tab show all · Ctrl+S session · Ctrl+R refresh · Esc close
 
-   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
 

@@ -167,7 +167,8 @@ fn stops(app: &App) -> Vec<String> {
         .values()
         .filter_map(|ask| match ask {
             Ask::Stop(session) => Some(session.0.clone()),
-            Ask::Delete(_) | Ask::Import { .. } => None,
+            Ask::Keepers => None,
+            Ask::Delete(_) | Ask::Archive(_) | Ask::Import { .. } => None,
         })
         .collect()
 }

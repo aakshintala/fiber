@@ -112,11 +112,44 @@ fn a_theme_choice_repaints_the_next_frame() {
         lp
     });
     let written = lp.screen.backend().buffer();
-    for cell in &written.content {
-        assert!(matches!(
-            cell.bg,
-            Color::Rgb(0xff, 0xff, 0xff) | Color::Rgb(0xea, 0xee, 0xf2)
-        ));
+    let width = usize::from(written.area.width);
+    let tab_row = written
+        .content
+        .chunks(width)
+        .position(|row| {
+            row.iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .contains("Appearance")
+        })
+        .expect("the tab bar draws");
+    // The open tab is the tab row's only bold run; it keeps its accent
+    // fill under every theme.
+    let tab_bgs: Vec<Color> = written
+        .content
+        .iter()
+        .enumerate()
+        .filter(|(at, cell)| {
+            at / width == tab_row && cell.modifier.contains(ratatui::style::Modifier::BOLD)
+        })
+        .map(|(_, cell)| cell.bg)
+        .collect();
+    assert!(!tab_bgs.is_empty(), "the open tab draws no bold cells");
+    assert!(
+        tab_bgs.iter().all(|bg| *bg == tab_bgs[0]),
+        "the open tab draws one fill: {tab_bgs:?}"
+    );
+    for (at, cell) in written.content.iter().enumerate() {
+        let open_tab =
+            at / width == tab_row && cell.modifier.contains(ratatui::style::Modifier::BOLD);
+        assert!(
+            matches!(
+                cell.bg,
+                Color::Rgb(0xff, 0xff, 0xff) | Color::Rgb(0xea, 0xee, 0xf2)
+            ) || open_tab,
+            "cell {at} repaints {}",
+            cell.symbol()
+        );
     }
     assert_eq!(
         seam.writes()

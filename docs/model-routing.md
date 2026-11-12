@@ -48,9 +48,12 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the milliseconds from the reply's `Date` header until then
-become the error's `retry_after_ms`, and
-the message names the reset time. Without a usable `Date`, no wait is set. `rate_limit_exceeded` stays `rate_limited`.
+(Unix seconds), Fiber uses `retry-after` first. Only when the reply has no
+`retry-after` header at all does it use the milliseconds from the reply's
+`Date` header until `resets_at` as `retry_after_ms`; a present but
+unparseable `retry-after` vetoes that fallback. Without a usable `Date`, no
+fallback wait is set. The message names the reset time. `rate_limit_exceeded`
+stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
 "The usage-limit error body").
@@ -399,6 +402,8 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
 - Go sends `store: false` on its `openai-responses` and
   `openai-completions` requests, as the OpenAI provider does on every
   request; its `anthropic-messages` requests carry no `store` key.
+
+Which thinking level each Go and Zen model takes is probed in [research/opencode-thinking](../research/opencode-thinking/README.md).
 
 ### Bedrock Invoke wire facts
 
@@ -808,6 +813,10 @@ fills it, and the declared variable when one exists.
   `: OPENROUTER PROCESSING` comment lines to the stream.
 - On Databricks, `gemini-4-argon` rejects `reasoning_effort` with a 400
   while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
+- On Databricks, open-weight chat services reject `max_completion_tokens`
+  with a 400 and take `max_tokens`, while the GPT and Gemini services on
+  the same route take `max_completion_tokens`
+  (`research/databricks-gateway-probe`).
 - A gateway serving Gemini returns a tool call's `extra_content` (such as
   `extra_content.google.thought_signature`) on the call; the last delta
   carrying one wins. Fiber decodes each such call with its carrier
@@ -849,12 +858,16 @@ models work only through its Anthropic route, because its default route rejects
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. A
 `gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
-carries `compat.gemini` on the protocol already chosen. Two Claude rows
-differ per model, as probed through the gateway: the `claude-sonnet-4-5`
-rows carry no `deferred_tools`, because the gateway rejects their deferred
-load; and `claude-opus-4-1` carries `compat.no_strict`, because the gateway
-rejects the `strict` key on it, even as `false`, so its tools are sent with
-no `strict` key at all. All of that is data.
+carries `compat.gemini` on the protocol already chosen. A service whose
+catalog row's `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`
+carries `compat.max_tokens`, so its output limit goes in `max_tokens`.
+Two Claude rows differ per model, as probed through the gateway: the
+`claude-sonnet-4-5` rows carry no `deferred_tools`, because the gateway
+rejects their deferred load; and `claude-opus-4-1` carries
+`compat.no_strict`, because the gateway rejects the `strict` key on it,
+even as `false`, so its tools are sent with no `strict` key at all. The
+returned list holds one entry per service, sorted by id. All of that is
+data.
 
 ### Model discovery
 
@@ -917,8 +930,10 @@ reports only what the registry has not already reported.
 
 The vendor's own list decides which models a provider offers. Every first-party
 package whose vendor has a listing endpoint declares a `models()` that calls it
-with the person's credential: `anthropic`, `openai`, `gemini`, `codex`, `muse`,
-`openrouter` and `databricks`. It keeps the models that output text and call
+with the person's credential, except OpenRouter, whose models endpoint needs no
+key: `anthropic`, `openai`, `gemini`, `codex`, `muse` and `databricks` use the
+person's credential; `openrouter` sends none, avoiding needless credential
+exposure. It keeps the models that output text and call
 tools, judged by the vendor's fields where it has them and by models.dev
 otherwise. A package whose vendor has no listing endpoint, and every package
 before its first refresh or without a credential, shows its generated list
