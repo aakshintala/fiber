@@ -426,6 +426,54 @@ fn sample_total(workload: &idle::Workload, runs: u32) -> u32 {
     }
 }
 
+fn measure_side(
+    pass: &mut Pass,
+    workload: &'static idle::Workload,
+    each: u32,
+    n: u32,
+    calls: u32,
+    alive: &mut bool,
+    samples: &mut Metrics,
+    measure: &mut impl FnMut(
+        Side,
+        &'static idle::Workload,
+        u32,
+        u32,
+        &mut Vec<String>,
+    ) -> Result<idle::Samples, String>,
+) {
+    eprintln!(
+        "bench: running {} (run {n} of {calls}, samples {each}) [{}]",
+        workload.name,
+        pass.side.tag()
+    );
+    #[allow(
+        clippy::let_underscore_must_use,
+        reason = "a progress line must not fail the run"
+    )]
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut notes = Vec::new();
+    let result = measure(pass.side, workload, each, n, &mut notes);
+    pass.failures.extend(
+        notes
+            .into_iter()
+            .map(|note| format!("{}, run {n}: {note}", workload.name)),
+    );
+    match result {
+        Ok(values) => {
+            for (id, sample) in values {
+                samples.entry(id).or_default().push(sample);
+            }
+        }
+        Err(err) => {
+            pass.failures
+                .push(format!("{}, run {n}: {err}", workload.name));
+            *alive = false;
+            samples.clear();
+        }
+    }
+}
+
 /// Runs each selected workload with its repeats and run count, head and
 /// base calls in alternation: head call n, then the base call n when the
 /// base runs the row, for n in 1..=`repeats`, so runner drift lands on
@@ -497,73 +545,29 @@ fn measure_all(
             (repeats, runs)
         };
         for n in 1..=calls {
-            // debt: the head and base side-measurement branches duplicate progress
-            // reporting, measurement, note collection, sample accumulation and failure
-            // handling; extract one per-side measurement operation called in head/base
-            // order on the next change to the side-measurement branches.
             if head_alive {
-                eprintln!(
-                    "bench: running {} (run {n} of {calls}, samples {each}) [{}]",
-                    workload.name,
-                    head.side.tag()
+                measure_side(
+                    head,
+                    workload,
+                    each,
+                    n,
+                    calls,
+                    &mut head_alive,
+                    &mut head_samples,
+                    &mut measure,
                 );
-                #[allow(
-                    clippy::let_underscore_must_use,
-                    reason = "a progress line must not fail the run"
-                )]
-                let _ = std::io::Write::flush(&mut std::io::stderr());
-                let mut notes = Vec::new();
-                let result = measure(head.side, workload, each, n, &mut notes);
-                head.failures.extend(
-                    notes
-                        .into_iter()
-                        .map(|note| format!("{}, run {n}: {note}", workload.name)),
-                );
-                match result {
-                    Ok(samples) => {
-                        for (id, sample) in samples {
-                            head_samples.entry(id).or_default().push(sample);
-                        }
-                    }
-                    Err(err) => {
-                        head.failures
-                            .push(format!("{}, run {n}: {err}", workload.name));
-                        head_alive = false;
-                        head_samples.clear();
-                    }
-                }
             }
             if base_alive && let Some(base) = base.as_mut() {
-                eprintln!(
-                    "bench: running {} (run {n} of {calls}, samples {each}) [{}]",
-                    workload.name,
-                    base.side.tag()
+                measure_side(
+                    base,
+                    workload,
+                    each,
+                    n,
+                    calls,
+                    &mut base_alive,
+                    &mut base_samples,
+                    &mut measure,
                 );
-                #[allow(
-                    clippy::let_underscore_must_use,
-                    reason = "a progress line must not fail the run"
-                )]
-                let _ = std::io::Write::flush(&mut std::io::stderr());
-                let mut notes = Vec::new();
-                let result = measure(base.side, workload, each, n, &mut notes);
-                base.failures.extend(
-                    notes
-                        .into_iter()
-                        .map(|note| format!("{}, run {n}: {note}", workload.name)),
-                );
-                match result {
-                    Ok(samples) => {
-                        for (id, sample) in samples {
-                            base_samples.entry(id).or_default().push(sample);
-                        }
-                    }
-                    Err(err) => {
-                        base.failures
-                            .push(format!("{}, run {n}: {err}", workload.name));
-                        base_alive = false;
-                        base_samples.clear();
-                    }
-                }
             }
         }
         // A metric is recorded only when every call of its side's row
