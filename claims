@@ -253,3 +253,4 @@ xtask/src/models_dev.rs	fiber-4709	plan	2026-11-12T12:29:48Z	Amoghs-MacBook-Pro:
 xtask/src/models_dev_table.rs	fiber-4709	plan	2026-11-12T12:29:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/models_dev_table/bedrock.rs	fiber-4709	plan	2026-11-12T12:29:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/model-routing.md	fiber-4709	plan	2026-11-12T12:29:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/vm.rs	fiber-4673	plan	2026-11-12T12:35:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
