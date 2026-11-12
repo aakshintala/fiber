@@ -564,7 +564,11 @@ fn shutdown_cancels_a_blocked_reload_prepare_without_applying_it() {
         let finished = finished_tx.clone();
         reads_for_run.run(purpose, move || {
             entered.send(()).unwrap();
-            let _ = release.lock().unwrap().recv();
+            release
+                .lock()
+                .unwrap()
+                .recv()
+                .expect("the held reload work is released");
             let result = work();
             finished.send(()).unwrap();
             result
