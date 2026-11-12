@@ -21,11 +21,12 @@ which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
 (`lint` and `test_linux`, plus `bug_red_linux` when an issue its
 body resolves carries the `bug` label) and macOS arm64 jobs
-(`bug_red_macos` on the same bug pull requests, and `clippy_macos`
-when its diff touches a file containing `target_os`, which lints the
-selected crates on the macOS arm64 runner ("On every pull request that
-changes code")). Each macOS job holds one macOS slot against the 5-slot
-cap while it runs; no Linux-side job changes. Draft and ready pull requests select
+(`bug_red_macos` on the same bug pull requests, `clippy_macos`
+when its diff touches a file containing `target_os`, and
+`scripts_self_test_macos` when its diff touches `scripts/`; the latter two
+run on the macOS arm64 runner ("On every pull request that changes code")).
+Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
+Linux-side job changes. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
@@ -216,6 +217,13 @@ that moved a gated file still fires it and a deleted file never does; it
 fires on pull requests only, never on the backstop. Its known gap: a
 macOS-only error in a file containing no `target_os` does not trigger the
 job.
+
+When a pull request's names-only diff contains a path under `scripts/`, a
+`scripts_self_test_macos` job runs `scripts/check` with the runner's system
+`/bin/bash` on macOS arm64. This runs the full scripts self-test block,
+including the leak-scan self-test. It triggers only on pull requests, never
+on the backstop; the backstop already runs the macOS test leg. The job holds
+one macOS slot while it runs.
 
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
