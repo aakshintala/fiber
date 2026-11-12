@@ -388,7 +388,7 @@ fn esc_stays_and_shows_no_hint() {
     assert!(!app.hint());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -959,7 +959,8 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
         0,
     ));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    // The delete question opens on the exited row's stop.
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
     let key = app
         .home
         .sessions
@@ -968,7 +969,8 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
         .find(|row| row.id.0 == "s_aaaaaaaaaaaaaaaa")
         .map(|row| row.key)
         .expect("exited row");
-    assert_eq!(app.home_click(crate::home::Spot::Stop(key)), Effect::None);
+    app.focus = Some(crate::mouse::TargetId::Home(crate::home::Spot::Entry(key)));
+    assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     // Enter sends the delete; its ask waits for the hub.
     let clock = fakes::clock::FakeClock::new();
     let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {

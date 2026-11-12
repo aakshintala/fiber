@@ -19,7 +19,7 @@ use crate::app::{App, Effect, NoticeLine};
 use crate::configure::Configure;
 use crate::configure_fake::Fake;
 use crate::home::{Launch, Spot};
-use crate::keys::{Button, Key, Mouse, MouseKind};
+use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::keyset::Context;
 use crate::link::Line;
 use crate::mouse::{self, Pointer, TargetId};
@@ -360,6 +360,8 @@ fn launch(app: &mut App, surface: Surface) {
         }
         Surface::DeleteQuestion => {
             // A swapped view hides the rows, and the question has nothing to ask about.
+            // The question opens with the Delete key: the row's ✕
+            // archives an exited row.
             let row = app.home_screen().and_then(|screen| {
                 crate::home::home_test_rows(&screen)
                     .into_iter()
@@ -367,7 +369,8 @@ fn launch(app: &mut App, surface: Surface) {
                     .map(|row| row.0)
             });
             if let Some(key) = row {
-                app.home_click(Spot::Stop(key));
+                app.focus = Some(TargetId::Home(Spot::Entry(key)));
+                assert_eq!(app.on_edit(Edit::Delete), Effect::None);
             }
         }
         Surface::Draft => panic!("{surface:?} has no opener here"),

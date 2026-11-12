@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/rebind_view_tests.rs
+assertion_line: 284
 expression: "screen(&app, 80, 24)"
 ---
  Keys  /keys                                                         Esc returns
@@ -15,14 +16,14 @@ expression: "screen(&app, 80, 24)"
   ⌥1 ⌥2 ⌥3 ⌥4 ⌥5   rail_row_n           Switch to the session of rail card N
   ⌥6 ⌥7 ⌥8 ⌥9
   Delete,          delete_session       Delete the selected exited, or a live
-  Backspace                             one with Delete session in the session
+  Shift+Backspace                       one with Delete session in the session
                                         list
   ⌥I               interrupt_turn       Interrupt the turn on screen, whatever
                                         is open over it, except the /keys screen
+  Backspace        archive_session      Archive the selected exited session in
+                                        the session list
 › ↑                recall_prompt        Recall an earlier prompt from the
                                         project of the session on screen
   ←                focus_rail           Move focus from an empty input box into
                                         the rail
-  Ctrl+R           search_prompts       Search those prompts
-  ⌥← ⌥→, Ctrl+←    move_word            Move by word
 ↑↓ move · Enter rebind · r reset · Delete unbind · Esc close

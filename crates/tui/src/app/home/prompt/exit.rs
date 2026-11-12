@@ -466,6 +466,7 @@ impl App {
         // The running command's stop tags are read before the loop below
         // settles the unsent closes' tags.
         let stops = self.delete_waiting_close_ids().unwrap_or_default();
+        let archive_stops = self.archive_waiting_close_ids().unwrap_or_default();
         let mut dropped = Vec::new();
         self.home.questions.closing.retain(|(_, close)| {
             let keep = !ids.contains(close);
@@ -478,6 +479,7 @@ impl App {
             self.outbox.settled(&id);
         }
         self.delete_command_unsent(ids, &stops);
+        self.archive_command_unsent(ids, &archive_stops);
     }
 
     /// The sessions working now, in list order, the attached one last

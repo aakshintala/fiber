@@ -391,6 +391,7 @@ pub(super) fn render(
         command: "/rewind".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
         footer: "↑↓ move · Enter open/send · Space summarise · Esc close".to_owned(),

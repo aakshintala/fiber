@@ -1215,10 +1215,14 @@ impl App {
                 | super::Waiting::Subscribe { .. }
                 | super::Waiting::Stop
                 | super::Waiting::Delete
+                | super::Waiting::Archive
                 | super::Waiting::OfferImport
                 | super::Waiting::DeleteDiscovery(..)
                 | super::Waiting::DeleteStop { .. }
                 | super::Waiting::DeleteFinal(..)
+                | super::Waiting::ArchiveDiscovery(..)
+                | super::Waiting::ArchiveStop { .. }
+                | super::Waiting::ArchiveFinal(..)
                 | super::Waiting::Feed
                 | super::Waiting::Recent(..)
                 | super::Waiting::Close,

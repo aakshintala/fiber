@@ -1130,7 +1130,7 @@ install still running.
     - The focused row's "› " and label are bold in `accent`. Other labels
       are plain.
     - A value is in `info`, bold on the focused row. An unset value reads
-      "Default", dim. Every value shows its unit: "30 min", "$10",
+      "Default", dim. Every number shows its unit: "30 min", "$10",
       "400k tokens", "80% used".
     - A value set anywhere but global is followed by its layer in
       `attention` (`project`, `repository`, `-c`); a global or default

@@ -260,6 +260,7 @@ pub(in crate::app) fn build_frame(
             })
             .collect(),
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
         footer: "y copies the whole call".to_owned(),

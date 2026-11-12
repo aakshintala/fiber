@@ -997,6 +997,7 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
         ("super+left", edit(Edit::LineStart)),
         ("super+right", edit(Edit::LineEnd)),
         ("delete", edit(Edit::Delete)),
+        ("shift+backspace", edit(Edit::Delete)),
         ("f1", key(Key::F1)),
         ("ctrl+c", key(Key::CtrlC)),
         ("ctrl+o", key(Key::CtrlO)),
@@ -1112,7 +1113,10 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Enter, ctrl), None),
         (modified(Code::Enter, super_), None),
         (modified(Code::Esc, shift), None),
-        (modified(Code::Backspace, shift), None),
+        (
+            modified(Code::Backspace, shift),
+            Some(Event::Edit(Edit::Delete)),
+        ),
         (
             modified(Code::Backspace, ctrl),
             Some(Event::Edit(Edit::DeleteWord)),

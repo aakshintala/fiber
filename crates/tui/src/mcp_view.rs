@@ -243,6 +243,7 @@ impl Mcp {
             command: "/mcp".to_owned(),
             rows,
             list: self.list,
+            gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
             footer: "↑↓ move · Enter reconnect or log in · Esc close".to_owned(),
