@@ -89,6 +89,15 @@ fn unsorted() -> Vec<SettingRow> {
         ),
         on(
             Models,
+            "Live model details",
+            "model_lists.models_dev",
+            value("true"),
+            "default",
+            ANY,
+            Boolean,
+        ),
+        on(
+            Models,
             "Model list refresh",
             "model_lists.refresh_after",
             value("\"24h\""),
@@ -463,6 +472,8 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Default model       a/b ›
 |
+|  Live model details  [x] On
+|
 |  Model list refresh  24h
 |
 |  Scoped models       a/b, c/d ›
@@ -470,8 +481,6 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |  Thinking level      Default
 |
 |  Credentials         Open /credential ›
-|
-|
 |
 |
 |
@@ -792,7 +801,7 @@ fn a_failed_read_says_why_and_shows_no_rows() {
 fn rows_space_one_blank_line_apart_only_when_the_frame_is_tall_enough() {
     let fake = Fake::new(rows());
     let settings = tab(&fake, SettingsTab::Models);
-    // Models has 4 keys and one screen row: 5 rows need 9 body lines.
+    // Models has 5 keys and one screen row: 6 rows need 11 body lines.
     let tall = drawn(&settings, None, 80, 24);
     let lines: Vec<&str> = tall.lines().collect();
     let at = lines
@@ -802,14 +811,14 @@ fn rows_space_one_blank_line_apart_only_when_the_frame_is_tall_enough() {
     assert_eq!(lines.get(at + 1), Some(&""), "{tall}");
     // Below 18 rows the top rows drop their blank lines: two fixed rows,
     // two lines under the list. A body of exactly nine lines is spaced.
-    let at_edge = settings.layout(80, 2 + 2 + 2 + 9, None);
-    assert_eq!(at_edge.body, 9);
+    let at_edge = settings.layout(80, 2 + 2 + 2 + 11, None);
+    assert_eq!(at_edge.body, 11);
     assert!(at_edge.lines.contains(&super::Line::Blank));
     // One line fewer and the rows pack.
-    let packed = settings.layout(80, 2 + 2 + 2 + 8, None);
-    assert_eq!(packed.body, 8);
+    let packed = settings.layout(80, 2 + 2 + 2 + 10, None);
+    assert_eq!(packed.body, 10);
     assert!(!packed.lines.contains(&super::Line::Blank));
-    assert_eq!(packed.lines.len(), 5);
+    assert_eq!(packed.lines.len(), 6);
 }
 
 #[test]
@@ -1761,7 +1770,7 @@ fn up_and_down_move_the_focus_by_row_and_a_move_clears_what_was_said() {
     one(&mut settings, &fake, Key::Down);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("model_lists.refresh_after".to_owned()))
+        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
     );
     settings.said = vec!["Saved.".to_owned()];
     one(&mut settings, &fake, Key::Down);
@@ -1808,18 +1817,18 @@ fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     settings.click(Spot::Row(second), &ctx(&fake));
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("model_lists.refresh_after".to_owned()))
+        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
     );
     // The line between two rows is not a row.
     settings.click(Spot::Row(second + 1), &ctx(&fake));
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("model_lists.refresh_after".to_owned()))
+        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
     );
     settings.click(Spot::Row(500), &ctx(&fake));
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("model_lists.refresh_after".to_owned()))
+        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
     );
     assert!(matches!(
         settings.click(Spot::Close, &ctx(&fake)),
@@ -3113,7 +3122,7 @@ fn settings_search_matches_letter_activation_and_slash_empty_query() {
     let mut settings = tab(&fake, SettingsTab::Sessions);
     one(&mut settings, &fake, Key::Char('/'));
     assert_eq!(query_of(&settings), "");
-    assert_eq!(settings.items().len(), 21);
+    assert_eq!(settings.items().len(), 22);
     assert_eq!(
         settings.focus,
         Some(super::Focus::Key("tui.hover".to_owned()))
@@ -3157,7 +3166,7 @@ fn settings_search_matches_case_insensitively_and_by_substring_with_backspace_an
     one(&mut settings, &fake, Key::Char('/'));
     one(&mut settings, &fake, Key::Backspace);
     assert_eq!(query_of(&settings), "");
-    assert_eq!(settings.items().len(), 21);
+    assert_eq!(settings.items().len(), 22);
     // A paste lands as one line: the newline and the tab go.
     let mut settings = open(&fake);
     one(&mut settings, &fake, Key::Char('/'));
