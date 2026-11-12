@@ -168,6 +168,10 @@ fn kept_ended_completions_load_tails_but_unstarted_does_not() {
                         extension: None,
                         description: "kept job".into(),
                         output_path: path,
+
+                        pgid: None,
+                        start_time: None,
+                        kind: None,
                     }),
                     None,
                     None,

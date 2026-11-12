@@ -97,6 +97,56 @@ pub(crate) struct List {
     accent: bool,
 }
 
+/// Advances a cursor through `rows`, wrapping at either end.
+pub(crate) fn wrap_cursor<T: Copy + PartialEq>(rows: &[T], cur: T, down: bool) -> T {
+    if rows.is_empty() {
+        return cur;
+    }
+    let at = rows.iter().position(|row| *row == cur).unwrap_or_default();
+    let next = wrap_step(at, rows.len(), if down { 1 } else { -1 });
+    rows.get(next).copied().unwrap_or(cur)
+}
+
+/// Advances an index by a signed distance, wrapping within `len`.
+/// An empty range leaves the index unchanged.
+pub(crate) fn wrap_step(at: usize, len: usize, delta: isize) -> usize {
+    if len == 0 {
+        return at;
+    }
+    let shift = delta.unsigned_abs() % len;
+    if delta.is_negative() {
+        if shift > at {
+            len - (shift - at)
+        } else {
+            at - shift
+        }
+    } else if shift >= len - at {
+        shift - (len - at)
+    } else {
+        at + shift
+    }
+}
+
+/// Finds the next target beyond `before`, wrapping to the opposite end.
+pub(crate) fn step_target(targets: &[usize], before: usize, down: bool) -> usize {
+    if down {
+        targets
+            .iter()
+            .copied()
+            .find(|target| *target > before)
+            .or_else(|| targets.first().copied())
+            .unwrap_or(before)
+    } else {
+        targets
+            .iter()
+            .rev()
+            .copied()
+            .find(|target| *target < before)
+            .or_else(|| targets.last().copied())
+            .unwrap_or(before)
+    }
+}
+
 impl List {
     /// A list that marks its selected row with a "› " gutter: every row
     /// draws two columns in, and the selected one draws the mark in them

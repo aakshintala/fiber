@@ -3307,6 +3307,9 @@ fn open_job(jobs: &FakeJobs, fired: mpsc::Sender<()>) -> contract::jobs::Opened 
         stop: Stop(Box::new(move || fired.send(()).unwrap())),
         lines: false,
         input: None,
+
+        identity: None,
+        detached: None,
     })
     .unwrap()
 }
@@ -3596,6 +3599,9 @@ fn open_tty_job(jobs: &FakeJobs, typed: Arc<Mutex<Vec<u8>>>) -> contract::jobs::
             typed.lock().unwrap().extend_from_slice(bytes);
             Ok(bytes.len())
         }))),
+
+        identity: None,
+        detached: None,
     })
     .unwrap()
 }
@@ -3721,6 +3727,9 @@ fn job_input_to_a_closed_terminal_is_rejected_io_failed() {
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let job_id = job.started.job_id.0.clone();

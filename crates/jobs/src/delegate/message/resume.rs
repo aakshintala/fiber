@@ -224,12 +224,21 @@ impl DelegateMessage {
                     finish: Arc::clone(&self.finish),
                 }
             }));
-            let (child, listing) = match runner.spawn(&launch, &launched) {
+            let (mut child, listing) = match runner.spawn(&launch, &launched) {
                 Ok(started) => started,
                 Err(source) => return Err(StartFailed::Spawn(source)),
             };
+            let identity = match super::super::run::process_identity(child.id()) {
+                Ok(identity) => identity,
+                Err(source) => {
+                    let source = crate::delegate::process_identity_cleanup(&mut child, source);
+                    runner.end_worktree();
+                    return Err(StartFailed::Spawn(source));
+                }
+            };
             Ok((
                 stop,
+                identity,
                 Started {
                     runner,
                     child,

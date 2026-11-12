@@ -15,6 +15,10 @@ fn start(id: &str) -> Delivery {
             extension: Some("test/scan".into()),
             description: "scan".into(),
             output_path: "/child/events.jsonl".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         },
         DelegateStarted {
             job_id: JobId(id.into()),

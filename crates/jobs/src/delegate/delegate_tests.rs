@@ -730,6 +730,7 @@ fn concurrent_spawn_cap_is_checked_after_model_validation() {
                 "fixture".into(),
                 "/unused".into(),
                 contract::jobs::Stop(Box::new(|| {})),
+                crate::support::identity(),
                 crate::support::delegate_started(&id.0),
             ));
         }
@@ -1221,6 +1222,7 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
                     "scan".into(),
                     "/child/events.jsonl".into(),
                     contract::jobs::Stop(Box::new(|| {})),
+                    crate::support::identity(),
                     delegate,
                 )
             } else {
@@ -1231,6 +1233,7 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
                         "scan".into(),
                         "/child/events.jsonl".into(),
                         contract::jobs::Stop(Box::new(|| {})),
+                        crate::support::identity(),
                         delegate,
                     )
                     .1
@@ -1560,6 +1563,7 @@ fn a_closed_start_at_the_cap_is_refused_closed_not_full() {
             "scan".into(),
             "/child/events.jsonl".into(),
             contract::jobs::Stop(Box::new(|| {})),
+            crate::support::identity(),
             crate::support::delegate_started(&id.0),
         ));
     }

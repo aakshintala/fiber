@@ -608,8 +608,6 @@ fn a_reload_groups_the_prepared_notices_by_code() {
 
 #[test]
 fn a_preparer_cancel_rejects_without_applying() {
-    // debt: Part 1 tests the cancellation rejection only; Part 2's shutdown
-    // wiring must prove that cancelling the prepare wait ends the loop.
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         Err(Rejection {
