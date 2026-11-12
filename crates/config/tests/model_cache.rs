@@ -53,6 +53,16 @@ fn models_dev_age_is_none_when_missing_and_zero_for_future_mtime() {
 }
 
 #[test]
+fn models_dev_age_reports_non_missing_metadata_errors() {
+    let setup = Setup::new();
+    let home = setup.home();
+    std::fs::create_dir_all(home.join("cache")).unwrap();
+    std::fs::write(home.join("cache/models.dev"), b"not a directory").unwrap();
+    let error = models_dev_age(&home, fakes::clock::FakeClock::new().wall()).unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+}
+
+#[test]
 fn model_cache_file_names_the_file_written_by_the_cache() {
     let setup = Setup::new();
     let home = setup.home();

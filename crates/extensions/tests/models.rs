@@ -29,12 +29,68 @@ fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
         source: Some("acme".into()),
         ..Default::default()
     };
-    let catalog = json!({"acme": {"m1": {"name":"Live", "limit":{"context":200}}}});
+    let catalog = json!({"acme": {"m1": {"name":"Live", "limit":{"context":200,"output":50}, "modalities":{"input":["text","image"]}, "cost":{"input":1.0,"output":2.0}}}});
     let merged = extensions::models_dev::merge(models, &meta, &catalog);
     assert_eq!(merged.len(), 2);
     assert_eq!(merged[0].name.as_deref(), Some("Live"));
     assert_eq!(merged[0].context_window, Some(200));
+    assert_eq!(merged[0].max_output_tokens, Some(50));
+    assert_eq!(merged[0].input, ["text", "image"]);
+    assert_eq!(
+        merged[0].cost,
+        Some(config::Cost {
+            input: 1.0,
+            output: 2.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new()
+        })
+    );
     assert_eq!(merged[1].context_window, Some(1000));
+}
+
+#[test]
+fn models_dev_pins_keep_generated_values_while_unpinned_fields_are_fetched() {
+    let models: Vec<ModelData> = serde_json::from_value(json!([{
+        "id":"m", "name":"Generated", "protocol":"openai-responses",
+        "base_url":"http://127.0.0.1:1/v1", "context_window":100,
+        "max_output_tokens":20, "input":["text"], "cost":{"input":0.5,"output":1.5}
+    }]))
+    .unwrap();
+    let meta = extensions::models_dev::CatalogMeta {
+        source: Some("acme".into()),
+        pins: [(
+            "m".to_owned(),
+            vec![
+                "name".into(),
+                "max_output_tokens".into(),
+                "input".into(),
+                "cost".into(),
+            ],
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let catalog = json!({"acme":{"m":{
+        "name":"Fetched", "limit":{"context":200,"output":50},
+        "modalities":{"input":["text","image"]}, "cost":{"input":1.0,"output":2.0}
+    }}});
+    let merged = extensions::models_dev::merge(models, &meta, &catalog);
+    assert_eq!(merged[0].name.as_deref(), Some("Generated"));
+    assert_eq!(merged[0].context_window, Some(200));
+    assert_eq!(merged[0].max_output_tokens, Some(20));
+    assert_eq!(merged[0].input, ["text"]);
+    assert_eq!(
+        merged[0].cost,
+        Some(config::Cost {
+            input: 0.5,
+            output: 1.5,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new()
+        })
+    );
 }
 
 #[test]
@@ -135,6 +191,48 @@ fn models_dev_forced_refresh_skips_a_held_lock() {
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     drop(held);
+}
+
+#[test]
+fn models_dev_fetch_reads_a_loopback_http_response() {
+    use fakes::{ProviderServer, Response};
+
+    let server = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    let agent = ureq::Agent::new_with_defaults();
+    let bytes =
+        extensions::models_dev::fetch(&agent, &format!("{}/api.json", server.url())).unwrap();
+    assert_eq!(bytes, b"{}");
+}
+
+#[test]
+fn models_dev_refresh_and_spawn_run_when_due() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let now = fakes::clock::FakeClock::new().wall();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(br#"{"acme":{}}"#.to_vec())
+    });
+    extensions::models_dev::refresh_if_due(&home, true, None, now, &fetch);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        config::read_models_dev(&home).unwrap(),
+        Some(br#"{"acme":{}}"#.to_vec())
+    );
+
+    let fresh_home = setup.workspace().join("second-home");
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(br#"{"acme":{}}"#.to_vec())
+    });
+    extensions::models_dev::spawn_if_due(fresh_home, true, None, now, fetch)
+        .expect("missing catalog is due")
+        .join()
+        .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[test]
