@@ -587,7 +587,6 @@ fn shutdown_cancels_a_blocked_reload_prepare_without_applying_it() {
         .recv(&entered_rx)
         .expect("the reload prepare entered its held work");
     reads.cancel();
-    waiter.join().unwrap();
     let rejected = match Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&result_rx)
         .expect("the cancelled reload wait returned")
@@ -595,12 +594,17 @@ fn shutdown_cancels_a_blocked_reload_prepare_without_applying_it() {
         Err(rejected) => rejected,
         Ok(_) => panic!("shutdown refuses the prepared reload"),
     };
+    waiter.join().unwrap();
     assert_eq!(rejected.code, contract::ErrorCode::Closing);
     assert!(fixture.replacements.lock().unwrap().is_empty());
     release_tx.send(()).unwrap();
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished_rx)
         .expect("the abandoned prepare worker finished");
+    assert!(
+        prepared.lock().unwrap().is_none(),
+        "the released prepare consumed and dropped its build value"
+    );
 }
 
 #[test]
