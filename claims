@@ -369,3 +369,5 @@ crates/extensions/src/lua/command_calls.rs	fiber-4691	grant	2026-11-12T20:24:31Z
 crates/extensions/src/lua.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/extensions/tests/process_activation.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/main/tests/extension_host/process_extensions.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
+crates/jobs/src/registry.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
