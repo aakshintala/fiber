@@ -128,9 +128,11 @@ no block budget.
 
 ### Fast paths
 
-Five classes of call never reach a reviewer or a person:
+These fast paths do not reach a reviewer or a person:
 
-- every call whose only effect is `reads`, or that declares no effect,
+- every call whose only effect is `reads`, or that declares no effect. This
+  includes `jobs stop` for a confirmed process the session started, including
+  a detached entry,
 - a `writes` call whose paths all sit inside the workspace or an added folder
   (`docs/events.md`, "`directory_added`"), none of them under a `.git/` or
   `.fiber/` directory of the one they sit inside,
@@ -145,7 +147,18 @@ Five classes of call never reach a reviewer or a person:
   so a search and a fetch to a known host take this path (`docs/tools.md`,
   "Web fetch and web search"). A call that declares no host list, or names a
   host that is not known, is reviewed, and
-- a shell call Fiber runs confined that does not declare `review_when_confined`.
+- a shell call Fiber runs confined that does not declare `review_when_confined`,
+- a bare shell builtin `kill` using `kill <pid>...`, `kill -<signal> <pid>...`
+  or `kill -- -<pgid>...`, when every target's recorded identity is confirmed.
+
+The shell accepts no-effect fast-path kills only for those bare builtin forms.
+Wrapped or path-qualified commands, foreign or mixed targets, and unparsed
+forms stay reviewed. Fiber checks each target's process group and leader
+start time when it declares the fast path, then rechecks just before each
+signal. A changed or unreadable identity stays reviewed. If an identity
+changes between declaration and execution, Fiber refuses to signal. A retry
+takes the reviewed path. The leader can still exit and its PID can be reused
+between the last check and the signal.
 
 Memory layers keep their notes and pages as Markdown in extension data
 directories, so saving one costs no model call. The limit to Markdown keeps

@@ -3835,22 +3835,19 @@ fn completion_text(completed: &Value) -> String {
         .join("")
 }
 
-/// The pid and log path a detached receipt names.
-fn detach_receipt(text: &str) -> (u32, PathBuf) {
+/// The job id and log path a detached receipt names.
+fn detach_receipt(text: &str) -> (String, PathBuf) {
     let rest = text
-        .strip_prefix("Started detached. PID ")
+        .strip_prefix("Started detached. Job ")
         .unwrap_or_else(|| panic!("a detached receipt: {text}"));
-    let (pid, rest) = rest
+    let (job_id, rest) = rest
         .split_once(". Output: ")
         .unwrap_or_else(|| panic!("a detached receipt names its output: {text}"));
+    let suffix = format!(". Stop it with `jobs stop {job_id}`.\n");
     let path = rest
-        .strip_suffix(". Fiber will not stop it.\n")
+        .strip_suffix(&suffix)
         .unwrap_or_else(|| panic!("a detached receipt ends: {text}"));
-    (
-        pid.parse()
-            .unwrap_or_else(|_| panic!("a numeric pid: {text}")),
-        PathBuf::from(path),
-    )
+    (job_id.to_owned(), PathBuf::from(path))
 }
 
 #[test]
@@ -3944,8 +3941,20 @@ fn a_detached_call_reaches_the_reviewer_even_when_a_standing_allow_covers_shell(
         move || marker_wait.exists(),
     );
     assert!(marker.exists(), "the reviewed call ran");
-    let (pid, log) = detach_receipt(&completion_text(done));
-    assert!(pid > 1, "the receipt names the process id");
+    let (job_id, log) = detach_receipt(&completion_text(done));
+    assert!(job_id.starts_with("j_"), "the receipt names the job id");
+    let starts: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "job_started")
+        .collect();
+    assert_eq!(starts.len(), 1, "the detached launch writes one start row");
+    assert_eq!(starts[0]["payload"]["job_id"], job_id);
+    assert_eq!(starts[0]["payload"]["kind"], "detached");
+    assert!(
+        !run.kinds().contains(&"job_completed"),
+        "a detached end does not wake the session"
+    );
     let logs: Vec<PathBuf> = fs::read_dir(setup.home().join("detached"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -3961,7 +3970,7 @@ fn a_detached_call_reaches_the_reviewer_even_when_a_standing_allow_covers_shell(
 }
 
 #[test]
-fn a_detached_command_outlives_the_session_and_the_receipt_names_its_pid_and_log() {
+fn a_detached_command_outlives_the_session_and_the_receipt_names_its_job_and_log() {
     let setup = Setup::new_with_started_deadline();
     let ready = fakes::children::Ready::new(&setup.workspace());
     let script = setup.workspace().join("detach-survive.sh");
@@ -3994,25 +4003,29 @@ fn a_detached_command_outlives_the_session_and_the_receipt_names_its_pid_and_log
     // on: `run` returns only after fiber's own group emptied.
     let done = completed_call(&run);
     assert_eq!(done["payload"]["status"], "completed");
-    let (pid, log) = detach_receipt(&completion_text(done));
+    let (job_id, log) = detach_receipt(&completion_text(done));
     let pgid = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
-    assert_eq!(pid, pgid, "the receipt's pid is the child's group");
     assert!(
         fakes::group_alive(pgid),
         "the detached command is still alive after its session shut down"
     );
     assert_eq!(fs::read_to_string(&log).unwrap(), "first\n");
-    assert!(
-        !run.kinds().contains(&"job_started"),
-        "a detached call is not a job"
-    );
+    let starts: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "job_started")
+        .collect();
+    assert_eq!(starts.len(), 1, "the detached launch writes one start row");
+    assert_eq!(starts[0]["payload"]["job_id"], job_id);
+    assert_eq!(starts[0]["payload"]["pgid"], pgid);
+    assert_eq!(starts[0]["payload"]["kind"], "detached");
     assert!(
         !run.kinds().contains(&"job_completed"),
         "a detached call sends no completion notice"
     );
-    assert!(fakes::kill_group(pid, "KILL").unwrap());
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
     assert!(
-        fakes::group_empties(pid, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        fakes::group_empties(pgid, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the group empties once the reaper thread reaps the child"
     );
     watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));

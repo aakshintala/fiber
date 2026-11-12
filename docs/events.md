@@ -1408,6 +1408,11 @@ absent when an extension started it.
 | `start_time` | integer | no | the leader's opaque process start-time identity, when known |
 | `kind` | string | no | `job` or `detached`; absent only on pre-upgrade rows |
 
+A detached entry writes `job_started` with `kind: detached`. Its `pgid` records
+the process group; `start_time` identifies the leader for same-session stop
+checks. When it ends, the registry updates its in-memory row, but the loop writes no
+`job_completed` line and starts no turn.
+
 #### `delegate_started`
 
 Durable. Written after `job_started`, for each run.

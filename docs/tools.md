@@ -578,7 +578,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   the call leaves the OS sandbox and is reviewed exactly as with the
   sandbox off); `detach` (optional; when true the command starts in a new
   session and process group, outside the OS sandbox, and the call returns
-  at once with the process ID and the output-log path, "Background jobs").
+  at once with the job id and output-log path. Stop it with `jobs stop`
+  ("Background jobs").
   `detach` implies unconfined: with `detach` true, `unconfined: false`
   fails with `invalid_arguments`. Fiber never reruns a failed confined call
   outside its sandbox: the model retries explicitly with `unconfined: true`
@@ -722,10 +723,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   every group at once.
 - A timeout's receipt says Fiber stopped the whole process group ("Result
   and output").
-- A detached command is never stopped by a timeout, a cancellation, a
-  `jobs stop` or a shutdown: it is not a job, and its group is not on the
-  list a shutdown signals ("Background jobs"). Stopping it is the person's
-  or the model's own `kill`.
+- A detached process outlives its session. A timeout or cancellation of its
+  launch call does not stop it, and shutdown leaves it running. While the
+  session is active, `jobs stop` stops it with the same TERM and KILL
+  sequence as another job ("Background jobs").
 
 ### Result and output
 
@@ -1024,9 +1025,11 @@ Settled by
 that ticket's resolution holds the rationale and the rejected alternatives.
 The kinds are `docs/events.md`.
 
-- One object: one `job_id`, one lifecycle, stopped the same way whatever runs
-  inside it. A job is a shell command, a monitor or a delegate
-  (`docs/delegates.md`).
+- The `jobs` registry gives each tracked process one `job_id`. Shell
+  commands, monitors and delegates are jobs (`docs/delegates.md`). The
+  registry also lists detached processes as `detached` entries. You can list
+  or stop a detached entry; `wait` and `write` do not apply to it. Detached
+  entries do not hold the session open.
 - The call that starts a job completes in its own turn with a receipt naming
   the `job_id` and the path of the job's output file in the session's
   `artifacts/`. A Fiber delegate's output file is its own `events.jsonl`
@@ -1053,9 +1056,10 @@ The kinds are `docs/events.md`.
   at most 30 seconds. A write with no input waits at least 5 seconds.
   `write` on a job not started with
   `tty` fails with `invalid_arguments`. A `write` call declares `executes`,
-  because typed input can make the program do anything. `jobs` only sees
-  and acts on jobs the calling session started, so a delegate cannot stop its
-  parent's work.
+  because typed input can make the program do anything. Detached entries
+  accept only `list` and `stop`; `wait` and `write` return `unknown_job` for
+  them. `jobs` only sees and acts on processes the calling session started,
+  so a delegate cannot stop its parent's work.
 - Every delivery to the model, a completion or a monitor's batch, passes
   through the `after_tool` hooks first, and so does the job's output file when
   the job ends (`docs/extensions.md`, "Hooks").
@@ -1117,8 +1121,10 @@ The kinds are `docs/events.md`.
   run whose model has given its final answer, `close` without `now`, or a delegate
   finishing its task — Fiber wakes the model once with a notice listing the running jobs, telling it to stop the ones it
   does not need and that the rest will be waited for. A process meant to outlive the session must be started with `shell` and `detach: true`. Whatever is still
-  running after that is waited for, whatever its kind, and each completion
-  wakes the model. The session ends when it is idle with no jobs running.
+  running after that is waited for, and each completion wakes the model.
+  Detached entries are not included in the notice or wait, so they do not hold
+  the session open and send no completion notice. The session ends when it is
+  idle with no session jobs running.
   The idle delay never ends a session with jobs running; a session left
   unattended with jobs running gets the jobs check instead
   (`docs/invocation.md`, "Lifecycle").
@@ -1134,14 +1140,18 @@ The kinds are `docs/events.md`.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
-- A detached command is not a job: no `job_id`, no `jobs` entry, no
-  completion notice, no keeper. The call returns at once with the receipt
-  `Started detached. PID 48213. Output: /home/a/.fiber/detached/d_48200_0.log.
-  Fiber will not stop it.`, naming the process ID and the log path. The
-  command keeps running when the session ends; Fiber never stops it, not at
-  a timeout, not at `jobs stop` and not at shutdown ("Shell", "Stopping a
-  command"). The model reads the log with the ordinary `read` tool
-  ("Bounded results").
+- A detached process has a `job_id` and appears in `jobs list` as
+  `detached`. Its durable `job_started` row records the process group and
+  leader start time. The call returns at once with a receipt such as:
+
+  > Started detached. Job j_abc123. Output: /home/a/.fiber/detached/d_48200_0.log. Stop it with `jobs stop j_abc123`.
+
+  `jobs stop` sends TERM, then KILL after the grace period if the group is
+  still alive. A detached entry does not support `wait` or `write`, and its
+  end does not write `job_completed` or wake a turn. The launch call has no
+  timeout; cancelling it or shutting down the session does not stop the
+  process, so it keeps running after the session ends. The model reads the
+  log with the ordinary `read` tool ("Bounded results").
 - A detached call's standard input is `/dev/null`; its standard output and
   standard error go to the log, interleaved in arrival order. Each log lives
   under `$FIBER_HOME/detached/`, named `d_<fiber-pid>_<n>.log` from 0 up,
