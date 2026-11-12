@@ -3293,6 +3293,48 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
 }
 
 #[test]
+fn feed_snapshot_after_status_arrives_includes_session_status() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let id = "s_00000000000000a1";
+    let session = crate::fake::FakeSession::bind(&temp.dir, id);
+    hub.feed.start();
+    assert!(session.await_subscribed(1, DEADLINE));
+
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "feed", json!({})));
+    let (echoed, _) = accepted(&client.next("the feed acknowledgement"));
+    assert_eq!(echoed, "c_1");
+    let keepers = client.next("the initial keepers line");
+    assert_eq!(keepers["kind"], "keepers");
+    assert_eq!(keepers["payload"], json!({"keepers": []}));
+
+    session.say(&crate::fake::status_line(
+        id,
+        &crate::fake::status("n", "/w", "streaming", None),
+    ));
+    let feed = Arc::clone(&hub.feed);
+    crate::testkit::await_true("the hub consumed the session status", move || {
+        feed.status_of(id).is_some()
+    });
+    client.send(&command("c_2", "feed", json!({})));
+    assert_eq!(client.next("the snapshot status")["kind"], "session_status");
+    let (echoed, _) = accepted(&client.next("the fresh feed acknowledgement"));
+    assert_eq!(echoed, "c_2");
+    // The live status broadcast follows the snapshot's cached status.
+    assert_eq!(
+        client.next("the live status line")["kind"],
+        "session_status"
+    );
+    let keepers = client.next("the fresh keepers line");
+    assert_eq!(keepers["kind"], "keepers");
+    assert_eq!(keepers["payload"], json!({"keepers": []}));
+    drop(client);
+    stop_within(&hub.feed);
+}
+
+#[test]
 fn a_client_that_half_closes_without_reading_still_leaves() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
