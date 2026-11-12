@@ -95,3 +95,4 @@ crates/main/src/reload_tests.rs	fiber-4734	plan	2026-11-12T17:04:31Z	Amoghs-MacB
 crates/loop/src/lib.rs	fiber-4671	plan	2026-11-12T17:04:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/prompt-cache.md	fiber-4671	plan	2026-11-12T17:04:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/fakes.md	fiber-4731	plan	2026-11-12T17:15:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/model_list_tests.rs	fiber-4756	plan	2026-11-12T17:45:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
