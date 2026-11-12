@@ -261,3 +261,4 @@ crates/loop/tests/fixtures/reviewer_consent/control-6-privileged-system-install/
 crates/loop/tests/fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl	fiber-4699	plan	2026-11-12T05:58:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/src/notes.rs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4671	plan	2026-11-12T05:58:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/screen_looks/panel_look.rs	fiber-4717	plan	2026-11-12T05:59:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
