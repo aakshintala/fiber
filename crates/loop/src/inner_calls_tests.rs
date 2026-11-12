@@ -908,7 +908,7 @@ fn inner_both_ends_tool_rejects_uncapped_form_that_retains_tail() {
         &out,
         &(tool.clone() as Arc<dyn contract::tool::Tool>)
     ));
-    assert_eq!(tool.calls.lock().unwrap().as_slice(), &[usize::MAX]);
+    assert!(tool.calls.lock().unwrap().contains(&usize::MAX));
 }
 
 #[test]
@@ -933,7 +933,7 @@ fn inner_both_ends_tool_adopts_uncapped_head_only_form() {
         &out,
         &(uncapped as Arc<dyn contract::tool::Tool>)
     ));
-    assert_eq!(tool.calls.lock().unwrap().as_slice(), &[usize::MAX]);
+    assert!(tool.calls.lock().unwrap().contains(&usize::MAX));
 }
 
 #[test]

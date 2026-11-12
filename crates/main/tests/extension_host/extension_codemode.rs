@@ -151,21 +151,7 @@ fn completed_holding<'a>(run: &'a Run, needle: &str) -> &'a Value {
                     })
                 })
         })
-        .unwrap_or_else(|| {
-            let summaries: Vec<_> = run
-                .of("tool_call_completed")
-                .iter()
-                .map(|line| {
-                    let text = line["payload"]["content"][0]["text"].as_str().unwrap_or("");
-                    format!(
-                        "{}: {}",
-                        line["payload"]["status"],
-                        &text[..text.len().min(200)]
-                    )
-                })
-                .collect();
-            panic!("no tool_call_completed holding {needle:?}; completed: {summaries:?}")
-        })
+        .unwrap_or_else(|| panic!("no tool_call_completed holding {needle:?}"))
 }
 
 /// The single text part of a `tool_call_completed`'s `content`.
@@ -353,12 +339,16 @@ fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     assert_large_eq(completed_text(inner), &whole);
     assert_eq!(inner["payload"].get("artifact"), None);
     assert_eq!(inner["payload"].get("kept"), None);
+    // `docs/tools.md`, "Bounded results", promises the 16 KiB model-facing
+    // bound; "Shell" → "Result and output" promises no inner-shell spill artifact.
     assert!(
         text.len() <= 16 * 1024,
         "model-facing result: {} bytes",
         text.len()
     );
     let artifacts = run.session_dir(&setup).join("artifacts");
+    // `docs/tools.md`, "Shell" → "Result and output" promises no inner-shell
+    // spill artifact.
     assert!(
         !artifacts.exists() || std::fs::read_dir(&artifacts).unwrap().next().is_none(),
         "inner shell call created an artifact"
