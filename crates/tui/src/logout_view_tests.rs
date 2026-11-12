@@ -197,3 +197,50 @@ fn body_len_counts_wrapped_status_and_short_draw_clips() {
     let mut targets = Vec::new();
     let _ = logout.draw(area, &mut buf, &mut targets);
 }
+
+/// Confirming a deletion redraws the list from the rows returned by the re-list.
+#[test]
+fn confirmed_delete_draws_only_the_relisted_rows() {
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "removed".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        },
+        LoginTarget {
+            name: "remaining".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        },
+    ]);
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+
+    let remaining = fake_with(vec![LoginTarget {
+        name: "remaining".to_owned(),
+        kind: LoginKind::Key,
+        label: None,
+    }]);
+    *fake.logout.lock().expect("logout rows") =
+        remaining.logout.lock().expect("remaining rows").clone();
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut actual = Buffer::empty(area);
+    let _ = logout.draw(area, &mut actual, &mut Vec::new());
+
+    let mut expected = Logout::open(&ctx_h(
+        &fake_with(vec![LoginTarget {
+            name: "remaining".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        }]),
+        24,
+    ));
+    expected.said = logout.said.clone();
+    let mut expected_buf = Buffer::empty(area);
+    let _ = expected.draw(area, &mut expected_buf, &mut Vec::new());
+
+    assert_eq!(actual, expected_buf, "the complete relisted screen");
+}

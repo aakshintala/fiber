@@ -19,8 +19,6 @@ return {
   ["claude-opus-4-8"] = { levels = { "off", "low", "medium", "high", "xhigh", "max" } },
   ["claude-opus-5"] = { levels = { "low", "medium", "high", "xhigh", "max" } },
   ["claude-opus-5-5"] = { levels = { "low", "medium", "high", "xhigh", "max" }, default = "medium" },
-  ["claude-sonnet-4-5"] = { levels = { "off", "minimal", "low", "medium", "high" } },
-  ["claude-sonnet-4-5-20250929"] = { levels = { "off", "minimal", "low", "medium", "high" } },
   ["claude-sonnet-4-6"] = { levels = { "off", "low", "medium", "high", "max" } },
   ["claude-sonnet-5"] = { levels = { "off", "low", "medium", "high", "xhigh", "max" } },
   ["claude-sonnet-5-5"] = { levels = { "low", "medium", "high", "xhigh", "max" } },

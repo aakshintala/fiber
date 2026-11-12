@@ -31,6 +31,7 @@ pub(crate) mod failure;
 pub(crate) mod fs;
 mod log;
 pub(crate) mod model;
+pub(crate) mod resolve;
 pub(crate) mod script;
 mod settings;
 pub(crate) mod state;

@@ -155,6 +155,7 @@ fn first_party_hosted_searches_are_the_marked_models() {
     let mut expected: Vec<(String, String)> = [
         ("anthropic/claude-fable-5", "web_search_20250305"),
         ("anthropic/claude-fable-5-1", "web_search_20250305"),
+        ("anthropic/claude-fable-5-2", "web_search_20250305"),
         ("anthropic/claude-haiku-4-5", "web_search_20250305"),
         ("anthropic/claude-haiku-4-5-20251001", "web_search_20250305"),
         ("anthropic/claude-haiku-5-5", "web_search_20250305"),
@@ -165,11 +166,6 @@ fn first_party_hosted_searches_are_the_marked_models() {
         ("anthropic/claude-opus-4-8", "web_search_20250305"),
         ("anthropic/claude-opus-5", "web_search_20250305"),
         ("anthropic/claude-opus-5-5", "web_search_20250305"),
-        ("anthropic/claude-sonnet-4-5", "web_search_20250305"),
-        (
-            "anthropic/claude-sonnet-4-5-20250929",
-            "web_search_20250305",
-        ),
         ("anthropic/claude-sonnet-4-6", "web_search_20250305"),
         ("anthropic/claude-sonnet-5", "web_search_20250305"),
         ("anthropic/claude-sonnet-5-5", "web_search_20250305"),

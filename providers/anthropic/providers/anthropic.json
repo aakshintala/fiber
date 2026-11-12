@@ -59,6 +59,25 @@
     },
     {
       "base_url": "https://api.anthropic.com/v1",
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 10,
+        "input": 8,
+        "output": 40
+      },
+      "id": "claude-fable-5-2",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5.2",
+      "protocol": "anthropic-messages",
+      "web_search": "web_search_20250305"
+    },
+    {
+      "base_url": "https://api.anthropic.com/v1",
       "compat": {
         "thinking_budget": true
       },
@@ -351,66 +370,6 @@
     },
     {
       "base_url": "https://api.anthropic.com/v1",
-      "compat": {
-        "thinking_budget": true
-      },
-      "context_window": 200000,
-      "cost": {
-        "cache_read": 0.3,
-        "cache_write": 3.75,
-        "input": 3,
-        "output": 15
-      },
-      "deferred_tools": true,
-      "id": "claude-sonnet-4-5",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 64000,
-      "name": "Claude Sonnet 4.5 (latest)",
-      "protocol": "anthropic-messages",
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "web_search": "web_search_20250305"
-    },
-    {
-      "base_url": "https://api.anthropic.com/v1",
-      "compat": {
-        "thinking_budget": true
-      },
-      "context_window": 200000,
-      "cost": {
-        "cache_read": 0.3,
-        "cache_write": 3.75,
-        "input": 3,
-        "output": 15
-      },
-      "deferred_tools": true,
-      "id": "claude-sonnet-4-5-20250929",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 64000,
-      "name": "Claude Sonnet 4.5",
-      "protocol": "anthropic-messages",
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "web_search": "web_search_20250305"
-    },
-    {
-      "base_url": "https://api.anthropic.com/v1",
       "context_window": 1000000,
       "cost": {
         "cache_read": 0.3,
@@ -502,6 +461,9 @@
         "deferred_tools",
         "web_search"
       ],
+      "claude-fable-5-2": [
+        "web_search"
+      ],
       "claude-haiku-4-5": [
         "compat",
         "deferred_tools",
@@ -542,16 +504,6 @@
         "web_search"
       ],
       "claude-opus-5-5": [
-        "deferred_tools",
-        "web_search"
-      ],
-      "claude-sonnet-4-5": [
-        "compat",
-        "deferred_tools",
-        "web_search"
-      ],
-      "claude-sonnet-4-5-20250929": [
-        "compat",
         "deferred_tools",
         "web_search"
       ],

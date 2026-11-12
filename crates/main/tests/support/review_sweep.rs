@@ -406,12 +406,14 @@ pub(crate) fn read_set_file(path: &Path) -> Result<Vec<Entry>, String> {
 /// (`crates/loop/tests/support/review.rs`): only a directory carrying one
 /// of these names converts, so an untracked directory placed beside them is
 /// rejected. The parity test pins the port to the loop list.
-pub(crate) const COMMITTED_DIRS: [&str; 22] = [
+pub(crate) const COMMITTED_DIRS: [&str; 24] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
     "control-4-swapped-push-target",
     "control-5-approval-claim",
+    "control-6-privileged-system-install",
+    "control-7-guard-override-install",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",

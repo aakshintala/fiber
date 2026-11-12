@@ -82,7 +82,6 @@ const LOW_MEDIUM_HIGH: &[&str] = &["low", "medium", "high"];
 const LOW_HIGH_MAX: &[&str] = &["low", "high", "max"];
 const LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const LOW_HIGH_XHIGH_MAX: &[&str] = &["low", "high", "xhigh", "max"];
 const LOW_MEDIUM_HIGH_MAX: &[&str] = &["low", "medium", "high", "max"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX: &[&str] =
     &["off", "minimal", "low", "medium", "high", "max"];
@@ -118,8 +117,6 @@ const ANTHROPIC: Package = Package {
         ("claude-haiku-4-5-20251001", THINKING_BUDGET_DEFERRED),
         ("claude-opus-4-5", THINKING_BUDGET_DEFERRED),
         ("claude-opus-4-5-20251101", THINKING_BUDGET_DEFERRED),
-        ("claude-sonnet-4-5", THINKING_BUDGET_DEFERRED),
-        ("claude-sonnet-4-5-20250929", THINKING_BUDGET_DEFERRED),
         ("claude-fable-5", DEFERRED),
         ("claude-fable-5-1", DEFERRED),
         ("claude-haiku-5-5", DEFERRED),
@@ -152,12 +149,6 @@ const ANTHROPIC: Package = Package {
         ("claude-opus-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
         (
             "claude-opus-4-5-20251101",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH,
-            None,
-        ),
-        ("claude-sonnet-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        (
-            "claude-sonnet-4-5-20250929",
             OFF_MINIMAL_LOW_MEDIUM_HIGH,
             None,
         ),
@@ -420,19 +411,6 @@ const OPENCODE_GO: Package = Package {
         // max 200; off and minimal are rejected as unsupported) and
         // models.dev's effort values for this id.
         ("beam-free", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-deepseek-v4-flash.json (every
-        // level 200s).
-        (
-            "deepseek-v4-flash",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
-        // research/opencode-thinking/raw/go-deepseek-v4-flash-vision-exp.json
-        (
-            "deepseek-v4-flash-vision-exp",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
         // research/opencode-thinking/raw/go-deepseek-v4-pro.json (every
         // level 200s).
         (
@@ -462,7 +440,6 @@ const OPENCODE_GO: Package = Package {
         // https://docs.x.ai/developers/model-capabilities/text/reasoning:
         // `reasoning.effort` takes low, medium, high and xhigh (4.6 and
         // later); reasoning cannot be disabled, so no `off`.
-        ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
         // research/opencode-thinking/raw/go-hy3.json
         ("hy3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -494,12 +471,6 @@ const OPENCODE_GO: Package = Package {
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
-        // research/opencode-thinking/raw/go-longcat-2.5-preview-free.json
-        (
-            "longcat-2.5-preview-free",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
         // research/opencode-thinking/raw/go-mimo-v2.5.json
         ("mimo-v2.5", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-mimo-v2.5-pro.json: upstream
@@ -509,9 +480,6 @@ const OPENCODE_GO: Package = Package {
         ("mimo-v2.6-flash", OFF_LOW_MEDIUM_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-mimo-v2.6-pro.json
         ("mimo-v2.6-pro", OFF_LOW_MEDIUM_HIGH_MAX, None),
-        // research/opencode-thinking/raw/go-minimax-m2.7.json (messages;
-        // completions is unsupported there).
-        ("minimax-m2.7", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-minimax-m3.json
         ("minimax-m3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // https://platform.minimax.io/docs/guides/text-generation: effort
@@ -537,18 +505,10 @@ const OPENCODE_GO: Package = Package {
         ("qwen3.8-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-qwen3.8-max.json
         ("qwen3.8-max", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-space-bunny.json
-        ("space-bunny", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // https://platform.stepfun.ai/docs/en/guides/models/step-5-preview:
         // reasoning effort supports low, medium and high; models.dev names
         // the same three for this id.
         ("step-5-preview", LOW_MEDIUM_HIGH, None),
-        // research/opencode-thinking/raw/go-step-5-preview-free.json
-        (
-            "step-5-preview-free",
-            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
     ],
 };
 
@@ -628,7 +588,6 @@ const OPENCODE_ZEN: Package = Package {
         // thinking (`docs/model-routing.md`, "Thinking").
         ("claude-haiku-4-5", GATEWAY_THINKING_BUDGET),
         ("claude-opus-4-5", GATEWAY_THINKING_BUDGET),
-        ("claude-sonnet-4", GATEWAY_THINKING_BUDGET),
         ("claude-sonnet-4-5", GATEWAY_THINKING_BUDGET),
     ],
     thinking: &[
@@ -641,15 +600,7 @@ const OPENCODE_ZEN: Package = Package {
         // thinking is always on; effort sets low, medium, high, xhigh or
         // max; models.dev names the same five for this id.
         ("claude-fable-5-2", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking:
-        // Claude Sonnet 4 is an earlier Claude 4 model, so it keeps manual
-        // budget thinking; the compat layer above carries the budget flag.
-        ("claude-sonnet-4", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        // research/opencode-thinking/raw/zen-deepseek-v4-flash.json:
-        // served by deepseek-v4.1-flash upstream, which supports only low,
-        // high, xhigh and max there (off, minimal and medium are rejected
-        // as unsupported).
-        ("deepseek-v4-flash", LOW_HIGH_XHIGH_MAX, None),
+        ("claude-sonnet-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
         // research/opencode-thinking/raw/zen-deepseek-v4-pro.json (every
         // level 200s).
         (

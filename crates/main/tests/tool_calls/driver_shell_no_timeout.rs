@@ -111,11 +111,6 @@ fn exit_cleanly(running: Running) {
     watchdog.stand_down(deadline.cleanup_phase());
 }
 
-/// Single-quotes `path` for a shell command, as in `driver_shell_sent.rs`.
-fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\"'\"'"))
-}
-
 #[test]
 fn agent_shell_timeout_stands_while_driver_shell_has_none() {
     let setup = Setup::new();
@@ -137,8 +132,8 @@ fn agent_shell_timeout_stands_while_driver_shell_has_none() {
         .write(true)
         .open(&driver_fifo)
         .unwrap();
-    let agent_command = format!("cat {}", shell_quote(&agent_fifo));
-    let driver_command = format!("read -r _ < {}", shell_quote(&driver_fifo));
+    let agent_command = format!("cat {}", fakes::shell_quote(&agent_fifo));
+    let driver_command = format!("read -r _ < {}", fakes::shell_quote(&driver_fifo));
     let server = ProviderServer::start([
         // A pending approval lets the loop drain shell deliveries without
         // ending the turn (`docs/testing.md`, "Waits and timeouts").
@@ -344,7 +339,7 @@ fn bang_sleep_five_draws_the_sent_row() {
     // timeout can end its turn. The person's `!sleep 5` runs past it.
     let agent_fifo = setup.workspace().join("agent-block");
     fakes::fifo(&agent_fifo);
-    script(&setup, &format!("cat {}", shell_quote(&agent_fifo)));
+    script(&setup, &format!("cat {}", fakes::shell_quote(&agent_fifo)));
     let (mut run, from) = attached(&setup);
     // The first prompt idles the fresh session fast: its text step ends
     // the turn at once. `ready` in `attached` covers `go`, and the turn

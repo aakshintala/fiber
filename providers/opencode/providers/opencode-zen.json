@@ -374,44 +374,6 @@
           }
         ]
       },
-      "id": "claude-sonnet-4",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 64000,
-      "name": "Claude Sonnet 4",
-      "protocol": "anthropic-messages",
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "thinking_budget": true
-      },
-      "context_window": 1000000,
-      "cost": {
-        "cache_read": 0.3,
-        "cache_write": 3.75,
-        "input": 3,
-        "output": 15,
-        "tiers": [
-          {
-            "cache_read": 0.6,
-            "cache_write": 7.5,
-            "input": 6,
-            "input_tokens_above": 200000,
-            "output": 22.5
-          }
-        ]
-      },
       "id": "claude-sonnet-4-5",
       "input": [
         "text",
@@ -492,7 +454,7 @@
       },
       "context_window": 1000000,
       "cost": {
-        "cache_read": 0.2,
+        "cache_read": 0.1,
         "cache_write": 2.5,
         "input": 2,
         "output": 10
@@ -521,35 +483,9 @@
       },
       "context_window": 1000000,
       "cost": {
-        "cache_read": 0.028,
-        "input": 0.14,
-        "output": 0.28
-      },
-      "id": "deepseek-v4-flash",
-      "input": [
-        "text"
-      ],
-      "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Flash",
-      "protocol": "openai-completions",
-      "thinking_levels": [
-        "low",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true
-      },
-      "context_window": 1000000,
-      "cost": {
         "cache_read": 0.145,
         "input": 1.74,
-        "output": 3.84
+        "output": 3.48
       },
       "id": "deepseek-v4-pro",
       "input": [
@@ -586,7 +522,7 @@
         "image"
       ],
       "max_output_tokens": 384000,
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "protocol": "openai-completions",
       "thinking_levels": [
         "off",
@@ -768,9 +704,9 @@
       },
       "context_window": 1048576,
       "cost": {
-        "cache_read": 0.15,
-        "input": 1.5,
-        "output": 7.5
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
       },
       "id": "gemini-3.6-flash",
       "input": [
@@ -794,9 +730,9 @@
       },
       "context_window": 1048576,
       "cost": {
-        "cache_read": 0.15,
-        "input": 1.5,
-        "output": 7.5
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
       },
       "id": "gemini-3.7-flash",
       "input": [
@@ -819,9 +755,9 @@
       },
       "context_window": 1048576,
       "cost": {
-        "cache_read": 0.15,
-        "input": 1.5,
-        "output": 7.5
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
       },
       "id": "gemini-3.8-flash",
       "input": [
@@ -1597,17 +1533,17 @@
       },
       "context_window": 1050000,
       "cost": {
-        "cache_read": 0.25,
-        "cache_write": 3.125,
-        "input": 2.5,
-        "output": 15,
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 12,
         "tiers": [
           {
-            "cache_read": 0.5,
-            "cache_write": 6.25,
-            "input": 5,
+            "cache_read": 0.4,
+            "cache_write": 5,
+            "input": 4,
             "input_tokens_above": 272000,
-            "output": 22.5
+            "output": 18
           }
         ]
       },
@@ -2008,6 +1944,7 @@
       "context_window": 1048576,
       "cost": {
         "cache_read": 0.3,
+        "cache_write": 3,
         "input": 3,
         "output": 15
       },
@@ -2496,9 +2433,6 @@
       "claude-opus-5-5": [
         "compat"
       ],
-      "claude-sonnet-4": [
-        "compat"
-      ],
       "claude-sonnet-4-5": [
         "compat"
       ],
@@ -2509,9 +2443,6 @@
         "compat"
       ],
       "claude-sonnet-5-5": [
-        "compat"
-      ],
-      "deepseek-v4-flash": [
         "compat"
       ],
       "deepseek-v4-pro": [
