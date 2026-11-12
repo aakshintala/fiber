@@ -446,3 +446,5 @@ crates/hub/src/lib_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-
 crates/hub/src/idle_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/directories_tests.rs	fiber-4598	plan	2026-11-12T20:11:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 extensions/codemode/extension.json	fiber-4361	plan	2026-11-12T20:15:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/reviewer.rs	fiber-4473	plan	2026-11-12T20:18:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/reviewer_tests.rs	fiber-4473	plan	2026-11-12T20:18:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
