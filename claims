@@ -256,3 +256,5 @@ scripts/test-leak-scan:146-146	fiber-4726	plan	2026-11-12T12:17:58Z	roundhouse-7
 scripts/test-leak-scan:158-159	fiber-4726	plan	2026-11-12T12:17:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4726-leak-scan-name	
 scripts/test-leak-scan:186-187	fiber-4726	plan	2026-11-12T12:17:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4726-leak-scan-name	
 scripts/test-leak-scan:399-399	fiber-4726	plan	2026-11-12T12:17:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4726-leak-scan-name	
+crates/tui/src/settings_view.rs	fiber-4582	plan	2026-11-12T12:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/settings_view_tests.rs	fiber-4582	plan	2026-11-12T12:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
