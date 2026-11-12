@@ -93,9 +93,6 @@ docs/code-quality.md	fiber-4260	plan	2026-11-11T23:50:56Z	Amoghs-MacBook-Pro:/Us
 crates/jobs/src/delegate/message/resume.rs	fiber-4260	plan	2026-11-12T00:26:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/events.rs	fiber-4260	grant	2026-11-12T01:03:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/jobs/src/timing_tests.rs	fiber-4260	grant	2026-11-12T01:39:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
-crates/tui/src/settings_view.rs	fiber-4589	plan	2026-11-12T04:07:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/settings_view_tests.rs	fiber-4589	plan	2026-11-12T04:07:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tui.md	fiber-4589	plan	2026-11-12T04:07:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/kill.rs	fiber-4260	grant	2026-11-12T04:13:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/loop/src/reviewer.rs	fiber-4699	plan	2026-11-12T05:03:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/fixtures/reviewer_eval/seeded.jsonl	fiber-4699	plan	2026-11-12T05:03:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
