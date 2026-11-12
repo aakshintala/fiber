@@ -262,6 +262,22 @@ fn process_command_host_tool_runs_alone_while_idle() {
             ]
         );
     }
+    let first_completed = events
+        .iter()
+        .position(|line| {
+            line["action_id"] == inner[0]["action_id"] && line["kind"] == "tool_call_completed"
+        })
+        .unwrap();
+    let second_requested = events
+        .iter()
+        .position(|line| {
+            line["action_id"] == inner[1]["action_id"] && line["kind"] == "tool_call_requested"
+        })
+        .unwrap();
+    assert!(
+        first_completed < second_requested,
+        "sequential host.tool calls finish in arrival order: {events:?}"
+    );
     send(&client, r#"{"id":"close","command":"close"}"#);
     let _tail = until_session_close(&client);
     drop(client);
