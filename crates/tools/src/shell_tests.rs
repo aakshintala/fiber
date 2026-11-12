@@ -23,6 +23,20 @@ use crate::error::ShellError;
 #[path = "../tests/support/sandbox_home.rs"]
 mod sandbox_home;
 
+struct TestNoAsk;
+
+impl contract::tool::Ask for TestNoAsk {
+    fn action(&self) -> contract::ActionId {
+        contract::ActionId("a_test".into())
+    }
+    fn answerable(&self) -> bool {
+        false
+    }
+    fn ask(&self, _asking: contract::tool::Asking) -> contract::tool::Answered {
+        contract::tool::Answered::NoAnswer
+    }
+}
+
 fn shell() -> Shell {
     Shell::new(std::env::temp_dir(), FakeClock::new())
 }
@@ -2153,6 +2167,40 @@ fn a_live_background_job_target_is_an_unreviewed_kill() {
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn dead_foreign_kill_stays_on_the_reviewed_path() {
+    let dir = fakes::TempDir::new("fiber-shell-kill-dead-reviewed");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs);
+    let dead = 2_000_000_000_u32;
+    let command = format!("kill {dead}");
+    let arguments = args(&command);
+    let prepared = shell.effects(&arguments).expect("kill effects");
+    assert_eq!(prepared.declared.effects, vec![Effect::Executes]);
+    assert!(!prepared.always_reviewed);
+
+    let output = shell.run_with_effects(
+        &arguments,
+        &prepared,
+        &CancelToken::new(),
+        &Recorder::default(),
+        &TestNoAsk,
+    );
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::NonzeroExit),
+        "the reviewed shell command reports the ordinary kill failure: {output:?}"
+    );
+    assert_eq!(
+        output
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(1),
+        "the dead pid makes kill fail without signalling anything"
+    );
 }
 
 #[test]

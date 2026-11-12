@@ -289,6 +289,78 @@ fn launch_with_a_non_utf8_directory_fails_before_spawn() {
 }
 
 #[test]
+fn reaped_leader_does_not_end_while_its_group_lives() {
+    let dir = fakes::TempDir::new("fiber-detached-reaped-leader");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let clock = FakeClock::new();
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-detached-supervisor".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    let shell = super::super::Shell::new(dir.path().to_path_buf(), clock.clone())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"))
+        .with_detached_spawner(spawner);
+    let command = format!("sleep 60 & echo $$ > '{}'; exit 0", ready.path().display());
+    let mut arguments = Map::new();
+    arguments.insert("command".into(), Value::String(command));
+    arguments.insert("detach".into(), json!(true));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let started = jobs.started().pop().expect("detached row");
+    let supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("supervisor started");
+    fakes::wait_until(
+        "leader reaped while descendant lives",
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || !fakes::pid_alive(pgid),
+    );
+    assert!(
+        fakes::group_alive(pgid),
+        "the background sleep holds the group"
+    );
+    for _ in 0..3 {
+        clock.advance_when_parked(
+            None,
+            Some(supervisor),
+            support::group::GROUP_POLL,
+            &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        );
+        assert!(
+            jobs.ended(fakes::Deadline::after(std::time::Duration::ZERO))
+                .is_none(),
+            "no End while the group remains alive"
+        );
+    }
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    let completed = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("End after the group empties");
+    assert_eq!(completed.job_id, started.job_id);
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert_eq!(jobs.end_count(), 1);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
 fn detached_stop_escalates_after_the_session_clock_grace() {
     let dir = fakes::TempDir::new("fiber-detached-stop-supervisor");
     let ready = Ready::new(dir.path());
