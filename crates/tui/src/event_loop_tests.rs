@@ -110,7 +110,6 @@ impl Backend for CursorFailure {
         &mut self,
         _clear_type: ratatui::backend::ClearType,
     ) -> Result<(), Self::Error> {
-        self.get_cursor_position()?;
         Ok(())
     }
     fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
@@ -586,6 +585,15 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
             mods: Mods::NONE,
         })]
     );
+}
+
+#[test]
+fn ctrl_c_once_on_empty_box() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert!(lp.app.hint(), "the first Ctrl+C arms the documented quit");
+    drop(tx);
 }
 
 #[test]

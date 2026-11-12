@@ -158,7 +158,7 @@ impl<B: Backend> Screen<B> {
     /// shown logo image lost its rect, and the redraw must follow at
     /// once, never a blank screen (`docs/tui.md`, "The logo").
     pub(crate) fn repaint(&mut self) -> Result<(), B::Error> {
-        self.terminal.clear()?;
+        self.terminal.backend_mut().clear_region(ClearType::All)?;
         self.last = None;
         Ok(())
     }
