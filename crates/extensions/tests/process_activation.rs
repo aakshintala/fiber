@@ -889,25 +889,34 @@ fn process_host_tool_model_delegate_live_and_sealed() {
         session.deliver(&finish(job, text), None);
     }
     session.deliver(&completed("j_pair_2"), None);
+    let marker = markers.join("delegate-call-two.json");
+    fakes::wait_until(
+        "the delegate-call-two run callback",
+        Deadline::after(WAIT),
+        {
+            let marker = marker.clone();
+            move || marker.exists()
+        },
+    );
+    let route = read_json_file(&marker, "delegate-call-two");
+    assert_eq!(route["payload"]["registration"], "delegate-call-two");
+    assert_eq!(route["payload"]["args"][0]["job_id"], "j_pair_2");
+    assert_eq!(route["payload"]["args"][0]["text"], "second-result");
+
     session.deliver(&completed("j_pair_1"), None);
-    for (handle, job, text) in [
-        ("delegate-call-one", "j_pair_1", "first-result"),
-        ("delegate-call-two", "j_pair_2", "second-result"),
-    ] {
-        let marker = markers.join(format!("{handle}.json"));
-        fakes::wait_until(
-            &format!("the {handle} run callback"),
-            Deadline::after(WAIT),
-            {
-                let marker = marker.clone();
-                move || marker.exists()
-            },
-        );
-        let route = read_json_file(&marker, handle);
-        assert_eq!(route["payload"]["registration"], handle);
-        assert_eq!(route["payload"]["args"][0]["job_id"], job);
-        assert_eq!(route["payload"]["args"][0]["text"], text);
-    }
+    let marker = markers.join("delegate-call-one.json");
+    fakes::wait_until(
+        "the delegate-call-one run callback",
+        Deadline::after(WAIT),
+        {
+            let marker = marker.clone();
+            move || marker.exists()
+        },
+    );
+    let route = read_json_file(&marker, "delegate-call-one");
+    assert_eq!(route["payload"]["registration"], "delegate-call-one");
+    assert_eq!(route["payload"]["args"][0]["job_id"], "j_pair_1");
+    assert_eq!(route["payload"]["args"][0]["text"], "first-result");
 
     contract::extension::ExtensionDoor::seal(session.as_ref());
     let second = tool.run_asking(&Map::new(), &cancel, &*emit, &ask);
@@ -995,6 +1004,7 @@ fn delegate_pair_plan(markers: &Path) -> Value {
     let route = |name: &str| {
         json!([
             {"send": {"id": format!("answer-{name}"), "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}},
+            {"read_until": {"path": "payload.command_id", "equals": format!("answer-{name}")}},
             {"write_file": {"path": marker(name), "value": {"$ref": "req"}}}
         ])
     };
