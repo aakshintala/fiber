@@ -1037,7 +1037,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "job_started",
             json!({"job_id": "j", "tool": "shell", "extension": "e",
-            "description": "d", "output_path": "/o"}),
+            "description": "d", "output_path": "/o", "pgid": 7,
+            "start_time": 8, "kind": "detached"}),
         ),
         (
             "delegate_started",

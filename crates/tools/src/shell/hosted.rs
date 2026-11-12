@@ -12,6 +12,7 @@ use contract::JobId;
 use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{JobCompleted, Outcome};
+use contract::jobs::JobIdentity;
 use contract::jobs::Jobs;
 use contract::keeper::{CommandHost, Exit, HostEvent, Sandbox, Spawn, Started};
 use contract::shapes::Failure;
@@ -56,6 +57,10 @@ impl Waiter {
             Self::Child { child, .. } => child.id(),
             Self::Host { started, .. } => started.pgid,
         }
+    }
+    pub(super) fn identity(&self) -> Option<JobIdentity> {
+        let pgid = self.pgid();
+        support::group::start_time(pgid).map(|start_time| JobIdentity { pgid, start_time })
     }
     pub(super) fn monitor(&self) -> bool {
         match self {

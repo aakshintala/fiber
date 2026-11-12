@@ -83,6 +83,66 @@ pub fn alive(pgid: u32) -> bool {
     )
 }
 
+/// Reads an opaque process start-time identity for the leader pid.
+///
+/// The value is compared only for equality: it distinguishes a live process
+/// from a later process that reused the same pid.
+#[must_use]
+pub fn start_time(pid: u32) -> Option<u64> {
+    if refused(pid) {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let close = stat.rfind(')')?;
+        let fields: Vec<_> = stat.get(close + 2..)?.split_ascii_whitespace().collect();
+        fields.get(19)?.parse().ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_start_time(pid)
+    }
+}
+
+#[cfg(target_os = "macos")]
+// Mutants run on Linux, where this macOS-only function is not compiled.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    unsafe_code,
+    reason = "proc_pidinfo reads one caller-sized proc_bsdinfo for the checked pid and fixed flavor"
+)]
+fn macos_start_time(pid: u32) -> Option<u64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: pid converts losslessly, the flavor and zero argument select
+    // bsd info, and info with size is one whole structure the kernel fills.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast::<libc::c_void>(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    // SAFETY: proc_pidinfo returned exactly the structure's size.
+    let info = unsafe { info.assume_init() };
+    Some(compose_start_time(
+        info.pbi_start_tvsec,
+        info.pbi_start_tvusec,
+    ))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn compose_start_time(seconds: u64, microseconds: u64) -> u64 {
+    (seconds << 32) + microseconds
+}
+
 /// Whether the process `pid` still runs, through `kill(pid, 0)`, with the
 /// same predicate as [`alive`]: only `ESRCH` reads dead, while `Ok` and
 /// every other errno (including `EPERM` for a process owned by someone
