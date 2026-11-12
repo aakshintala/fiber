@@ -404,9 +404,11 @@ fn backspace_deletes_on_the_words_row_only() {
 }
 
 #[test]
-fn up_and_down_stop_at_the_first_and_last_rows() {
+fn up_and_down_wrap_at_the_first_and_last_rows() {
     let mut form = base_and_name(true);
     press(&mut form, &[Key::Up]);
+    assert_eq!(cursor_line(&form), "▸ Next →");
+    press(&mut form, &[Key::Down]);
     assert_eq!(
         cursor_line(&form),
         "▸ 1 [ ] main (Recommended)  the default"
@@ -416,11 +418,13 @@ fn up_and_down_stop_at_the_first_and_last_rows() {
         cursor_line(&form),
         "▸ 3 ✎ Type an answer, alone or with the options"
     );
-    press(&mut form, &[Key::Down, Key::Down]);
+    press(&mut form, &[Key::Down]);
     assert_eq!(cursor_line(&form), "▸ Next →");
     press(&mut form, &[Key::Tab, Key::Tab]);
     press(&mut form, &[Key::Up]);
     assert_eq!(cursor_line(&form), "▸ note Add a note on the whole form");
+    press(&mut form, &[Key::Down]);
+    assert_eq!(cursor_line(&form), " Submit ");
     press(&mut form, &[Key::Down, Key::Down]);
     let shown = panel(&form);
     assert_eq!(shown.cursor, Some(8));
