@@ -1863,6 +1863,41 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
 }
 
 #[test]
+fn add_lua_addenda_failure_reports_no_omission_yet() {
+    let setup = Setup::new();
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        "{ {id='gone', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, omit_reason='first reason'}, {id='broken', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000, prompt_addendum='no-such-addendum.md'}, {id='ok', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000} }",
+    );
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices.iter().filter(|n| n.code == ErrorCode::ModelOmitted).count(), 0);
+
+    let models: Vec<ModelData> = serde_json::from_value(json!([
+        {"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"},
+        {"id":"broken", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "prompt_addendum":"no-such-addendum.md"},
+        {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}
+    ])).unwrap();
+    let notices = providers.set_models("acme", models);
+    assert_eq!(notices.iter().filter(|n| n.code == ErrorCode::ModelOmitted).count(), 1, "{notices:?}");
+}
+
+#[test]
 fn add_lua_with_a_missing_addendum_leaves_no_models_but_keeps_the_provider() {
     let setup = Setup::new();
     let mut providers = lua_only(
