@@ -9,7 +9,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
-use fakes::{Deadline, MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN};
+use fakes::{Deadline, MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN as WAIT};
 
 /// The checked-in events file both jig tests draw, so the path never
 /// changes with a checkout.
@@ -63,12 +63,7 @@ pub(crate) fn run_hover_jig(binary: &str, args: &[&str], finished: &str) -> Outp
         .spawn()
         .expect("the jig binary spawns");
     let watchdog = fakes::Watchdog::group(child.id());
-    let output = fakes::finished(
-        finished,
-        child,
-        &[],
-        Deadline::after(WHOLE_SUBSYSTEM_WITHIN),
-    );
-    watchdog.stand_down(Deadline::after(WHOLE_SUBSYSTEM_WITHIN));
+    let output = fakes::finished(finished, child, &[], Deadline::after(WAIT));
+    watchdog.stand_down(Deadline::after(WAIT));
     output
 }
