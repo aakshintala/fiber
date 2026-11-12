@@ -393,3 +393,31 @@ fn prune_routes_args_and_maps_every_outcome() {
     );
     assert_eq!(calls[2]["prune"]["dry_run"], json!(false));
 }
+
+#[test]
+fn keeper_probe_reports_fixed_keepers_behind_a_trait_object() {
+    use crate::machine::KeeperProbe;
+
+    struct Fixed(Vec<contract::SessionId>);
+    impl KeeperProbe for Fixed {
+        fn keepers(
+            &self,
+            _home: &std::path::Path,
+            _clock: Arc<dyn Clock>,
+        ) -> Vec<contract::SessionId> {
+            self.0.clone()
+        }
+    }
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Fixed>();
+    let probe: Arc<dyn KeeperProbe> = Arc::new(Fixed(vec![
+        contract::SessionId(id(2)),
+        contract::SessionId(id(1)),
+    ]));
+    let temp = fakes::TempDir::new("hm-keepers");
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    assert_eq!(
+        probe.keepers(temp.path(), clock),
+        vec![contract::SessionId(id(2)), contract::SessionId(id(1))]
+    );
+}

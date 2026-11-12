@@ -983,6 +983,94 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
     }
 }
 
+/// A scripted keeper set for the feed and command tests: `keepers`
+/// answers the fixed list. The sockets it names are bound by the
+/// tests themselves: an accept-and-never-answer entry comes from
+/// [`FakeKeeperProbe::hold`], which accepts and holds every
+/// connection unread.
+pub(crate) struct FakeKeeperProbe {
+    keepers: Mutex<Vec<SessionId>>,
+}
+
+impl FakeKeeperProbe {
+    /// A probe answering `keepers`.
+    pub(crate) fn new(keepers: Vec<SessionId>) -> Self {
+        Self {
+            keepers: Mutex::new(keepers),
+        }
+    }
+
+    /// Re-scripts the answer: the next scan publishes the new set.
+    pub(crate) fn set(&self, keepers: Vec<SessionId>) {
+        *lock(&self.keepers) = keepers;
+    }
+
+    /// Binds `id`'s socket and holds every accepted connection unread:
+    /// an accept-and-never-answer entry. The guard's drop unbinds it.
+    pub(crate) fn hold(home: &Path, id: &SessionId) -> HeldKeeper {
+        HeldKeeper::spawn(&home.join("run"), id)
+    }
+}
+
+impl crate::KeeperProbe for FakeKeeperProbe {
+    fn keepers(&self, _home: &Path, _clock: Arc<dyn contract::clock::Clock>) -> Vec<SessionId> {
+        lock(&self.keepers).clone()
+    }
+}
+
+/// An accept-and-never-answer socket: bound before the return, every
+/// connection accepted into a held-open stream that never reads nor
+/// writes, unbound on drop.
+pub(crate) struct HeldKeeper {
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl HeldKeeper {
+    fn spawn(run: &Path, id: &SessionId) -> Self {
+        std::fs::create_dir_all(run).unwrap();
+        let path = run.join(&id.0);
+        let listener = UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            thread::Builder::new()
+                .name("fake-held-keeper".to_owned())
+                .spawn(move || {
+                    let mut held = Vec::new();
+                    while !stop.load(Ordering::SeqCst) {
+                        match listener.accept() {
+                            Ok((stream, _)) => held.push(stream),
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                thread::park_timeout(Duration::from_millis(10))
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .unwrap()
+        };
+        Self {
+            path,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for HeldKeeper {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            thread.join().unwrap_or(());
+        }
+        std::fs::remove_file(&self.path).unwrap_or(());
+    }
+}
+
 /// Records machine calls and answers configuration operations from a script.
 #[derive(Default)]
 pub(crate) struct FakeMachine {

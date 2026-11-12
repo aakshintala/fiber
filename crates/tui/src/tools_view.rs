@@ -402,6 +402,7 @@ impl Tools {
             command: "/tools".to_owned(),
             rows,
             list,
+            gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
             footer,

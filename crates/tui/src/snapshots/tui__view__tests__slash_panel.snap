@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view_tests.rs
+assertion_line: 2026
 expression: "sized(&mut app, 80, 24)"
 ---
 
@@ -11,14 +12,14 @@ expression: "sized(&mut app, 80, 24)"
 
 
 
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-⋮
+
 ⋮  › home     Goes home, focused on the session on screen's row.       command
 ⋮    hooks    Opens the hooks view.                                    command
-     help     Opens the key map.                                       command
+⋮    help     Opens the key map.                                       command
      thinking /effort Sets the thinking level, or opens the… [<level>] command
      theme    Opens the theme picker, or sets the named them… [<name>] command
+     archive  Stops the session and its cascade as /delete does, then… command
 
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

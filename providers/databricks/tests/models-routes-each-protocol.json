@@ -61,7 +61,8 @@
       "protocol": "anthropic-messages",
       "base_url": "https://{workspace}/ai-gateway/anthropic/v1",
       "compat": {
-        "bearer": true
+        "bearer": true,
+        "max_tokens": true
       },
       "context_window": 200000,
       "max_output_tokens": 64000,
@@ -99,6 +100,9 @@
       "id": "databricks-glm-5.3",
       "protocol": "openai-completions",
       "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "compat": {
+        "max_tokens": true
+      },
       "context_window": 200000,
       "max_output_tokens": 32000,
       "input": [

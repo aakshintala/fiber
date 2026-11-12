@@ -3,26 +3,26 @@ source: crates/tui/src/view/model_picker_tests.rs
 expression: "screen(&app, 160, 48)"
 ---
                        Models  /model                                                                                  Esc returns
-                             ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                               Type to search █
-                               4 models                                                                     ⟳ refresh all
-                               acme ⟳ refreshing ●
-                               › m1 [deep] [review] $3.00 in · $15.00 out /M
-                                     thinking low [high]
-                                 m2
-                                     fixed thinking
+                                    Type to search █
+                                    4 models                                                           ⟳ refresh all
+                                    acme ⟳ refreshing ●
+                                    › m1 [deep] [review] $3.00 in · $15.00 out /M
+                                          thinking low [high]
+                                      m2
+                                          fixed thinking
 
-                               zeta ⟳ refreshing ●
-                                 z1
-                                     thinking [low]
-                                 z2 [chat] $2.00 in · $8.00 out /M
-                                     thinking low [high]
-                               refreshing…
+                                    zeta ⟳ refreshing ●
+                                      z1
+                                          thinking [low]
+                                      z2 [chat] $2.00 in · $8.00 out /M
+                                          thinking low [high]
+                                    refreshing…
 
-                               ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close
+                                    ↑↓ move · ←→ levels · Enter choose · Ctrl+S session · Ctrl+R refresh · Esc close
 
-                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
                      ⋮                                                                                                            ⋮

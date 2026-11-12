@@ -204,6 +204,7 @@ fn home_foot(
     open: Option<String>,
     project: Option<String>,
     delete: Option<String>,
+    archive: Option<String>,
     key_map: Option<String>,
     back: bool,
     esc: Option<String>,
@@ -229,6 +230,9 @@ fn home_foot(
             &label,
             "stops a live one, deletes an exited one",
         );
+    }
+    if let Some(label) = archive {
+        hint_key(&mut spans, &label, "archives an exited one");
     }
     if let Some(label) = key_map {
         hint_key(&mut spans, &label, "the key map");
@@ -499,6 +503,9 @@ impl App {
             for row in section.exited.iter().take(section.shown_exited) {
                 list.push(ListLine::Exited {
                     key: row.key,
+                    // An exited row draws its ✕: Backspace and the
+                    // cross archive it through the hub.
+                    stop: true,
                     glyph: "○",
                     name: crate::home::title(row),
                     id: row.id.0.clone(),
@@ -530,6 +537,9 @@ impl App {
             for row in section.archived.iter().take(section.shown_archived) {
                 list.push(ListLine::Exited {
                     key: row.key,
+                    // An archived row draws no ✕: opening it resumes
+                    // it, which unarchives it.
+                    stop: false,
                     glyph: "○",
                     name: crate::home::title(row),
                     id: row.id.0.clone(),
@@ -563,6 +573,7 @@ impl App {
                 self.keys().first_label("open_focused"),
                 self.keys().first_label("focus_project"),
                 self.keys().first_label("delete_session"),
+                self.keys().first_label("archive_session"),
                 self.keys().first_label("key_map"),
                 self.came_from_live(),
                 self.keys().first_label("close_or_interrupt"),
@@ -768,7 +779,27 @@ impl App {
                         self.outbox.note_hub_sent(&sent.id, &sent.line);
                         lines.push(sent.line);
                     }
+                    // The archive command's stops retire the same way:
+                    // only an exit permits its one archive.
+                    lines.extend(self.archive_command_session_left(&exited));
                     Some(lines)
+                } else if kind == contract::HubEventKind::Keepers {
+                    // The feed's count, folded beside `SessionLeft`: only
+                    // minted ids land in the set, and a malformed payload
+                    // keeps the current one, never clears it. No feed
+                    // attached reads no line at all, which stays no
+                    // keepers the way an old hub's silence does.
+                    let keepers = hub.payload.get("keepers").and_then(Value::as_array)?;
+                    let mut folded = Vec::new();
+                    for keeper in keepers {
+                        let id = keeper.as_str()?;
+                        if !crate::home::valid_session_id(id) {
+                            return Some(Vec::new());
+                        }
+                        folded.push(SessionId(id.to_owned()));
+                    }
+                    self.home.sessions.keepers = Some(folded);
+                    Some(Vec::new())
                 } else if kind == contract::HubEventKind::SessionDeleted
                     || kind == contract::HubEventKind::SessionArchived
                 {
@@ -899,7 +930,23 @@ impl App {
                                 return Some(lines);
                             }
                         }
-                        Some(super::Waiting::Stop) | Some(super::Waiting::Delete) => {
+                        Some(
+                            super::Waiting::ArchiveDiscovery(..)
+                            | super::Waiting::ArchiveStop { .. }
+                            | super::Waiting::ArchiveFinal(..),
+                        ) => {
+                            // The archive command's discovery, stops and
+                            // one archive fold the same way, with no
+                            // question at any phase.
+                            if let Some(lines) =
+                                self.archive_command_answer(id, accepted, &hub.payload)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(super::Waiting::Stop)
+                        | Some(super::Waiting::Delete)
+                        | Some(super::Waiting::Archive) => {
                             if let Some(ask) = self.take_ask(id) {
                                 return Some(self.answer_ask(ask, accepted, &hub.payload));
                             }
@@ -971,6 +1018,14 @@ impl App {
                         return Some(Vec::new());
                     }
                     let session = envelope.session_id.clone();
+                    // A replayed status for a read-only session reaches
+                    // the conversation below but never touches the rows:
+                    // no row-status fold, no unarchive, no left clearing,
+                    // no refetch asks. The row stays where it was,
+                    // archived or exited.
+                    if self.home.subs.unwritable(&session).is_some() {
+                        return None;
+                    }
                     let was_left = self
                         .home
                         .sessions
@@ -1082,8 +1137,23 @@ impl App {
                             }
                         }
                         Some(
+                            super::Waiting::ArchiveDiscovery(..)
+                            | super::Waiting::ArchiveStop { .. }
+                            | super::Waiting::ArchiveFinal(..),
+                        ) => {
+                            // The archive command's discovery, stops and
+                            // one archive fold the same way, with no
+                            // question at any phase.
+                            if let Some(lines) =
+                                self.archive_command_answer(id, accepted, &envelope.payload)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(
                             super::Waiting::Stop
                             | super::Waiting::Delete
+                            | super::Waiting::Archive
                             | super::Waiting::OfferImport,
                         ) => {
                             if let Some(ask) = self.take_ask(id) {
@@ -1321,7 +1391,7 @@ impl App {
         }
         if !matches!(key, Key::Char('j')) {
             if matches!(key, Key::Backspace) {
-                return self.delete_key();
+                return self.archive_key();
             }
             if matches!(key, Key::Char(ch) if !matches!(ch, 'k' | 'y'))
                 && matches!(
@@ -1413,7 +1483,7 @@ impl App {
     }
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
-    /// live session or asks to delete an exited one, a `More` row reveals
+    /// live session or archives an exited one, a `More` row reveals
     /// its project's loaded exited rows, the workspace chip opens the
     /// picker, the worktree switch toggles it, the model chip opens the model picker, the
     /// thinking chip opens it at the model's thinking chips, a picker

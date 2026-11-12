@@ -1,0 +1,162 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "inkling-2-small-free",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.33,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.26,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 400,
+   "elapsed_s": 0.23,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 400,
+   "elapsed_s": 0.25,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 400,
+   "elapsed_s": 0.28,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.4,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.28,
+   "request": {
+    "model": "inkling-2-small-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  }
+ ]
+}

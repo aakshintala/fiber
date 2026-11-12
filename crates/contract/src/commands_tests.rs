@@ -845,9 +845,10 @@ fn a_key_not_in_the_command_line_is_refused() {
     assert!(parse(r#"{"id":"c","command":"cancel","session_id":"s_1"}"#).is_err());
 }
 
-/// Slash commands the doc table names that are not built yet; the build
-/// ticket (#3782) removes the entry.
-const NOT_BUILT: [&str; 1] = ["archive"];
+/// Slash commands the doc table names that are not built yet: none left.
+/// Every doc row now has its command, and the filter below stays so a
+/// future row can rejoin the list without reshaping the test.
+const NOT_BUILT: [&str; 0] = [];
 
 /// `BUILT_IN_COMMANDS` names the commands in `docs/tui.md`'s "Slash commands" table.
 #[test]

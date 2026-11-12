@@ -74,6 +74,7 @@ pub(crate) fn frame(
         command: "/release-notes".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: Vec::new(),
         field: None,
         footer: "↑↓ scroll · PgUp/PgDn page · Esc close".to_owned(),

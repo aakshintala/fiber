@@ -817,6 +817,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "clear",
     "close",
     "stop",
+    "archive",
     "delete",
     "quit",
     "exit",

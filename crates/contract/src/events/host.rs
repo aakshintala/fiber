@@ -464,6 +464,18 @@ pub enum CommandResult {
     Stop {
         /// The sessions that confirmed closed.
         sessions_stopped: usize,
+        /// The keepers that confirmed stopped. Old hubs omit it, which
+        /// reads as zero; zero keepers omit it on the wire, so the
+        /// sessions-only shape stays byte-identical.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        keepers_stopped: usize,
+    },
+    /// For `stop_keepers`, over the hub: the keepers that confirmed
+    /// stopped. An empty confirmed set with nothing unconfirmed answers
+    /// accepted zero.
+    StopKeepers {
+        /// The keepers that confirmed stopped.
+        keepers_stopped: usize,
     },
     /// For `placeholder_env`, over the hub: the hub's captured values for
     /// the requested placeholder variable names. Absent names are omitted,
@@ -476,6 +488,14 @@ pub enum CommandResult {
     Subscribe {
         /// The last durable line sent before the stream goes live.
         last_seq: crate::Seq,
+        /// The missing workspace path, when the hub replays the log of
+        /// a session whose workspace is gone and cannot be made again:
+        /// the terminal opens it read only (`docs/invocation.md`,
+        /// "Lifecycle"). Old results omit it, which reads as a live
+        /// open; the hub omits it for live sessions, so the live shape
+        /// stays byte-identical.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_gone: Option<String>,
     },
     /// For `quota`.
     Quota {
@@ -545,6 +565,11 @@ where
     D: serde::Deserializer<'de>,
 {
     Value::deserialize(deserializer).map(Some)
+}
+
+/// A zero count is the absent old-hub shape, so it stays off the wire.
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 /// The labels of the provider a credential command would switch now.

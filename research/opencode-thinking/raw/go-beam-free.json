@@ -1,0 +1,354 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "beam-free",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.46,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "param": "reasoning_effort",
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [unsupported_value] Unsupported value: 'reasoning_effort' only supports 'max', 'xhigh', 'high', 'medium' or 'low' with this model."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.36,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "param": "reasoning_effort",
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [unsupported_value] Unsupported value: 'reasoning_effort' only supports 'max', 'xhigh', 'high', 'medium' or 'low' with this model."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 0.64,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "chatcmpl-5d62bcc0-59a6-4b71-b1e8-5faa389f9fb5",
+    "object": "chat.completion",
+    "created": 1794423502,
+    "model": "beam-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". I should output exactly that."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 51,
+     "completion_tokens": 30,
+     "total_tokens": 81,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 28
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 51,
+       "output": 30,
+       "reasoning": 28,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 0.71,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "chatcmpl-19b8dfe7-dccb-4c73-b210-5d03365243cb",
+    "object": "chat.completion",
+    "created": 1794423502,
+    "model": "beam-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is straightforward."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 52,
+     "completion_tokens": 28,
+     "total_tokens": 80,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 24
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 52,
+       "output": 28,
+       "reasoning": 24,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 0.78,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "chatcmpl-cfdd833e-5f54-4aec-8512-9b21c5327ea2",
+    "object": "chat.completion",
+    "created": 1794423503,
+    "model": "beam-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user asks: \"Reply with the single word: ok\". So final should be just \"ok\". Need ensure no extra."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 53,
+     "completion_tokens": 37,
+     "total_tokens": 90,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 34
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 53,
+       "output": 37,
+       "reasoning": 34,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 0.67,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "chatcmpl-299fd5f5-7596-4a99-a46c-81a8970050b4",
+    "object": "chat.completion",
+    "created": 1794423504,
+    "model": "beam-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". That's simple."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 53,
+     "completion_tokens": 28,
+     "total_tokens": 81,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 26
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 53,
+       "output": 28,
+       "reasoning": 26,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 0.6,
+   "request": {
+    "model": "beam-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "chatcmpl-d513dcc0-a0f6-46f3-a52a-01c2ee5ddf46",
+    "object": "chat.completion",
+    "created": 1794423504,
+    "model": "beam-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". That's straightforward."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 53,
+     "completion_tokens": 28,
+     "total_tokens": 81,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 24
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 53,
+       "output": 28,
+       "reasoning": 24,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  }
+ ]
+}

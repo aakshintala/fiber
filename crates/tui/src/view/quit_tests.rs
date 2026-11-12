@@ -391,20 +391,37 @@ fn the_hint_row_no_longer_shows_the_question() {
     assert_eq!(shown.matches("sessions working").count(), 1, "{shown}");
 }
 
-/// Opens the close-all question with two live sessions, both working.
+/// A hub `keepers` line naming `ids`: what the feed publishes for the
+/// keepers of gone sessions.
+fn keepers(ids: &[&str]) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: HubEventKind::Keepers,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"keepers": ids})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// Opens the close-all question with two live sessions, both working,
+/// and one keeper the feed counted.
 fn ask_close_all(app: &mut App) {
     app.on_line(hello());
     app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", 0));
+    app.on_line(keepers(&["s_cccccccccccccccc"]));
     let clock = fakes::clock::FakeClock::new();
     for ch in "/close all".chars() {
         assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
     }
     assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
     assert!(app.quit_open());
-    // `docs/tui.md`, "Quit": "2 sessions, 2 working, 0 open elsewhere"
-    // dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((2, 2, 0)));
+    // `docs/tui.md`, "Quit": "2 sessions, 2 working, 0 open elsewhere,
+    // 1 keeper" dim (live top-level sessions, how many working, how
+    // many elsewhere, and the counted keepers).
+    assert_eq!(app.close_all_question(), Some((2, 2, 0, 1)));
 }
 
 #[test]
@@ -438,23 +455,61 @@ fn close_all_at_width_40() {
 }
 
 #[test]
-fn the_close_all_count_line_names_all_three_numbers() {
+fn the_close_all_draw_shows_the_counted_line() {
     let mut app = home(80, 24);
     app.on_line(hello());
     app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", 0));
     app.on_line(live("s_cccccccccccccccc", 0));
+    app.on_line(keepers(&["s_dddddddddddddddd"]));
     ask_close_all_three(&mut app);
-    // `docs/tui.md`, "Quit": "3 sessions, 3 working, 0 open elsewhere"
-    // dim (live top-level sessions, how many working, how many elsewhere).
-    assert_eq!(app.close_all_question(), Some((3, 3, 0)));
+    // `docs/tui.md`, "Quit": "3 sessions, 3 working, 0 open elsewhere,
+    // 1 keeper" dim (live top-level sessions, how many working, how
+    // many elsewhere, and the counted keepers).
+    assert_eq!(app.close_all_question(), Some((3, 3, 0, 1)));
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     draw(&app, area, &mut buf, &mut Vec::new());
     let shown = crate::view::text(&buf);
     assert!(
-        shown.contains("3 sessions, 3 working, 0 open elsewhere"),
+        shown.contains("3 sessions, 3 working, 0 open elsewhere, 1 keeper"),
         "{shown}"
+    );
+}
+
+#[test]
+fn close_all_with_only_keepers_shows_the_count_and_sends_the_stop() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(keepers(&["s_cccccccccccccccc"]));
+    let clock = fakes::clock::FakeClock::new();
+    for ch in "/close all".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert!(app.quit_open());
+    // `docs/tui.md`, "Quit": no live session, one counted keeper.
+    assert_eq!(app.close_all_question(), Some((0, 0, 0, 1)));
+    let shown = screen(&app, 80, 24);
+    assert!(
+        shown.contains("0 sessions, 0 working, 0 open elsewhere, 1 keeper"),
+        "{shown}"
+    );
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter stops the keepers");
+    };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
+    let mut stops: Vec<serde_json::Value> = Vec::new();
+    for line in &lines {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap_or_default();
+        if line["command"] == "stop_keepers" {
+            stops.push(line);
+        }
+    }
+    assert_eq!(stops.len(), 1);
+    assert_eq!(
+        stops[0]["args"],
+        serde_json::json!({"keepers": ["s_cccccccccccccccc"]})
     );
 }
 

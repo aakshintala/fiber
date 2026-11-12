@@ -1,0 +1,197 @@
+{
+ "route": "go",
+ "protocol": "google",
+ "model": "gemini-4-argon",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 404,
+   "elapsed_s": 0.34,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingBudget": 0,
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 404,
+   "elapsed_s": 0.25,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MINIMAL",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  },
+  {
+   "level": "low",
+   "status": 404,
+   "elapsed_s": 0.27,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "LOW",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  },
+  {
+   "level": "medium",
+   "status": 404,
+   "elapsed_s": 0.23,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MEDIUM",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  },
+  {
+   "level": "high",
+   "status": 404,
+   "elapsed_s": 0.23,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "HIGH",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 404,
+   "elapsed_s": 0.23,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "XHIGH",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  },
+  {
+   "level": "max",
+   "status": 404,
+   "elapsed_s": 0.24,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MAX",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "_raw": "non-JSON error body"
+   }
+  }
+ ]
+}
