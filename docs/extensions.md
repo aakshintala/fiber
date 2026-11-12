@@ -185,13 +185,14 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 - **from the extension:** its registrations, and host calls as requests Fiber
   answers
 
-> **The extension's calls are driver commands.** A registration, a `host` call or a `state` call is the command `call`, with `args` `{ "call": "<name>", "args": [ ... ] }`: the name as Lua writes it, such as `fiber.tool`, `host.http` or `state.set`, and the Lua call's arguments as a JSON array. A key whose Lua value is a function, such as `run`, a computed `effects`, or a provider's `sign` or `cost`, is sent as `true`, and Fiber calls it with a request. A call is answered by `command_accepted`, whose `result` is `{ "value": <what the Lua call returns> }`, with `value` absent when it returns nothing, or by `command_rejected` with the `code` and `message` a Lua call raises. A registration that would fail in Lua is rejected with the message its notice carries. `host.after`, `host.every` and `host.drive` are not calls: the program keeps its own timers and sends driver commands directly. The extension ends its registrations with the command `ready`, which takes no `args`. The startup deadline is met when `ready` arrives. A call made while answering a request names it with `request_id` in its `args`. Fiber treats it as made inside that request's callback, with every rule a Lua call in that callback follows: which calls it may make, what `ran_by` names, the timeout it counts against, whether a state write goes with a hook's change, and what is cancelled when the callback ends. A call with no `request_id` before `ready` is treated as made while the entry script runs. One after `ready` is treated as made from a timer with no timeout of its own. A call naming a request that is no longer pending, because it was answered, timed out or was cancelled, is rejected `stale_request` and runs nothing. When a request ends, each call still running under it is stopped as the Lua callback's would be, and answered `stale_request`.
+> **The extension's calls are driver commands.** A registration, a `host` call or a `state` call is the command `call`, with `args` `{ "call": "<name>", "args": [ ... ] }`: the name as Lua writes it, such as `fiber.tool`, `host.http` or `state.set`, and the Lua call's arguments as a JSON array. A key whose Lua value is a function, such as `run`, a computed `effects`, or a provider's `sign` or `cost`, is sent as `true`, and Fiber calls it with a request. A call is answered by `command_accepted`, whose `result` is `{ "value": <what the Lua call returns> }`, with `value` absent when it returns nothing, or by `command_rejected` with the `code` and `message` a Lua call raises. A registration that would fail in Lua is rejected with the message its notice carries. `host.after`, `host.every`, `host.utf8_lossy` and `host.drive` are not calls: the program keeps its own timers and sends driver commands directly. The extension ends its registrations with the command `ready`, which takes no `args`. The startup deadline is met when `ready` arrives. A call made while answering a request names it with `request_id` in its `args`. Fiber treats it as made inside that request's callback, with every rule a Lua call in that callback follows: which calls it may make, what `ran_by` names, the timeout it counts against, whether a state write goes with a hook's change, and what is cancelled when the callback ends. A call with no `request_id` before `ready` is treated as made while the entry script runs. One after `ready` is treated as made from a timer with no timeout of its own. A call naming a request that is no longer pending, because it was answered, timed out or was cancelled, is rejected `stale_request` and runs nothing. When a request ends, each call still running under it is stopped as the Lua callback's would be, and answered `stale_request`.
 >
 > **Bytes are base64.** JSON strings are text, so every position below that holds bytes in Lua carries them as a string of standard base64, both ways. Every other string is text, as JSON carries it.
 >
 > | Call | Bytes positions |
 > |---|---|
 > | `host.http` | `opts.body`; the result's `body` |
+> | `host.oauth.poll` | `body` |
 > | `host.exec` | `opts.input`; the result's `stdout` and `stderr` |
 > | `host.fs.read` | its result |
 > | `host.fs.write` | the contents argument |
@@ -200,7 +201,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 >
 > A bytes position that is not valid base64 is rejected `invalid_arguments`, naming the call and the argument.
 >
-> **Functions are requests.** A function passed as a value, whether a key such as `run`, `sign`, `cost` or a computed `effects`, or a positional argument such as `host.oauth.refresh`'s, is sent as `true`. Fiber calls it with an `extension_request`. Its `key` is the key's name or, for a positional argument, its 1-based position as a string, such as `"1"`. `host.after`, `host.every` and `host.drive` are not calls (above). The `json` helpers are available, but are not host calls.
+> **Functions are requests.** A function passed as a value, whether a key such as `run`, `sign`, `cost` or a computed `effects`, or a positional argument such as `host.oauth.refresh`'s, is sent as `true`. Fiber calls it with an `extension_request`. Its `key` is the key's name or, for a positional argument, its 1-based position as a string, such as `"1"`. `host.after`, `host.every`, `host.utf8_lossy` and `host.drive` are not calls (above). The `json` helpers are available, but are not host calls.
 >
 > **JSON is exact.** Lua cannot tell an empty object from an empty list (an empty table), and the rule that settles it in Lua ("`json.encode({})` is `{}`") does not apply on the wire. What the extension sends is read as sent, and what Fiber sends is the value as recorded, so `{}` and `[]` stay distinct. A whole number Lua requires, such as a `timeout`, must be a JSON integer, and a fraction there is rejected as it is in Lua.
 >
@@ -448,9 +449,9 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   and messages are the start's, `depth_exceeded`, `invalid_arguments`,
   `credential_missing` and `tool_error` (`docs/errors.md`).
   From a command, a hook, a timer or a tool call it starts the delegate;
-  from a provider function, a search function or an effects function it
-  raises `invalid_arguments` (`host.delegate: not available here`) and
-  starts nothing. While the entry script runs it raises `closing`.
+  from a watcher, a provider function, a search function or an effects
+  function it raises `invalid_arguments` (`host.delegate: not available
+  here`) and starts nothing. While the entry script runs it raises `closing`.
   Once the session's end has begun stopping its jobs, on a normal end, a
   shutdown or a rewind, it raises `closing` and starts nothing. The end
   wakes nothing and is not shown to the model, `jobs list` lists the job,
@@ -1569,7 +1570,8 @@ calls `on_click` as a click does (`docs/tui.md`, "Input and focus").
 
 `fiber.on_focus({ timeout, run })` runs `run` when the session on screen
 changes, with `{ session_id = "…" }`, or no `session_id` key on home. It
-runs as an event handler does and may make host calls. Its return value is
+runs as an event handler does and may call `host.http`; any other host call
+raises a Lua error, as it does from `on_key`. Its return value is
 ignored. An extension registers it once, and a second call records one
 rejection and is skipped.
 
@@ -1759,10 +1761,12 @@ each to finish, within its timeout. That is where a worklog or a memory
 written at session end runs. It writes to the extension's data directory
 (`docs/state.md`, "What each part holds"), not to extension state: these
 deliveries come after `fiber_exited`, the last line the log takes, so
-`state.set`, `state.unset`, `host.drive` and `host.delegate` fail with
-code `closing`. A process extension then has its manifest's
-`exit_timeout_ms` to finish, and after that gets the shutdown sequence every
-child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
+`state.set`, `state.unset`, `host.model` and `host.drive` fail with code
+`closing`. `host.delegate` is refused to a watcher at any time, so there
+it fails with `invalid_arguments`, not `closing`. A process extension
+then has its manifest's `exit_timeout_ms` to finish, and after that gets
+the shutdown sequence every child gets: SIGTERM, 800 ms, then SIGKILL
+(`docs/invocation.md`, "Shutdown").
 
 Before replaying, the drain waits until no watcher delivery is still
 queued or running: a durable delivery the live fan-out already covered
@@ -1821,7 +1825,7 @@ together.
 - **A removal or a rename raises it.** Fiber loads an extension only when its
   `api` is Fiber's own. Otherwise the extension is not loaded, and a `notice`
   with the code `extension_incompatible` names it and both numbers. `fiber
-  install` refuses it with the same code.
+  extension install` refuses it with the same code.
 
 The API starts at 1.
 

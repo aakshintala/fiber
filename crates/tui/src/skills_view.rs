@@ -450,6 +450,7 @@ impl Skills {
                     .map(|line| vec![(line.clone(), None, Ink::Plain)])
                     .collect(),
                 list: text.list,
+                gutter_mark: ratatui::style::Style::default(),
                 below: self.said.clone(),
                 field: None,
                 footer: "↑↓ scroll · Ctrl+G open the file · Esc back".to_owned(),
@@ -476,6 +477,7 @@ impl Skills {
             command: "/skills".to_owned(),
             rows,
             list: self.list,
+            gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
             footer: "Enter shows the text · Ctrl+G opens its file".to_owned(),

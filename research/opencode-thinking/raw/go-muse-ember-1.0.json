@@ -1,0 +1,162 @@
+{
+ "route": "go",
+ "protocol": "responses",
+ "model": "muse-ember-1.0",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.28,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "none"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.24,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "minimal"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 400,
+   "elapsed_s": 0.26,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "low"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 400,
+   "elapsed_s": 0.25,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "medium"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 400,
+   "elapsed_s": 0.25,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "high"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.26,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "xhigh"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.26,
+   "request": {
+    "model": "muse-ember-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "max"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model is unavailable."
+    }
+   }
+  }
+ ]
+}

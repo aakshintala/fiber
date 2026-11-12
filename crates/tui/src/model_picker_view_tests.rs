@@ -546,7 +546,6 @@ fn the_filter_row_draws_the_query_bold_with_its_count() {
             ("↑↓", "move"),
             ("←→", "levels"),
             ("Enter", "choose"),
-            ("Tab", "all"),
             ("Ctrl+S", "session"),
             ("Ctrl+R", "refresh"),
             ("Esc", "close"),
@@ -566,6 +565,39 @@ fn the_filter_row_draws_the_query_bold_with_its_count() {
     let x = u16::try_from(crate::format::width(&line[..byte])).unwrap_or(u16::MAX);
     let y = u16::try_from(row).unwrap_or(u16::MAX);
     assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn footer_names_what_tab_does_next() {
+    // With no scope Tab does nothing, so the footer names no Tab entry.
+    let mut app = attached(80, 24);
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    assert!(!view.footer.iter().any(|(key, _)| *key == "Tab"));
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Enter choose"), "{text}");
+    assert!(!text.contains("Tab"), "{text}");
+
+    // With a scope only scoped models show, so Tab offers every model.
+    let mut app = scoped_home(&["acme/m1", "zeta/z2"]);
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    // Count row contract (`docs/tui.md`, "The model picker"): "scoped · 5 of 12" under scoped_models.
+    assert_eq!(view.count, "scoped · 2 of 4");
+    assert!(view.footer.contains(&("Tab", "show all")));
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Tab show all"), "{text}");
+
+    // After Tab every model shows, so the footer offers the way back.
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    // Count row contract (`docs/tui.md`, "The model picker"): "12 models" when every model shows.
+    assert_eq!(view.count, "4 models");
+    assert!(view.footer.contains(&("Tab", "show scoped")));
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Tab show scoped"), "{text}");
 }
 
 #[test]

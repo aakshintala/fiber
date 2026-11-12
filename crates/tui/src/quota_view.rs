@@ -191,6 +191,7 @@ pub(crate) fn frame(
         },
         rows: out,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),

@@ -379,9 +379,9 @@ fn changed_files_editor_remote() {
     run.write(b"\x1b[D");
     run.wait_bytes(list_from, FRAME_END, "the returned list frame");
     let grid = run.wait_screen("the refreshed row", |screen| {
-        shows(screen, "Enter show diff") && shows(screen, "only-on-a.txt · +2 −0")
+        shows(screen, "open in editor") && shows(screen, "    M  only-on-a.txt  +2 −0")
     });
-    let _ = row_with(&grid, "only-on-a.txt · +2 −0");
+    let _ = row_with(&grid, "only-on-a.txt");
     // A second Ctrl+G fetches the edited file; a hub-side edit in
     // mid-editor leaves the copy unwritten with the changed-file
     // notice, and the view still rereads the diff and numstat.
@@ -431,6 +431,71 @@ fn changed_files_editor_remote() {
                 .contents
                 .contains(&format!("fiber resume {} --hub box", sockets[0]))
     });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+    assert!(
+        !world.b.hub_socket().exists(),
+        "no hub starts on the client"
+    );
+    reap(world, &ws, guard);
+}
+
+#[test]
+fn changed_files_remote_untracked_file_draws_a_with_hub_line_counts() {
+    let world = world(true);
+    // The scripted model creates a new hub file it never commits, so
+    // the hub reports it untracked with its line counts.
+    write_json(
+        &world.a.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "write", "arguments": {"path": "hub-new.txt", "content": "one\ntwo\nthree\n"}}]},
+            {"text": ["Done."]},
+        ]}),
+    );
+    let env = [
+        ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        TRUECOLOUR[0],
+        TRUECOLOUR[1],
+        TRUECOLOUR[2],
+    ];
+    let mut run = Run::spawn(&world.b, 200, 32, &["--hub", "box"], &env);
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    run.wait_screen("the hub home picker", |screen| {
+        shows(screen, "Workspaces")
+            && shows(screen, "› ~/")
+            && shows(screen, "── recents ──")
+            && recents_row(screen)
+            && shows(screen, "remote session")
+    });
+    run.write(&[0x7f; 64]);
+    run.write(b"\r");
+    run.wait_screen("the chosen hub workspace", |screen| {
+        shows(screen, "[w]") && !shows(screen, "Workspaces")
+    });
+    let ws = world.a.workspace().display().to_string();
+    let guard = support::SessionGuard::arm(world.a.deadline, &ws);
+    let from = run.output().len();
+    run.write(b"create the new file\r");
+    run.wait_screen("the reply", |screen| shows(screen, "Done."));
+    run.turn_finished(from);
+    // The Changed files list opens through `/diff`, keyboard-only.
+    let list_from = run.output().len();
+    run.write(b"/diff\r");
+    run.wait_bytes(list_from, FRAME_END, "the changed files frame");
+    // The hub-side untracked file draws A with its line counts, dimmed
+    // nowhere: the tracking answer carries what the hub counted.
+    run.wait_screen("the untracked file row", |screen| {
+        screen.rows[0].contains("Changed files") && shows(screen, "    A  hub-new.txt  +3 −0")
+    });
+    // Enter reads its diff through --no-index as lines, never empty.
+    let diff_from = run.output().len();
+    run.write(b"\r");
+    run.wait_bytes(diff_from, FRAME_END, "the untracked file diff frame");
+    run.wait_screen("the untracked file diff", |screen| {
+        screen.rows[0].contains("Changed files") && shows(screen, "+one")
+    });
+    run.write(b"\x03\x03\r");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
     assert!(

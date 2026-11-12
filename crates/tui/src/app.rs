@@ -22,7 +22,7 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, Queue};
-use crate::ext::{Handle, Renderer};
+use crate::ext::{Handle, Renderer, SessionCtx};
 use crate::import_report::ImportReport;
 use crate::input::Draft;
 use crate::install_worker::HooksJob;
@@ -901,6 +901,27 @@ impl App {
         }
     }
 
+    /// Runs every loaded focus handler for the session on screen after
+    /// a switch settles, then shows what the runs queued (`docs/tui.md`,
+    /// "Input and focus"). Home runs with no session; a session screen
+    /// carries the session and its halves.
+    pub(crate) fn fire_focus_change(&mut self, session: Option<SessionId>) {
+        let Some(renderer) = self.handle.get() else {
+            return;
+        };
+        let halves = session
+            .as_ref()
+            .and_then(|session| self.pages().halves_for(session));
+        let ctx = SessionCtx {
+            session_id: session,
+            halves,
+        };
+        renderer.on_focus(&ctx);
+        for (code, text) in renderer.take_pending() {
+            self.push_notice(ErrorCode::from_name(&code), text);
+        }
+    }
+
     /// Shows `text` as a notice under `code`.
     pub(crate) fn push_notice(&mut self, code: ErrorCode, text: String) {
         self.notices.push(code, text);
@@ -1007,6 +1028,7 @@ impl App {
                 .push(ErrorCode::ConnectionFailed, "Connection lost.".to_owned());
         }
         self.delete_command_link_lost();
+        self.archive_command_link_lost();
         // A lost connection closes an open item view first, swapping the
         // screen back before anything clears it, and drops every wish:
         // the hub connection and its levels are gone.
@@ -1766,10 +1788,14 @@ impl App {
                         | Waiting::Subscribe { .. }
                         | Waiting::Stop
                         | Waiting::Delete
+                        | Waiting::Archive
                         | Waiting::OfferImport
                         | Waiting::DeleteDiscovery(..)
                         | Waiting::DeleteStop { .. }
                         | Waiting::DeleteFinal(..)
+                        | Waiting::ArchiveDiscovery(..)
+                        | Waiting::ArchiveStop { .. }
+                        | Waiting::ArchiveFinal(..)
                         | Waiting::Feed
                         | Waiting::Recent(..)
                         | Waiting::Close,
@@ -1882,10 +1908,14 @@ impl App {
                             | Waiting::Subscribe { .. }
                             | Waiting::Stop
                             | Waiting::Delete
+                            | Waiting::Archive
                             | Waiting::OfferImport
                             | Waiting::DeleteDiscovery(..)
                             | Waiting::DeleteStop { .. }
                             | Waiting::DeleteFinal(..)
+                            | Waiting::ArchiveDiscovery(..)
+                            | Waiting::ArchiveStop { .. }
+                            | Waiting::ArchiveFinal(..)
                             | Waiting::Feed
                             | Waiting::Recent(..)
                             | Waiting::Close,
@@ -1938,6 +1968,7 @@ impl App {
                 }
                 Vec::new()
             }
+            HubEventKind::Keepers => Vec::new(),
             HubEventKind::DeviceChanged
             | HubEventKind::SessionLeft
             | HubEventKind::SessionDeleted
@@ -2194,10 +2225,14 @@ impl App {
                 | Waiting::Subscribe { .. }
                 | Waiting::Stop
                 | Waiting::Delete
+                | Waiting::Archive
                 | Waiting::OfferImport
                 | Waiting::DeleteDiscovery(..)
                 | Waiting::DeleteStop { .. }
                 | Waiting::DeleteFinal(..)
+                | Waiting::ArchiveDiscovery(..)
+                | Waiting::ArchiveStop { .. }
+                | Waiting::ArchiveFinal(..)
                 | Waiting::Feed
                 | Waiting::Recent(..)
                 | Waiting::Close,

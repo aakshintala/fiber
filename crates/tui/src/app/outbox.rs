@@ -90,6 +90,8 @@ pub(crate) enum Waiting {
     Stop,
     /// A `delete` for an exited row.
     Delete,
+    /// An `archive` for an exited row.
+    Archive,
     /// The first-run offer's `import`.
     OfferImport,
     /// `/delete`'s discovery dry run, for the command's generation.
@@ -102,6 +104,16 @@ pub(crate) enum Waiting {
     },
     /// `/delete`'s exact-set delete, for the command's generation.
     DeleteFinal(u64),
+    /// `/archive`'s discovery dry run, for the command's generation.
+    ArchiveDiscovery(u64),
+    /// `/archive`'s confirmed stop of one session, for the command's
+    /// generation.
+    ArchiveStop {
+        generation: u64,
+        session: SessionId,
+    },
+    /// `/archive`'s one-session archive, for the command's generation.
+    ArchiveFinal(u64),
     /// Home's `feed`.
     Feed,
     /// Home's `recent` pages, scoped or not.

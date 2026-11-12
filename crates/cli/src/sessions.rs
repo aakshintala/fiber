@@ -481,6 +481,7 @@ fn matched(
         | HubEventKind::SessionArchived
         | HubEventKind::StreamClosed
         | HubEventKind::StreamReopened
+        | HubEventKind::Keepers
         | HubEventKind::Unknown(_) => None,
     }
 }

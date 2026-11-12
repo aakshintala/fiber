@@ -242,6 +242,7 @@ impl Rules {
                 .map(|(at, item)| self.line(*item, at, width, wall_ms))
                 .collect(),
             list,
+            gutter_mark: ratatui::style::Style::default(),
             below: self.said.clone(),
             field: None,
             footer: "Ctrl+G opens the rules file".to_owned(),

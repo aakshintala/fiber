@@ -1280,15 +1280,29 @@ impl ModelPicker {
                     ("Esc", "close"),
                 ]
             } else {
-                vec![
-                    ("↑↓", "move"),
-                    ("←→", "levels"),
-                    ("Enter", "choose"),
-                    ("Tab", "all"),
+                let mut footer = vec![("↑↓", "move"), ("←→", "levels"), ("Enter", "choose")];
+                // The Tab entry names what Tab does next, as the count
+                // row's toggle does: hidden with no scope to show.
+                // debt: the footer is laid out at the picker's preferred
+                // content width with no narrow-width degradation;
+                // upgrade trigger: #4689 decides how the footer degrades
+                // when it does not fit.
+                if !self.scoped.is_empty() {
+                    footer.push((
+                        "Tab",
+                        if open.show_all {
+                            "show scoped"
+                        } else {
+                            "show all"
+                        },
+                    ));
+                }
+                footer.extend([
                     ("Ctrl+S", "session"),
                     ("Ctrl+R", "refresh"),
                     ("Esc", "close"),
-                ]
+                ]);
+                footer
             },
             // The selection may sit off the shown rows after a read
             // answered, so it falls to the first model row shown.

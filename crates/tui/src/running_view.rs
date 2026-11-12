@@ -69,6 +69,7 @@ pub(crate) fn all_delegates_frame(app: &App, list: List) -> Frame {
         command: "/delegates".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: empty
             .then(|| "No delegates".to_owned())
             .into_iter()
@@ -243,6 +244,7 @@ fn frame(
         command: "delegates · jobs".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: none.then(|| empty.to_owned()).into_iter().collect(),
         field: None,
         footer: String::new(),

@@ -23,6 +23,7 @@ pub(crate) fn frame(rows: &[HookInfo], list: List, width: u16) -> Frame {
         command: "/hooks".to_owned(),
         rows: body,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below: Vec::new(),
         field: None,
         footer: "Esc close".to_owned(),

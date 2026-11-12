@@ -536,11 +536,18 @@ impl App {
                 if line.kind() == EventKind::CommandAccepted
                     && let Some(accepted) = read!(line, CommandAccepted)
                 {
-                    if let Some(CommandResult::Subscribe { last_seq }) = accepted.result {
+                    if let Some(CommandResult::Subscribe {
+                        last_seq,
+                        workspace_gone,
+                    }) = accepted.result
+                    {
                         self.passes
                             .retain(|(session, _)| session != &line.session_id);
                         self.passes
                             .push((line.session_id.clone(), Pass::Until(last_seq)));
+                        if let Some(gone) = workspace_gone {
+                            self.set_unwritable(line.session_id.clone(), gone);
+                        }
                         if let Some(id) = line.payload.get("command_id").and_then(Value::as_str) {
                             self.begin_fold(&line.session_id, id);
                         }
@@ -552,6 +559,25 @@ impl App {
                 }
             }
             Line::Hub(line) => {
+                // A `full` hub accept carrying the missing workspace
+                // opens its session read only: the pass boundary and
+                // the unwritable mark land beside each other, as the
+                // live accept lands them, before the fold's lines
+                // arrive. A hub accept without the path changes nothing
+                // here.
+                if line.kind() == HubEventKind::CommandAccepted
+                    && let Some(answer) = answer
+                    && let Some(super::outbox::Waiting::Subscribe { session, .. }) = &answer.waiting
+                    && let Some(result) = line.payload.get("result").and_then(Value::as_object)
+                    && let Some(gone) = result.get("workspace_gone").and_then(Value::as_str)
+                    && let Some(last) = result.get("last_seq").and_then(Value::as_u64)
+                {
+                    self.passes.retain(|(held, _)| held != session);
+                    self.passes.push((session.clone(), Pass::Until(Seq(last))));
+                    self.set_unwritable(session.clone(), gone.to_owned());
+                    self.begin_fold(session, answer.id);
+                    return false;
+                }
                 let Some(session) = line.payload.get("session_id").and_then(Value::as_str) else {
                     return false;
                 };
@@ -633,6 +659,7 @@ impl App {
                     | HubEventKind::SessionArchived
                     | HubEventKind::CommandAccepted
                     | HubEventKind::CommandRejected
+                    | HubEventKind::Keepers
                     | HubEventKind::Unknown(_) => {}
                 }
             }

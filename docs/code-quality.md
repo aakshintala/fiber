@@ -265,8 +265,8 @@ Only what no tool can:
   as a notice's code has a row in `docs/errors.md`, "Registry", or its
   notices table
 - in each test the pull request adds or changes: every asserted order or
-  count cites the doc line that promises it (`docs/testing.md`, "Event
-  streams"); every pointer input follows a readiness signal, not a grid
+  count cites the doc sentence that promises it, by heading
+  (`docs/testing.md`, "Event streams"); every pointer input follows a readiness signal, not a grid
   match (`docs/testing/screens.md`); every fake's signal is sent after the
   state it announces
 - the Spec review of a build pull request checks every doc line its ticket
