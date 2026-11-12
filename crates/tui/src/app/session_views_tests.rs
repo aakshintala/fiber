@@ -976,12 +976,18 @@ fn command(effect: Effect) -> Value {
 }
 
 fn accepted_diff(id: &str, text: &str) -> Line {
+    accepted_diff_exited(id, text, 1)
+}
+
+/// A `command_accepted` line whose shell result exits `exit_code`: an
+/// `Empty` diff answer needs a zero exit with only the closing line.
+fn accepted_diff_exited(id: &str, text: &str, exit_code: i32) -> Line {
     session_line(
         SESSION,
         "command_accepted",
         json!({
             "command_id": id,
-            "result": {"output": text, "process": {"exit_code": 1, "timed_out": false}},
+            "result": {"output": text, "process": {"exit_code": exit_code, "timed_out": false}},
         }),
         Some("a_1"),
     )
@@ -1017,41 +1023,65 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
     );
     let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
     let Effect::Send(lines) = effect else {
-        panic!("opening the list sends the numstat query, got {effect:?}");
+        panic!("opening the list sends its queries, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
-    assert_eq!(lines.len(), 1);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
+    assert_eq!(lines.len(), 2);
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        crate::changed_files_view::numstat_command(&paths),
+        crate::changed_files_view::tracking_command(&paths),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
 }
 
 #[test]
-fn the_totals_row_opens_every_changed_file_in_ranked_order() {
+fn the_totals_row_opens_every_changed_file_in_grouped_order() {
     let mut app = files_attached(160, 40);
     many_changes(&mut app, 7);
     open_files_from_totals(&mut app, 160, 40);
     let shown = screen(&app, 160, 40).0;
     assert!(shown.contains("Changed files"), "{shown}");
     let frame = app.session_view_screen(0).expect("changed-files frame");
-    assert_eq!(frame.rows.len(), 7);
-    let paths: Vec<String> = frame
+    // `docs/tui.md`, "Swapped views" Changed files Folders promises this
+    // order: one folder row with its files under it in name order, then
+    // the rule above the totals. The count follows: one folder, seven
+    // files, one rule.
+    assert_eq!(frame.rows.len(), 9);
+    let rows: Vec<String> = frame
         .rows
         .iter()
         .map(|row| row.iter().map(|cell| cell.0.as_str()).collect())
         .collect();
-    let expected: Vec<String> = ranked(app.panel_state().changes())
-        .into_iter()
-        .map(|(path, added, removed)| format!("{path} · +{added} −{removed}"))
+    // No answer yet, so every row shows the card's figures with M.
+    let expected: Vec<String> = (0..7)
+        .map(|at| format!("    M  file-{at}.rs  +{} −0", 7 - at))
         .collect();
-    assert_eq!(paths, expected);
+    assert_eq!(rows[0], "src/");
+    assert_eq!(&rows[1..8], expected.as_slice());
+    assert!(rows[8].chars().all(|cell| cell == '─'));
+    // The view opens with a file row focused, never the folder.
+    assert_eq!(frame.list.selected(), 1);
 }
 
 #[test]
@@ -1155,7 +1185,7 @@ fn left_returns_to_the_same_file_selection_and_drops_a_late_answer() {
     app.on_key(Key::Down, now());
     let request = command(app.on_key(Key::Enter, now()));
     assert_eq!(app.on_edit(Edit::Left), Effect::None);
-    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
+    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 2);
     assert!(screen(&app, 120, 35).0.contains("Changed files"));
     app.on_line(accepted_diff(
         request["id"].as_str().unwrap_or_default(),
@@ -1163,7 +1193,7 @@ fn left_returns_to_the_same_file_selection_and_drops_a_late_answer() {
     ));
     let shown = screen(&app, 120, 35).0;
     assert!(!shown.contains("late diff"), "{shown}");
-    assert!(shown.contains("src/file-1.rs"), "{shown}");
+    assert!(shown.contains("file-1.rs"), "{shown}");
 }
 
 #[test]
@@ -1237,11 +1267,14 @@ fn clicking_a_panel_file_row_opens_its_diff_and_sends_the_request() {
         .map(|(path, _, _)| path)
         .collect();
     let numstat = crate::changed_files_view::numstat_command(&paths);
+    let tracking = crate::changed_files_view::tracking_command(&paths);
     let fetch = diff_command(&expected);
     for request in &requests {
         assert!(
-            request["args"]["command"] == numstat || request["args"]["command"] == fetch,
-            "every request is the numstat query or the file's diff: {requests:?}"
+            request["args"]["command"] == numstat
+                || request["args"]["command"] == tracking
+                || request["args"]["command"] == fetch,
+            "every request is the numstat query, the tracking query or the file's diff: {requests:?}"
         );
     }
     assert!(
@@ -1249,6 +1282,12 @@ fn clicking_a_panel_file_row_opens_its_diff_and_sends_the_request() {
             .iter()
             .any(|request| request["args"]["command"] == numstat),
         "one request is the numstat query: {requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request["args"]["command"] == tracking),
+        "one request is the tracking query: {requests:?}"
     );
     let diff = requests
         .iter()
@@ -1266,24 +1305,40 @@ fn clicking_a_panel_file_row_opens_its_diff_and_sends_the_request() {
 }
 
 #[test]
-fn a_panel_file_rank_past_the_end_opens_the_list_sending_only_the_numstat_command() {
+fn a_panel_file_rank_past_the_end_opens_the_list_sending_the_view_open_queries() {
     let mut app = files_attached(160, 40);
     many_changes(&mut app, 1);
     let effect = app.on_click(TargetId::Panel(PanelSpot::File(5)));
     let Effect::Send(lines) = effect else {
-        panic!("a rank past the end sends only the numstat query, got {effect:?}");
+        panic!("a rank past the end sends the view-open queries, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
-    assert_eq!(lines.len(), 1);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
+    assert_eq!(lines.len(), 2);
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        crate::changed_files_view::numstat_command(&paths),
+        crate::changed_files_view::tracking_command(&paths),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
     assert!(app.session_view_open());
     assert!(screen(&app, 160, 40).0.contains("Changed files"));
@@ -1305,17 +1360,33 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
-    assert_eq!(lines.len(), 1);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
+    assert_eq!(lines.len(), 2);
     let paths: Vec<&str> = ranked(app.panel_state().changes())
         .into_iter()
         .map(|(path, _, _)| path)
         .collect();
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        crate::changed_files_view::numstat_command(&paths),
+        crate::changed_files_view::tracking_command(&paths),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        crate::changed_files_view::numstat_command(&paths)
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
     assert!(screen(&app, 100, 30).0.contains("Changed files"));
 }
@@ -1326,19 +1397,83 @@ fn clicking_a_file_list_row_chooses_that_file() {
     many_changes(&mut app, 2);
     open_files_from_totals(&mut app, 120, 35);
     let expected = ranked(app.panel_state().changes())[1].0.to_owned();
+    // The folder row leads, so the second file sits on display row 2.
     let (_, targets) = screen(&app, 120, 35);
     assert!(
         targets
             .iter()
-            .any(|target| { target.id == TargetId::View(ViewSpot::Row(1)) })
+            .any(|target| { target.id == TargetId::View(ViewSpot::Row(2)) })
     );
-    let value = command(app.on_click(TargetId::View(ViewSpot::Row(1))));
+    let value = command(app.on_click(TargetId::View(ViewSpot::Row(2))));
     assert_eq!(value["args"]["command"], diff_command(&expected));
     assert!(
         screen(&app, 120, 35)
             .0
             .contains(&format!("Changed files › {expected}"))
     );
+}
+
+#[test]
+fn enter_on_a_folder_or_rule_row_sends_no_diff_request() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    // Display rows: the folder, two files, then the rule.
+    assert_eq!(app.session_view_file_enter(0), Effect::None);
+    assert_eq!(app.session_view_file_enter(3), Effect::None);
+    assert_eq!(app.session_view_file_enter(4), Effect::None);
+    // A file row sends its own path's diff request.
+    let effect = app.session_view_file_enter(2);
+    let Effect::Send(lines) = effect else {
+        panic!("a file row sends its diff, got {effect:?}");
+    };
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    assert_eq!(request["args"]["command"], diff_command("src/file-1.rs"));
+}
+
+#[test]
+fn clicking_a_folder_row_sends_nothing_and_keeps_selection() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    assert_eq!(
+        app.session_view_screen(0).unwrap().list.selected(),
+        1,
+        "the view opens with the first file focused"
+    );
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(0))), Effect::None);
+    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
+    assert!(app.session_view_open());
+}
+
+#[test]
+fn arrow_keys_move_over_file_rows_only() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let selected = |app: &App| app.session_view_screen(0).unwrap().list.selected();
+    assert_eq!(selected(&app), 1);
+    // Folder and rule rows never take the selection: past either end the
+    // keys wrap to the farthest file row (`docs/tui.md`, "Swapped views").
+    app.on_key(Key::Up, now());
+    assert_eq!(
+        selected(&app),
+        2,
+        "up from the first file wraps to the last"
+    );
+    app.on_key(Key::Down, now());
+    assert_eq!(
+        selected(&app),
+        1,
+        "down from the last file wraps to the first"
+    );
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 2);
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 1, "the rule never takes the selection");
+    app.on_key(Key::Up, now());
+    assert_eq!(selected(&app), 2);
 }
 
 /// Folds a plain job as `job`.
@@ -2154,7 +2289,9 @@ fn wheel_over_files_scrolls_the_list_not_the_conversation() {
     }
     let frame = app.session_view_screen(0).expect("changed-files frame");
     assert!(frame.rows.len() >= 4, "the list fits three steps");
-    assert_eq!(frame.list.selected(), 3);
+    // Three steps down from the first file row lands on the fourth file:
+    // the folder and rule rows never take the selection.
+    assert_eq!(frame.list.selected(), 4);
     let shown_top = frame.list.top();
     app.on_wheel(&wheel(30, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
@@ -2166,7 +2303,7 @@ fn wheel_over_files_scrolls_the_list_not_the_conversation() {
     );
     assert_eq!(
         frame.list.selected(),
-        3,
+        4,
         "a selection still on screen stays where it was"
     );
 }
@@ -2502,10 +2639,22 @@ fn the_matching_numstat_answer_shows_git_figures_in_the_rows() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // In no promised order: find the numstat query by its command.
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    let request: Value = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .find(|req: &Value| {
+            req["args"]["command"] == crate::changed_files_view::numstat_command(&paths)
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {lines:?}"));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +2 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +2 −0"), "{shown}");
     app.on_line(accepted_figures(
         request["id"].as_str().unwrap_or_default(),
         "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
@@ -2514,8 +2663,8 @@ fn the_matching_numstat_answer_shows_git_figures_in_the_rows() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
-    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-1.rs  +0 −3"), "{shown}");
 }
 
 #[test]
@@ -2532,15 +2681,28 @@ fn a_rejected_numstat_query_keeps_the_card_figures() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // In no promised order: find the numstat query by its command.
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    let request: Value = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .find(|req: &Value| {
+            req["args"]["command"] == crate::changed_files_view::numstat_command(&paths)
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {lines:?}"));
     app.on_line(rejected_diff(
         SESSION,
         request["id"].as_str().unwrap_or_default(),
         "hub refused",
     ));
+    // The figures answer never arrives, so the row stays card and M.
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 fn files_attached_in(root: &std::path::Path, width: u16, height: u16) -> App {
@@ -2565,7 +2727,7 @@ fn files_attached_in(root: &std::path::Path, width: u16, height: u16) -> App {
     app
 }
 
-fn open_figures(app: &mut App, width: u16, height: u16) -> String {
+fn open_figures(app: &mut App, width: u16, height: u16) -> (String, String) {
     let (_, targets) = screen(app, width, height);
     assert!(
         targets
@@ -2574,12 +2736,57 @@ fn open_figures(app: &mut App, width: u16, height: u16) -> String {
     );
     let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
     let Effect::Send(lines) = effect else {
-        panic!("opening the list sends the numstat query, got {effect:?}");
+        panic!("opening the list sends its queries, got {effect:?}");
     };
-    assert_eq!(lines.len(), 1, "one numstat command"); // `docs/tui.md`, "Swapped views", run when the view opens.
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
-    request["id"].as_str().unwrap_or_default().to_owned()
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
+    assert_eq!(lines.len(), 2);
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    let requests: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .collect();
+    let numstat = requests
+        .iter()
+        .find(|req| req["args"]["command"] == crate::changed_files_view::numstat_command(&paths))
+        .unwrap_or_else(|| panic!("one request is the numstat query: {requests:?}"))
+        .clone();
+    let tracking = requests
+        .iter()
+        .find(|req| req["args"]["command"] == crate::changed_files_view::tracking_command(&paths))
+        .unwrap_or_else(|| panic!("one request is the tracking query: {requests:?}"))
+        .clone();
+    {
+        let mut got: Vec<String> = requests
+            .iter()
+            .map(|req| {
+                req["args"]["command"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
+        got.sort();
+        let mut want = vec![
+            crate::changed_files_view::numstat_command(&paths),
+            crate::changed_files_view::tracking_command(&paths),
+        ];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "the view-open sends the numstat and the tracking"
+        );
+    }
+    (
+        numstat["id"].as_str().unwrap_or_default().to_owned(),
+        tracking["id"].as_str().unwrap_or_default().to_owned(),
+    )
 }
 
 fn accepted_figures(
@@ -2604,7 +2811,7 @@ fn accepted_figures(
 fn a_numstat_answer_ended_by_a_signal_keeps_the_card_figures() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(
         &id,
         "5\t0\tsrc/file-0.rs\n",
@@ -2613,14 +2820,14 @@ fn a_numstat_answer_ended_by_a_signal_keeps_the_card_figures() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
 fn a_timed_out_numstat_answer_keeps_the_card_figures() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(
         &id,
         "5\t0\tsrc/file-0.rs\n",
@@ -2628,15 +2835,16 @@ fn a_timed_out_numstat_answer_keeps_the_card_figures() {
         None,
         true,
     ));
+    // The figures answer never arrives, so the row stays card and M.
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
 fn a_numstat_answer_with_a_failure_exit_keeps_the_card_figures() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(
         &id,
         "5\t0\tsrc/file-0.rs\n",
@@ -2644,8 +2852,9 @@ fn a_numstat_answer_with_a_failure_exit_keeps_the_card_figures() {
         None,
         false,
     ));
+    // A refused answer stores nothing: the row stays card and M.
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -2657,11 +2866,24 @@ fn an_empty_numstat_answer_with_exit_zero_counts_untracked_lines() {
         .unwrap_or_else(|error| panic!("workspace file: {error}"));
     let mut app = files_attached_in(dir.path(), 120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
-    app.on_line(accepted_figures(&id, "Exit code 0.\n", 0, None, false));
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t4\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("untracked, wholly added"), "{shown}");
-    assert!(shown.contains("1 file changed  +4 −0"), "{shown}");
+    assert!(shown.contains("    A  file-0.rs  +4 −0"), "{shown}");
+    assert!(shown.contains("1 file  +4 −0"), "{shown}");
 }
 
 #[test]
@@ -2673,17 +2895,18 @@ fn an_empty_numstat_answer_with_a_failure_exit_keeps_the_card_figures() {
         .unwrap_or_else(|error| panic!("workspace file: {error}"));
     let mut app = files_attached_in(dir.path(), 120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(&id, "", 128, None, false));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    // The workspace file exists, so its letter stays changed.
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
 fn a_refused_numstat_query_drops_its_late_answer() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(rejected_diff(SESSION, &id, "hub refused"));
     app.on_line(accepted_figures(
         &id,
@@ -2692,15 +2915,16 @@ fn a_refused_numstat_query_drops_its_late_answer() {
         None,
         false,
     ));
+    // The refused query drops its late answer.
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
 fn a_refusal_for_another_command_keeps_the_numstat_query_pending() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(rejected_diff(SESSION, "c_other", "wrong command"));
     app.on_line(accepted_figures(
         &id,
@@ -2710,7 +2934,7 @@ fn a_refusal_for_another_command_keeps_the_numstat_query_pending() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
 }
 
 /// Opens the Changed files list on `app` holding two changed files.
@@ -2801,6 +3025,19 @@ fn ctrl_g_on_an_empty_list_opens_nothing() {
     assert!(app.session_view_open());
     assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
     assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn a_cell_click_on_open_in_editor_runs_the_same_path_as_ctrl_g() {
+    let mut app = files_attached(120, 35);
+    open_two_files(&mut app);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    let wanted = Effect::OpenFile(OpenFile {
+        path: PathBuf::from("/w/src/file-0.rs"),
+        line: Some(1),
+    });
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Cell(0, 1))), wanted);
+    assert_eq!(app.on_key(Key::CtrlG, now()), wanted);
 }
 
 #[test]
@@ -3060,9 +3297,10 @@ fn returning_the_remote_copy_stores_it_and_rereads() {
     accept_hub_line(&script, &asked, json!({}));
     let (lines, mut app) = collect(rx, "the workspace write");
     handle.join().unwrap();
-    // `docs/tui.md`, "Swapped views": the view reads the file's diff and
-    // numstat again. That promises both requests, in no promised order.
-    assert_eq!(lines.len(), 2);
+    // `docs/tui.md`, "Swapped views": the view reads the file's diff,
+    // numstat and tracking again. That promises all three requests,
+    // in no promised order.
+    assert_eq!(lines.len(), 3);
     let mut got: Vec<String> = shell_requests(&lines)
         .iter()
         .map(|request| {
@@ -3076,9 +3314,13 @@ fn returning_the_remote_copy_stores_it_and_rereads() {
     let mut want = vec![
         diff_command("src/file-0.rs"),
         numstat_command(&["src/file-0.rs"]),
+        crate::changed_files_view::tracking_command(&["src/file-0.rs"]),
     ];
     want.sort();
-    assert_eq!(got, want, "the reread sends the diff and the numstat");
+    assert_eq!(
+        got, want,
+        "the reread sends the diff, the numstat and the tracking"
+    );
     assert_eq!(app.notices.newest(), None);
     // The holder is spent: closing the same copy again sends nothing.
     assert!(app.changed_file_closed(&temp, Ok(())).is_empty());
@@ -3104,9 +3346,10 @@ fn a_hub_side_edit_leaves_the_remote_copy_unwritten_with_the_notice_but_still_re
         app.notices.newest(),
         Some("/w/src/file-0.rs changed since it was read.")
     );
-    // `docs/tui.md`, "Swapped views": the view still reads the diff and
-    // numstat again. That promises both requests, in no promised order.
-    assert_eq!(lines.len(), 2);
+    // `docs/tui.md`, "Swapped views": the view still reads the diff,
+    // numstat and tracking again. That promises all three requests,
+    // in no promised order.
+    assert_eq!(lines.len(), 3);
     let mut got: Vec<String> = shell_requests(&lines)
         .iter()
         .map(|request| {
@@ -3120,9 +3363,13 @@ fn a_hub_side_edit_leaves_the_remote_copy_unwritten_with_the_notice_but_still_re
     let mut want = vec![
         diff_command("src/file-0.rs"),
         numstat_command(&["src/file-0.rs"]),
+        crate::changed_files_view::tracking_command(&["src/file-0.rs"]),
     ];
     want.sort();
-    assert_eq!(got, want, "the reread sends the diff and the numstat");
+    assert_eq!(
+        got, want,
+        "the reread sends the diff, the numstat and the tracking"
+    );
 }
 
 #[test]
@@ -3133,7 +3380,7 @@ fn a_failed_editor_return_drops_the_remote_copy_without_storing() {
     let (lines, mut app) = collect(rx, "the failed editor return");
     handle.join().unwrap();
     assert_eq!(app.notices.newest(), Some("editor failed"));
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     assert!(script.asked.try_recv().is_err());
     // The holder is spent without a write: closing again sends nothing.
     assert!(app.changed_file_closed(&temp, Ok(())).is_empty());
@@ -3165,9 +3412,20 @@ fn a_remote_numstat_answer_matches_hub_absolute_paths_by_the_viewed_workspace() 
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
         panic!("opening the list sends the numstat query");
     };
-    assert_eq!(lines.len(), 1);
-    let request: Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises the
+    // numstat query plus the tracking line counts; in no promised order,
+    // so find the numstat query by its command.
+    assert_eq!(lines.len(), 2);
+    let request: Value = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .find(|req: &Value| {
+            req["args"]["command"]
+                == crate::changed_files_view::numstat_command(&["/w/src/file-0.rs"])
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {lines:?}"));
     app.on_line(accepted_figures(
         request["id"].as_str().unwrap_or_default(),
         "2\t0\tsrc/file-0.rs\nExit code 0.\n",
@@ -3176,7 +3434,64 @@ fn a_remote_numstat_answer_matches_hub_absolute_paths_by_the_viewed_workspace() 
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("file-0.rs · +2 −0"), "{shown}");
+    // A remote terminal has no local root to stat, so the letter stays
+    // changed.
+    assert!(shown.contains("    M  file-0.rs  +2 −0"), "{shown}");
+}
+
+#[test]
+fn a_remote_reported_deletion_draws_d_without_a_local_root() {
+    let (mut app, _script) = files_remote_scripted();
+    // The card holds the hub workspace path while git answers
+    // repository-relative ones, as production does.
+    app.on_line(changes_line(&[("/w/src/file-0.rs", 1, 0)]));
+    let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
+        panic!("opening the list sends its queries");
+    };
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises the
+    // numstat query plus the tracking line counts; in no promised order,
+    // so find each by its command.
+    assert_eq!(lines.len(), 2);
+    let requests: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .collect();
+    let numstat = requests
+        .iter()
+        .find(|req| {
+            req["args"]["command"]
+                == crate::changed_files_view::numstat_command(&["/w/src/file-0.rs"])
+        })
+        .unwrap_or_else(|| panic!("one request is the numstat query: {requests:?}"))
+        .clone();
+    let tracking = requests
+        .iter()
+        .find(|req| {
+            req["args"]["command"]
+                == crate::changed_files_view::tracking_command(&["/w/src/file-0.rs"])
+        })
+        .unwrap_or_else(|| panic!("one request is the tracking query: {requests:?}"))
+        .clone();
+    app.on_line(accepted_figures(
+        numstat["id"].as_str().unwrap_or_default(),
+        "2\t0\tsrc/file-0.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        tracking["id"].as_str().unwrap_or_default(),
+        "deleted\t\t/w/src/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    // No local root exists to stat: only the hub-reported deletion
+    // draws D.
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    D  file-0.rs  +2 −0"), "{shown}");
 }
 
 /// The workspace path of the first changed file.
@@ -3201,7 +3516,7 @@ fn returning_from_the_editor_resends_the_diff_and_the_numstat_lines() {
     open_files_from_totals(&mut app, 120, 35);
     open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
     let lines = app.changed_file_closed(&first_file(), Ok(()));
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     let requests = shell_requests(&lines);
     for request in &requests {
         assert_eq!(request["command"], "shell");
@@ -3216,6 +3531,10 @@ fn returning_from_the_editor_resends_the_diff_and_the_numstat_lines() {
         requests[1]["args"]["command"],
         numstat_command(&["src/file-0.rs"])
     );
+    assert_eq!(
+        requests[2]["args"]["command"],
+        crate::changed_files_view::tracking_command(&["src/file-0.rs"])
+    );
     assert_eq!(app.notices.newest(), None);
 }
 
@@ -3226,7 +3545,7 @@ fn a_failing_editor_return_notices_and_still_resends_both_lines() {
     open_files_from_totals(&mut app, 120, 35);
     open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
     let lines = app.changed_file_closed(&first_file(), Err("editor failed".to_owned()));
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     let requests = shell_requests(&lines);
     assert_eq!(
         requests[0]["args"]["command"],
@@ -3235,6 +3554,10 @@ fn a_failing_editor_return_notices_and_still_resends_both_lines() {
     assert_eq!(
         requests[1]["args"]["command"],
         numstat_command(&["src/file-0.rs"])
+    );
+    assert_eq!(
+        requests[2]["args"]["command"],
+        crate::changed_files_view::tracking_command(&["src/file-0.rs"])
     );
     assert_eq!(app.notices.newest(), Some("editor failed"));
 }
@@ -3246,7 +3569,7 @@ fn the_resent_requests_fill_the_diff_and_move_the_row_when_they_answer() {
     open_files_from_totals(&mut app, 120, 35);
     open_first_diff(&mut app, "old hunk\n");
     let lines = app.changed_file_closed(&first_file(), Ok(()));
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     let requests = shell_requests(&lines);
     let ids: Vec<&str> = requests
         .iter()
@@ -3264,7 +3587,178 @@ fn the_resent_requests_fill_the_diff_and_move_the_row_when_they_answer() {
     assert!(shown.contains("new hunk"), "{shown}");
     assert_eq!(app.on_edit(Edit::Left), Effect::None);
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+}
+
+#[test]
+fn an_empty_diff_answer_marks_the_path_so_its_row_turns_dim() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let (numstat_id, _) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "2\t0\tsrc/file-0.rs\n0\t1\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff_exited(
+        request["id"].as_str().unwrap_or_default(),
+        "Exit code 0.\n",
+        0,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(
+        shown.contains("No changes against HEAD: committed or undone since Fiber changed it."),
+        "{shown}"
+    );
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    let text: String = frame.rows[1].iter().map(|cell| cell.0.as_str()).collect();
+    assert_eq!(text, "    ·  file-0.rs  no changes");
+    assert!(
+        frame.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Muted))
+    );
+    // The unmarked file keeps its figures.
+    let text: String = frame.rows[2].iter().map(|cell| cell.0.as_str()).collect();
+    assert_eq!(text, "    D  file-1.rs  +0 −1");
+}
+
+#[test]
+fn a_later_diff_answer_unmarks_the_path_so_its_row_returns() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let (numstat_id, _) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "2\t0\tsrc/file-0.rs\n0\t1\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let request = command(app.on_key(Key::Enter, now()));
+    let id = request["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(accepted_diff_exited(&id, "Exit code 0.\n", 0));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    assert!(
+        screen(&app, 120, 35)
+            .0
+            .contains("    ·  file-0.rs  no changes")
+    );
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "@@ -1 +1 @@\n-old\n+new\n",
+    ));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    D  file-0.rs  +2 −0"), "{shown}");
+    assert!(!shown.contains("no changes"), "{shown}");
+}
+
+#[test]
+fn an_untracked_path_s_diff_answer_is_lines_so_its_row_never_dims() {
+    // An untracked file's diff reads through --no-index as lines, never
+    // empty, so its answer keeps the row on its line count as added.
+    let dir = fakes::TempDir::new("tui-numstat-untracked-lines");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\nb\nc\nd\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t4\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    assert!(screen(&app, 120, 35).0.contains("    A  file-0.rs  +4 −0"));
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "diff --git a/src/file-0.rs b/src/file-0.rs\n@@ -0,0 +1,4 @@\n+a\n+b\n+c\n+d\n",
+    ));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    A  file-0.rs  +4 −0"), "{shown}");
+    assert!(!shown.contains("no changes"), "{shown}");
+}
+
+#[test]
+fn returning_from_the_editor_with_an_empty_diff_marks_the_path_dim() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    let lines = app.changed_file_closed(&first_file(), Ok(()));
+    assert_eq!(lines.len(), 3);
+    let requests = shell_requests(&lines);
+    let id = requests[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        requests[2]["args"]["command"],
+        crate::changed_files_view::tracking_command(&["src/file-0.rs"])
+    );
+    app.on_line(accepted_diff_exited(&id, "Exit code 0.\n", 0));
+    let shown = screen(&app, 120, 35).0;
+    assert!(
+        shown.contains("No changes against HEAD: committed or undone since Fiber changed it."),
+        "{shown}"
+    );
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    ·  file-0.rs  no changes"), "{shown}");
+}
+
+#[test]
+fn a_locally_deleted_file_draws_d_in_removed() {
+    let dir = fakes::TempDir::new("tui-changed-files-deleted");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    let (numstat_id, _) = open_figures(&mut app, 120, 35);
+    // The presence read stays off until the figures answer arrives.
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
+    std::fs::remove_file(dir.path().join("src/file-0.rs"))
+        .unwrap_or_else(|error| panic!("delete workspace file: {error}"));
+    // The presence read runs at frame time, so no reopen is needed.
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    let text: String = frame.rows[1].iter().map(|cell| cell.0.as_str()).collect();
+    assert_eq!(text, "    D  file-0.rs  +1 −0");
+    assert!(matches!(
+        frame.rows[1][1].2,
+        crate::swapped::Ink::Role(crate::theme::Role::Removed)
+    ));
+    // Restoring the file flips its letter back to changed.
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\n")
+        .unwrap_or_else(|error| panic!("restore workspace file: {error}"));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
@@ -3309,7 +3803,7 @@ fn figures_answer_reaches_its_handler_and_settles_its_tag() {
     use crate::app::Waiting;
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 2);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     assert_eq!(app.outbox.waiting(&id), Some(Waiting::Figures));
     app.on_line(accepted_figures(
         &id,
@@ -3320,8 +3814,8 @@ fn figures_answer_reaches_its_handler_and_settles_its_tag() {
     ));
     assert_eq!(app.outbox.waiting(&id), None);
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
-    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-1.rs  +0 −3"), "{shown}");
 }
 
 #[test]
@@ -3329,19 +3823,230 @@ fn figures_refusal_settles_its_tag_and_keeps_the_card_figures() {
     use crate::app::Waiting;
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 1);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     assert_eq!(app.outbox.waiting(&id), Some(Waiting::Figures));
     app.on_line(rejected_diff(SESSION, &id, "hub refused"));
     assert_eq!(app.outbox.waiting(&id), None);
+    // The figures answer never arrives, so the row stays card and M.
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
+}
+
+#[test]
+fn the_tracking_query_runs_on_the_same_side_and_channel() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    assert_ne!(numstat_id, tracking_id);
+    assert_eq!(app.outbox.waiting(&numstat_id), Some(Waiting::Figures));
+    assert_eq!(app.outbox.waiting(&tracking_id), Some(Waiting::Figures));
+}
+
+#[test]
+fn the_fold_answers_in_either_order() {
+    for tracking_first in [false, true] {
+        let mut app = files_attached(120, 35);
+        many_changes(&mut app, 2);
+        let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+        let numstat = accepted_figures(
+            &numstat_id,
+            "2\t0\tsrc/file-0.rs\nExit code 0.\n",
+            0,
+            None,
+            false,
+        );
+        let tracking = accepted_figures(&tracking_id, "Exit code 0.\n", 0, None, false);
+        if tracking_first {
+            app.on_line(tracking);
+            // The figures answer is still missing: the rows hold.
+            assert!(screen(&app, 120, 35).0.contains("    M  file-0.rs  +2 −0"));
+            app.on_line(numstat);
+        } else {
+            app.on_line(numstat);
+            // The tracking answer is still missing: git figures show
+            // with M, and nothing joins no-diff yet.
+            let shown = screen(&app, 120, 35).0;
+            assert!(shown.contains("    D  file-0.rs  +2 −0"), "{shown}");
+            assert!(shown.contains("    D  file-1.rs  +1 −0"), "{shown}");
+            app.on_line(tracking);
+        }
+        let shown = screen(&app, 120, 35).0;
+        assert!(shown.contains("    D  file-0.rs  +2 −0"), "{shown}");
+        assert!(shown.contains("    ·  file-1.rs  no changes"), "{shown}");
+    }
+}
+
+#[test]
+fn a_clean_omitted_path_joins_no_diff_without_being_chosen() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "2\t0\tsrc/file-0.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    let dimmed: Vec<String> = frame
+        .rows
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.0.as_str()).collect())
+        .collect();
+    assert!(
+        dimmed.contains(&"    D  file-0.rs  +2 −0".to_owned()),
+        "{dimmed:?}"
+    );
+    assert!(
+        dimmed.contains(&"    ·  file-1.rs  no changes".to_owned()),
+        "{dimmed:?}"
+    );
+}
+
+#[test]
+fn a_deleted_path_with_a_row_draws_d() {
+    let dir = fakes::TempDir::new("tui-tracking-deleted");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "1\t0\tsrc/file-0.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "deleted\t\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    // The file exists locally: only the query-reported deletion draws D.
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_stale_tracking_answer_folds_nowhere() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (_, tracking_id) = open_figures(&mut app, 120, 35);
+    // A new view-open replaces the request: the late answer for the
+    // old id settles its tag but folds nowhere.
+    open_files_from_totals(&mut app, 120, 35);
+    assert_eq!(app.outbox.waiting(&tracking_id), Some(Waiting::Figures));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t9\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    assert_eq!(app.outbox.waiting(&tracking_id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(!shown.contains("no changes"), "{shown}");
+    assert!(!shown.contains("    A  file-0.rs"), "{shown}");
+}
+
+#[test]
+fn a_tracking_refusal_settles_its_tag_and_keeps_the_card_figures() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (_, tracking_id) = open_figures(&mut app, 120, 35);
+    assert_eq!(app.outbox.waiting(&tracking_id), Some(Waiting::Figures));
+    app.on_line(rejected_diff(SESSION, &tracking_id, "hub refused"));
+    assert_eq!(app.outbox.waiting(&tracking_id), None);
+    // Without tracking no class applies: the row stays card and M.
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    M  file-0.rs  +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_tracking_answer_ended_by_a_signal_keeps_the_card_figures() {
+    // `answered_tracking` rejects a signalled run, as with numstat:
+    // flipping `||` to `&&` accepts the signalled tracking and fails here.
+    // The numstat answer omits the file, so the presence read draws `D`:
+    // an accepted tracking would draw `A` instead.
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t1\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        Some("SIGKILL"),
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    D  file-0.rs  +1 −0"), "{shown}");
+    assert!(!shown.contains("    A  file-0.rs"), "{shown}");
+}
+
+#[test]
+fn a_refusal_for_another_command_keeps_the_tracking_query_pending() {
+    // `session_views_refused` clears only the matching tracking tag:
+    // flipping `==` to `!=` clears it on the wrong id and fails here.
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (numstat_id, tracking_id) = open_figures(&mut app, 120, 35);
+    app.on_line(rejected_diff(SESSION, "c_other", "wrong command"));
+    assert_eq!(
+        app.outbox.waiting(&tracking_id),
+        Some(Waiting::Figures),
+        "the tracking query stays pending after another command's refusal"
+    );
+    // The stale rejection leaves the live tracking request intact: the
+    // later tracking answer still folds. With `!=` the stale rejection
+    // would clear the live request and the tracking answer would fold
+    // nowhere, leaving the card figures with `D`.
+    app.on_line(accepted_figures(
+        &numstat_id,
+        "Exit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &tracking_id,
+        "untracked\t1\tsrc/file-0.rs\0\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("    A  file-0.rs  +1 −0"), "{shown}");
 }
 
 #[test]
 fn a_second_figures_answer_after_settle_changes_nothing() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 2);
-    let id = open_figures(&mut app, 120, 35);
+    let (id, _) = open_figures(&mut app, 120, 35);
     app.on_line(accepted_figures(
         &id,
         "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
@@ -3357,8 +4062,8 @@ fn a_second_figures_answer_after_settle_changes_nothing() {
         false,
     ));
     let shown = screen(&app, 120, 35).0;
-    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
-    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+    assert!(shown.contains("    D  file-0.rs  +5 −0"), "{shown}");
+    assert!(shown.contains("    D  file-1.rs  +0 −3"), "{shown}");
 }
 
 #[test]

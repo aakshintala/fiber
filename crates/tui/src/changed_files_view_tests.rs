@@ -2,7 +2,7 @@
 //! (`docs/tui.md`, "Swapped views").
 
 use fakes::MUST_SUCCEED_WITHIN;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -17,8 +17,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::{
-    Diff, answer, diff_command, first_hunk_line, frame, numstat_command, ranked, resolve_figures,
+    Diff, answer, diff_command, file_takes, first_hunk_line, frame, list_rows, numstat_command,
+    parse_tracking, ranked, resolve_figures, row_path, tracking_command,
 };
+use super::{ListRow, ResolvedFigures, Tracking};
 use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
@@ -52,6 +54,32 @@ fn row(frame: &crate::swapped::Frame, at: usize) -> String {
         .flatten()
         .map(|(text, _, _)| text.as_str())
         .collect()
+}
+
+/// The grouped list frame for `changes` with the card's figures, an
+/// empty no-diff set and no local root: what the view shows before the
+/// numstat answer.
+fn list_frame(changes: &BTreeMap<String, (u64, u64)>, list: List) -> crate::swapped::Frame {
+    frame(changes, None, None, list, &BTreeSet::new(), None, None, 0)
+}
+
+/// The grouped list frame over `resolved` figures with the card's
+/// changes, an empty no-diff set and no local root.
+fn resolved_frame(
+    changes: &BTreeMap<String, (u64, u64)>,
+    resolved: &ResolvedFigures,
+    list: List,
+) -> crate::swapped::Frame {
+    frame(
+        changes,
+        Some(resolved),
+        None,
+        list,
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    )
 }
 
 fn screen(app: &App) -> String {
@@ -91,15 +119,31 @@ fn app_with_files() -> App {
         .unwrap_or_default(),
     }));
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
-        panic!("opening the list sends the numstat query");
+        panic!("opening the list sends its queries");
     };
-    // `docs/tui.md`, "Swapped views" promises one numstat query, run when the view opens.
-    assert_eq!(lines.len(), 1);
-    let request: serde_json::Value = serde_json::from_str(&lines[0])
-        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    // `docs/tui.md`, "Swapped views" Changed files Figures promises one
+    // `git diff --numstat HEAD` when the view opens, and the tracking query
+    // carries the untracked line counts Figures requires; in no promised order.
+    assert_eq!(lines.len(), 2);
+    let mut got: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|error| panic!("shell request JSON: {error}"))["args"]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("shell command"))
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        numstat_command(&["src/a.rs", "src/b.rs"]),
+        tracking_command(&["src/a.rs", "src/b.rs"]),
+    ];
+    want.sort();
     assert_eq!(
-        request["args"]["command"],
-        numstat_command(&["src/a.rs", "src/b.rs"])
+        got, want,
+        "the view-open sends the numstat and the tracking"
     );
     app
 }
@@ -132,20 +176,401 @@ fn app_with_diff() -> App {
 }
 
 #[test]
-fn a_file_row_is_its_path_bold_then_dim_dot_added_and_removed() {
+fn files_group_by_folder_in_path_order_with_top_level_under_dot_slash() {
+    let card = changes(&[
+        ("z.rs", 1, 0),
+        ("src/b.rs", 2, 0),
+        ("delegate/src/session/a.rs", 3, 0),
+        ("delegate/src/c.rs", 4, 0),
+        ("src/a.rs", 5, 0),
+    ]);
+    // `docs/tui.md`, "Swapped views" Changed files Folders promises this
+    // order: each folder in path order with its files under it in name
+    // order, top-level files under "./".
+    assert_eq!(
+        list_rows(&card, None, None),
+        [
+            ListRow::Folder("./".to_owned()),
+            ListRow::File("z.rs".to_owned()),
+            ListRow::Folder("delegate/src/".to_owned()),
+            ListRow::File("delegate/src/c.rs".to_owned()),
+            ListRow::Folder("delegate/src/session/".to_owned()),
+            ListRow::File("delegate/src/session/a.rs".to_owned()),
+            ListRow::Folder("src/".to_owned()),
+            ListRow::File("src/a.rs".to_owned()),
+            ListRow::File("src/b.rs".to_owned()),
+            ListRow::Rule,
+        ]
+    );
+}
+
+#[test]
+fn displayed_paths_strip_the_workspace_root_but_mapping_keeps_the_card_path() {
+    let dir = fakes::TempDir::new("tui-changed-files-display-root");
+    let absolute = dir
+        .path()
+        .join("src/a.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 4, 2)]);
+    let resolved = resolve_figures(
+        &card,
+        Some(""),
+        &BTreeMap::new(),
+        None,
+        Some(dir.path()),
+        None,
+    );
+    let frame = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    assert_eq!(row(&frame, 0), "src/");
+    assert_eq!(row(&frame, 1), "    D  a.rs  +4 −2");
+    // Selection and Enter read the card's own path, not the display.
+    let plan = list_rows(&card, Some(dir.path()), None);
+    assert_eq!(row_path(&plan, 1), Some(absolute.as_str()));
+}
+
+#[test]
+fn displayed_paths_fall_back_to_the_viewed_workspace_without_a_local_root() {
+    let dir = fakes::TempDir::new("tui-changed-files-display-viewed");
+    let absolute = dir
+        .path()
+        .join("top.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 1, 0)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        Some(dir.path()),
+        0,
+    );
+    // A remote terminal has no local root to stat, so the letter stays
+    // changed while the name shows workspace-relative.
+    assert_eq!(row(&frame, 0), "./");
+    assert_eq!(row(&frame, 1), "    M  top.rs  +1 −0");
+}
+
+#[test]
+fn a_path_outside_every_root_shows_whole() {
+    let dir = fakes::TempDir::new("tui-changed-files-display-outside");
+    let card = changes(&[("/elsewhere/f.rs", 2, 1)]);
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), None, None, None);
+    let frame = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    assert_eq!(row(&frame, 0), "/elsewhere/");
+    assert_eq!(row(&frame, 1), "    D  f.rs  +2 −1");
+}
+
+#[test]
+fn an_empty_change_set_lists_no_rows_and_zero_totals() {
+    let frame = list_frame(&changes(&[]), List::default());
+    assert!(frame.rows.is_empty());
+    assert_eq!(frame.below, ["0 files  +0 −0"]);
+}
+
+#[test]
+fn a_file_row_shows_its_letter_name_and_right_aligned_figures() {
     use crate::swapped::Ink;
     use crate::theme::Role;
-    let frame = frame(&changes(&[("src/a.rs", 4, 2)]), None, None, List::default());
+    let frame = list_frame(&changes(&[("src/a.rs", 4, 2)]), List::default());
+    // The folder row, the file row, then the rule above the totals.
+    assert_eq!(frame.rows.len(), 3);
+    assert_eq!(frame.rows[0], [("src/".to_owned(), None, Ink::Muted)]);
     assert_eq!(
-        frame.rows[0],
+        frame.rows[1],
         [
-            ("src/a.rs".to_owned(), None, Ink::Heading),
-            (" · ".to_owned(), None, Ink::Muted),
+            ("    ".to_owned(), None, Ink::Plain),
+            ("M  ".to_owned(), None, Ink::Role(Role::Attention)),
+            ("a.rs".to_owned(), None, Ink::Heading),
+            ("  ".to_owned(), None, Ink::Plain),
             ("+4".to_owned(), None, Ink::Role(Role::Added)),
             (" ".to_owned(), None, Ink::Plain),
             ("−2".to_owned(), None, Ink::Role(Role::Removed)),
         ]
     );
+    assert_eq!(row(&frame, 1), "    M  a.rs  +4 −2");
+}
+
+#[test]
+fn figure_widths_pad_short_counts_to_the_widest() {
+    // One, two and three digit counts: the added column spans the
+    // widest "+N", the removed column the widest "−N".
+    let card = changes(&[("a.rs", 9, 0), ("b.rs", 10, 1), ("c.rs", 100, 10)]);
+    let frame = list_frame(&card, List::default());
+    assert_eq!(row(&frame, 1), "    M  a.rs    +9  −0");
+    assert_eq!(row(&frame, 2), "    M  b.rs   +10  −1");
+    assert_eq!(row(&frame, 3), "    M  c.rs  +100 −10");
+    assert_eq!(frame.below, ["3 files  +119 −11"]);
+}
+
+#[test]
+fn letters_mark_untracked_added_missing_deleted_and_otherwise_changed() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let dir = fakes::TempDir::new("tui-changed-files-letters");
+    std::fs::write(dir.path().join("kept.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("write kept file: {error}"));
+    std::fs::write(dir.path().join("staged.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("write staged file: {error}"));
+    let card = changes(&[
+        ("gone.rs", 2, 0),
+        ("kept.rs", 1, 0),
+        ("new.rs", 3, 0),
+        ("staged.rs", 5, 0),
+    ]);
+    let mut figures = BTreeMap::new();
+    figures.insert("gone.rs".to_owned(), (2, 0));
+    figures.insert("kept.rs".to_owned(), (1, 0));
+    figures.insert("new.rs".to_owned(), (3, 0));
+    figures.insert("staged.rs".to_owned(), (5, 0));
+    let mut untracked = BTreeSet::new();
+    untracked.insert("new.rs".to_owned());
+    let mut added = BTreeSet::new();
+    added.insert("staged.rs".to_owned());
+    let resolved = ResolvedFigures {
+        figures,
+        untracked,
+        added,
+        deleted: BTreeSet::new(),
+        dim: BTreeSet::new(),
+    };
+    let lettered = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    // "staged.rs" (9) is widest: the shorter names pad to share the
+    // figures column.
+    assert_eq!(row(&lettered, 1), "    D  gone.rs    +2 −0");
+    assert_eq!(lettered.rows[1][1].2, Ink::Role(Role::Removed));
+    assert_eq!(row(&lettered, 2), "    M  kept.rs    +1 −0");
+    assert_eq!(lettered.rows[2][1].2, Ink::Role(Role::Attention));
+    assert_eq!(row(&lettered, 3), "    A  new.rs     +3 −0");
+    assert_eq!(lettered.rows[3][1].2, Ink::Role(Role::Added));
+    assert_eq!(row(&lettered, 4), "    A  staged.rs  +5 −0");
+    assert_eq!(lettered.rows[4][1].2, Ink::Role(Role::Added));
+    // Restoring the deleted file flips its letter back to changed.
+    std::fs::write(dir.path().join("gone.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("restore deleted file: {error}"));
+    let restored = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    assert_eq!(row(&restored, 1), "    M  gone.rs    +2 −0");
+}
+
+#[test]
+fn a_missing_file_without_a_local_root_stays_changed() {
+    let card = changes(&[("gone.rs", 2, 0)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(row(&frame, 1), "    M  gone.rs  +2 −0");
+}
+
+#[test]
+fn the_focused_name_draws_bold_accent_with_an_accent_gutter_mark() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
+    let mut list = List::gutter_accent();
+    list.select(2, 4, 24);
+    let accented = frame(&card, None, None, list, &BTreeSet::new(), None, None, 0);
+    // The unfocused file row keeps its heading name.
+    assert_eq!(accented.rows[1][2].2, Ink::Heading);
+    assert_eq!(accented.rows[2][2].2, Ink::Bold(Role::Accent));
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&accented, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 3)].symbol(), "›");
+    assert_eq!(buf[(0, 3)].fg, Role::Accent.color());
+    // A plain gutter list keeps the uncoloured mark on the same row.
+    let mut plain = List::gutter();
+    plain.select(2, 4, 24);
+    let unaccented = frame(&card, None, None, plain, &BTreeSet::new(), None, None, 0);
+    assert_eq!(unaccented.rows[2][2].2, Ink::Heading);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&unaccented, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 3)].symbol(), "›");
+    assert_eq!(buf[(0, 3)].fg, ratatui::style::Color::Reset);
+}
+
+#[test]
+fn a_blurred_accent_list_draws_no_accent_name_or_mark() {
+    use crate::swapped::Ink;
+    let card = changes(&[("src/a.rs", 4, 2)]);
+    let frame = frame(
+        &card,
+        None,
+        None,
+        List::gutter_accent().blur(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(frame.rows[1][2].2, Ink::Heading);
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&frame, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 2)].symbol(), " ");
+}
+
+#[test]
+fn folder_and_rule_rows_hold_no_path_while_file_rows_do() {
+    let card = changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)]);
+    let plan = list_rows(&card, None, None);
+    assert_eq!(row_path(&plan, 0), None);
+    assert_eq!(row_path(&plan, 1), Some("top.rs"));
+    assert_eq!(row_path(&plan, 2), None);
+    assert_eq!(row_path(&plan, 3), Some("src/b.rs"));
+    assert_eq!(row_path(&plan, 4), None);
+    assert_eq!(row_path(&plan, 5), None);
+}
+
+#[test]
+fn file_takes_names_the_file_rows_only() {
+    assert_eq!(
+        file_takes(
+            &changes(&[("src/b.rs", 1, 0), ("top.rs", 2, 0)]),
+            None,
+            None
+        ),
+        [1, 3]
+    );
+    assert!(file_takes(&changes(&[]), None, None).is_empty());
+    assert_eq!(file_takes(&changes(&[("top.rs", 2, 0)]), None, None), [1]);
+}
+
+#[test]
+fn totals_count_files_not_folders_and_the_rule_spans_the_content() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 3)]);
+    let frame = list_frame(&card, List::default());
+    assert_eq!(frame.rows.len(), 4);
+    assert_eq!(frame.below, ["2 files  +5 −5"]);
+    let widest = [0, 1, 2]
+        .iter()
+        .map(|at| crate::text::width(&row(&frame, *at)))
+        .max()
+        .unwrap_or(0);
+    assert_eq!(frame.rows[3][0].0, "─".repeat(widest));
+    assert_eq!(frame.rows[3][0].2, Ink::Role(Role::Rule));
+}
+
+#[test]
+fn file_rows_pad_names_to_share_the_figures_column() {
+    // `docs/tui.md`, "Swapped views" Changed files promises file figures
+    // right-aligned in one column. With different name widths the figures
+    // must still start at the same column; without the shared name width
+    // the shorter name's figures sit left. Flipping to unpadded names
+    // fails here.
+    let card = changes(&[("src/a.rs", 4, 2), ("src/longer.rs", 1, 0)]);
+    let frame = list_frame(&card, List::default());
+    // "a.rs" (4) pads to "longer.rs" (9), so both figures start together.
+    assert_eq!(row(&frame, 1), "    M  a.rs       +4 −2");
+    assert_eq!(row(&frame, 2), "    M  longer.rs  +1 −0");
+    let figures_at = |at: usize| {
+        row(&frame, at)
+            .find('+')
+            .unwrap_or_else(|| panic!("figures in row {at}"))
+    };
+    assert_eq!(figures_at(1), figures_at(2));
+}
+
+#[test]
+fn the_list_footer_names_file_and_open_in_editor_with_bold_keys() {
+    use crate::swapped::Ink;
+    use ratatui::style::{Modifier, Style};
+    let frame = list_frame(&changes(&[("src/a.rs", 4, 2)]), List::default());
+    assert_eq!(frame.footer, "↑↓ file · Ctrl+G open in editor");
+    let chrome = frame.chrome.expect("the list carries styled keys");
+    assert!(chrome.top.is_empty());
+    assert!(chrome.draft.is_none());
+    let text: String = chrome
+        .footer
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect();
+    assert_eq!(text, "↑↓ file · Ctrl+G open in editor");
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    assert_eq!(chrome.footer[0].1, bold);
+    assert_eq!(chrome.footer[1].1, Ink::Muted.style());
+    assert_eq!(chrome.footer[2].1, bold);
+    assert_eq!(chrome.footer[3].1, Ink::Muted.style());
+}
+
+#[test]
+fn a_no_diff_row_stays_dim_with_no_changes_where_the_figures_go() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("src/a.rs", 4, 2)]);
+    let mut no_diff = BTreeSet::new();
+    no_diff.insert("src/a.rs".to_owned());
+    let dimmed = frame(&card, None, None, List::default(), &no_diff, None, None, 0);
+    assert_eq!(row(&dimmed, 1), "    ·  a.rs  no changes");
+    assert!(
+        dimmed.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, Ink::Muted))
+    );
+    assert_eq!(dimmed.below, ["1 file  +4 −2"]);
+    // Focus marks the gutter but leaves the dim row alone.
+    let mut list = List::gutter_accent();
+    list.select(1, 3, 24);
+    let focused = frame(&card, None, None, list, &no_diff, None, None, 0);
+    assert!(
+        focused.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, Ink::Muted))
+    );
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::swapped::render(&focused, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 2)].symbol(), "›");
+    assert_eq!(buf[(0, 2)].fg, Role::Accent.color());
 }
 
 #[test]
@@ -330,19 +755,23 @@ fn resolve_figures_prefers_git_counts_untracked_lines_then_card() {
     let answered = "7\t1\tsrc/a.rs\n-\t-\tbin/x\n";
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let displayed = resolve_figures(&card, Some(answered), &lines, None, None);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let displayed = resolve_figures(&card, Some(answered), &lines, Some(&parsed), None, None);
     assert_eq!(displayed.figures.get("src/a.rs"), Some(&(7, 1)));
     // A binary path keeps the card's figures.
     assert_eq!(displayed.figures.get("bin/x"), Some(&(1, 1)));
     // An answered-but-omitted path resolves to its line count as added.
     assert_eq!(displayed.figures.get("new.txt"), Some(&(3, 0)));
-    // An answered-but-omitted and uncounted path keeps the card's figures.
+    // An answered-but-omitted and untracked-absent path keeps the card's
+    // figures and joins no-diff.
     assert_eq!(displayed.figures.get("gone.txt"), Some(&(2, 0)));
-    // Only the counted omitted path draws the untracked row form.
+    assert!(displayed.dim.contains("gone.txt"));
+    // Only the tracking-untracked path draws the untracked row form.
     assert!(displayed.untracked.contains("new.txt"));
     assert!(!displayed.untracked.contains("gone.txt"));
     assert!(!displayed.untracked.contains("bin/x"));
     assert!(!displayed.untracked.contains("src/a.rs"));
+    assert!(!displayed.dim.contains("new.txt"));
 }
 
 #[test]
@@ -351,14 +780,50 @@ fn resolve_figures_without_an_answer_keeps_the_card() {
     let mut lines = BTreeMap::new();
     lines.insert("src/a.rs".to_owned(), 9u64);
     assert_eq!(
-        resolve_figures(&card, None, &lines, None, None).figures,
+        resolve_figures(&card, None, &lines, None, None, None).figures,
         card
     );
     assert!(
-        resolve_figures(&card, None, &lines, None, None)
+        resolve_figures(&card, None, &lines, None, None, None)
             .untracked
             .is_empty()
     );
+    assert!(
+        resolve_figures(&card, None, &lines, None, None, None)
+            .dim
+            .is_empty()
+    );
+}
+
+/// Runs a shell `command` in `root`, returning its stdout: the numstat
+/// and tracking queries run the same way over the same paths, so the
+/// shell watching lives here once.
+fn shell_out(command: &str, root: &std::path::Path) -> String {
+    let mut child = Command::new("/bin/sh");
+    child
+        .args(["-c", command])
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = child
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn shell command: {error}"));
+    let watchdog = fakes::Watchdog::matching(command);
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let output = child
+            .wait_with_output()
+            .unwrap_or_else(|error| panic!("wait for shell command: {error}"));
+        done.send(output).unwrap_or(());
+    });
+    let output = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .expect("waited for the shell command");
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
+    let stdout = String::from_utf8(output.stdout)
+        .unwrap_or_else(|error| panic!("shell output was not UTF-8: {error}"));
+    assert!(output.status.success(), "shell command failed: {stdout}");
+    stdout
 }
 
 #[test]
@@ -389,39 +854,135 @@ fn numstat_command_output_parses_and_resolves_against_git() {
     std::fs::write(root.join("new.txt"), "x\ny\nz\n")
         .unwrap_or_else(|error| panic!("write new.txt: {error}"));
 
-    let command = numstat_command(&["a.rs", "new.txt"]);
-    let mut child = Command::new("/bin/sh");
-    child
-        .args(["-c", command.as_str()])
-        .current_dir(root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = child
-        .spawn()
-        .unwrap_or_else(|error| panic!("spawn numstat command: {error}"));
-    let watchdog = fakes::Watchdog::matching(&command);
-    let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || {
-        let output = child
-            .wait_with_output()
-            .unwrap_or_else(|error| panic!("wait for numstat command: {error}"));
-        done.send(output).unwrap_or(());
-    });
-    let output = Deadline::after(Duration::from_secs(10))
-        .recv(&finished)
-        .expect("waited for the shell numstat command");
-    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
-    let stdout = String::from_utf8(output.stdout)
-        .unwrap_or_else(|error| panic!("numstat output was not UTF-8: {error}"));
-    assert!(output.status.success(), "numstat failed: {stdout}");
+    let stdout = shell_out(&numstat_command(&["a.rs", "new.txt"]), root);
     // The card's sums are deliberately wrong: the resolved figures
     // must be git's, not the card's.
     let card = changes(&[("a.rs", 5, 5), ("new.txt", 9, 9)]);
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let displayed = resolve_figures(&card, Some(&stdout), &lines, None, None);
+    let displayed = resolve_figures(&card, Some(&stdout), &lines, None, None, None);
     assert_eq!(displayed.figures.get("a.rs"), Some(&(2, 1)));
-    assert_eq!(displayed.figures.get("new.txt"), Some(&(3, 0)));
+    // Without tracking no class applies: the omitted path keeps the
+    // card's figures with no letter and no no-diff marking.
+    assert_eq!(displayed.figures.get("new.txt"), Some(&(9, 9)));
+    assert!(displayed.untracked.is_empty());
+    assert!(displayed.dim.is_empty());
+    // The tracking query runs the same way over the same paths: the
+    // modified file stays clean, the untracked one carries its counts.
+    let tracked = shell_out(&tracking_command(&["a.rs", "new.txt"]), root);
+    let parsed = tracking(&tracked);
+    let resolved = resolve_figures(&card, Some(&stdout), &lines, Some(&parsed), None, None);
+    assert_eq!(resolved.figures.get("a.rs"), Some(&(2, 1)));
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(3, 0)));
+    assert!(resolved.untracked.contains("new.txt"));
+    assert!(resolved.dim.is_empty());
+}
+
+#[test]
+fn tracking_command_counts_a_final_unterminated_line_as_one() {
+    // `issue-4592.md:70` requires one added line for an untracked file;
+    // `wc -l` reads 0 for `one` with no trailing newline, so the query
+    // uses `awk 'END{print NR}'`. Flipping back to `wc -l` fails here.
+    let dir = fakes::TempDir::new("tui-changed-files-unterminated");
+    let root = dir.path();
+    let setup = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    setup(&["init", "-q"]);
+    setup(&["config", "user.email", "fiber@example.invalid"]);
+    setup(&["config", "user.name", "Fiber test"]);
+    std::fs::write(root.join("one.txt"), "one")
+        .unwrap_or_else(|error| panic!("write one.txt: {error}"));
+    let tracked = shell_out(&tracking_command(&["one.txt"]), root);
+    let parsed = tracking(&tracked);
+    assert!(parsed.untracked.contains("one.txt"));
+    assert_eq!(parsed.counts.get("one.txt"), Some(&1u64));
+    let card = changes(&[("one.txt", 9, 9)]);
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    assert_eq!(resolved.figures.get("one.txt"), Some(&(1, 0)));
+}
+
+#[test]
+fn a_committed_file_reply_with_only_the_closing_line_reads_empty() {
+    // The shell appends its closing "Exit code N." line to the
+    // command's own output: stripped, the committed file's reply reads
+    // empty, never "Exit code 0.".
+    assert_eq!(
+        answer(Some(&shell("Exit code 0.\n", Some(0), None))),
+        Diff::Empty
+    );
+    assert_eq!(
+        answer(Some(&shell("Exit code 0.", Some(0), None))),
+        Diff::Empty
+    );
+}
+
+#[test]
+fn a_real_diff_keeps_its_hunks_without_the_closing_line() {
+    assert_eq!(
+        answer(Some(&shell(
+            "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\nExit code 1.\n",
+            Some(1),
+            None,
+        ))),
+        Diff::Lines {
+            lines: vec![
+                "diff --git a/a b/a".to_owned(),
+                "@@ -1 +1 @@".to_owned(),
+                "-old".to_owned(),
+                "+new".to_owned(),
+            ],
+            cut: None,
+        }
+    );
+}
+
+#[test]
+fn only_the_answer_s_own_closing_line_strips() {
+    // A closing line naming another exit is the diff's own text.
+    assert_eq!(
+        answer(Some(&shell("diff line\nExit code 0.\n", Some(1), None))),
+        Diff::Lines {
+            lines: vec!["diff line".to_owned(), "Exit code 0.".to_owned()],
+            cut: None,
+        }
+    );
+}
+
+#[test]
+fn no_exit_code_text_reaches_any_diff_frame() {
+    let answered = answer(Some(&shell(
+        "diff --git a/a b/a\n+new\nExit code 1.\n",
+        Some(1),
+        None,
+    )));
+    let frame = frame(
+        &changes(&[("a", 1, 0)]),
+        None,
+        Some(("a", &answered)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert!(
+        frame
+            .rows
+            .iter()
+            .flatten()
+            .all(|(text, _, _)| !text.contains("Exit code")),
+        "{frame:?}"
+    );
 }
 
 #[test]
@@ -499,65 +1060,102 @@ fn a_missing_or_non_shell_answer_cannot_be_read() {
 #[test]
 fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let changes = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
-    let list = frame(&changes, None, None, List::default());
+    let list = list_frame(&changes, List::default());
     assert_eq!(list.title, "Changed files");
-    assert_eq!(row(&list, 0), "src/a.rs · +4 −2");
-    assert_eq!(row(&list, 1), "src/b.rs · +1 −0");
-    assert_eq!(list.below, ["2 files changed  +5 −2"]);
-    assert_eq!(
-        list.footer,
-        "↑↓ move · Enter show diff · Ctrl+G edits · Esc close"
-    );
-    let remote_list = frame(&changes, None, None, List::default());
-    assert_eq!(
-        remote_list.footer,
-        "↑↓ move · Enter show diff · Ctrl+G edits · Esc close"
-    );
+    assert_eq!(list.command, "diff against HEAD");
+    assert_eq!(row(&list, 0), "src/");
+    assert_eq!(row(&list, 1), "    M  a.rs  +4 −2");
+    assert_eq!(row(&list, 2), "    M  b.rs  +1 −0");
+    assert!(row(&list, 3).chars().all(|cell| cell == '─'));
+    assert_eq!(list.below, ["2 files  +5 −2"]);
+    assert_eq!(list.footer, "↑↓ file · Ctrl+G open in editor");
 
     let reading = frame(
         &changes,
         None,
         Some(("src/a.rs", &Diff::Reading)),
         List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
     );
     assert_eq!(
         reading.title,
         "Changed files › src/a.rs · diff against HEAD"
     );
-    assert_eq!(row(&reading, 0), "Reading the diff…");
+    assert_eq!(row(&reading, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(row(&reading, 1), "Reading the diff…");
 
     let diff = Diff::Lines {
         lines: vec!["+new".to_owned()],
         cut: None,
     };
-    let local_diff = frame(&changes, None, Some(("src/a.rs", &diff)), List::default());
-    assert_eq!(row(&local_diff, 0), "+new");
+    let local_diff = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(row(&local_diff, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(row(&local_diff, 1), "+new");
     assert_eq!(
         local_diff.footer,
         "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
     );
-    let remote_diff = frame(&changes, None, Some(("src/a.rs", &diff)), List::default());
+    let remote_diff = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
     assert_eq!(
         remote_diff.footer,
         "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
     );
+    let empty = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &Diff::Empty)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(row(&empty, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(
+        row(&empty, 1),
+        "No changes against HEAD: committed or undone since Fiber changed it."
+    );
+    assert!(
+        empty.rows[1]
+            .iter()
+            .all(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Muted))
+    );
+    assert_eq!(empty.rows.len(), 2);
+    let failed = Diff::Failed("denied".to_owned());
     assert_eq!(
         row(
             &frame(
                 &changes,
                 None,
-                Some(("src/a.rs", &Diff::Empty)),
+                Some(("src/a.rs", &failed)),
                 List::default(),
+                &BTreeSet::new(),
+                None,
+                None,
+                0
             ),
-            0
-        ),
-        "No changes against HEAD."
-    );
-    let failed = Diff::Failed("denied".to_owned());
-    assert_eq!(
-        row(
-            &frame(&changes, None, Some(("src/a.rs", &failed)), List::default(),),
-            0
+            1
         ),
         "denied"
     );
@@ -566,9 +1164,58 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         cut: Some("artifacts/full.diff".to_owned()),
     };
     assert_eq!(
-        frame(&changes, None, Some(("src/a.rs", &cut)), List::default(),).below,
+        frame(
+            &changes,
+            None,
+            Some(("src/a.rs", &cut)),
+            List::default(),
+            &BTreeSet::new(),
+            None,
+            None,
+            0
+        )
+        .below,
         ["Cut: the whole diff is in artifacts/full.diff"]
     );
+}
+
+#[test]
+fn open_in_editor_target_right_aligns_to_the_view_width() {
+    // `docs/tui.md`, "Swapped views" Changed files Hunks promises the
+    // editor target right-aligned. With a view width the gap pads the
+    // path row to that width; a fixed two-space gap leaves it short.
+    // Flipping back to the fixed gap fails here.
+    let changes = changes(&[("src/a.rs", 4, 2)]);
+    let diff = Diff::Lines {
+        lines: vec!["+new".to_owned()],
+        cut: None,
+    };
+    let wide = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        40,
+    );
+    let top = row(&wide, 0);
+    assert_eq!(crate::text::width(&top), 40);
+    assert!(top.starts_with("src/a.rs"));
+    assert!(top.ends_with("Open in editor ›"));
+    // A metrics width (0) keeps the old two-space gap.
+    let narrow = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(row(&narrow, 0), "src/a.rs  Open in editor ›");
 }
 
 #[test]
@@ -588,7 +1235,45 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
         None,
         Some(("src/a.rs", &diff)),
         List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
     )
+}
+
+#[test]
+fn the_diff_frame_shows_the_path_with_an_open_in_editor_target() {
+    use crate::swapped::{Ink, Spot};
+    use crate::theme::Role;
+    let diff = Diff::Lines {
+        lines: vec!["+new".to_owned()],
+        cut: None,
+    };
+    let frame = frame(
+        &changes(&[("src/a.rs", 1, 1)]),
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        &BTreeSet::new(),
+        None,
+        None,
+        0,
+    );
+    assert_eq!(
+        frame.rows[0],
+        [
+            ("src/a.rs".to_owned(), None, Ink::Heading),
+            ("  ".to_owned(), None, Ink::Plain),
+            (
+                "Open in editor ›".to_owned(),
+                Some(Spot::Cell(0, 1)),
+                Ink::Role(Role::Secondary),
+            ),
+        ]
+    );
+    assert_eq!(row(&frame, 0), "src/a.rs  Open in editor ›");
+    assert_eq!(row(&frame, 1), "+new");
 }
 
 #[test]
@@ -605,6 +1290,7 @@ fn the_diff_frame_drops_git_headers() {
     let texts: Vec<String> = frame
         .rows
         .iter()
+        .skip(1)
         .map(|cells| cells.iter().map(|(text, _, _)| text.as_str()).collect())
         .collect();
     assert_eq!(
@@ -620,22 +1306,22 @@ fn the_diff_frame_drops_git_headers() {
 #[test]
 fn the_diff_frame_has_a_gutter_from_the_hunk_header() {
     let frame = diff_frame_of(&["@@ -9 +10 @@", "-old", "+new"]);
-    let guttered: Vec<String> = frame.rows[1..]
+    let guttered: Vec<String> = frame.rows[2..]
         .iter()
         .map(|cells| cells.iter().map(|(text, _, _)| text.as_str()).collect())
         .collect();
     assert_eq!(guttered[0], " 9 -old");
     assert_eq!(guttered[1], "10 +new");
     // The gutter is dim; the hunk row is dim too.
-    assert!(matches!(frame.rows[1][0].2, crate::swapped::Ink::Muted));
-    assert!(matches!(frame.rows[0][1].2, crate::swapped::Ink::Muted));
+    assert!(matches!(frame.rows[2][0].2, crate::swapped::Ink::Muted));
+    assert!(matches!(frame.rows[1][1].2, crate::swapped::Ink::Muted));
 }
 
 #[test]
 fn a_paired_line_marks_its_words_with_ink_marked() {
     use crate::theme::Role;
     let frame = diff_frame_of(&["@@ -1 +1 @@", "-call foo(a);", "+call bar(a);"]);
-    let removed = &frame.rows[1];
+    let removed = &frame.rows[2];
     let marked: Vec<_> = removed
         .iter()
         .filter(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
@@ -646,7 +1332,7 @@ fn a_paired_line_marks_its_words_with_ink_marked() {
         marked[0].2,
         crate::swapped::Ink::Marked(Role::Removed)
     ));
-    let added = &frame.rows[2];
+    let added = &frame.rows[3];
     let marked: Vec<_> = added
         .iter()
         .filter(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
@@ -671,22 +1357,307 @@ fn an_unpaired_run_marks_nothing() {
 #[test]
 fn answered_rows_show_git_figures_and_the_untracked_row_form() {
     use crate::swapped::Ink;
+    use crate::theme::Role;
     let card = changes(&[("src/a.rs", 4, 2), ("new.txt", 4, 1)]);
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None, None);
-    let frame = frame(&card, Some(&resolved), None, List::default());
-    assert_eq!(row(&frame, 0), "src/a.rs · +7 −1");
-    assert_eq!(row(&frame, 1), "new.txt · untracked, wholly added");
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let resolved = resolve_figures(
+        &card,
+        Some("7\t1\tsrc/a.rs\n"),
+        &lines,
+        Some(&parsed),
+        None,
+        None,
+    );
+    let frame = resolved_frame(&card, &resolved, List::default());
+    assert_eq!(row(&frame, 0), "./");
+    assert_eq!(row(&frame, 1), "    A  new.txt  +3 −0");
     assert_eq!(
         frame.rows[1],
         [
+            ("    ".to_owned(), None, Ink::Plain),
+            ("A  ".to_owned(), None, Ink::Role(Role::Added)),
             ("new.txt".to_owned(), None, Ink::Heading),
-            (" · ".to_owned(), None, Ink::Muted),
-            ("untracked, wholly added".to_owned(), None, Ink::Muted),
+            ("  ".to_owned(), None, Ink::Plain),
+            ("+3".to_owned(), None, Ink::Role(Role::Added)),
+            (" ".to_owned(), None, Ink::Plain),
+            ("−0".to_owned(), None, Ink::Role(Role::Removed)),
         ]
     );
-    assert_eq!(frame.below, ["2 files changed  +10 −1"]);
+    assert_eq!(row(&frame, 2), "src/");
+    // "a.rs" pads to "new.txt" (7), so its figures share the column.
+    assert_eq!(row(&frame, 3), "    M  a.rs     +7 −1");
+    assert_eq!(frame.below, ["2 files  +10 −1"]);
+}
+
+fn tracking(body: &str) -> Tracking {
+    parse_tracking(body).unwrap_or_else(|| panic!("tracking parses: {body:?}"))
+}
+
+#[test]
+fn tracking_command_queries_each_listed_path_s_porcelain_state() {
+    let command = tracking_command(&["src/a.rs", "my file.rs"]);
+    assert!(command.starts_with("for p in "), "{command}");
+    assert!(command.contains("'src/a.rs'"), "{command}");
+    assert!(command.contains("'my file.rs'"), "{command}");
+    assert!(
+        command.contains("status --porcelain=v1 --no-renames"),
+        "{command}"
+    );
+    // `awk 'END{print NR}'` counts a final unterminated line, which
+    // `wc -l` misses (`issue-4592.md:70` requires one added line for it).
+    assert!(command.contains("awk 'END{print NR}'"), "{command}");
+    assert!(!command.contains("wc -l"), "{command}");
+    // One query per view-open: a single shell line, no chaining.
+    assert!(!command.contains("&&"), "{command}");
+    assert_eq!(command.matches("git ").count(), 1, "{command}");
+}
+
+#[test]
+fn tracking_command_quotes_embedded_quotes() {
+    let command = tracking_command(&["src/a'b.rs"]);
+    assert!(command.contains("'src/a'\\''b.rs'"), "{command}");
+}
+
+#[test]
+fn parse_tracking_reads_classes_counts_and_nothing_else() {
+    let parsed = tracking("untracked\t3\tnew.txt\0added\t\tstaged.rs\0deleted\t\tgone.rs\0");
+    assert!(parsed.untracked.contains("new.txt"));
+    assert_eq!(parsed.counts.get("new.txt"), Some(&3u64));
+    assert!(parsed.added.contains("staged.rs"));
+    assert!(parsed.deleted.contains("gone.rs"));
+    assert_eq!(parsed.untracked.len(), 1);
+    assert_eq!(parsed.added.len(), 1);
+    assert_eq!(parsed.deleted.len(), 1);
+    // Empty output (every path clean) is valid.
+    assert_eq!(parse_tracking(""), Some(Tracking::default()));
+    // The closing-line strip leaves a trailing newline fragment: valid.
+    let parsed = tracking("untracked\t3\tnew.txt\0\n");
+    assert!(parsed.untracked.contains("new.txt"));
+    assert_eq!(parsed.counts.get("new.txt"), Some(&3u64));
+}
+
+#[test]
+fn parse_tracking_rejects_garbage_records() {
+    for body in [
+        "bogus\t3\tnew.txt\0",
+        "untracked\tnan\tnew.txt\0",
+        "untracked\t3\0",
+        "untracked\tnew.txt\0",
+        "untracked\t3\tnew.txt\0garbage",
+        // Staged-new and deleted records carry no count: a count with them
+        // rejects the whole answer. Flipping either guard to `true` accepts
+        // these and fails here.
+        "added\t3\tstaged.rs\0",
+        "deleted\t0\tgone.rs\0",
+    ] {
+        assert_eq!(parse_tracking(body), None, "{body:?}");
+    }
+}
+
+#[test]
+fn resolve_folds_tracking_classes_with_numstat() {
+    let card = changes(&[
+        ("src/a.rs", 4, 2),
+        ("staged.rs", 1, 1),
+        ("gone.rs", 2, 0),
+        ("clean.rs", 0, 0),
+    ]);
+    let answered = "7\t1\tsrc/a.rs\n5\t0\tstaged.rs\n0\t3\tgone.rs\n";
+    let parsed = tracking("added\t\tstaged.rs\0deleted\t\tgone.rs\0");
+    let resolved = resolve_figures(
+        &card,
+        Some(answered),
+        &BTreeMap::new(),
+        Some(&parsed),
+        None,
+        None,
+    );
+    // Staged-new keeps numstat figures; only the letter is A.
+    assert_eq!(resolved.figures.get("staged.rs"), Some(&(5, 0)));
+    assert!(resolved.added.contains("staged.rs"));
+    // A reported deletion with a numstat row draws D.
+    assert_eq!(resolved.figures.get("gone.rs"), Some(&(0, 3)));
+    assert!(resolved.deleted.contains("gone.rs"));
+    // A tracked-but-omitted path joins no-diff without being chosen.
+    assert!(resolved.dim.contains("clean.rs"));
+    assert!(!resolved.untracked.contains("clean.rs"));
+    assert_eq!(resolved.figures.get("clean.rs"), Some(&(0, 0)));
+    // An ordinary row is unaffected.
+    assert_eq!(resolved.figures.get("src/a.rs"), Some(&(7, 1)));
+    assert!(!resolved.dim.contains("src/a.rs"));
+}
+
+#[test]
+fn resolve_marks_omitted_clean_paths_dim_and_keeps_untracked_counts() {
+    let card = changes(&[("new.txt", 4, 1), ("clean.rs", 0, 0), ("missing.rs", 2, 0)]);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    // Hub-side counts put the untracked row on its lines as added.
+    assert!(resolved.untracked.contains("new.txt"));
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(3, 0)));
+    // Omitted paths tracking does not call untracked join no-diff.
+    assert!(resolved.dim.contains("clean.rs"));
+    assert!(resolved.dim.contains("missing.rs"));
+    assert!(!resolved.untracked.contains("clean.rs"));
+    assert!(!resolved.untracked.contains("missing.rs"));
+    assert_eq!(resolved.figures.get("clean.rs"), Some(&(0, 0)));
+}
+
+#[test]
+fn resolve_sends_untracked_vanished_paths_to_no_diff() {
+    // Undone-new: tracking saw it untracked, but no count survived.
+    let card = changes(&[("gone-new.txt", 4, 1)]);
+    let parsed = tracking("untracked\t\tgone-new.txt\0");
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    assert!(!resolved.untracked.contains("gone-new.txt"));
+    assert!(resolved.dim.contains("gone-new.txt"));
+    assert_eq!(resolved.figures.get("gone-new.txt"), Some(&(4, 1)));
+}
+
+#[test]
+fn resolve_without_tracking_keeps_card_rows_and_no_dim() {
+    // Strict fallback: no tracking classes, no marking.
+    let card = changes(&[("new.txt", 4, 1), ("gone.txt", 2, 0)]);
+    let mut lines = BTreeMap::new();
+    lines.insert("new.txt".to_owned(), 3u64);
+    let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None, None, None);
+    assert!(!resolved.untracked.contains("new.txt"));
+    assert!(resolved.dim.is_empty());
+    assert!(resolved.added.is_empty());
+    assert!(resolved.deleted.is_empty());
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(4, 1)));
+    assert_eq!(resolved.figures.get("gone.txt"), Some(&(2, 0)));
+}
+
+#[test]
+fn resolve_without_an_answer_ignores_tracking() {
+    // No numstat answer yet: the rows keep the card's figures with no
+    // class, even when tracking names a class. Forcing `answered` to
+    // `true` folds the tracking and fails here.
+    let card = changes(&[("new.txt", 4, 1)]);
+    let parsed = tracking("untracked\t3\tnew.txt\0");
+    let resolved = resolve_figures(&card, None, &BTreeMap::new(), Some(&parsed), None, None);
+    assert!(!resolved.untracked.contains("new.txt"));
+    assert!(resolved.dim.is_empty());
+    assert_eq!(resolved.figures.get("new.txt"), Some(&(4, 1)));
+}
+
+#[test]
+fn resolve_prefers_dim_when_tracking_is_silent_despite_local_counts() {
+    // The numstat answer omits the path and tracking does not call it
+    // untracked: it joins no-diff, even when a local line count exists.
+    // Forcing `untracked.contains` to `true` marks it untracked and fails.
+    let card = changes(&[("clean.rs", 0, 0)]);
+    let parsed = tracking("untracked\t3\tother.txt\0");
+    let mut lines = BTreeMap::new();
+    lines.insert("clean.rs".to_owned(), 3u64);
+    let resolved = resolve_figures(&card, Some(""), &lines, Some(&parsed), None, None);
+    assert!(!resolved.untracked.contains("clean.rs"));
+    assert!(resolved.dim.contains("clean.rs"));
+    assert_eq!(resolved.figures.get("clean.rs"), Some(&(0, 0)));
+}
+
+#[test]
+fn resolve_keeps_added_without_numstat_out_of_dim() {
+    // The numstat answer omits a staged-new path tracking calls added:
+    // it keeps the card's figures with `A`, outside no-diff. Forcing
+    // `added.contains` to `false` sends it to no-diff and fails here.
+    let card = changes(&[("staged.rs", 1, 1)]);
+    let parsed = tracking("added\t\tstaged.rs\0");
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), Some(&parsed), None, None);
+    assert!(resolved.added.contains("staged.rs"));
+    assert!(!resolved.dim.contains("staged.rs"));
+    assert_eq!(resolved.figures.get("staged.rs"), Some(&(1, 1)));
+}
+
+#[test]
+fn staged_added_draws_a_with_numstat_figures() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let card = changes(&[("staged.rs", 1, 1)]);
+    let parsed = tracking("added\t\tstaged.rs\0");
+    let resolved = resolve_figures(
+        &card,
+        Some("5\t0\tstaged.rs\n"),
+        &BTreeMap::new(),
+        Some(&parsed),
+        None,
+        None,
+    );
+    let frame = resolved_frame(&card, &resolved, List::default());
+    assert_eq!(row(&frame, 1), "    A  staged.rs  +5 −0");
+    assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Added));
+}
+
+#[test]
+fn deleted_with_a_row_draws_d_even_when_present() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let dir = fakes::TempDir::new("tui-changed-files-tracking-deleted");
+    std::fs::write(dir.path().join("gone.rs"), "x\n")
+        .unwrap_or_else(|error| panic!("write counted file: {error}"));
+    let absolute = dir
+        .path()
+        .join("gone.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 2, 0)]);
+    let parsed = tracking(&format!("deleted\t\t{absolute}\0"));
+    let resolved = resolve_figures(
+        &card,
+        Some("0\t2\tgone.rs\n"),
+        &BTreeMap::new(),
+        Some(&parsed),
+        Some(dir.path()),
+        None,
+    );
+    let frame = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    assert_eq!(row(&frame, 1), "    D  gone.rs  +0 −2");
+    assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Removed));
+}
+
+#[test]
+fn rows_show_m_until_answers_arrive() {
+    let dir = fakes::TempDir::new("tui-changed-files-no-answers");
+    let card = changes(&[("gone.rs", 2, 0)]);
+    // No numstat answer yet: the presence read stays off, so the row
+    // shows the card's figures with M.
+    let unanswered = frame(
+        &card,
+        None,
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    assert_eq!(row(&unanswered, 1), "    M  gone.rs  +2 −0");
+    // The same missing path with an answer draws D.
+    let resolved = resolve_figures(&card, Some(""), &BTreeMap::new(), None, None, None);
+    let answered = frame(
+        &card,
+        Some(&resolved),
+        None,
+        List::default(),
+        &BTreeSet::new(),
+        Some(dir.path()),
+        None,
+        0,
+    );
+    assert_eq!(row(&answered, 1), "    D  gone.rs  +2 −0");
 }
 
 #[test]
@@ -734,7 +1705,14 @@ fn resolve_figures_matches_git_s_relative_paths_against_absolute_card_paths() {
         .to_owned();
     let card = changes(&[(absolute.as_str(), 4, 2)]);
     let lines = BTreeMap::new();
-    let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, Some(dir.path()), None);
+    let displayed = resolve_figures(
+        &card,
+        Some("7\t1\ta.rs\n"),
+        &lines,
+        None,
+        Some(dir.path()),
+        None,
+    );
     assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
     assert!(displayed.untracked.is_empty());
 }
@@ -751,7 +1729,14 @@ fn resolve_figures_matches_git_s_relative_paths_against_viewed_card_paths() {
     let card = changes(&[(absolute.as_str(), 4, 2)]);
     let lines = BTreeMap::new();
     // No launch workspace strips the hub card path; the viewed one does.
-    let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, None, Some(dir.path()));
+    let displayed = resolve_figures(
+        &card,
+        Some("7\t1\ta.rs\n"),
+        &lines,
+        None,
+        None,
+        Some(dir.path()),
+    );
     assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
     assert!(displayed.untracked.is_empty());
 }
