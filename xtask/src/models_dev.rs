@@ -773,13 +773,13 @@ pub(crate) fn generate(
             ));
         }
         for id in package.only.iter().copied() {
-            if !generated.iter().any(|model| model.0 == id) {
-                if !note_deprecated_reference(package, id, "only", &models, &mut left_out) {
-                    return Err(format!(
-                        "{}: only entry for `{id}` matches no generated model",
-                        stem(package)
-                    ));
-                }
+            if !generated.iter().any(|model| model.0 == id)
+                && !note_deprecated_reference(package, id, "only", &models, &mut left_out)
+            {
+                return Err(format!(
+                    "{}: only entry for `{id}` matches no generated model",
+                    stem(package)
+                ));
             }
         }
         for (id, table) in package
@@ -789,13 +789,13 @@ pub(crate) fn generate(
             .chain(package.by_model.iter().map(|entry| (entry.0, "by_model")))
             .chain(package.thinking.iter().map(|entry| (entry.0, "thinking")))
         {
-            if !generated.iter().any(|model| model.0 == id) {
-                if !note_deprecated_reference(package, id, table, &models, &mut left_out) {
-                    return Err(format!(
-                        "{}: table entry for `{id}` matches no generated model",
-                        stem(package)
-                    ));
-                }
+            if !generated.iter().any(|model| model.0 == id)
+                && !note_deprecated_reference(package, id, table, &models, &mut left_out)
+            {
+                return Err(format!(
+                    "{}: table entry for `{id}` matches no generated model",
+                    stem(package)
+                ));
             }
         }
         for (index, correction) in corrections.iter().enumerate() {
