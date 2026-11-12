@@ -1080,9 +1080,17 @@ impl Settings {
             None => false,
         };
         if changed {
-            self.said.clear();
-            self.focus = None;
-            self.place(ctx);
+            if self
+                .search
+                .as_ref()
+                .is_some_and(|search| search.query.is_empty())
+            {
+                self.clear_search(ctx);
+            } else {
+                self.said.clear();
+                self.focus = None;
+                self.place(ctx);
+            }
         }
     }
 
