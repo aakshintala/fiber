@@ -246,3 +246,13 @@ crates/main/tests/tool_calls/driver_shell_spill.rs	fiber-4674	plan	2026-11-12T05
 crates/worktree/src/list_tests.rs	fiber-4674	plan	2026-11-12T05:55:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/panel/quota_tests.rs	fiber-4674	plan	2026-11-12T05:55:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reload_tests.rs	fiber-4674	plan	2026-11-12T05:55:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/prompt/reviewer.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/reviewer_tests.rs	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/prompt_tests.rs	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/support/review.rs	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/review_jig.rs	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/review_sweep.rs	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/permissions.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/fakes.md	fiber-4699	plan	2026-11-12T05:57:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
