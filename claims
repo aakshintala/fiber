@@ -365,3 +365,4 @@ crates/tui/src/logout_view_tests.rs	fiber-4673	plan	2026-11-12T09:44:36Z	roundho
 crates/tui/src/login_logout_view.rs	fiber-4673	plan	2026-11-12T09:44:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/host/resolve.rs	fiber-4673	plan	2026-11-12T09:44:36Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/fake.rs	fiber-4716	plan	2026-11-12T09:51:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/prune.rs	fiber-4673	plan	2026-11-12T09:57:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
