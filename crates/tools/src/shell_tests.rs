@@ -1211,6 +1211,26 @@ fn with_cap_splits_its_share_and_leaves_the_shell_otherwise() {
     let capped = shell().with_cap(101).unwrap();
     assert_eq!(capped.bound(), Bound { start: 51, end: 50 });
     assert_eq!(capped.definition().name, "shell");
+
+    let dir = fakes::TempDir::new("fiber-shell-cap");
+    let configured = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_artifacts(dir.path().join("artifacts"));
+    let inner = configured.with_cap(usize::MAX).unwrap();
+    assert_eq!(
+        inner.bound(),
+        Bound {
+            start: usize::MAX,
+            end: 0
+        }
+    );
+    assert_eq!(
+        configured.bound(),
+        Bound {
+            start: 8192,
+            end: 8192
+        }
+    );
+    assert!(configured.artifacts.is_some());
 }
 
 #[test]
