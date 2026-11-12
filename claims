@@ -45,10 +45,6 @@ docs/tools.md	fiber-4628	plan	2026-11-11T15:24:01Z	Amoghs-MacBook-Pro:/Users/aak
 scripts/bug-red	fiber-4628	plan	2026-11-11T15:25:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/log/Cargo.toml	fiber-4628	plan	2026-11-11T16:46:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/Cargo.toml	fiber-4628	plan	2026-11-11T16:46:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-.github/workflows/journey-report.yml	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/test-journey-report	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md	fiber-3928	plan	2026-11-11T19:57:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-.github/workflows/ci.yml	fiber-3928	plan	2026-11-11T20:06:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/package.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/process/context.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/process/context/native.rs	fiber-4664	plan	2026-11-11T20:17:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -168,11 +164,6 @@ crates/extensions/src/search_tests.rs	fiber-4664	plan	2026-11-11T23:03:29Z	Amogh
 crates/extensions/src/process/calls/decode/model.rs	fiber-4664	plan	2026-11-11T23:20:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/code-quality.md	fiber-4260	plan	2026-11-11T23:50:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/delegate/message/resume.rs	fiber-4260	plan	2026-11-12T00:26:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-.github/workflows/release.yml	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/main.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/tests/cli.rs	fiber-3928	plan	2026-11-12T00:45:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/journey_streak.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
-xtask/src/journey_streak_tests.rs	fiber-3928	grant	2026-11-12T00:47:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3928	
 docs/architecture.md	fiber-4628	plan	2026-11-12T01:03:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/contract/src/events.rs	fiber-4260	grant	2026-11-12T01:03:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/jobs/src/timing_tests.rs	fiber-4260	grant	2026-11-12T01:39:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
