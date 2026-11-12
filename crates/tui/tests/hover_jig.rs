@@ -20,7 +20,7 @@ use std::process::Output;
 /// minutes in debug, so the test passes an explicit shorter count. Twenty
 /// reports run the exchange in about 0.9 s alone, so at five times that
 /// cost, the contention that pushed fifty reports (about 2.0 s alone) past
-/// the 20 s whole-subsystem hang guard, this still finishes inside half the guard.
+/// the 20 s whole-subsystem hang guard, this still finishes inside half the 20 s guard.
 const REPORTS: &str = "20";
 
 /// A usage error: exit code 2 with the usage on stderr and no report, so
