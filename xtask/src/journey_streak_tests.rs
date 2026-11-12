@@ -157,6 +157,47 @@ fn failed_history_view_lookup_leaves_no_companion() {
 }
 
 #[test]
+fn skipped_producer_does_not_contribute_to_history() {
+    let dir = TempDir::new("journey-streak-skipped-producer");
+    dir.write("failures.txt", "qa\n");
+    dir.write(
+        "runs.json",
+        r#"[
+            {"databaseId":1000,"headSha":"0123456789abcdef0123456789abcdef01234567","event":"push","headBranch":"main","conclusion":"failure"},
+            {"databaseId":999,"headSha":"abcdef0123456789abcdef0123456789abcdef01","event":"push","headBranch":"main","conclusion":"failure"}
+        ]"#,
+    );
+    dir.write(
+        "history/1000/view.json",
+        r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]}"#,
+    );
+    dir.write("history/1000/journey-failures.txt", "qa\n");
+    dir.write(
+        "history/999/view.json",
+        r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"skipped"}]}"#,
+    );
+    dir.write("history/999/journey-failures.txt", "qa\n");
+    let args = [
+        "--current-id",
+        "1000",
+        "--current-sha",
+        "0123456789abcdef0123456789abcdef01234567",
+        "--failures",
+        dir.path().join("failures.txt").to_str().unwrap(),
+        "--runs",
+        dir.path().join("runs.json").to_str().unwrap(),
+        "--history-dir",
+        dir.path().join("history").to_str().unwrap(),
+        "--output",
+        dir.path().join("journey-streaks.json").to_str().unwrap(),
+    ]
+    .map(str::to_owned);
+
+    assert!(compute(&args).unwrap());
+    assert!(!dir.path().join("journey-streaks.json").exists());
+}
+
+#[test]
 fn skipped_producer_is_ignored() {
     let sha = "0123456789abcdef0123456789abcdef01234567";
     assert_eq!(
