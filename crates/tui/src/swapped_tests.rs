@@ -7,13 +7,14 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::{
     Chrome, Frame, Ink, Inline, List, Spot, about, compact, render, rows_height, step_target,
-    wheel_targets_window, wheel_window, wrap_step,
+    wheel_targets_window, wheel_window, wrap_cursor, wrap_step,
 };
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::rows::Join;
 use crate::theme::Role;
 
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 #[test]
 fn wrap_step_handles_empty_single_and_both_directions() {
     assert_eq!(wrap_step(7, 0, 1), 7);
@@ -25,6 +26,15 @@ fn wrap_step_handles_empty_single_and_both_directions() {
     assert_eq!(wrap_step(1, 4, -6), 3);
 }
 
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn wrap_cursor_wraps_and_keeps_empty_rows() {
+    assert_eq!(wrap_cursor::<usize>(&[], 3, true), 3);
+    assert_eq!(wrap_cursor(&[2, 5, 9], 2, false), 9);
+    assert_eq!(wrap_cursor(&[2, 5, 9], 9, true), 2);
+}
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
 #[test]
 fn step_target_wraps_sparse_targets_and_keeps_empty() {
     assert_eq!(step_target(&[], 4, true), 4);

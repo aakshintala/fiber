@@ -97,6 +97,16 @@ pub(crate) struct List {
     accent: bool,
 }
 
+/// Advances a cursor through `rows`, wrapping at either end.
+pub(crate) fn wrap_cursor<T: Copy + PartialEq>(rows: &[T], cur: T, down: bool) -> T {
+    if rows.is_empty() {
+        return cur;
+    }
+    let at = rows.iter().position(|row| *row == cur).unwrap_or_default();
+    let next = wrap_step(at, rows.len(), if down { 1 } else { -1 });
+    rows.get(next).copied().unwrap_or(cur)
+}
+
 /// Advances an index by a signed distance, wrapping within `len`.
 /// An empty range leaves the index unchanged.
 pub(crate) fn wrap_step(at: usize, len: usize, delta: isize) -> usize {
