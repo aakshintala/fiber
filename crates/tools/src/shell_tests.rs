@@ -2103,6 +2103,72 @@ fn a_detached_call_with_the_sandbox_on_runs_unconfined() {
     stand_down_group(pid, fakes::Watchdog::group(pid));
 }
 
+#[test]
+fn red_kill_own_detached_pid_declares_no_effect() {
+    let dir = fakes::TempDir::new("fiber-shell-red-kill-own");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_detached(dir.path().join("detached"));
+    let output = shell.run(
+        &detached_arguments("sleep 60"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pid = detached_pid(&text(&output));
+    let declared = effects(&shell, &format!("kill {pid}"));
+    assert!(
+        declared.declared.effects.is_empty(),
+        "own detached process should need no review: {declared:?}"
+    );
+    stand_down_group(pid, fakes::Watchdog::group(pid));
+}
+
+#[test]
+fn red_kill_foreign_pid_declares_executes() {
+    let dir = fakes::TempDir::new("fiber-shell-red-kill-foreign");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_detached(dir.path().join("detached"));
+    let output = shell.run(
+        &detached_arguments("sleep 60"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pid = detached_pid(&text(&output));
+    let declared = effects(&shell, &format!("kill {}", std::process::id()));
+    assert_eq!(declared.declared.effects, vec![Effect::Executes]);
+    stand_down_group(pid, fakes::Watchdog::group(pid));
+}
+
+#[test]
+fn red_kill_mixed_own_and_foreign_pids_declares_executes() {
+    let dir = fakes::TempDir::new("fiber-shell-red-kill-mixed");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_detached(dir.path().join("detached"));
+    let output = shell.run(
+        &detached_arguments("sleep 60"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_none(),
+        "detached launch: {:?}",
+        output.error
+    );
+    let pid = detached_pid(&text(&output));
+    let declared = effects(&shell, &format!("kill {pid} {}", std::process::id()));
+    assert_eq!(declared.declared.effects, vec![Effect::Executes]);
+    stand_down_group(pid, fakes::Watchdog::group(pid));
+}
+
 fn listed_files(root: &Path) -> Vec<(std::path::PathBuf, u64)> {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
