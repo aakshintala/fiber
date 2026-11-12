@@ -218,7 +218,5 @@ crates/tui/src/approvals/one_question_tests.rs	fiber-4619	plan	2026-11-12T05:48:
 crates/tui/src/app/home/workspace_tests.rs	fiber-4619	plan	2026-11-12T05:48:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/typed_tests.rs	fiber-4619	plan	2026-11-12T05:48:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/keymap_tests.rs	fiber-4619	plan	2026-11-12T05:48:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/command.rs	fiber-4260	grant	2026-11-12T05:49:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
-crates/tools/src/shell/hosted.rs	fiber-4260	grant	2026-11-12T05:49:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/shell/4260-stop-reviewed-plan	
 crates/tui/src/rebind_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/model_picker_view_tests.rs	fiber-4619	plan	2026-11-12T05:49:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
