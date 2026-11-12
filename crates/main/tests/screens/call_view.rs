@@ -247,11 +247,10 @@ fn a_cut_shell_call_pages_to_the_end_with_both_markers() {
     // Following pages to the end: the resume marker draws at the tail.
     // (The head page's end marker pages out of the three-page window, as
     // scrolling back up shows.)
-    let grid = run.wait_screen("the call's view", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("── the model's view resumes ──"))
+    let grid = run.wait_screen("the settled call view", |grid| {
+        settled_call_view(&grid.rows)
     });
+
     assert_view_chrome(&grid, "Shell", "awk", true);
     assert_snapshot!("call_view_open", snapshot_text(&setup, &grid, &[]));
     // Search stays scoped to the view: the tail hit counts once, and
@@ -383,6 +382,43 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Whether the resume marker and tail have reached their snapshot rows.
+fn settled_call_view(rows: &[String]) -> bool {
+    rows.get(1)
+        .is_some_and(|row| row.contains("── the model's view resumes ──"))
+        && rows.iter().any(|row| row.contains("TAIL"))
+}
+
+#[test]
+fn settled_call_view_rejects_unsettled_and_accepts_settled_rows() {
+    let unsettled = vec![
+        "Shell awk".to_owned(),
+        "463 output".to_owned(),
+        "── the model's view resumes ──".to_owned(),
+        "TAIL output".to_owned(),
+    ];
+    let settled = vec![
+        "Shell awk".to_owned(),
+        "── the model's view resumes ──".to_owned(),
+        "463 output".to_owned(),
+        "TAIL output".to_owned(),
+    ];
+    assert!(
+        unsettled
+            .iter()
+            .any(|row| row.contains("── the model's view resumes ──"))
+    );
+    assert!(
+        settled
+            .iter()
+            .any(|row| row.contains("── the model's view resumes ──"))
+    );
+    assert!(!settled_call_view(&unsettled));
+    assert!(settled_call_view(&settled));
+    assert!(!settled_call_view(&settled[..3]));
+    assert!(!settled_call_view(&settled[1..]));
 }
 
 /// The tail the view paged to, the footer and the top row, with the
