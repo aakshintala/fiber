@@ -237,13 +237,15 @@ impl Reply {
 
     fn wait(&self) -> Box<ToolCallCompleted> {
         let mut state = lock(&self.state);
-        while state.is_none() {
+        loop {
+            if let Some(result) = state.take() {
+                return result;
+            }
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        state.take().expect("reply is present")
     }
 }
 
