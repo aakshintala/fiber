@@ -91,6 +91,10 @@ pub(crate) struct List {
     /// Whether the selected row is marked by a "› " gutter instead of the
     /// selection bar.
     gutter: bool,
+    /// Whether the gutter mark draws in the accent role: the Changed
+    /// files list's focused row (`docs/tui.md`, "Swapped views"). Every
+    /// other gutter list keeps the plain mark.
+    accent: bool,
 }
 
 impl List {
@@ -102,6 +106,23 @@ impl List {
             gutter: true,
             ..Self::default()
         }
+    }
+
+    /// A gutter list whose mark draws in the accent role: the Changed
+    /// files list's focused row (`docs/tui.md`, "Swapped views"). The
+    /// focused name still draws from its own row, so other views keep
+    /// their plain marks and names.
+    pub(crate) fn gutter_accent() -> Self {
+        Self {
+            gutter: true,
+            accent: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the list marks its selection with an accent gutter.
+    pub(crate) fn is_accent(&self) -> bool {
+        self.accent
     }
 
     /// Brings the selection and the first row shown back onto the last
