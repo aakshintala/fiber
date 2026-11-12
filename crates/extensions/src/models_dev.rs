@@ -54,7 +54,7 @@ pub fn fetch(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, ureq::Error> {
         .body_mut()
         .as_reader()
         .read_to_end(&mut bytes)
-        .map_err(|error| ureq::Error::Io(error))?;
+        .map_err(ureq::Error::Io)?;
     Ok(bytes)
 }
 
@@ -116,13 +116,14 @@ pub fn refresh_if_due(
         return;
     }
     with_lock(home, false, || {
-        if !should_fetch(home, enabled, max_age, SystemTime::now()) {
+        if !should_fetch(home, enabled, max_age, now) {
             return;
         }
         if let Ok(bytes) = fetcher(URL)
             && valid_catalog(&bytes)
+            && config::write_models_dev(home, &bytes).is_err()
         {
-            let _ = config::write_models_dev(home, &bytes);
+            return;
         }
     });
 }
@@ -136,8 +137,9 @@ pub fn refresh_forced(home: &Path, enabled: bool, now: SystemTime, fetcher: &Fet
         if should_fetch(home, enabled, None, now)
             && let Ok(bytes) = fetcher(URL)
             && valid_catalog(&bytes)
+            && config::write_models_dev(home, &bytes).is_err()
         {
-            let _ = config::write_models_dev(home, &bytes);
+            return;
         }
     });
 }
@@ -150,11 +152,8 @@ pub fn spawn_if_due(
     now: SystemTime,
     fetcher: Fetch,
 ) -> Option<JoinHandle<()>> {
-    should_fetch(&home, enabled, max_age, now).then(|| {
-        std::thread::spawn(move || {
-            refresh_if_due(&home, enabled, max_age, SystemTime::now(), &fetcher)
-        })
-    })
+    should_fetch(&home, enabled, max_age, now)
+        .then(|| std::thread::spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher)))
 }
 
 /// Merge the cached catalog into rows before provider admission validates them.
