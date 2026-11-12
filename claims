@@ -389,3 +389,5 @@ xtask/tests/models-dev.json:14002-14003	fiber-4709	plan	2026-11-12T18:00:43Z	rou
 xtask/tests/models-dev.json:14147-14206	fiber-4709	plan	2026-11-12T18:00:43Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4709-deprecated-rows	
 xtask/tests/models-dev.json:14322-14345	fiber-4709	plan	2026-11-12T18:00:43Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4709-deprecated-rows	
 xtask/tests/models-dev.json:14393-14394	fiber-4709	plan	2026-11-12T18:00:43Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4709-deprecated-rows	
+crates/loop/src/inner_calls.rs	fiber-4361	plan	2026-11-12T18:16:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/inner_calls_tests.rs	fiber-4361	plan	2026-11-12T18:16:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
