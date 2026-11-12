@@ -273,3 +273,4 @@ crates/fakes/src/finished.rs	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-701
 crates/fakes/src/within.rs	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4719	plan	2026-11-12T08:55:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/offer_tests.rs	fiber-4735	plan	2026-11-12T08:58:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
