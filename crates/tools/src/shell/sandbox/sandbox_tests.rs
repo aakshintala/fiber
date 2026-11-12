@@ -660,7 +660,14 @@ fn assert_device_refused(fixture: &HomeFixture, device: &str) {
     let super::super::command::Kept::Whole(bytes) = read.output else {
         panic!("a one-byte device read keeps output whole");
     };
-    assert!(bytes.is_empty(), "no device bytes reach output");
+    let output = String::from_utf8_lossy(&bytes);
+    assert!(
+        output.contains("Permission denied"),
+        "the refusal is reported: {output}"
+    );
+    if device == "/dev/zero" {
+        assert!(!bytes.contains(&0), "no NUL device byte reaches output");
+    }
     let null = fixture.confined("cat /dev/null");
     assert!(
         null.status.is_some_and(|status| status.success()),

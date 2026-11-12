@@ -515,6 +515,10 @@ pub fn prepare(
             path: root.to_path_buf(),
             source,
         })?;
+        // Writable roots must not re-grant /dev or anything beneath it.
+        if resolved.starts_with("/dev") {
+            continue;
+        }
         let rule_fd = open_nofollow(&resolved)?;
         let access = landlock::AccessFs::from_all(selected);
         rules.push(landlock::PathBeneath::new(rule_fd, access));
@@ -720,14 +724,19 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Setu
          (allow sysctl-read)\n\
          (allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n\
          (allow file-read* (subpath \"/\"))\n\
+         (deny file-read* file-write* (regex #\"^/dev/\"))\n\
          (allow file-read* file-write* (literal \"/dev/null\"))\n\
-         (allow file-read* file-write* file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n\
+         (allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n\
          (allow file-write* (subpath (param \"FIBER_WS\")))\n\
          (allow file-write* (subpath (param \"FIBER_TMPDIR\")))\n\
          (allow file-write* (subpath (param \"FIBER_TMP\")))\n",
     );
     for (index, root) in settings.allow_write.iter().enumerate() {
         let resolved = canonicalize_root("an allow_write path", root)?;
+        // Writable roots must not re-grant /dev or anything beneath it.
+        if resolved.starts_with("/dev") {
+            continue;
+        }
         let name = format!("FIBER_ALLOW_{index}");
         profile.push_str(&format!(
             "(allow file-write* (subpath (param \"{name}\")))\n"
@@ -1222,9 +1231,12 @@ fn add_ancestor_grants(
                 path: ancestor.clone(),
                 source,
             })?;
-            // Skip every entry leading to any denied path, not only the
-            // current one: Landlock unions grants across denies.
+            // Skip /dev and its descendants; the walk must not grant devices.
+            // Also skip every entry leading to any deny: Landlock unions grants.
             let path = ancestor.join(entry.file_name());
+            if path.starts_with("/dev") {
+                continue;
+            }
             if exclusions.iter().any(|denied| denied.starts_with(&path)) {
                 continue;
             }
