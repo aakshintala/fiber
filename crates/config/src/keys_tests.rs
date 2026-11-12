@@ -264,7 +264,6 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
         SettingsTab::Advanced,
         &[
             "hub.idle_exit_ms",
-            "hub.port",
             "hub.default",
             "hub.allowed_origins",
             "session.idle_exit_ms",
@@ -331,10 +330,10 @@ fn settings_metadata_tabs_follow_key_classification() {
             key.path
         );
         if want.is_none() {
-            // No blanket fallback: a new plain key must be classified
-            // above, or named as the covered one.
+            // `hub.port` is deliberately absent from Settings; other plain
+            // keys must be classified above or named as covered.
             assert!(
-                key.path.contains('*') || key.path == COVERED_PLAIN,
+                key.path.contains('*') || key.path == COVERED_PLAIN || key.path == "hub.port",
                 "`{}` has no tab: add it to a tab, or have a screen row cover it",
                 key.path
             );
