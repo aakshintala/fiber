@@ -4754,6 +4754,87 @@ fn call(shell: &Shell, command: &str) -> contract::tool::Output {
 }
 
 #[test]
+fn kill_fast_path_stops_a_live_detached_process_through_the_tool() {
+    let dir = fakes::TempDir::new("fiber-shell-kill-detached-e2e");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Arc::new(
+        Shell::new(dir.path().to_path_buf(), FakeClock::new())
+            .with_jobs(jobs.clone())
+            .with_detached(dir.path().join("detached")),
+    );
+    let mut launch = args("exec sleep 60");
+    launch.insert("detach".into(), json!(true));
+    let recorder = Arc::new(Recorder::default());
+    let output = run_on(&shell, launch, &recorder);
+    assert!(output.error.is_none(), "{}", text(&output));
+    let [JobRecord::Started(started)] = output.jobs.as_slice() else {
+        panic!("the detached start returns one job: {:?}", output.jobs);
+    };
+    assert_eq!(started.kind, Some(contract::events::JobKind::Detached));
+    let pgid = started.pgid.expect("the leader identity is recorded");
+    let watchdog = Watchdog::group(pgid);
+
+    let killed = run_on(&shell, args(&format!("kill {pgid}")), &recorder);
+    assert!(killed.error.is_none(), "{}", text(&killed));
+    assert_eq!(
+        killed
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(0),
+        "the own-PID kill fast path reports success"
+    );
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the detached supervisor reports the signal");
+    assert_eq!(ended.status, Outcome::Failed);
+    assert_eq!(
+        ended.process.and_then(|process| process.signal),
+        Some("SIGTERM".into())
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_prepared_owned_kill_fails_closed_when_its_leader_is_gone() {
+    let dir = fakes::TempDir::new("fiber-shell-stale-kill-e2e");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
+        .with_detached(dir.path().join("detached"));
+    let mut launch = args("exec sleep 60");
+    launch.insert("detach".into(), json!(true));
+    let recorder = Recorder::default();
+    let output = run_prepared(&shell, &launch, &CancelToken::new(), &recorder);
+    assert!(output.error.is_none(), "{}", text(&output));
+    let started = started(&output);
+    let pid = started.pgid.expect("the leader identity is recorded");
+    let watchdog = Watchdog::group(pid);
+    let kill = args(&format!("kill {pid}"));
+    let prepared = shell.effects(&kill).expect("the live identity is safe");
+    assert!(prepared.declared.effects.is_empty());
+
+    assert!(kill_group(pid, "KILL").unwrap());
+    assert!(fakes::group_empties(
+        pid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    let stale = shell.run_with_effects(&kill, &prepared, &CancelToken::new(), &recorder, &NoAsk);
+    assert!(stale.error.is_some(), "the stale fast path fails closed");
+    assert!(
+        stale.process.is_none(),
+        "it did not spawn the shell builtin"
+    );
+    jobs.ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the detached supervisor reports its end");
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
 fn background_without_timeout_runs_until_stopped() {
     let dir = fakes::TempDir::new("fiber-shell-bg-no-timeout");
     let ready = Ready::new(dir.path());

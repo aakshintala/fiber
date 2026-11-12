@@ -92,7 +92,9 @@ fn process_tool_runs_and_runs_asking_through_the_tool_interface() {
         owner,
         CommandId("register-tool".to_owned()),
         "run",
-        std::sync::Arc::new(|_args, _scope, _cancel| Ok(Some(json!("process result")))),
+        std::sync::Arc::new(|_args, _scope, _cancel, _inner_calls| {
+            Ok(Some(json!("process result")))
+        }),
     );
     let tool = ProcessTool::new(
         runtime,

@@ -11334,6 +11334,10 @@ fn seeded_job_started(job: &str) -> Event {
         extension: None,
         description: "scan".into(),
         output_path: format!("artifacts/{job}.log"),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     })
 }
 

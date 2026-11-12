@@ -132,6 +132,14 @@ pub(crate) fn world() -> (TempDir, Arc<Registry>) {
     registry_with(clock)
 }
 
+/// A stable identity for registry tests that do not launch a child.
+pub(crate) fn identity() -> contract::jobs::JobIdentity {
+    contract::jobs::JobIdentity {
+        pgid: 4242,
+        start_time: 99,
+    }
+}
+
 /// An opening for a shell job called `description`.
 pub(crate) fn opening(description: &str) -> Opening {
     Opening {
@@ -140,5 +148,7 @@ pub(crate) fn opening(description: &str) -> Opening {
         stop: Stop(Box::new(|| {})),
         lines: false,
         input: None,
+        identity: None,
+        detached: None,
     }
 }

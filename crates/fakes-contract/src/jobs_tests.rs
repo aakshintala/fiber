@@ -8,7 +8,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use contract::events::{JobCompleted, Outcome};
-use contract::jobs::{Jobs, OpenError, Opening, Stop};
+use contract::jobs::{JobIdentity, Jobs, OpenError, Opening, Stop};
 use contract::shapes::Process;
 use contract::{ErrorCode, JobId};
 
@@ -23,6 +23,8 @@ fn opening(description: &str, stop: Stop) -> Opening {
         stop,
         lines: false,
         input: None,
+        identity: None,
+        detached: None,
     }
 }
 
@@ -76,6 +78,29 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
         dropped.error.as_ref().map(|error| error.code.clone()),
         Some(ErrorCode::Indeterminate)
     );
+}
+
+#[test]
+fn owned_identities_returns_the_identity_recorded_by_open() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let mut opening = opening("sleep", Stop(Box::new(|| {})));
+    opening.identity = Some(JobIdentity {
+        pgid: 123,
+        start_time: 456,
+    });
+    let opened = jobs.open(opening).unwrap();
+    assert_eq!(jobs.end_count(), 0, "no End has been reported yet");
+    assert_eq!(
+        jobs.owned_identities(),
+        vec![JobIdentity {
+            pgid: 123,
+            start_time: 456,
+        }]
+    );
+    let id = opened.started.job_id.0.clone();
+    opened.end.0(completed(&id, Outcome::Completed));
+    assert_eq!(jobs.end_count(), 1, "one reported End is counted once");
 }
 
 #[test]
