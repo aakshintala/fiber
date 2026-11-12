@@ -52,7 +52,7 @@ the hub checked them. Other `session_held` refusals omit it (`docs/events.md`,
 
 ## Where a code comes from
 
-Each library crate has its own error enum (`docs/code-quality.md`, "Errors").
+Each library crate that has failures to report has its own error enum (`docs/code-quality.md`, "Errors").
 The crate that defines the enum also maps each case to a code, in a match with
 no wildcard arm, so a new case does not compile until it has one. The codes
 themselves are data in `contract`: names and nothing else, because `contract`
