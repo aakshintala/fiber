@@ -3193,12 +3193,16 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let id = "s_00000000000000a1";
     let session = crate::fake::FakeSession::bind(&temp.dir, id);
+    hub.feed.start();
+    assert!(session.await_subscribed(1, DEADLINE));
     session.say(&crate::fake::status_line(
         id,
         &crate::fake::status("n", "/w", "streaming", None),
     ));
-    hub.feed.start();
-    assert!(session.await_subscribed(1, DEADLINE));
+    let feed = Arc::clone(&hub.feed);
+    crate::testkit::await_true("the hub consumed the initial session status", move || {
+        feed.status_of(id).is_some()
+    });
     let mut a = Client::connect(&hub);
     a.hello();
     // A status answer runs after the server's register and listen.
