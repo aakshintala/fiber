@@ -416,3 +416,7 @@ crates/main/tests/providers/databricks.rs	fiber-4756	plan	2026-11-12T19:03:51Z	A
 crates/tui/tests/draw_jig.rs	fiber-4742	plan	2026-11-12T19:05:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection.rs	fiber-4598	plan	2026-11-12T19:09:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon/hub_resume.rs	fiber-4598	plan	2026-11-12T19:09:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop.rs	fiber-4746	plan	2026-11-12T19:14:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_tests.rs	fiber-4746	plan	2026-11-12T19:14:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_loop_tests.rs	fiber-4746	plan	2026-11-12T19:14:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop/attach_tests.rs	fiber-4746	plan	2026-11-12T19:14:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
