@@ -135,9 +135,9 @@ fn compute(args: &[String]) -> Result<bool, String> {
 
 fn producer_job(view: &Value) -> Option<&Value> {
     view.get("jobs")?.as_array()?.iter().find(|job| {
-        job.get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| name.contains("journey suite"))
+        job.get("name").and_then(Value::as_str).is_some_and(|name| {
+            name == "Journey suite on the release binary" || name == "Nightly publish"
+        })
     })
 }
 

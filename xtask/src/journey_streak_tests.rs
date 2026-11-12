@@ -54,12 +54,20 @@ fn pass_or_missing_artifact_resets_each_journey() {
 
 #[test]
 fn producer_lookup_selects_journey_suite_or_absence() {
-    let view: Value = serde_json::json!({"jobs":[{"name":"Run the journey suite against the built binary","conclusion":"failure"}]});
+    let view: Value = serde_json::json!({"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]});
     assert_eq!(
         producer_job(&view)
             .and_then(|job| job.get("conclusion"))
             .and_then(Value::as_str),
         Some("failure")
+    );
+    let nightly: Value =
+        serde_json::json!({"jobs":[{"name":"Nightly publish","conclusion":"success"}]});
+    assert_eq!(
+        producer_job(&nightly)
+            .and_then(|job| job.get("conclusion"))
+            .and_then(Value::as_str),
+        Some("success")
     );
     assert!(producer_job(&serde_json::json!({"jobs":[]})).is_none());
 }

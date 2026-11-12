@@ -2519,7 +2519,11 @@ fn journey_streak_cli_dispatches_input_output() {
     std::fs::create_dir_all(&prior).unwrap();
     std::fs::write(&current, "qa\n").unwrap();
     std::fs::write(&runs, r#"[{"databaseId":1,"headSha":"abcdef0123456789abcdef0123456789abcdef01","event":"push","headBranch":"main","conclusion":"failure"}]"#).unwrap();
-    std::fs::write(prior.join("view.json"), r#"{"jobs":[{"name":"Run the journey suite against the built binary","conclusion":"failure"}]}"#).unwrap();
+    std::fs::write(
+        prior.join("view.json"),
+        r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]}"#,
+    )
+    .unwrap();
     std::fs::write(prior.join("journey-failures.txt"), "qa\n").unwrap();
     let output_path = dir.path().join("streaks.json");
     let (code, output) = xtask(
