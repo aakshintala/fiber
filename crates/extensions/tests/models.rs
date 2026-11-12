@@ -1886,7 +1886,13 @@ fn add_lua_addenda_failure_reports_no_omission_yet() {
     );
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
-    assert_eq!(notices.iter().filter(|n| n.code == ErrorCode::ModelOmitted).count(), 0);
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        0
+    );
 
     let models: Vec<ModelData> = serde_json::from_value(json!([
         {"id":"gone", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000, "omit_reason":"first reason"},
@@ -1894,7 +1900,14 @@ fn add_lua_addenda_failure_reports_no_omission_yet() {
         {"id":"ok", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}
     ])).unwrap();
     let notices = providers.set_models("acme", models);
-    assert_eq!(notices.iter().filter(|n| n.code == ErrorCode::ModelOmitted).count(), 1, "{notices:?}");
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|n| n.code == ErrorCode::ModelOmitted)
+            .count(),
+        1,
+        "{notices:?}"
+    );
 }
 
 #[test]
