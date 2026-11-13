@@ -373,7 +373,3 @@ docs/workflow.md	fiber-4583	plan	2026-11-13T20:25:15Z	roundhouse-7010-plus-1:/ho
 GLOSSARY.md	fiber-4583	plan	2026-11-13T20:25:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/config_views.rs	fiber-4583	plan	2026-11-13T21:00:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/model_picker_tests.rs	fiber-4675	plan	2026-11-13T21:19:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
---repo	fiber-4675	grant	2026-11-13T21:24:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-aakshintala/fiber	fiber-4675	grant	2026-11-13T21:24:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
---worktree	fiber-4675	grant	2026-11-13T21:24:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-click-enter	fiber-4675	grant	2026-11-13T21:24:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
