@@ -303,3 +303,8 @@ research/opencode-thinking/raw/zen-exo-free.json	fiber-4637	plan	2026-11-13T17:5
 docs/testing.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/models_dev.rs	fiber-4637	plan	2026-11-13T18:06:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/models.rs	fiber-4637	plan	2026-11-13T18:06:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/parts.rs	fiber-4637	plan	2026-11-13T18:06:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/parts_tests.rs	fiber-4637	plan	2026-11-13T18:06:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/switch.rs	fiber-4637	plan	2026-11-13T18:06:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
