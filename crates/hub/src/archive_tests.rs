@@ -100,17 +100,34 @@ impl Temp {
 
     /// Appends an exited row for session `n`, its directory made.
     fn exited_row(&self, n: u64) {
+        self.indexed(n, "/w", None);
+    }
+
+    fn indexed(&self, n: u64, workspace: &str, parent: Option<&str>) {
+        let status = crate::fake::status("session", workspace, "idle", parent);
         let row = crate::recent::RecentRow {
             session_id: SessionId(testkit::id(n)),
             ts: n,
             project: "-w".to_owned(),
-            workspace: "/w".to_owned(),
+            workspace: workspace.to_owned(),
             name: format!("session {n}"),
             how: crate::recent::Left::Exited,
-            status: None,
+            status: Some(serde_json::from_value(status).unwrap()),
             archived: false,
         };
         crate::recent::append(&self.dir, &row).unwrap();
+    }
+
+    fn hub_with_keep(&self, keep: usize) -> Arc<Hub> {
+        let timed: Arc<dyn Clock> = Arc::clone(&self.clock) as Arc<dyn Clock>;
+        Arc::new(
+            testkit::hub(
+                &self.dir,
+                Arc::new(FakeStarter::bind_and_hold(&self.dir)),
+                timed,
+            )
+            .with_keep_exited(keep),
+        )
     }
 
     /// Starts the hub's feed on the shared clock: a stop that hangs
@@ -816,6 +833,101 @@ fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
     assert_eq!(page["sessions"][0]["session_id"], testkit::id(1), "{page}");
     assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
     assert!(archived_lines(&temp.log_text(1)).is_empty());
+}
+
+#[test]
+fn keep_two_archives_the_three_oldest_top_level_sessions() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(2);
+    for n in 1..=5 {
+        temp.logged(n, &["fiber_exited"]);
+        temp.indexed(n, &workspace, None);
+    }
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["total"], 2);
+    assert_eq!(
+        answer["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["session_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [testkit::id(5), testkit::id(4)]
+    );
+    for n in 1..=3 {
+        assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
+    }
+    for n in 4..=5 {
+        assert!(archived_lines(&temp.log_text(n)).is_empty(), "session {n}");
+    }
+}
+
+#[test]
+fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(2);
+    for n in 1..=5 {
+        temp.logged(n, &["fiber_exited"]);
+        let parent = (n == 4 || n == 5).then(|| testkit::id(1));
+        temp.indexed(n, &workspace, parent.as_deref());
+    }
+    let mut sub = Sub::new(&hub.feed);
+    let mut initial = String::new();
+    sub.read.read_line(&mut initial).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&initial).unwrap()["kind"], "keepers");
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["total"], 2);
+    for n in [1, 4, 5] {
+        assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
+    }
+    for n in [2, 3] {
+        assert!(archived_lines(&temp.log_text(n)).is_empty(), "session {n}");
+    }
+    for n in [1, 4, 5] {
+        sub.forgot("session_archived", &testkit::id(n), "-w");
+    }
+    let rows = crate::recent::read_all(&temp.dir);
+    for n in [1, 4, 5] {
+        assert!(
+            rows.iter()
+                .rev()
+                .find(|row| row.session_id.0 == testkit::id(n))
+                .unwrap()
+                .archived,
+            "session {n} has an archived recent row"
+        );
+    }
+}
+
+#[test]
+fn a_missing_workspace_delegate_is_archived_independently_of_retention() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(0);
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    temp.indexed(1, &workspace, None);
+    temp.indexed(2, "/missing-delegate-workspace", Some(&testkit::id(1)));
+
+    feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert!(archived_lines(&temp.log_text(1)).is_empty());
+    assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
 }
 
 #[test]
