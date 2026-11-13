@@ -292,3 +292,4 @@ scripts/bug-red	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/a
 scripts/test-bug-red	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/commands/archive.rs	fiber-4598	plan	2026-11-13T07:37:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
