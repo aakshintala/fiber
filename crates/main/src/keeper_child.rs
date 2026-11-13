@@ -157,6 +157,7 @@ struct Hooks {
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
     accept_error: Option<Box<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>>,
+    candidate_spawn_error: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }
 
 struct Runtime {
@@ -762,33 +763,24 @@ impl Runtime {
             runtime.clock.subscribe(Arc::downgrade(&waker));
             let mut delay = Duration::from_millis(10);
             let mut incoming = listener.incoming();
-            #[cfg(test)]
-            let mut inject = true;
             loop {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
                 #[cfg(test)]
-                let accepted = if inject {
-                    inject = false;
-                    runtime
-                        .hooks
-                        .accept_error
-                        .as_ref()
-                        .and_then(|hook| hook())
-                        .map_or_else(
-                            || {
-                                incoming
-                                    .next()
-                                    .unwrap_or_else(|| Err(io::Error::other("listener ended")))
-                            },
-                            |kind| Err(io::Error::from(kind)),
-                        )
-                } else {
-                    incoming
-                        .next()
-                        .unwrap_or_else(|| Err(io::Error::other("listener ended")))
-                };
+                let accepted = runtime
+                    .hooks
+                    .accept_error
+                    .as_ref()
+                    .and_then(|hook| hook())
+                    .map_or_else(
+                        || {
+                            incoming
+                                .next()
+                                .unwrap_or_else(|| Err(io::Error::other("listener ended")))
+                        },
+                        |kind| Err(io::Error::from(kind)),
+                    );
                 #[cfg(not(test))]
                 let accepted = incoming
                     .next()
@@ -805,6 +797,16 @@ impl Runtime {
                 };
                 delay = Duration::from_millis(10);
                 // One thread per candidate: a stalled one holds up nothing.
+                #[cfg(test)]
+                if runtime
+                    .hooks
+                    .candidate_spawn_error
+                    .as_ref()
+                    .is_some_and(|inject| inject())
+                {
+                    drop(stream);
+                    continue;
+                }
                 let runtime = Arc::clone(&runtime);
                 let Ok(_candidate) = thread::Builder::new()
                     .name("keeper-candidate".into())

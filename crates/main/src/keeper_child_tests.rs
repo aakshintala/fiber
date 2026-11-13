@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::clock::Clock;
 use contract::events::EventKind;
 use contract::keeper::{FromKeeper, HostStdin, Spawn, Stream, ToKeeper};
 use contract::{JobId, SessionId};
@@ -38,7 +39,12 @@ fn accept_error_keeps_acceptor_alive() {
     let (ready_tx, ready_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
+    let injected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let once = Arc::clone(&injected);
     let accept_error = Box::new(move || {
+        if once.swap(true, Ordering::SeqCst) {
+            return None;
+        }
         ready_tx.send(()).ok()?;
         release_rx.lock().ok()?.recv().ok()?;
         Some(std::io::ErrorKind::ConnectionAborted)
@@ -87,6 +93,127 @@ fn accept_error_keeps_acceptor_alive() {
         "expected Identity after accept error, heard {}",
         describe(&identity)
     );
+}
+
+#[test]
+fn accept_error_backoff_doubles_caps_and_resets_after_accept() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let home = fakes::TempDir::new("keeper-backoff-progression");
+    let socket = home.path().join("keeper.sock");
+    let listener = UnixListener::bind(&socket).expect("listener");
+    let clock = fakes::clock::FakeClock::new();
+    let count = Arc::new(AtomicUsize::new(0));
+    let inject_count = Arc::clone(&count);
+    let hook = Box::new(move || {
+        let n = inject_count.fetch_add(1, Ordering::SeqCst);
+        (n < 9 || n == 10).then_some(std::io::ErrorKind::ConnectionAborted)
+    });
+    let (control, _peer) = UnixStream::pair().expect("control");
+    let (done, _) = mpsc::channel();
+    let runtime = super::Runtime::new(
+        home.path().to_path_buf(),
+        SessionId("s_0123456789abcdef".into()),
+        clock.clone(),
+        control,
+        done,
+        super::Hooks {
+            accept_error: Some(hook),
+            ..super::Hooks::default()
+        },
+    );
+    runtime.listen(socket.clone(), listener);
+    let mut expected = Duration::from_millis(10);
+    for _ in 0..9 {
+        let until = clock.now() + expected;
+        clock
+            .mark_parked(until, Deadline::after(Duration::from_secs(10)))
+            .expect("acceptor parks at backoff");
+        clock.advance_when_parked(
+            Some(until),
+            None,
+            expected,
+            &Deadline::after(Duration::from_secs(10)),
+        );
+        expected = expected.saturating_mul(2).min(Duration::from_secs(1));
+    }
+    // Nine backoffs include 10, 20, 40, 80, 160, 320, 640, 1000, 1000 ms.
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(3270));
+    let writer = UnixStream::connect(&socket).expect("connect after injected errors");
+    let _ = writer;
+    let reset_at = clock.now() + Duration::from_millis(10);
+    clock
+        .mark_parked(reset_at, Deadline::after(Duration::from_secs(10)))
+        .expect("successful accept resets delay to 10 ms");
+    clock.advance_when_parked(
+        Some(reset_at),
+        None,
+        Duration::from_millis(10),
+        &Deadline::after(Duration::from_secs(10)),
+    );
+    let listening = super::lock(&runtime.listening);
+    listening
+        .as_ref()
+        .expect("listener")
+        .stop
+        .store(true, Ordering::Release);
+    drop(listening);
+    let _wake = UnixStream::connect(&socket);
+}
+
+#[test]
+fn candidate_spawn_failure_drops_stream_and_acceptor_handles_next_connection() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::AtomicBool;
+
+    let home = fakes::TempDir::new("keeper-candidate-spawn-failure");
+    let socket = home.path().join("keeper.sock");
+    let listener = UnixListener::bind(&socket).expect("listener");
+    let failed = Arc::new(AtomicBool::new(false));
+    let inject = Arc::clone(&failed);
+    let (control, _peer) = UnixStream::pair().expect("control");
+    let (done, _) = mpsc::channel();
+    let runtime = super::Runtime::new(
+        home.path().to_path_buf(),
+        SessionId("s_0123456789abcdef".into()),
+        fakes::clock::FakeClock::new(),
+        control,
+        done,
+        super::Hooks {
+            candidate_spawn_error: Some(Box::new(move || !inject.swap(true, Ordering::SeqCst))),
+            ..super::Hooks::default()
+        },
+    );
+    runtime.listen(socket.clone(), listener);
+    let dropped = UnixStream::connect(&socket).expect("first connection");
+    dropped
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let mut eof = Vec::new();
+    let mut reader = dropped;
+    reader
+        .read_to_end(&mut eof)
+        .expect("failed candidate is dropped");
+    assert!(eof.is_empty());
+
+    let writer = UnixStream::connect(&socket).expect("subsequent connection");
+    let reader = writer.try_clone().expect("reader");
+    let (send, frames) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let frame = crate::keeper::read_reply(&mut reader).ok().flatten();
+        let _ = send.send(frame);
+    });
+    let mut peer = Peer { writer, frames };
+    say(
+        &mut peer,
+        &ToKeeper::Identify(SessionId("s_0123456789abcdef".into())),
+    );
+    assert!(matches!(
+        hear(&peer, "subsequent candidate identity"),
+        Some(FromKeeper::Identity { .. })
+    ));
 }
 
 #[test]
