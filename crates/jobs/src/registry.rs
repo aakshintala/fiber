@@ -314,6 +314,136 @@ impl Registry {
         })
     }
 
+    /// Restores a detached job under the `job_started` the session log
+    /// already holds. The recorded output path is retained without opening
+    /// or validating it; the detached process writes the log. No start event
+    /// is written and no id is minted.
+    pub fn restore_detached(&self, started: JobStarted, stop: Stop) -> Result<Opened, OpenError> {
+        let path = PathBuf::from(&started.output_path);
+        if started.kind != Some(contract::events::JobKind::Detached) {
+            return Err(OpenError {
+                path: path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the job is not detached",
+                ),
+            });
+        }
+        let Some(registry) = self.me.upgrade() else {
+            return Err(OpenError {
+                path,
+                source: std::io::Error::other("the registry is gone"),
+            });
+        };
+        let mut inner = lock(&self.inner);
+        if inner
+            .jobs
+            .iter()
+            .any(|job| job.started.job_id == started.job_id)
+        {
+            return Err(OpenError {
+                path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "the job is already recorded",
+                ),
+            });
+        }
+        // Restored detached supervisors never use this ordinary-job file
+        // handle. Opening the recorded output here could block on a FIFO or
+        // follow a symlink, so keep the handle unrelated to that path.
+        let file = File::open("/dev/null").map_err(|source| OpenError {
+            path: path.clone(),
+            source,
+        })?;
+        let job_id = started.job_id.clone();
+        let end = End(Box::new(move |completed| {
+            registry.finish_run(
+                1,
+                JobCompleted {
+                    job_id,
+                    ..completed
+                },
+                None,
+            )
+        }));
+        inner.jobs.push(Job::running(
+            started.clone(),
+            path.clone(),
+            Arc::from(stop.0),
+            None,
+            None,
+        ));
+        Ok(Opened {
+            started,
+            path,
+            file,
+            end,
+            emit: Arc::clone(&self.emit),
+            lines: None,
+        })
+    }
+
+    /// Replays the session log and restores outstanding detached groups whose
+    /// process identity still matches. Invalid or absent rows are silently
+    /// omitted; restoration never signals a group.
+    pub fn restore_detached_rows<I, E, F, T>(&self, lines: I, mut parts: F) -> Vec<(Opened, T)>
+    where
+        I: IntoIterator<Item = Result<contract::Envelope, E>>,
+        F: FnMut(u32) -> (Stop, T),
+    {
+        use contract::events::{Event, EventKind, JobKind};
+        use std::collections::{HashMap, HashSet};
+
+        let mut outstanding = HashMap::<JobId, JobStarted>::new();
+        let mut order = Vec::new();
+        let mut present = HashSet::new();
+        for line in lines {
+            let Ok(line) = line else { continue };
+            if line.kind() == EventKind::JobStarted {
+                let Ok(Some(Event::JobStarted(started))) = Event::from_envelope(&line) else {
+                    continue;
+                };
+                if started.kind == Some(JobKind::Detached) {
+                    let id = started.job_id.clone();
+                    if present.insert(id.clone()) {
+                        order.push(id.clone());
+                    }
+                    outstanding.insert(id, started);
+                }
+            } else if line.kind() == EventKind::JobCompleted {
+                let Ok(Some(Event::JobCompleted(ended))) = Event::from_envelope(&line) else {
+                    continue;
+                };
+                outstanding.remove(&ended.job_id);
+                present.remove(&ended.job_id);
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|id| {
+                let started = outstanding.remove(&id)?;
+                let pgid = started
+                    .pgid
+                    .filter(|pgid| !support::group::refused(*pgid))?;
+                if !support::group::alive(pgid) {
+                    return None;
+                }
+                if let (Some(expected), Some(actual)) =
+                    (started.start_time, support::group::start_time(pgid))
+                    && expected != actual
+                {
+                    return None;
+                }
+                let (stop, tracking) = parts(pgid);
+                self.restore_detached(started, stop)
+                    .ok()
+                    .map(|opened| (opened, tracking))
+            })
+            .collect()
+    }
+
     /// Records a job a keeper handed over, under the `job_started` the log
     /// already holds: no id is minted, no line is written and the output
     /// file is not created or truncated. The file must exist under this
@@ -880,7 +1010,8 @@ fn detached_identity(started: &JobStarted) -> IdentityState {
     }
     match support::group::start_time(pgid) {
         Some(actual) if actual == start_time => IdentityState::Confirmed,
-        Some(_) | None => IdentityState::Gone,
+        Some(_) => IdentityState::Gone,
+        None => IdentityState::Review,
     }
 }
 
