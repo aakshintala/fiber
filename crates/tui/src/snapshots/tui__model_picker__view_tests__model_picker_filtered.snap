@@ -8,7 +8,7 @@ expression: text
    › m1█
    1 of 4 models                                                 ⟳ refresh all
    acme
-   › m1 [deep] [review]
+     m1 [deep] [review]
          thinking low [high]
 
    ↑↓ move · ←→ levels · Enter choose · Ctrl+S session · Ctrl+R refresh · Esc

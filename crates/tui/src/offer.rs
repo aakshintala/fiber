@@ -45,6 +45,8 @@ pub(crate) enum Spot {
         item: usize,
         decision: OfferDecision,
     },
+    /// An item's name row: selects it and opens its source.
+    Item(usize),
     /// The Send row.
     Send,
     /// The header's ✕: puts the offer aside.
@@ -284,8 +286,8 @@ impl Offer {
             Key::Esc | Key::F1 | Key::AltA | Key::CtrlC => return None,
             Key::Up => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, -1),
             Key::Down => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, 1),
-            Key::Enter if held.cursor == send => return Some(OfferKey::Send),
-            Key::Enter => return Some(OfferKey::Source),
+            Key::Enter | Key::Char(' ') if held.cursor == send => return Some(OfferKey::Send),
+            Key::Enter | Key::Char(' ') => return Some(OfferKey::Source),
             Key::PageUp => {
                 held.top = held.top.saturating_sub(page);
                 return Some(OfferKey::Handled);
@@ -371,6 +373,16 @@ impl Offer {
             return OfferKey::Handled;
         }
         match spot {
+            Spot::Item(item) => {
+                let Some(held) = self.held.as_mut() else {
+                    return OfferKey::Handled;
+                };
+                if item >= held.items.len() {
+                    return OfferKey::Handled;
+                }
+                held.cursor = item;
+                OfferKey::Source
+            }
             Spot::Choice { item, decision } => {
                 if let Some(held) = self.held.as_mut()
                     && let Some(chosen) = held.decisions.get_mut(item)
@@ -629,7 +641,11 @@ fn layout(held: &Held, width: u16) -> (Vec<Row>, Vec<usize>) {
     let mut cursor_rows = Vec::with_capacity(held.items.len().saturating_add(1));
     for (at, (item, decision)) in held.items.iter().zip(&held.decisions).enumerate() {
         cursor_rows.push(rows.len());
-        rows.push(Row::text(header_line(item, held.cursor == at)));
+        rows.push(clipped(
+            header_line(item, held.cursor == at),
+            vec![(0, width, Spot::Item(at))],
+            width,
+        ));
         rows.extend(
             item.summary
                 .lines()

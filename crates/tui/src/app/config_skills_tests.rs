@@ -322,6 +322,7 @@ fn left_and_right_reach_the_skills_view_not_the_draft() {
     ));
     app.on_key(Key::Down, now());
     app.on_edit(Edit::Right);
+    app.on_edit(Edit::Right);
     app.on_key(Key::Char(' '), now());
     app.on_edit(Edit::Left);
     app.on_key(Key::Char(' '), now());

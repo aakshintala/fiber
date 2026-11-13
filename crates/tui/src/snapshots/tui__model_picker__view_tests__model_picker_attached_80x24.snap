@@ -8,7 +8,7 @@ expression: "screen(&app, 80, 24)"
    Type to search █
    4 models                                                      ⟳ refresh all
    acme
-   › m1 [deep] [review] ● current                                            —
+     m1 [deep] [review] ● current                                            —
          thinking low [high]
      m2                                                    switch ~201k tokens
          fixed thinking

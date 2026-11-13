@@ -60,8 +60,9 @@ fn loop_on_row(seam: &Arc<Fake>) -> (super::Loop<TestBackend>, Receiver<Input>) 
         installable: vec!["openai".to_owned()],
         ..Catalogue::default()
     }));
-    // Ctrl+L opens the picker, Down moves onto the row.
+    // Ctrl+L opens the picker; Down focuses the model, then the install row.
     feed(&mut lp, vec![Input::Bytes(vec![0x0c])]);
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[B".to_vec())]);
     feed(&mut lp, vec![Input::Bytes(b"\x1b[B".to_vec())]);
     (lp, rx)
 }

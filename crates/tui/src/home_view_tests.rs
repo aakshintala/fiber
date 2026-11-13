@@ -164,6 +164,7 @@ fn choose_session_model(app: &mut App) {
         left_out: Vec::new(),
         ..Default::default()
     }));
+    assert_eq!(app.on_key(Key::Down, now), crate::app::Effect::None);
     assert_eq!(
         app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now),
         crate::app::Effect::None

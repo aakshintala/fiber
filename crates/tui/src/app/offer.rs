@@ -83,7 +83,8 @@ impl App {
             None
         };
         let effect = match self.offer.click(spot) {
-            OfferKey::Handled | OfferKey::Source => Effect::None,
+            OfferKey::Handled => Effect::None,
+            OfferKey::Source => self.ask_offered_file(FileAction::Open),
             OfferKey::Send => self.send_offer(),
         };
         if let Some(asked) = asked {

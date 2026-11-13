@@ -56,6 +56,7 @@ fn open(app: &mut App) {
 fn on_first_row(app: &mut App) {
     open(app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.model_picker.install_target().as_deref(), Some("openai"));
 }
 
@@ -142,18 +143,18 @@ fn a_second_choice_while_one_installs_starts_nothing() {
 }
 
 #[test]
-fn a_click_on_the_name_starts_the_job_and_a_click_elsewhere_only_focuses() {
-    let mut app = home(fake());
-    open(&mut app);
-    let zeta = row_at(&app, 1);
-    let _ = app.model_picker_click(Spot::Row(zeta));
-    assert!(app.take_install_start().is_none());
-    assert_eq!(app.model_picker.install_target().as_deref(), Some("zeta"));
-    let openai = row_at(&app, 0);
-    let _ = app.model_picker_click(Spot::Cell(openai, 0));
-    let start = job(&mut app);
-    assert_eq!(start.provider, "openai");
-    assert_eq!(app.model_picker.install_target().as_deref(), Some("openai"));
+fn clicking_a_row_or_its_name_starts_that_install() {
+    let mut row_click = home(fake());
+    open(&mut row_click);
+    let zeta = row_at(&row_click, 1);
+    let _ = row_click.model_picker_click(Spot::Row(zeta));
+    assert_eq!(job(&mut row_click).provider, "zeta");
+
+    let mut name_click = home(fake());
+    open(&mut name_click);
+    let openai = row_at(&name_click, 0);
+    let _ = name_click.model_picker_click(Spot::Cell(openai, 0));
+    assert_eq!(job(&mut name_click).provider, "openai");
 }
 
 #[test]
@@ -531,6 +532,7 @@ fn a_remote_terminal_with_a_workspace_installs_there_and_asks_the_hub_nothing() 
         app.outbox.link = Link::Up;
         let _ = app.open_model_picker(Mode::Choose);
         let _ = app.on_key(Key::Down, now());
+        let _ = app.on_key(Key::Down, now());
         let _ = app.on_key(Key::Enter, now());
         let start = job(&mut app);
         assert_eq!(start.workspace, PathBuf::from("/w"));
@@ -624,6 +626,7 @@ fn the_spinner_asks_for_a_frame_only_while_an_install_shows() {
     let _ = screen(&app);
     assert_eq!(app.take_wake(), None, "no install: the picker asks nothing");
 
+    let _ = app.on_key(Key::Down, now());
     let _ = app.on_key(Key::Down, now());
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);

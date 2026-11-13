@@ -139,6 +139,7 @@ fn open(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlL, now), Effect::None);
     assert!(app.model_picker_open());
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
 }
 
 /// Renders `app` on a `width` by `height` screen as text.
@@ -1452,9 +1453,9 @@ fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() 
 }
 
 #[test]
-fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
-    // `docs/tui.md`, "The model picker": after scrolling, focus stays on a model with
-    // its provider heading in the compact window.
+fn a_wheel_on_the_short_picker_keeps_visible_focus_with_its_heading() {
+    // `docs/tui.md`, "The model picker": after scrolling, a still-visible focused
+    // model keeps its focus and provider heading in the compact window.
     let mut app = attached(120, 14);
     current_model(&mut app, "acme/m1");
     app.on_models(Ok(catalogue()));
@@ -1478,26 +1479,27 @@ fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
     // a step and never the conversation under it."
     assert_eq!(
         view.top,
-        3,
-        "wheel did not shift the window; conversation rows={}, slab={slab:?}",
+        first.top + 3,
+        "wheel did not shift the window by three body rows; conversation rows={}, slab={slab:?}",
         app.conversation_area_height()
     );
-    let next = view.sections[0]
+    let visible = view.sections[0]
         .models
         .iter()
-        .find(|model| model.id == "m2")
-        .expect("the next model");
-    assert_eq!(view.focused, Some(next.at));
+        .find(|model| Some(model.at) == view.focused)
+        .expect("the visible focused model");
+    assert_eq!(visible.id, "m1");
+    assert_eq!(view.focused, first.focused);
     let text = screen(&app, 120, 14);
-    let (model_y, model) = find_row(&text, "m2");
-    assert!(model.contains("› m2"), "{text}");
+    let (model_y, model) = find_row(&text, "m1");
+    assert!(model.contains("› m1"), "{text}");
     assert!(
         text.lines()
             .nth(usize::from(model_y).saturating_sub(1))
             .is_some_and(|line| line.contains("acme")),
         "the provider heading must precede the focused model: {text}"
     );
-    assert!(!text.contains("m1 ● current"), "{text}");
+    assert!(model.contains("● current"), "{model}");
 }
 
 #[test]
@@ -1628,14 +1630,14 @@ fn short_model_fit_boundaries_keep_footer_and_window_terms_distinct() {
             10,
             heading - 1,
             [false, false, false, true],
-            Some(4),
+            Some(2),
         ),
         (
             "heading and model both precede a clamped top",
             10,
             display.rows.len(),
             [false, true, true, false],
-            Some(4),
+            Some(2),
         ),
         (
             "one ordinary row still fits",

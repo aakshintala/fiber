@@ -371,7 +371,7 @@ impl App {
             }
             if self.session_views.diff.is_some() {
                 self.session_views.diff_list.key(key, rows, height);
-            } else if *key == Key::Enter {
+            } else if *key == Key::Enter || *key == Key::Char(' ') {
                 return Some(self.session_view_file_enter(list.selected()));
             } else {
                 // Folder and rule rows take no Enter: the selection moves

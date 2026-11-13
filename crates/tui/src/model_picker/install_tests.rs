@@ -20,6 +20,9 @@ fn picker(mode: Mode, models: &[&str], installable: &[&str]) -> ModelPicker {
         ..ModelPicker::default()
     };
     picker.open(mode, None);
+    if mode == Mode::Choose && !models.is_empty() {
+        picker.move_row(1);
+    }
     picker
 }
 
@@ -610,7 +613,7 @@ fn pruning_keeps_a_catalogued_install_focus_hidden_by_the_query() {
     picker.prune_focus();
 
     assert_eq!(picker.installs.focus.as_deref(), Some("openai"));
-    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+    assert_eq!(picker.focus(), None, "typing cleared the row focus");
 }
 
 #[test]
@@ -666,11 +669,12 @@ fn a_query_that_hides_every_model_focuses_nothing_until_down() {
 }
 
 #[test]
-fn a_query_that_some_model_matches_keeps_the_model_focused() {
+fn typing_a_query_clears_row_focus_even_when_a_model_matches() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["zeta"]);
     picker.push_query('m');
-    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+    assert_eq!(picker.focus(), None);
     assert_eq!(picker.install_target(), None);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
 }
 
 #[test]
@@ -679,12 +683,12 @@ fn a_query_never_moves_the_focus_onto_a_row_and_a_hidden_row_falls_back() {
     picker.move_row(1);
     assert_eq!(picker.install_target().as_deref(), Some("openai"));
     picker.push_query('z');
-    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+    assert_eq!(picker.focus(), None);
     picker.clear_query();
     assert_eq!(
         picker.focus(),
-        Some(Stop::Model(0)),
-        "the row does not take the focus back"
+        None,
+        "clearing the query keeps no row focused"
     );
 
     let mut picker = self::picker(Mode::Choose, &["acme/m1"], &["openai"]);
@@ -692,7 +696,7 @@ fn a_query_never_moves_the_focus_onto_a_row_and_a_hidden_row_falls_back() {
     picker.push_query('z');
     assert_eq!(picker.focus(), None);
     picker.pop_query();
-    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+    assert_eq!(picker.focus(), None);
 }
 
 #[test]
@@ -766,6 +770,9 @@ fn a_focused_row_takes_no_choice_and_no_chip() {
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
+    assert_eq!(picker.focus(), None);
+    assert!(picker.choice(false).is_none());
+    picker.move_row(1);
     assert!(picker.choice(false).is_some());
     picker.move_row(1);
     assert_eq!(picker.install_target().as_deref(), Some("openai"));
@@ -956,7 +963,7 @@ fn open_keeps_a_running_install_and_drops_the_rest() {
         Some(&Progress::Installing)
     );
     assert_eq!(picker.installs.progress("zeta"), None);
-    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+    assert_eq!(picker.focus(), None, "a new Choose open has no row focus");
 }
 
 #[test]

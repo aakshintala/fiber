@@ -1293,7 +1293,7 @@ install still running.
   and any skill it shadows, plus whether it is switched off. A switch turns
   a skill off or on for this project or everywhere, writing
   `skills.disabled` in that layer; the change reaches the model at the next
-  turn start. Enter shows the skill's text, after every skill it shadows
+  turn start. Enter/Space shows text only with the row focused, and flips a switch with that switch focused. Enter shows the skill's text, after every skill it shadows
   with its source and path, Ctrl+G opens its file
   (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
   hub's copy instead ("Swapped views"). A row is "review · checks a diff

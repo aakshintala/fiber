@@ -890,7 +890,9 @@ fn short_model_fit(view: &PickerView, height: u16) -> Option<usize> {
     let top = keep_focus_visible_top(view, height);
     let end = top.saturating_add(visible);
     let footerless = footerless_fit(view, height);
-    let compact = if footerless < 2 {
+    let compact = if fit == 2 {
+        fit
+    } else if footerless < 2 {
         footerless_fit_without_controls(view, height)
     } else {
         footerless

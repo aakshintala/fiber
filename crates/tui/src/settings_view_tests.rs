@@ -2004,31 +2004,41 @@ fn a_reread_keeps_the_focused_key_where_it_is_and_a_vanished_one_falls_to_the_fi
 }
 
 #[test]
-fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
+fn a_click_runs_the_row_action_but_blank_lines_and_header_do_nothing() {
     let fake = Fake::new(rows());
     let mut settings = tab(&fake, SettingsTab::Models);
     let layout = settings.layout(80, 24, None);
     let second = layout.takes[1];
+    // The line between two rows and the out-of-range header are not rows.
+    settings.click(Spot::Row(second + 1), &ctx(&fake));
+    settings.click(Spot::Row(500), &ctx(&fake));
+    assert!(settings.page.is_none());
     settings.click(Spot::Row(second), &ctx(&fake));
     assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
+        writes(&fake),
+        [w(Layer::Global, "model_lists.models_dev", "false")]
     );
-    // The line between two rows is not a row.
-    settings.click(Spot::Row(second + 1), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
-    settings.click(Spot::Row(500), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
+    assert!(settings.page.is_none());
     assert!(matches!(
         settings.click(Spot::Close, &ctx(&fake)),
         Act::Close
     ));
+}
+
+#[test]
+fn clicking_a_main_boolean_row_runs_its_enter_action() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.hover");
+    let items = settings.items();
+    let item = items
+        .iter()
+        .position(
+            |item| matches!(item, super::Item::Key(at) if settings.rows[*at].key == "tui.hover"),
+        )
+        .expect("the hover row is displayed");
+    let line = settings.layout(80, 24, None).takes[item];
+    settings.click(Spot::Row(line), &ctx(&fake));
+    assert_eq!(writes(&fake), [w(Layer::Global, "tui.hover", "false")]);
 }
 
 #[test]
@@ -2490,6 +2500,7 @@ fn space_flips_required_and_a_new_entry_starts_with_it_off() {
     ));
     let mut settings = page(&fake, "repository_extensions");
     one(&mut settings, &fake, Key::Char(' '));
+    assert!(settings.page.as_ref().unwrap().field.is_none());
     let first = writes(&fake);
     assert_eq!(first.len(), 1);
     assert_eq!(
@@ -2505,6 +2516,7 @@ fn space_flips_required_and_a_new_entry_starts_with_it_off() {
     // every other member.
     one(&mut settings, &fake, Key::Down);
     one(&mut settings, &fake, Key::Char(' '));
+    assert!(settings.page.as_ref().unwrap().field.is_none());
     let last = writes(&fake).last().cloned().unwrap().2;
     let parsed: serde_json::Value = serde_json::from_str(&last).unwrap();
     assert_eq!(
@@ -2549,7 +2561,7 @@ fn editing_an_object_changes_its_path_and_keeps_its_other_members() {
         saved,
         serde_json::json!([{"path":"ext/a2","required":true,"note":"keep"}])
     );
-    // Space on a string list does nothing.
+    // Space enters the ordinary string-list row's field.
     let fake = Fake::new(rows());
     let mut strings = page(&fake, "scoped_models");
     one(&mut strings, &fake, Key::Char(' '));
@@ -2605,12 +2617,34 @@ fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
 }
 
 #[test]
+fn space_on_a_string_list_page_enters_a_field_and_space_in_the_field_types() {
+    let fake = Fake::new(rows());
+    let mut settings = page(&fake, "scoped_models");
+    one(&mut settings, &fake, Key::Char(' '));
+    assert!(settings.page.as_ref().unwrap().field.is_some());
+    one(&mut settings, &fake, Key::Char(' '));
+    assert_eq!(
+        settings
+            .page
+            .as_ref()
+            .unwrap()
+            .field
+            .as_ref()
+            .unwrap()
+            .draft
+            .expand(),
+        "a/b "
+    );
+    assert!(writes(&fake).is_empty());
+}
+
+#[test]
 fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     let fake = Fake::new(rows());
     let mut settings = page(&fake, "scoped_models");
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
-    one(&mut settings, &fake, Key::Enter);
+    assert!(settings.page.as_ref().unwrap().field.is_some());
     settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
         settings.page.as_ref().unwrap().list.selected(),
@@ -2744,6 +2778,15 @@ fn choosing_a_theme_writes_the_global_tui_theme_queues_it_and_returns_to_the_tab
 |←→ tab · / search · Enter change · Tab layer · Delete reset
 "#,
     );
+}
+
+#[test]
+fn space_on_a_theme_choice_matches_enter() {
+    let fake = Fake::new(rows());
+    let mut settings = theme_choices(&fake);
+    one(&mut settings, &fake, Key::Char(' '));
+    assert_eq!(writes(&fake), [w(Layer::Global, "tui.theme", "\"auto\"")]);
+    assert!(matches!(settings.mode, super::Mode::Rows));
 }
 
 #[test]
@@ -4051,7 +4094,7 @@ fn settings_search_controls_save_through_the_existing_control_and_layer() {
     assert_eq!(settings.said, ["Saved to global config.".to_owned()]);
     // A filtered fixed row steps in the schema's order, as on its tab.
     let mut settings = searched(&fake, "thinking");
-    one(&mut settings, &fake, Key::Char(' '));
+    one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
         [

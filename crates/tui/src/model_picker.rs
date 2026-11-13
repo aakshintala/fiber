@@ -566,7 +566,7 @@ impl ModelPicker {
         let mut open = Open {
             mode,
             selected: 0,
-            unselected: false,
+            unselected: mode == Mode::Choose,
             chips,
             touched,
             marks,
@@ -768,6 +768,9 @@ impl ModelPicker {
                 return;
             };
             open.query.push(c);
+            if open.mode == Mode::Choose {
+                open.unselected = true;
+            }
         }
         self.installs.focus = None;
         let rows = {
@@ -966,9 +969,9 @@ impl ModelPicker {
 
     /// Focuses the model, logged-out or not-installed row `frame_row` names.
     /// Headings and the buttons are not stops, so they select nothing.
-    pub(crate) fn select_frame_row(&mut self, frame_row: usize) {
+    pub(crate) fn select_frame_row(&mut self, frame_row: usize) -> bool {
         let Some(layout) = self.layout() else {
-            return;
+            return false;
         };
         match layout.get(frame_row) {
             Some(RowAt::Model(index)) => self.go(Stop::Model(*index)),
@@ -981,8 +984,9 @@ impl ModelPicker {
                 | RowAt::LeftOut { .. }
                 | RowAt::NoMatch,
             )
-            | None => {}
+            | None => return false,
         }
+        true
     }
 
     /// The open picker's choice at the selection: the row's reference at

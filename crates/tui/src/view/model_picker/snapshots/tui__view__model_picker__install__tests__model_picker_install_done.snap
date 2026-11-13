@@ -7,7 +7,7 @@ expression: "screen(&picker, 100, 30)"
           Type to search █
           3 models                                                           ⟳ refresh all
           acme
-          › m1
+            m1
                 fixed thinking
 
           databricks

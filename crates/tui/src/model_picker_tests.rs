@@ -58,6 +58,14 @@ fn ctx(usage: Option<u64>, wall_ms: u64, current: Option<&str>) -> PickerCtx<'_>
     }
 }
 
+/// Opens a choosing picker in the focused state these tests exercise.
+fn open_focused(picker: &mut ModelPicker, target: Option<(&str, Option<&str>)>) {
+    picker.open(Mode::Choose, target);
+    if let Some(open) = picker.open.as_mut() {
+        open.unselected = false;
+    }
+}
+
 /// `picker`'s view with no prompt size, at wall time 0, and no current
 /// model.
 fn view_of(picker: &ModelPicker) -> PickerView {
@@ -73,7 +81,7 @@ fn first_run_picker_has_no_choice_until_explicit_navigation() {
     // focused does nothing until ↓ focuses one.
     let mut picker = ModelPicker::default();
     picker.catalogue.models = vec![entry("acme/only", &[], None, None)];
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.unselect_for_first_run();
 
     assert_eq!(view_of(&picker).focused, None);
@@ -88,7 +96,7 @@ fn first_run_picker_has_no_choice_until_explicit_navigation() {
 fn arrows_wrap_over_model_stops_only() {
     let mut picker = ModelPicker::default();
     picker.catalogue.models = catalogue();
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.open.as_mut().unwrap().selected = 4;
     picker.move_row(1);
     assert_eq!(picker.focus(), Some(super::install::Stop::Model(0)));
@@ -234,7 +242,7 @@ fn the_selection_stays_on_its_model_across_the_toggle() {
             .as_ref()
             .map(|open| picker.catalogue.models[open.selected].reference.clone())
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.move_row(1);
     assert_eq!(selected(&picker).as_deref(), Some("zeta/z3"));
     picker.toggle_show_all();
@@ -261,7 +269,7 @@ fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
     };
     // `zeta/z3` declares levels but preselects none.
     picker.scoped = vec!["zeta/z3".to_owned()];
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.selected, 4);
     assert_eq!(open.chips.get(4).copied().flatten(), None);
@@ -269,7 +277,7 @@ fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.chips.get(4).copied().flatten(), Some(0));
     assert!(open.touched.get(4).copied().unwrap_or(false));
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.move_chip(-1);
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.chips.get(4).copied().flatten(), Some(1));
@@ -289,7 +297,7 @@ fn move_chip_on_a_model_with_no_levels_does_nothing() {
         ..ModelPicker::default()
     };
     picker.scoped = vec!["zeta/z1".to_owned()];
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.move_chip(1);
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.chips.get(2).copied().flatten(), None);
@@ -310,7 +318,7 @@ fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
         scoped: vec!["acme/m1".to_owned()],
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.toggle_show_all();
     picker.move_row(2);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
@@ -331,7 +339,7 @@ fn open_over(models: Vec<ModelEntry>) -> ModelPicker {
         },
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker
 }
 
@@ -430,7 +438,7 @@ fn chips_follow_the_level_name_across_a_replacement() {
 #[test]
 fn an_open_before_the_first_answer_preselects_the_current_model() {
     let mut picker = ModelPicker::default();
-    picker.open(Mode::Choose, Some(("acme/m2", Some("low"))));
+    open_focused(&mut picker, Some(("acme/m2", Some("low"))));
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     picker.store(Ok(Catalogue {
         installable: Vec::new(),
@@ -497,7 +505,7 @@ fn page_keys_do_nothing_closed_empty_or_without_height() {
         scoped: vec!["gone/x".to_owned()],
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.move_page(&Key::PageDown, 3);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
 
@@ -581,7 +589,7 @@ fn frame_row_clicks_select_without_choosing() {
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
     // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
@@ -619,7 +627,7 @@ fn the_first_chip_click_follows_the_roles_cell() {
         },
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     // The roles take cell 1, so the first chip is cell 2: choosing it
     // carries `low`, picked out.
     let choice = picker.click_cell(3, 2).expect("the first chip chooses");
@@ -641,7 +649,7 @@ fn each_chip_click_advances_one_cell() {
         },
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     // With no roles the chips start at cell 1: cell 2 is `high`.
     let choice = picker.click_cell(3, 2).expect("the second chip chooses");
     assert_eq!(choice.level.as_deref(), Some("high"));
@@ -804,7 +812,7 @@ fn choice_is_none_while_closed_or_with_no_scoped_row() {
         scoped: vec!["gone/x".to_owned()],
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     assert!(picker.choice(false).is_none());
 }
 
@@ -824,7 +832,7 @@ fn clicks_choose_at_the_row_and_chip() {
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
     // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
@@ -899,7 +907,7 @@ fn an_open_checklist_starts_marked_from_the_list() {
         Some(vec![false, true, false, false, false])
     );
     // Any other open keeps no marks.
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
         Some(Vec::new())
@@ -933,7 +941,7 @@ fn toggle_mark_flips_only_the_selected_row() {
         Some(vec![true, false, false, false, false])
     );
     // With no marks kept, toggling changes nothing.
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.toggle_mark();
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
@@ -1211,7 +1219,7 @@ fn a_read_leaves_a_choose_open_without_marks() {
         left_out: Vec::new(),
         ..Default::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker.store(Ok(Catalogue {
         installable: Vec::new(),
         models: catalogue(),
@@ -1495,7 +1503,7 @@ fn open_listed(lists: Vec<crate::catalogue::ListAge>) -> ModelPicker {
         },
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker
 }
 
@@ -1536,7 +1544,7 @@ fn the_view_lists_every_provider_with_its_models() {
 #[test]
 fn the_view_marks_chips_saved_levels_and_the_current_model() {
     let mut picker = open_over(catalogue());
-    picker.open(Mode::Choose, Some(("acme/m2", Some("high"))));
+    open_focused(&mut picker, Some(("acme/m2", Some("high"))));
     let laid = picker
         .view(&ctx(Some(84_000), 0, Some("acme/m2")))
         .expect("open");
@@ -1579,7 +1587,7 @@ fn the_view_keeps_prices_on_the_current_model_and_without_usage() {
         tiers: vec![],
     });
     let mut picker = open_over(models);
-    picker.open(Mode::Choose, Some(("acme/m2", Some("high"))));
+    open_focused(&mut picker, Some(("acme/m2", Some("high"))));
     let current = picker.view(&ctx(Some(84_000), 0, Some("acme/m2"))).unwrap();
     assert_eq!(
         current.sections[0].models[1].price.as_deref(),
@@ -1600,7 +1608,7 @@ fn the_view_keeps_prices_on_the_current_model_and_without_usage() {
 fn the_view_counts_the_scope_and_marks_its_models_when_shown_all() {
     let mut picker = open_over(catalogue());
     picker.scoped = vec!["acme/m1".to_owned(), "zeta/z3".to_owned()];
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     let scoped = view_of(&picker);
     assert_eq!(scoped.count, "scoped · 2 of 5");
     assert_eq!(scoped.toggle.as_deref(), Some("[show all]"));
@@ -1679,7 +1687,7 @@ fn the_checklist_view_counts_marks_and_keeps_its_footer() {
     assert_eq!(view.count, " 0 of 5 models · 2 marked ");
     assert!(view.no_match);
     // A choosing open keeps the refresh button.
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     assert!(view_of(&picker).refresh);
 }
 
@@ -1870,7 +1878,7 @@ fn open_left_out(models: Vec<ModelEntry>, groups: Vec<LeftOutGroup>) -> ModelPic
         },
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     picker
 }
 
@@ -2158,7 +2166,7 @@ fn count_rows_follow_the_scope_unless_show_all() {
         ],
     );
     picker.scoped = vec!["acme/m1".to_owned(), "zeta/z1".to_owned()];
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     // `beta` has no installed in-scope model: no section, no count row.
     let view = view_of(&picker);
     let providers: Vec<&str> = view
@@ -2606,7 +2614,7 @@ fn the_startup_read_counts_as_owed_until_it_answers() {
     picker.note_asked();
     assert_eq!(picker.owed, 1);
     assert_eq!(picker.refreshing, None);
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
     assert_eq!(picker.owed, 2);
     // The startup read answers first, while the open read still runs.
@@ -2747,7 +2755,7 @@ fn move_row_zero_with_no_focus_moves_nothing() {
         },
         ..ModelPicker::default()
     };
-    picker.open(Mode::Choose, None);
+    open_focused(&mut picker, None);
     assert!(picker.focus().is_none());
     picker.move_row(0);
     assert!(picker.focus().is_none());

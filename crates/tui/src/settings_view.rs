@@ -963,7 +963,7 @@ impl Settings {
                 Act::Stay
             }
             Mode::Choices { names, list, .. } => {
-                if *key == Key::Enter {
+                if *key == Key::Enter || *key == Key::Char(' ') {
                     let name = names.get(list.selected()).cloned();
                     return name.map_or(Act::Stay, |name| self.choose(&name, ctx));
                 }
@@ -1004,6 +1004,10 @@ impl Settings {
                 return Act::OpenLocal(file);
             }
             return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
+        }
+        if *key == Key::Char(' ') && self.search.is_some() {
+            self.mutate_query(ctx, |query| query.insert(' '));
+            return Act::Stay;
         }
         if *key == Key::Enter || *key == Key::Char(' ') {
             return self.change(ctx);
@@ -1255,8 +1259,19 @@ impl Settings {
                 && at <= page.entries.len()
             {
                 self.page_select(at, ctx);
+                self.page_key(&Key::Enter, ctx);
             }
             return Act::Stay;
+        }
+        if let Spot::Row(at) = spot
+            && matches!(self.mode, Mode::Rows)
+            && matches!(
+                self.layout(ctx.width, ctx.height, ctx.usage).lines.get(at),
+                Some(Line::Item(_))
+            )
+        {
+            self.focus_line(at, ctx);
+            return self.change(ctx);
         }
         match (spot, &mut self.mode) {
             (Spot::Close, _) => Act::Close,
@@ -1666,7 +1681,7 @@ impl Settings {
         if *key == Key::Esc {
             self.page = None;
             self.said.clear();
-        } else if *key == Key::Enter {
+        } else if *key == Key::Enter || (*key == Key::Char(' ') && !page.objects) {
             let entry = page.entries.get(at);
             let mut draft = Draft::default();
             draft.set(&entry.map(entry_path).unwrap_or_default());

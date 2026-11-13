@@ -170,6 +170,21 @@ fn open(app: &mut App) {
 }
 
 #[test]
+fn choose_picker_starts_without_row_focus_and_space_types() {
+    let mut app = attached(80, 24);
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    assert_eq!(app.model_picker_view().unwrap().focused, None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.model_picker_view().unwrap().filter, " ");
+    assert!(app.model_picker_open());
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("›  █"), "{text}");
+}
+
+#[test]
 fn model_picker_attached_80x24() {
     let mut app = attached(80, 24);
     app.on_line(session_line(
@@ -255,7 +270,7 @@ fn model_picker_long_list_scrolls_to_the_selection() {
         ..Default::default()
     }));
     open(&mut app);
-    for _ in 0..25 {
+    for _ in 0..26 {
         assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     }
     let text = screen(&app, 80, 24);
@@ -611,11 +626,11 @@ fn matched_id_runs_draw_bold_and_underlined_on_and_off_the_selection() {
     // selection stays on `acme/m1`, leaving `acme/m2` off it.
     type_filter(&mut app, "m");
     let view = app.model_picker_view().expect("open");
-    assert_eq!(view.focused, Some(3));
+    assert_eq!(view.focused, None);
     assert_eq!(view.sections[0].models[0].hits, [true, false]);
     assert_eq!(view.sections[0].models[1].hits, [true, false]);
-    // The drawn runs underline the matches on both rows. The bar bolds
-    // the focused row throughout, so only off it is the rest plain.
+    // Typing clears row focus, but model IDs still draw their bold
+    // matched prefix and underline.
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
@@ -636,13 +651,6 @@ fn matched_id_runs_draw_bold_and_underlined_on_and_off_the_selection() {
                 .modifier
                 .contains(Modifier::UNDERLINED)
         );
-        if id == "m2" {
-            assert!(
-                !buf[(x.saturating_add(1), y)]
-                    .modifier
-                    .contains(Modifier::BOLD)
-            );
-        }
     }
     // A role-less id matched whole underlines every letter.
     type_filter(&mut app, "2");
@@ -677,7 +685,7 @@ fn model_picker_filtered() {
     open(&mut app);
     type_filter(&mut app, "m1");
     let text = screen(&app, 80, 24);
-    assert!(text.contains("› m1█"), "{text}");
+    assert!(text.contains("m1█"), "{text}");
     assert!(text.contains("1 of 4 models"), "{text}");
     insta::assert_snapshot!("model_picker_filtered", text);
 }

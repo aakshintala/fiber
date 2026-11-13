@@ -501,7 +501,7 @@ fn arrows_wrap_rows_and_clamp_chips() {
     assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     // Rows wrap at both ends.
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
@@ -548,10 +548,10 @@ fn headings_are_not_stops() {
         seen.as_slice(),
         [
             Some("acme/m1".to_owned()),
+            Some("acme/m1".to_owned()),
             Some("acme/m2".to_owned()),
             Some("zeta/z1".to_owned()),
             Some("acme/m1".to_owned()),
-            Some("acme/m2".to_owned()),
         ]
     );
 }
@@ -626,6 +626,8 @@ fn each_open_starts_fresh() {
     let mut app = scoped_home(&["acme/m1", "zeta/z1"]);
     app.on_models(Ok(three()));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     app.on_edit(Edit::Right);
@@ -1157,8 +1159,17 @@ fn choosing_app() -> (App, Arc<crate::configure_fake::Fake>) {
     (app, seam)
 }
 
-/// Opens the picker.
+/// Opens the picker with its selected row focused, for tests exercising
+/// the row action. Tests of the no-focus opening use `open_unfocused`.
 fn open(app: &mut App) {
+    open_unfocused(app);
+    if let Some(open) = app.model_picker.open.as_mut() {
+        open.unselected = false;
+    }
+}
+
+/// Opens the picker without focusing a row.
+fn open_unfocused(app: &mut App) {
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
     assert!(app.model_picker_open());
 }
@@ -1368,12 +1379,25 @@ fn hub_refused(id: &str, message: &str) -> Line {
 #[test]
 fn space_on_a_focused_model_row_chooses_as_enter_does() {
     let (mut app, _) = choosing_app();
-    open(&mut app);
+    open_unfocused(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     let line = sent(app.on_key(Key::Char(' '), now()));
     assert_eq!(line["command"], "model");
     assert_eq!(line["args"]["model"], "acme/m2");
     assert!(!app.model_picker_open());
+}
+
+#[test]
+fn clicking_a_model_row_runs_its_enter_action() {
+    use crate::swapped::Spot;
+
+    let (mut app, _) = choosing_app();
+    open_unfocused(&mut app);
+    let row = app.model_picker_view().unwrap().sections[0].models[0].at;
+    let line = sent(app.model_picker_click(Spot::Row(row)));
+    assert_eq!(line["command"], "model");
+    assert_eq!(line["args"]["model"], "acme/m1");
 }
 
 #[test]
@@ -2131,12 +2155,11 @@ fn ctrl_s_mid_session_updates_the_row_once_the_session_accepts() {
 }
 
 #[test]
-fn ctrl_s_with_the_quit_question_up_sends_nothing_from_a_choosable_row() {
+fn ctrl_s_with_the_quit_question_up_sends_nothing_without_row_focus() {
     let mut app = quitting();
-    // A row is there to choose, so only the quit question keeps it back.
-    // The question takes Ctrl+S before the keymap, so this runs the
-    // action directly.
-    assert!(app.model_picker.choice(true).is_some());
+    // The question takes Ctrl+S before the keymap, and an unfocused row
+    // gives the session-only action nothing to choose.
+    assert!(app.model_picker.choice(true).is_none());
     assert_eq!(app.on_action("session_only"), Effect::None);
     assert!(app.quit_open());
     assert!(app.model_picker_open());
@@ -3409,12 +3432,13 @@ fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
 }
 
 #[test]
-fn space_does_nothing_outside_the_checklist() {
+fn space_without_a_focused_row_types_into_the_default_picker_query() {
     let (mut app, seam) = choosing_app();
-    open(&mut app);
+    open_unfocused(&mut app);
     let before = selected(&app);
     assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert!(app.model_picker_open());
+    assert_eq!(app.model_picker.query(), " ");
     assert_eq!(selected(&app), before);
     assert_eq!(marks(&app), Some(Vec::new()));
     assert!(seam.writes().is_empty());
@@ -4569,7 +4593,10 @@ fn the_start_pick_opens_over_the_workspace_picker() {
     Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
     assert_eq!(selected(&app).as_deref(), Some("hub/m"));
-    // Down moves the model picker's row, not the workspace picker's.
+    // Down focuses the selected model first; the next Down moves to the
+    // following row, not the workspace picker's.
+    assert_eq!(press_key(&mut app, Key::Down), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("hub/m"));
     assert_eq!(press_key(&mut app, Key::Down), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("hub/n"));
     assert_eq!(
@@ -5323,15 +5350,15 @@ fn wheel_inside_the_picker_slab_moves_the_picker_not_the_conversation() {
     assert_eq!(app.model_picker_view().unwrap().top, picker_top + 3);
     assert_eq!(
         selected(&app).as_deref(),
-        Some("acme/m2"),
-        "focus clamps to the nearest visible model after the viewport moves"
+        Some("acme/m1"),
+        "scrolling leaves the unfocused selection unchanged"
     );
     app.on_wheel(&wheel(slab.x + 1, slab.y + 1, false));
     assert_eq!(app.model_picker_view().unwrap().top, picker_top);
     assert_eq!(
         selected(&app).as_deref(),
-        Some("acme/m2"),
-        "focus stays when scrolling back makes its row visible"
+        Some("acme/m1"),
+        "scrolling back keeps the unfocused selection unchanged"
     );
 }
 
@@ -5366,8 +5393,8 @@ fn wheel_outside_the_picker_slab_moves_the_picker_not_the_conversation() {
     assert_eq!(app.model_picker_view().unwrap().top, picker_top + 3);
     assert_eq!(
         selected(&app).as_deref(),
-        Some("acme/m2"),
-        "focus clamps to the nearest visible model after the viewport moves"
+        Some("acme/m1"),
+        "scrolling leaves the unfocused selection unchanged"
     );
 }
 
@@ -5612,6 +5639,7 @@ fn settings_picker(app: &mut App, down: usize) {
     }
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(app.model_picker_open());
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert!(app.config_view_open(), "the picker opens over /settings");
 }
 
@@ -5714,6 +5742,7 @@ fn closing_a_settings_picker_writes_nothing_and_leaves_no_target_behind() {
     // model, not the settings row.
     app.open_model_picker(crate::model_picker::Mode::Choose);
     assert!(!app.config_view_open());
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(
         app.home_model().map(|(model, _)| model),

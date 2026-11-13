@@ -418,6 +418,17 @@ fn clicking_a_chip_sets_its_decision_and_moves_the_cursor() {
 }
 
 #[test]
+fn clicking_an_item_header_runs_its_source_action() {
+    let mut app = offered(json!([server("a", false), server("db", false)]), 80, 24);
+    let (_, targets) = draw(&app, 80, 24);
+    let spot = Spot::Item(1);
+    assert!(rect_of(&targets, spot).is_some());
+    assert_eq!(app.on_click(TargetId::Offer(spot)), Effect::None);
+    let (screen, _) = draw(&app, 80, 24);
+    assert!(screen.contains("▸ MCP server db"), "{screen}");
+}
+
+#[test]
 fn the_send_target_sends_and_the_cross_puts_it_aside() {
     let mut app = offered(json!([server("db", false)]), 80, 24);
     let (_, targets) = draw(&app, 80, 24);

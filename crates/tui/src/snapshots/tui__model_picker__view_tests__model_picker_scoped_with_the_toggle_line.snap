@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
+assertion_line: 216
 expression: "screen(&app, 80, 24)"
 ---
  Models  /model                                                      Esc returns
@@ -8,7 +9,7 @@ expression: "screen(&app, 80, 24)"
   Type to search █
   scoped · 2 of 4 [show all]                                     ⟳ refresh all
   acme
-  › m1 [deep] [review]
+    m1 [deep] [review]
         thinking low [high]
 
   zeta

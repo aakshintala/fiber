@@ -364,6 +364,14 @@ fn space_on_an_item_asks_for_its_source_and_on_send_sends() {
 }
 
 #[test]
+fn clicking_an_item_row_opens_its_source_and_send_click_sends() {
+    let mut offer = holding(1);
+    assert_eq!(offer.click(Spot::Item(0)), OfferKey::Source);
+    assert_eq!(offer.held.as_ref().unwrap().cursor, 0);
+    assert_eq!(offer.click(Spot::Send), OfferKey::Send);
+}
+
+#[test]
 fn enter_on_an_item_asks_for_its_source() {
     let mut offer = holding(2);
     assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Source));

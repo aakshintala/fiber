@@ -217,8 +217,11 @@ impl App {
                 super::Effect::None
             }
             Spot::Row(at) => {
-                self.model_picker.select_frame_row(at);
-                super::Effect::None
+                if self.model_picker.select_frame_row(at) {
+                    self.model_picker_enter()
+                } else {
+                    super::Effect::None
+                }
             }
             Spot::Cell(row, cell) => {
                 if let Some(provider) = self.model_picker.install_click(row, cell) {
@@ -1036,33 +1039,22 @@ impl App {
                     Some(super::Effect::None)
                 }
             }
-            Key::Enter => {
-                // The checklist toggles its focused row's mark, keeping
-                // the picker open; choosing sends one command. With no
-                // scoped row to choose the picker stays open, sending
-                // nothing; the key never reaches the draft.
-                if self.model_picker.is_scope() {
-                    self.model_picker.toggle_mark();
-                    return Some(super::Effect::None);
+            Key::Enter => Some(self.model_picker_enter()),
+            Key::Char(' ') => {
+                if self.model_picker.is_scope() || self.model_picker.focus().is_none() {
+                    let before = self.model_picker.query().to_owned();
+                    self.model_picker.push_query(' ');
+                    if self.model_picker.query() != before {
+                        self.keep_model_picker_top(true);
+                    }
+                    Some(super::Effect::None)
+                } else {
+                    Some(self.model_picker_enter())
                 }
-                // A focused not-installed row installs: choosing it is the
-                // approval.
-                if let Some(provider) = self.model_picker.install_target() {
-                    return Some(self.start_install(provider));
-                }
-                // Login-capable logged-out providers reuse the swapped
-                // `/login` view; a credential-label row stays focused.
-                if let Some((provider, true)) = self.model_picker.logged_out_target() {
-                    return Some(self.open_login_on(&provider));
-                }
-                Some(match self.model_picker.choice(false) {
-                    Some(choice) => self.choose(choice),
-                    None => super::Effect::None,
-                })
             }
             Key::Char(c) => {
-                // Typing filters the list on every letter, Space
-                // included, in every mode.
+                // Typing filters the list on every letter, Space included
+                // when no default-picker row is focused and in the checklist.
                 let before = self.model_picker.query().to_owned();
                 self.model_picker.push_query(*c);
                 if self.model_picker.query() != before {
@@ -1090,6 +1082,24 @@ impl App {
             | Key::ShiftUp
             | Key::ShiftDown
             | Key::AltX => Some(super::Effect::None),
+        }
+    }
+
+    /// Runs the Enter action for the currently focused picker row.
+    fn model_picker_enter(&mut self) -> super::Effect {
+        if self.model_picker.is_scope() {
+            self.model_picker.toggle_mark();
+            return super::Effect::None;
+        }
+        if let Some(provider) = self.model_picker.install_target() {
+            return self.start_install(provider);
+        }
+        if let Some((provider, true)) = self.model_picker.logged_out_target() {
+            return self.open_login_on(&provider);
+        }
+        match self.model_picker.choice(false) {
+            Some(choice) => self.choose(choice),
+            None => super::Effect::None,
         }
     }
 

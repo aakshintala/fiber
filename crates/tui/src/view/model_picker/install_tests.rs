@@ -289,13 +289,18 @@ fn exactly_one_row_is_barred_with_a_model_focused_and_with_a_row_focused() {
     let (buf, _, _) = render(&picker, 100, 30);
     let text = crate::view::text(&buf);
     let bars = barred(&buf);
-    assert_eq!(bars.len(), 1, "{bars:?}");
-    let (model, _) = find_row(&text, "m1");
-    assert_eq!(bars, [model]);
-    let (_, databricks) = find_row(&text, "databricks");
-    assert!(databricks.contains("  databricks"), "{databricks}");
-    assert!(!databricks.contains("› databricks"), "{databricks}");
+    assert!(
+        bars.is_empty(),
+        "a new Choose picker has no focused row: {text}"
+    );
+    let (_, model) = find_row(&text, "m1");
+    assert!(!model.contains('›'), "{model}");
 
+    picker.move_row(1);
+    let (buf, _, _) = render(&picker, 100, 30);
+    let text = crate::view::text(&buf);
+    let (model_at, _) = find_row(&text, "m1");
+    assert_eq!(barred(&buf), [model_at]);
     picker.move_row(1);
     let (buf, _, _) = render(&picker, 100, 30);
     let text = crate::view::text(&buf);
@@ -358,6 +363,7 @@ fn the_focused_row_stays_on_screen_at_every_position_on_a_short_terminal() {
     for with_models in [false, true] {
         let models: &[&str] = if with_models { &["acme/m1"] } else { &[] };
         let mut picker = picker(models, &installable);
+        picker.move_row(1);
         let steps = names.len() + usize::from(with_models) - 1;
         for step in 0..steps {
             let text = screen(&picker, 80, 12);

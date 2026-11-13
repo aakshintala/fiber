@@ -13,6 +13,7 @@ use crate::configure::{SkillsDisabled, SwitchScope};
 use crate::format::{cut, wrap};
 use crate::keys::{Edit, Key};
 use crate::scope_switches::ScopeSwitches;
+
 use crate::settings_view::{Act, Ctx, applies_text};
 use crate::swapped::{Frame, GUTTER, Ink, List, Spot, rows_height};
 use crate::text;
@@ -135,6 +136,13 @@ struct Text {
     list: List,
 }
 
+/// Which part of a skill row owns Enter and Space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Focus {
+    Row,
+    Switch(SwitchScope),
+}
+
 /// The `/skills` view's state.
 #[derive(Debug)]
 pub(crate) struct Skills {
@@ -149,8 +157,8 @@ pub(crate) struct Skills {
     /// focused row's mark never sits on a non-skill row, since there is
     /// no header row.
     list: List,
-    /// The two switches' shared state: the switch Space flips.
-    focus: ScopeSwitches,
+    /// Row or switch that Enter and Space act on.
+    focus: Focus,
     /// The text pane while open.
     text: Option<Text>,
     /// What the last action said, shown below the rows.
@@ -170,9 +178,7 @@ impl Skills {
             infos: Vec::new(),
             off,
             list: List::gutter(),
-            focus: ScopeSwitches {
-                focus: SwitchScope::Project,
-            },
+            focus: Focus::Row,
             text: None,
             said,
         };
@@ -211,11 +217,11 @@ impl Skills {
         if *key == Key::CtrlG {
             return self.open_file();
         }
-        if *key == Key::Enter {
-            return self.enter(ctx);
-        }
-        if *key == Key::Char(' ') {
-            return self.switch(ctx);
+        if *key == Key::Enter || *key == Key::Char(' ') {
+            return match self.focus {
+                Focus::Row => self.enter(ctx),
+                Focus::Switch(_) => self.switch(ctx),
+            };
         }
         let shown = self.shown(ctx);
         if self.list.key(key, self.rows_len(ctx.width), shown) {
@@ -267,9 +273,21 @@ impl Skills {
         Act::Stay
     }
 
-    /// Handles one editing key: ← and → choose the row's switch.
+    /// Moves focus between the row and its two switches.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
-        self.focus.edit_key(edit);
+        self.focus = match (self.focus, edit) {
+            (Focus::Row, Edit::Left) => Focus::Switch(SwitchScope::Everywhere),
+            (Focus::Row, Edit::Right) => Focus::Switch(SwitchScope::Project),
+            (Focus::Switch(SwitchScope::Project), Edit::Left) => Focus::Row,
+            (Focus::Switch(SwitchScope::Project), Edit::Right) => {
+                Focus::Switch(SwitchScope::Everywhere)
+            }
+            (Focus::Switch(SwitchScope::Everywhere), Edit::Left) => {
+                Focus::Switch(SwitchScope::Project)
+            }
+            (Focus::Switch(SwitchScope::Everywhere), Edit::Right) => Focus::Row,
+            (focus, _) => focus,
+        };
     }
 
     /// A click: the ✕ closes, a row is selected, and a switch is selected
@@ -289,7 +307,12 @@ impl Skills {
                 // The new selection's details lines change the frame's
                 // available rows: clamp to the final frame.
                 self.clamp(ctx);
-                Act::Stay
+                if self.text.is_none() {
+                    self.focus = Focus::Row;
+                    self.enter(ctx)
+                } else {
+                    Act::Stay
+                }
             }
             Spot::Switch { row, at } => {
                 if self.text.is_some() {
@@ -297,7 +320,11 @@ impl Skills {
                 }
                 let shown = self.shown(ctx);
                 self.list.select(row, self.rows_len(ctx.width), shown);
-                self.focus.focus = ScopeSwitches::scope_for_at(at);
+                self.focus = Focus::Switch(if at == 0 {
+                    SwitchScope::Project
+                } else {
+                    SwitchScope::Everywhere
+                });
                 self.switch(ctx)
             }
         }
@@ -346,7 +373,9 @@ impl Skills {
             return Act::Stay;
         };
         let name = info.name.clone();
-        let scope = self.focus.focused();
+        let Focus::Switch(scope) = self.focus else {
+            return Act::Stay;
+        };
         ScopeSwitches::write_then_reread(
             scope,
             self,
@@ -480,7 +509,9 @@ impl Skills {
             gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
-            footer: "Enter shows the text · Ctrl+G opens its file".to_owned(),
+            footer:
+                "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file"
+                    .to_owned(),
         }
     }
 
@@ -557,7 +588,12 @@ impl Skills {
             String::new()
         };
         let switch = |scope: SwitchScope, at: usize| {
-            let (text, ink) = ScopeSwitches::mark(selected, self.focus.focused() == scope);
+            let focused = selected && self.focus == Focus::Switch(scope);
+            let (text, ink) = if focused {
+                ("›".to_owned(), Ink::Heading)
+            } else {
+                (" ".to_owned(), Ink::Plain)
+            };
             let mark = (text, None, ink);
             let (word, ink) = if self.on_in_scope(&info.name, scope) {
                 ("[on]", Ink::Heading)
