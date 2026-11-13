@@ -399,6 +399,19 @@ fn plan_prints_the_jobs_and_shards() {
 }
 
 #[test]
+fn plan_reuse_candidates_prints_unique_ids_in_source_order() {
+    let dir = workspace();
+    dir.write(
+        "runs.json",
+        r#"{"workflow_runs":[{"id":7},{"id":8},{"id":7},{"id":"bad"}]}"#,
+    );
+    let args = ["plan", "reuse-candidates", "--runs", "runs.json"];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "7\n8\n");
+}
+
+#[test]
 fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
     let dir = workspace();
     let base = common::git(&dir, &["rev-parse", "main"]);
@@ -414,12 +427,20 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
             }],
         }]
     });
-    let jobs = serde_json::json!({ "7": (0..3).map(|i| serde_json::json!({
-        "name": format!("Mutants (shard {i}, base {base})"),
-        "conclusion": "success",
-    })).collect::<Vec<_>>() });
+    let jobs_dir = dir.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let shard_jobs: Vec<_> = (0..3)
+        .map(|i| {
+            serde_json::json!({
+                "name": format!("Mutants (shard {i}, base {base})"),
+                "conclusion": "success",
+            })
+        })
+        .collect();
+    let first_page = serde_json::json!({"jobs": [shard_jobs[0].clone()]});
+    let second_page = serde_json::json!({"jobs": [shard_jobs[1].clone(), shard_jobs[2].clone()]});
     dir.write("runs.json", &runs.to_string());
-    dir.write("jobs.json", &jobs.to_string());
+    dir.write("jobs/7.json", &format!("{}\n{}\n", first_page, second_page));
     let args = vec![
         "plan",
         "--base",
@@ -434,8 +455,6 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
         "false",
         "--bug",
         "false",
-        "--mutants",
-        "true",
         "--mutant-count",
         "40",
         "--lookup-ok",
@@ -449,7 +468,7 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
         "--runs",
         "runs.json",
         "--jobs",
-        "jobs.json",
+        "jobs",
     ];
     let (code, out) = xtask(&dir, &args, &[], "");
     assert_eq!(code, 0, "{out}");
@@ -482,6 +501,18 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
     assert!(out.contains("mutants=true\n"), "{out}");
     assert!(out.contains("shards=[0,1,2]\n"), "{out}");
     assert!(out.contains("reuse=false\n"), "{out}");
+
+    std::fs::remove_file(dir.path().join("jobs/7.json")).unwrap();
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=true\n"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+
+    dir.write("jobs/7.json", "{not json}\n");
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=true\n"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
 }
 
 #[test]

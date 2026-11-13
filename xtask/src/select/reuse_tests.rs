@@ -2,7 +2,10 @@
 
 use serde_json::{Value, json};
 
-use super::{CommitSha, Current, MatchedReuse, PullRequestNumber, RunId, matched_reuse};
+use super::{
+    CommitSha, Current, MatchedReuse, PullRequestNumber, RunId, matched_reuse, matched_reuse_files,
+    reuse_candidate_ids,
+};
 
 const PR: u64 = 3899;
 const HEAD: &str = "abc123";
@@ -99,6 +102,45 @@ fn matched_run(run_id: u64, pr_head: &str) -> MatchedReuse {
 
 fn jobs_for(id: u64, jobs: Value) -> Value {
     json!({ id.to_string(): jobs })
+}
+
+#[test]
+fn candidate_ids_from_runs_keep_source_order_and_drop_duplicates() {
+    let runs = json!({ "workflow_runs": [
+        { "id": 9 }, { "id": 7 }, { "id": 9 }, { "id": "invalid" }, { "id": 3 }
+    ]});
+    assert_eq!(reuse_candidate_ids(&runs.to_string()), Some(vec![9, 7, 3]));
+}
+
+#[test]
+fn raw_jobs_pages_merge_before_matching() {
+    let temp = fakes::TempDir::new("xtask-reuse-pages");
+    let runs = json!({ "workflow_runs": [matching_candidate()] });
+    let shards = successful_shards(SHARD_TOTAL);
+    let jobs = shards.as_array().unwrap();
+    let first = json!({ "jobs": [jobs[0].clone()] });
+    let second = json!({ "jobs": [jobs[1].clone(), jobs[2].clone()] });
+    temp.write("jobs/7.json", &format!("{first}\n{second}\n"));
+    assert_eq!(
+        matched_reuse_files(&current(), &runs.to_string(), &temp.path().join("jobs")),
+        Some(matched_run(7, HEAD))
+    );
+}
+
+#[test]
+fn missing_or_invalid_raw_candidate_jobs_file_fails_closed() {
+    let temp = fakes::TempDir::new("xtask-reuse-invalid-pages");
+    let runs = json!({ "workflow_runs": [matching_candidate()] });
+    let jobs_dir = temp.path().join("jobs");
+    assert_eq!(
+        matched_reuse_files(&current(), &runs.to_string(), &jobs_dir),
+        None
+    );
+    temp.write("jobs/7.json", "{not json}\n");
+    assert_eq!(
+        matched_reuse_files(&current(), &runs.to_string(), &jobs_dir),
+        None
+    );
 }
 
 #[test]

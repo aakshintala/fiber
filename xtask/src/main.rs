@@ -12,9 +12,11 @@
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
-//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutant-count N [--labels "L1 L2" --lookup-ok true|false --head H --run-id R --runs FILE --jobs FILE --pr N]`:
+//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutant-count N [--labels "L1 L2" --lookup-ok true|false --head H --run-id R --runs FILE --jobs DIR --pr N]`:
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
+//! - `plan reuse-candidates --runs FILE`: prints unique run IDs from the raw
+//!   Actions runs response, one per line; invalid input is an error
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped. With the
 //!   `HEAD_FAILURES` file plus the `BASE_LIST`, `BASE_FAILED` and
@@ -219,6 +221,14 @@ fn run(args: &[String]) -> Result<bool, String> {
                 select::extension_packages(&selection, Path::new("."))?
             {
                 println!("extension_packages={}", extension_packages.join(" "));
+            }
+            Ok(true)
+        }
+        "plan" if rest.first().is_some_and(|arg| arg == "reuse-candidates") => {
+            let candidate_args = rest.get(1..).ok_or("missing reuse-candidates arguments")?;
+            let runs = read(&flag(candidate_args, "--runs")?)?;
+            for id in select::reuse_candidate_ids(&runs).ok_or("invalid runs response")? {
+                println!("{id}");
             }
             Ok(true)
         }
@@ -936,8 +946,8 @@ fn reuse_match_for_plan(
         draft,
     };
     let runs = std::fs::read_to_string(optional(args, "--runs")?).ok()?;
-    let jobs = std::fs::read_to_string(optional(args, "--jobs")?).ok()?;
-    select::matched_reuse(&current, &runs, &jobs)
+    let jobs_dir = optional(args, "--jobs")?;
+    select::matched_reuse_files(&current, &runs, Path::new(&jobs_dir))
 }
 
 /// The contents of the file the `name` environment variable points at: `None`

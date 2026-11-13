@@ -31,7 +31,8 @@ pub(crate) use reuse::CommitSha;
 pub(crate) use reuse::MatchedReuse;
 pub(crate) use reuse::{
     CommitSha as ReuseCommitSha, Current as ReuseCurrent,
-    PullRequestNumber as ReusePullRequestNumber, RunId as ReuseRunId, matched_reuse,
+    PullRequestNumber as ReusePullRequestNumber, RunId as ReuseRunId, matched_reuse_files,
+    reuse_candidate_ids,
 };
 pub(crate) use runtime_read::runtime_read_mismatches;
 pub(crate) use runtime_read::string_literal;

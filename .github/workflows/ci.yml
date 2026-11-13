@@ -173,44 +173,32 @@ jobs:
           fi
           echo "mutants in the diff: $count"
 
-          # Fetching is workflow wiring; xtask owns parsing and the reuse decision.
           lookup_ok=true
+          args=(--base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME"
+            --draft "$DRAFT" --bug "$BUG" --labels "$LABELS" --mutant-count "$count")
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            if runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$HEAD_REF&per_page=20" 2>/dev/null); then
-              printf '%s' "$runs_json" >"$RUNNER_TEMP/runs.json"
-              printf '%s\n' '{}' >"$RUNNER_TEMP/jobs.json"
-              if ids=$(printf '%s' "$runs_json" | jq -r '.workflow_runs[]?.id' 2>/dev/null); then
-                for id in $ids; do
-                  # Combine paginated API responses so xtask sees one jobs list
-                  # per candidate run.
-                  if jobs_pages=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null) \
-                    && [ -n "$jobs_pages" ] \
-                    && jobs_json=$(printf '%s' "$jobs_pages" | jq -c -s 'map(.jobs // []) | add // []' 2>/dev/null); then
-                    tmp="$RUNNER_TEMP/jobs-$id.json"
-                    if jq --arg id "$id" --argjson jobs "$jobs_json" '. + {($id): $jobs}' "$RUNNER_TEMP/jobs.json" >"$tmp" 2>/dev/null; then
-                      mv "$tmp" "$RUNNER_TEMP/jobs.json"
-                    else
-                      rm -f "$tmp"
-                      lookup_ok=false
-                    fi
-                  else
+            runs_file="$RUNNER_TEMP/runs.json"
+            jobs_dir="$RUNNER_TEMP/jobs"
+            mkdir -p "$jobs_dir"
+            if gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$HEAD_REF&per_page=20" >"$runs_file"; then
+              if ids=$(cargo xtask plan reuse-candidates --runs "$runs_file"); then
+                while IFS= read -r id; do
+                  [ -n "$id" ] || continue
+                  if ! gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" >"$jobs_dir/$id.json"; then
                     lookup_ok=false
                   fi
-                done
+                done <<<"$ids"
               else
                 lookup_ok=false
               fi
             else
               lookup_ok=false
+              : >"$runs_file"
             fi
-          fi
-
-          args=(--base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME"
-            --draft "$DRAFT" --bug "$BUG" --labels "$LABELS" --lookup-ok "$lookup_ok" --mutant-count "$count")
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             args+=(--head "$HEAD_SHA" --run-id "$CURRENT_RUN_ID" --pr "$PR_NUMBER"
-              --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json")
+              --runs "$runs_file" --jobs "$jobs_dir")
           fi
+          args+=(--lookup-ok "$lookup_ok")
           cargo xtask plan "${args[@]}" | tee -a "$GITHUB_OUTPUT"
 
   lint:
