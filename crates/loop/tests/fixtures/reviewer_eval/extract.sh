@@ -5,8 +5,9 @@
 #   fixtures/reviewer_eval/extract.sh [--out <file>]
 #
 # Every value the recipe needs is a committed byte or a literal flag:
-# the converter reads the `reviewer_consent/` sessions and the
-# `review_person_input/` session with an empty scrub context, the python
+# the converter reads `reviewer_consent/`, the one
+# `reviewer_eval/contradictory-consent/` case and `review_person_input/`
+# with an empty scrub context, the python
 # step labels synthetic lines by fixture session (`control-*` sessions
 # block, every other synthetic session passes; `family2` stays null), and
 # `seeded.jsonl` lines keep their block verdicts. The committed
@@ -47,6 +48,7 @@ export TMPDIR="$TMP"
 
 DIRS=()
 while IFS= read -r d; do DIRS+=("$d"); done < <(printf '%s\n' "$FIX_DIR"/../reviewer_consent/*/ | sort)
+DIRS+=("$FIX_DIR/contradictory-consent")
 DIRS+=("$FIX_DIR/../review_person_input")
 
 FLAGS=()
