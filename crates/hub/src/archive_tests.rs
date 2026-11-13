@@ -794,6 +794,50 @@ fn recent_listing_archives_missing_workspaces_and_archived_mode_counts_it() {
 }
 
 #[test]
+fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited", "archived"]);
+    let rows = [
+        crate::recent::RecentRow {
+            session_id: SessionId(testkit::id(1)),
+            ts: 1,
+            project: "-w".to_owned(),
+            workspace: temp.dir.join("missing-workspace").to_string_lossy().into_owned(),
+            name: "newly archived".to_owned(),
+            how: crate::recent::Left::Exited,
+            status: None,
+            archived: false,
+        },
+        crate::recent::RecentRow {
+            session_id: SessionId(testkit::id(2)),
+            ts: 2,
+            project: "-w".to_owned(),
+            workspace: workspace.to_string_lossy().into_owned(),
+            name: "already archived".to_owned(),
+            how: crate::recent::Left::Exited,
+            status: None,
+            archived: true,
+        },
+    ];
+    for row in rows {
+        crate::recent::append(&temp.dir, &row).unwrap();
+    }
+
+    let page = feed::recent_for_hub(
+        &hub,
+        &args(serde_json::json!({"archived": true, "before": testkit::id(1)})),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["sessions"][0]["session_id"], testkit::id(2));
+}
+
+#[test]
 fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
     let temp = Temp::new();
     let hub = temp.hub();
