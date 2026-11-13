@@ -307,12 +307,11 @@ struct RestoredSupervisor {
 impl RestoredSupervisor {
     fn group_alive(&self, event: RestoredLivenessEvent) -> bool {
         #[cfg(debug_assertions)]
-        if let Some(hook) = &self.restored.liveness {
-            if hook.observed.send(event).is_ok() {
-                if let Ok(answer) = hook.answers.recv() {
-                    return answer;
-                }
-            }
+        if let Some(hook) = &self.restored.liveness
+            && hook.observed.send(event).is_ok()
+            && let Ok(answer) = hook.answers.recv()
+        {
+            return answer;
         }
         support::group::alive(self.restored.pgid)
     }
