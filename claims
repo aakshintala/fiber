@@ -317,3 +317,6 @@ docs/configuration.md:34-35	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010
 crates/config/src/cache.rs	fiber-4755	plan	2026-11-13T08:36:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/src/lib.rs	fiber-4755	plan	2026-11-13T08:36:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/tests/model_cache.rs	fiber-4755	plan	2026-11-13T08:36:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/prompt/reviewer.md	fiber-4748	plan	2026-11-13T08:48:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/prompt_tests.rs	fiber-4748	plan	2026-11-13T08:48:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/reviewer_tests.rs	fiber-4748	plan	2026-11-13T08:48:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
