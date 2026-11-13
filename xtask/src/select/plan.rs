@@ -252,28 +252,6 @@ pub(crate) fn plan(
     mutants: bool,
     mutant_count: u64,
 ) -> Plan {
-    plan_with_changed_paths(
-        mode,
-        packages,
-        event,
-        draft,
-        bug,
-        mutants,
-        mutant_count,
-        &[],
-    )
-}
-
-pub(crate) fn plan_with_changed_paths(
-    mode: &str,
-    packages: &[String],
-    event: &str,
-    draft: bool,
-    bug: bool,
-    mutants: bool,
-    mutant_count: u64,
-    changed_paths: &[ChangedPath],
-) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
@@ -287,16 +265,9 @@ pub(crate) fn plan_with_changed_paths(
     // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
     // "The merge gate"), so the selection ignores it.
     let _ = draft;
-    let clippy_macos = pr && changed_paths.iter().any(|entry| {
-        matches!(&entry.state, PathState::Present(Some(contents)) if contents.contains("target_os"))
-    });
-    let scripts_self_test_macos = pr
-        && changed_paths
-            .iter()
-            .any(|entry| entry.path.starts_with("scripts/"));
     let jobs = BTreeMap::from([
-        ("clippy_macos", clippy_macos),
-        ("scripts_self_test_macos", scripts_self_test_macos),
+        ("clippy_macos", false),
+        ("scripts_self_test_macos", false),
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
         // Linux x86_64 runs the selected tests on every event; `test` runs
@@ -315,6 +286,27 @@ pub(crate) fn plan_with_changed_paths(
         ("release", !pr),
     ]);
     Plan { jobs, shards }
+}
+
+/// Add the pull-request-only macOS selections from the head paths and their
+/// current contents, while leaving release-path selection separate.
+pub(crate) fn plan_with_changed_paths(
+    mut plan: Plan,
+    event: &str,
+    changed_paths: &[ChangedPath],
+) -> Plan {
+    let pull_request = event == "pull_request";
+    let clippy_macos = pull_request && changed_paths.iter().any(|entry| {
+        matches!(&entry.state, PathState::Present(Some(contents)) if contents.contains("target_os"))
+    });
+    let scripts_self_test_macos = pull_request
+        && changed_paths
+            .iter()
+            .any(|entry| entry.path.starts_with("scripts/"));
+    plan.jobs.insert("clippy_macos", clippy_macos);
+    plan.jobs
+        .insert("scripts_self_test_macos", scripts_self_test_macos);
+    plan
 }
 
 /// What the rerun at the base commit says about one test that failed at

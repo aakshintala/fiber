@@ -240,16 +240,17 @@ fn run(args: &[String]) -> Result<bool, String> {
             let base = flag(rest, "--base")?;
             let release_paths = release_paths(&base)?;
             let changed_paths = plan_changed_paths(&base)?;
-            let plan = select::plan_with_changed_paths(
+            let event = flag(rest, "--event")?;
+            let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
-                &flag(rest, "--event")?,
+                &event,
                 draft,
                 bug,
                 mutants,
                 mutant_count,
-                &changed_paths,
             );
+            let plan = select::plan_with_changed_paths(plan, &event, &changed_paths);
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
                 "jobs={}",

@@ -33,8 +33,11 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
         ),
     ];
     for (paths, clippy, scripts) in cases {
-        let plan =
-            plan_with_changed_paths("docs", &[], "pull_request", false, false, false, 0, &paths);
+        let plan = plan_with_changed_paths(
+            plan("docs", &[], "pull_request", false, false, false, 0),
+            "pull_request",
+            &paths,
+        );
         assert_eq!(plan.jobs["clippy_macos"], clippy);
         assert_eq!(plan.jobs["scripts_self_test_macos"], scripts);
     }
@@ -43,13 +46,8 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
 #[test]
 fn moved_matching_file_uses_its_head_path_and_content() {
     let plan = plan_with_changed_paths(
-        "docs",
-        &[],
+        plan("docs", &[], "pull_request", false, false, false, 0),
         "pull_request",
-        false,
-        false,
-        false,
-        0,
         &[changed("renamed.rs", Some("target_os"))],
     );
     assert!(plan.jobs["clippy_macos"]);
@@ -59,13 +57,8 @@ fn moved_matching_file_uses_its_head_path_and_content() {
 fn macos_jobs_are_off_for_non_pull_request_events() {
     for event in ["push", "workflow_dispatch"] {
         let plan = plan_with_changed_paths(
-            "all",
-            &[],
+            plan("all", &[], event, false, false, false, 0),
             event,
-            false,
-            false,
-            false,
-            0,
             &[changed("scripts/test-x", Some("target_os"))],
         );
         assert!(!plan.jobs["clippy_macos"]);
