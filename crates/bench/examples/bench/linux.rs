@@ -118,7 +118,10 @@ pub(crate) fn idle_switches(
     let mut deltas = Vec::new();
     for (tid, start) in before {
         let Some(end) = after.get(tid) else {
-            notes.push(format!("thread {tid} exited during the idle window"));
+            let name = start.name.as_deref().unwrap_or("name unavailable");
+            notes.push(format!(
+                "thread {tid} ({name}) exited during the idle window"
+            ));
             continue;
         };
         match (

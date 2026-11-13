@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+
+for test_name in \
+  leak-scan \
+  look-diff \
+  flaky-tests \
+  flake-report \
+  retry-filter \
+  stress-plan \
+  journey-report \
+  mutants-rotation \
+  mutants-shard-finish \
+  bug-red \
+  class-data
+do
+  echo "== $test_name self-test"
+  /bin/bash "scripts/test-$test_name"
+done
