@@ -172,6 +172,7 @@ mod ticket;
 mod visibility;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -236,8 +237,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             let mutant_count: u64 = flag(rest, "--mutant-count")?
                 .parse()
                 .map_err(|e| format!("--mutant-count: {e}"))?;
-            let release_paths = release_paths(&flag(rest, "--base")?)?;
-            let plan = select::plan(
+            let base = flag(rest, "--base")?;
+            let release_paths = release_paths(&base)?;
+            let changed_paths = plan_changed_paths(&base)?;
+            let plan = select::plan_with_changed_paths(
                 &flag(rest, "--mode")?,
                 &packages,
                 &flag(rest, "--event")?,
@@ -245,6 +248,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 bug,
                 mutants,
                 mutant_count,
+                &changed_paths,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -1020,6 +1024,42 @@ fn changed_files(base: &str) -> Result<Vec<String>, String> {
         .collect();
     files.extend(git_lines(&["ls-files", "--others", "--exclude-standard"])?);
     Ok(files.into_iter().collect())
+}
+
+/// The head diff's paths and current contents for the Select trigger rules.
+/// A missing path is a deletion; a path whose contents cannot be read stays
+/// present with no readable content, so it cannot match `target_os`.
+fn plan_changed_paths(base: &str) -> Result<Vec<select::ChangedPath>, String> {
+    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
+        .into_iter()
+        .next()
+        .ok_or("no merge base")?;
+    let paths = split_nul(&output(
+        "git",
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            &format!("{merge_base}..HEAD"),
+        ],
+    )?);
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            let path_state = match fs::read_to_string(&path) {
+                Ok(contents) => select::PathState::Present(Some(contents)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    select::PathState::Deleted
+                }
+                Err(_) => select::PathState::Present(None),
+            };
+            select::ChangedPath {
+                path,
+                state: path_state,
+            }
+        })
+        .collect())
 }
 
 /// Paths for the release rule from the merge base with `base`: committed
