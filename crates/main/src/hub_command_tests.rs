@@ -104,6 +104,19 @@ fn configure_reads_the_idle_exit() {
 }
 
 #[test]
+fn configure_reads_the_exited_session_retention_count() {
+    let root = fakes::TempDir::new("hcfg");
+    let (home, workspace) = home_and_workspace(&root);
+    std::fs::write(
+        home.join("config.json"),
+        r#"{"session": {"keep_exited": 3}}"#,
+    )
+    .unwrap();
+    // `docs/configuration.md`, "Keys": the configured count reaches the hub.
+    assert_eq!(configure(&home, Ok(workspace)).unwrap().keep_exited, 3);
+}
+
+#[test]
 fn configure_reads_a_global_port_with_its_origins() {
     let root = fakes::TempDir::new("hport");
     let (home, workspace) = home_and_workspace(&root);

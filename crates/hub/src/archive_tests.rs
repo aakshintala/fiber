@@ -880,6 +880,8 @@ fn an_explicit_archive_cascades_to_exited_delegate_descendants() {
         };
         temp.indexed(n, "/w", parent.as_deref());
     }
+    temp.logged(33, &["fiber_exited"]);
+    temp.indexed(33, "/w", None);
 
     // `docs/invocation.md`, "Archiving": explicit parent archiving includes
     // every exited delegate descendant.
@@ -891,7 +893,8 @@ fn an_explicit_archive_cascades_to_exited_delegate_descendants() {
     for n in 30..=32 {
         assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
     }
-    assert_eq!(crate::recent::read_all(&temp.dir).len(), 6);
+    assert!(archived_lines(&temp.log_text(33)).is_empty());
+    assert_eq!(crate::recent::read_all(&temp.dir).len(), 7);
 }
 
 #[test]

@@ -100,6 +100,29 @@ fn default() -> (Source, Value) {
     (Source::Default, keys::defaults())
 }
 
+#[test]
+fn keep_exited_uses_the_documented_default_and_count() {
+    // `docs/configuration.md`, "Keys": session.keep_exited defaults to 10
+    // and accepts zero as a configured value.
+    assert_eq!(config_with(vec![default()]).keep_exited(), 10);
+    assert_eq!(
+        config_with(vec![
+            default(),
+            global(json!({"session": {"keep_exited": 0}}))
+        ])
+        .keep_exited(),
+        0
+    );
+    assert_eq!(
+        config_with(vec![
+            default(),
+            global(json!({"session": {"keep_exited": 3}}))
+        ])
+        .keep_exited(),
+        3
+    );
+}
+
 /// The `merged`-route answer for the table: the merged value with the
 /// highest layer holding the key, or the schema default.
 fn reference(config: &Config, key: &str, model: Option<&str>) -> Option<(Value, Source)> {
