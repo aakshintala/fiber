@@ -2715,7 +2715,7 @@ fn number_text(key: &str, text: &str) -> String {
             as_typed(text)
         };
     };
-    let shown = match spec.format {
+    match spec.format {
         NumberFormat::Width => format!("{}% of screen width", trimmed(n)),
         NumberFormat::PercentUsed => format!("{}% used", trimmed(n)),
         NumberFormat::FractionPercent => {
@@ -2743,8 +2743,7 @@ fn number_text(key: &str, text: &str) -> String {
             number_list(key).unwrap_or(&[]),
             counted(n, "session", "sessions"),
         ),
-    };
-    shown
+    }
 }
 
 /// A duration string with its unit word spaced out: "24h" reads
