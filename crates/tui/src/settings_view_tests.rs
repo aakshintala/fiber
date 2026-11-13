@@ -256,6 +256,7 @@ fn focus_non_numeric(settings: &mut Settings, fake: &Fake) -> bool {
     true
 }
 
+/// Opens `tab`, focusing a non-numeric row before each arrow switches tabs.
 fn tab(fake: &Fake, tab: SettingsTab) -> Settings {
     let mut settings = open(fake);
     while settings.tab != tab {
@@ -1082,6 +1083,7 @@ fn editor_fake() -> Fake {
     )])
 }
 
+/// The fixture rows with `key` holding `shown` from `layer`.
 fn with(key: &str, shown: Shown, layer: &str) -> Vec<SettingRow> {
     rows()
         .into_iter()
@@ -3347,6 +3349,28 @@ fn refresh_after_arrows_step_its_list_without_changing_tabs() {
     assert_eq!(
         writes(&fake),
         [w(Layer::Global, "model_lists.refresh_after", "\"3d\"")]
+    );
+}
+
+#[test]
+fn enter_at_the_top_of_compaction_token_list_wraps_to_first_value() {
+    let fake = Fake::new(with("compaction.tokens", value("1000000"), "global"));
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "compaction.tokens", "100000")]
+    );
+}
+
+#[test]
+fn enter_at_the_end_of_refresh_list_wraps_to_one_hour() {
+    let fake = Fake::new(with("model_lists.refresh_after", value("\"7d\""), "global"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.refresh_after", "\"1h\"")]
     );
 }
 

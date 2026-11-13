@@ -488,6 +488,9 @@ fn the_settings_view_matches_the_doc() {
     assert!(!is_bold(&grid, footer, "change"));
     // Move focus off the Quota notice slider before moving to Models.
     run.write(b"\x1b[B");
+    run.wait_screen("the focused non-numeric Appearance row", |grid| {
+        focused_label(grid).is_some_and(|label| label != "Quota notice")
+    });
     run.write(b"\x1b[C");
     run.write(b"\x1b[B");
     run.write(b"\x1b[C");
@@ -507,6 +510,9 @@ fn the_settings_view_matches_the_doc() {
     // move to Sessions; walk the focus to `compaction.tokens` below.
     run.write(b"\x1b[C");
     run.write(b"\x1b[B\x1b[B\x1b[B");
+    run.wait_screen("the focused non-numeric Permissions row", |grid| {
+        focused_label(grid).as_deref() == Some("Reviewer model")
+    });
     run.write(b"\x1b[C");
     grid = run.wait_screen("the Sessions tab", |grid| {
         find_row(grid, "Compaction tokens").is_some()

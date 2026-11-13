@@ -1454,8 +1454,12 @@ impl Settings {
         };
         let layer = Self::write_layer(row);
         if let Some(values) = text_list(&row.key) {
-            let Some(next) = next_text_value(values, &text, forward) else {
-                return Act::Stay;
+            let next = match next_text_value(values, &text, forward) {
+                Some(next) => next,
+                None if enter && refresh_millis(&text).is_some() => {
+                    values.first().copied().unwrap_or(&text)
+                }
+                None => return Act::Stay,
             };
             self.save(ctx, layer, &row.key, &quoted(next));
             return Act::Stay;
@@ -1485,9 +1489,12 @@ impl Settings {
         let Some(values) = number_list(&row.key) else {
             return Act::Stay;
         };
-        let Some(next) = next_number_value(values, value, forward) else {
-            return Act::Stay;
+        let next = match next_number_value(values, value, forward) {
+            Some(next) => next,
+            None if enter => values.first().copied().unwrap_or(value),
+            None => return Act::Stay,
         };
+
         if row.key == "budget.usd" && next == 0.0 {
             let Some(expected) = layer_named(&row.layer).map(|_| text.as_str()) else {
                 return Act::Stay;
