@@ -1264,7 +1264,7 @@ expect_summary "$collate_absent_writer/out" "the flaky-tests-macos-26 list is mi
 code=$(run_step "$collate_absent_writer" push "" "$empty_open" "" decisions.jsonl)
 expect_exit collate-absent-writer "$code" 0
 expect_writes "$collate_absent_writer" 1
-expect_write "$collate_absent_writer" 0 "$(printf 'create Flaky tests: main::probe\nThe test `main::probe a` passed after a retry on ubuntu-24.04-arm: %s.\ntested %s\n%s\nd1\n%s\nlabel=test-only' "$url" "$sha" "$fence" "$fence")"
+expect_write "$collate_absent_writer" 0 "$(printf 'create Flaky tests: main::probe\nThe test %smain::probe a%s passed after a retry on ubuntu-24.04-arm: %s.\ntested %s\n%s\nd1\n%s\nlabel=test-only' '`' '`' "$url" "$sha" "$fence" "$fence")"
 # The Linux-only completed-empty result stays a success with no flakes:
 # no list was ever uploaded, and none is expected.
 collate_linux_only_empty=$tmp/collate-linux-only-empty
