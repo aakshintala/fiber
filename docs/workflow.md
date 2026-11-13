@@ -111,7 +111,11 @@ those.
   `cargo xtask tui-isolation`, `cargo xtask crate-edges`,
   `cargo xtask must-succeed` and
   `cargo xtask dependency-list`. `main` has no library target, so its clippy and nextest take `--bins --tests` in place of
-  `--all-targets`. `log` shares its name with a dependency, so its clippy and
+  `--all-targets`. `--bins --tests` doesn't build `main`'s examples, the jigs
+  its tests run, and a jig older than its sources is refused
+  (`docs/testing/fakes.md`, "Jigs"). So every `main` nextest run here comes
+  after `cargo build -p main --examples`, with the same environment
+  variables. `log` shares its name with a dependency, so its clippy and
   nextest take `-p log@0.0.0`; `cargo fmt` takes plain `-p log`.
 - A crate whose tests read a doc table, such as `contract`, runs its tests
   when that doc changes.
