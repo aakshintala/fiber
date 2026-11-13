@@ -293,3 +293,7 @@ scripts/test-bug-red	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Us
 .github/workflows/ci.yml	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/archive.rs	fiber-4598	plan	2026-11-13T07:37:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/check	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/ci.yml	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/test-script-selftests	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
