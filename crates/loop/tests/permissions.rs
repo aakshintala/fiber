@@ -688,7 +688,7 @@ fn an_always_reviewed_call_reaches_the_reviewer_despite_a_project_allow() {
     let reviewer = session.reviewer_limits(
         vec![
             Scripted::text("check"),
-            Scripted::text("block writes the index"),
+            Scripted::text("writes the index\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 1,

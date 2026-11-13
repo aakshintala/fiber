@@ -482,7 +482,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
-        Scripted::text("block: it writes"),
+        Scripted::text("it writes\nblock"),
     ]));
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
@@ -589,7 +589,7 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
-        Scripted::text("block: it writes"),
+        Scripted::text("it writes\nblock"),
     ]));
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
@@ -2468,7 +2468,7 @@ fn twenty_prior_denials(history: &History) {
 fn blocking_reviewer() -> Arc<ScriptedProvider> {
     Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
-        Scripted::text("block: it writes"),
+        Scripted::text("it writes\nblock"),
     ]))
 }
 
