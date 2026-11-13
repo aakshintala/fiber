@@ -50,12 +50,13 @@ pub enum Error {
     /// screen would move.
     #[error("terminal: could not start the terminal's timer: {0}")]
     TimerStart(#[from] std::io::Error),
+    /// The terminal loop failed while handling input or drawing.
     #[error(transparent)]
-    LoopExit(#[from] ExitCause),
+    LoopExit(io::Error),
 }
 
 #[derive(Debug)]
-pub struct ExitCause {
+pub(crate) struct ExitCause {
     message: &'static str,
     source: Option<io::Error>,
 }
@@ -71,6 +72,21 @@ type LoopResult = Result<Option<i32>, ExitCause>;
 fn draw_cause(error: impl std::fmt::Display) -> ExitCause {
     ExitCause::new(
         "terminal: could not draw the screen",
+        Some(io::Error::other(error.to_string())),
+    )
+}
+
+fn kitty_cause() -> ExitCause {
+    ExitCause::new("terminal: could not send an image to the terminal", None)
+}
+
+fn logo_cause(error: io::Error) -> ExitCause {
+    ExitCause::new("terminal: could not draw the logo", Some(error))
+}
+
+fn handover_cause(error: impl std::fmt::Display) -> ExitCause {
+    ExitCause::new(
+        "terminal: could not take the terminal back",
         Some(io::Error::other(error.to_string())),
     )
 }
@@ -461,7 +477,7 @@ pub(crate) fn run_with(
     for line in &lines {
         writeln!(tty, "{line}").unwrap_or(());
     }
-    code.map_err(Error::from)
+    code.map_err(|cause| Error::LoopExit(io::Error::other(cause)))
 }
 
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
@@ -682,8 +698,8 @@ impl<B: Backend> Loop<B> {
                     None
                 };
             }
-            // The batch's end runs on every path out, so a quit never
-            // leaves the hold set.
+            // A handled batch ends here. An error propagated by `?` exits
+            // before settlement and can leave the hold set.
             if held {
                 self.app.end_batch();
                 #[cfg(test)]
@@ -1000,10 +1016,7 @@ impl<B: Backend> Loop<B> {
             // nothing further: the loop quits through the failed-draw
             // exit, closing nothing first.
             Input::KittyFailed => {
-                return Err(ExitCause::new(
-                    "terminal: could not send an image to the terminal",
-                    None,
-                ));
+                return Err(kitty_cause());
             }
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
@@ -1134,10 +1147,7 @@ impl<B: Backend> Loop<B> {
         // loop write already running may be attempted before this check,
         // but a failed tty contributes no bytes.
         if self.kitty_failed.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(ExitCause::new(
-                "terminal: could not send an image to the terminal",
-                None,
-            ));
+            return Err(kitty_cause());
         }
         // The summary span opens and closes here: every handled batch
         // ends in a frame, so the send is seen on the next frame top
@@ -1566,29 +1576,17 @@ impl<B: Backend> Loop<B> {
             let _guard = lock.loop_write();
             #[cfg(test)]
             if let Some(error) = self.take_screen_fault(ScreenFault::LogoRepaint) {
-                return Err(ExitCause::new(
-                    "terminal: could not draw the logo",
-                    Some(error),
-                ));
+                return Err(logo_cause(error));
             }
             if let Err(error) = self.screen.repaint() {
-                return Err(ExitCause::new(
-                    "terminal: could not draw the logo",
-                    Some(io::Error::other(error.to_string())),
-                ));
+                return Err(logo_cause(io::Error::other(error.to_string())));
             }
             #[cfg(test)]
             if let Some(error) = self.take_screen_fault(ScreenFault::LogoDraw) {
-                return Err(ExitCause::new(
-                    "terminal: could not draw the logo",
-                    Some(error),
-                ));
+                return Err(logo_cause(error));
             }
             if let Err(error) = self.screen.draw(&mut self.app, self.pointer.at) {
-                return Err(ExitCause::new(
-                    "terminal: could not draw the logo",
-                    Some(io::Error::other(error.to_string())),
-                ));
+                return Err(logo_cause(io::Error::other(error.to_string())));
             }
             let (protocol, after) = self.logo_after(true);
             return self.logo_write(protocol, after);
@@ -1627,10 +1625,7 @@ impl<B: Backend> Loop<B> {
         let lock = Arc::clone(&self.tty_lock);
         let _guard = lock.loop_write();
         if let Err(error) = self.tty.write_all(&after.bytes) {
-            return Err(ExitCause::new(
-                "terminal: could not draw the logo",
-                Some(error),
-            ));
+            return Err(logo_cause(error));
         }
         Ok(None)
     }
@@ -2056,10 +2051,7 @@ impl<B: Backend> Loop<B> {
         if let Err(error) = term::resume(self.parser.kitty(), self.hover) {
             // A failed resume or a shutdown leaves the writer paused for
             // Stop and join: no Resume is sent.
-            return Err(ExitCause::new(
-                "terminal: could not take the terminal back",
-                Some(error),
-            ));
+            return Err(handover_cause(error));
         }
         // The restore popped the title: the next frame writes it again.
         self.title.forget();
@@ -2073,10 +2065,7 @@ impl<B: Backend> Loop<B> {
         self.note_handover_resumed();
         match self.screen.resize(width, height) {
             Ok(()) => Ok(None),
-            Err(error) => Err(ExitCause::new(
-                "terminal: could not take the terminal back",
-                Some(io::Error::other(error.to_string())),
-            )),
+            Err(error) => Err(handover_cause(error)),
         }
     }
 }

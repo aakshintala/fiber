@@ -3932,7 +3932,7 @@ fn frame_draw_failure_carries_source_and_io_failed_code() {
         "terminal: could not draw the screen: injected screen failure"
     );
     assert_eq!(
-        super::Error::from(cause).code(),
+        super::Error::LoopExit(io::Error::other(cause)).code(),
         contract::ErrorCode::IoFailed
     );
 }
@@ -3955,10 +3955,9 @@ fn resize_failure_carries_screen_draw_cause() {
 #[test]
 fn logo_tty_write_failure_carries_logo_cause() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.tty = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/full")
-        .unwrap_or_else(|err| panic!("/dev/full: {err}"));
+    let (reader, writer) = UnixStream::pair().unwrap_or_else(|err| panic!("pipe pair: {err}"));
+    drop(reader);
+    lp.tty = File::from(std::os::fd::OwnedFd::from(writer));
 
     let cause = lp
         .logo_write(
@@ -3979,7 +3978,7 @@ fn logo_tty_write_failure_carries_logo_cause() {
         "a tty write failure retains its source"
     );
     assert_eq!(
-        super::Error::from(cause).code(),
+        super::Error::LoopExit(io::Error::other(cause)).code(),
         contract::ErrorCode::IoFailed
     );
 }
