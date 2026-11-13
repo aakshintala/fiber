@@ -5226,6 +5226,53 @@ fn route_gone(
     (reader, writer, relays)
 }
 
+/// Routes history while the client drains its answer concurrently.
+fn route_gone_while_reading<T>(
+    hub: &Arc<Hub>,
+    sid: &str,
+    stripped: Map<String, Value>,
+    id: &str,
+    read: impl FnOnce(&mut BufReader<UnixStream>) -> T,
+) -> (T, Arc<Mutex<UnixStream>>, Arc<Mutex<Relays>>) {
+    let (writer, reader) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let route_writer = Arc::clone(&writer);
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let route_relays = Arc::clone(&relays);
+    let route_hub = Arc::clone(hub);
+    let route_sid = sid.to_owned();
+    let route_id = id.to_owned();
+
+    std::thread::scope(|scope| {
+        let route = scope.spawn(move || {
+            fakes::within(
+                "history route",
+                Deadline::start().within(fakes::WHOLE_SUBSYSTEM_WITHIN),
+                move || {
+                    route(
+                        &contract::CommandId(route_id),
+                        &route_sid,
+                        stripped,
+                        &route_hub,
+                        &route_writer,
+                        &route_relays,
+                        None,
+                        false,
+                        None,
+                    );
+                },
+            );
+        });
+        let mut lines = BufReader::new(reader);
+        let value = read(&mut lines);
+        route.join().unwrap();
+        (value, writer, relays)
+    })
+}
+
 /// The next line the client reads, parsed.
 fn next_client_line(reader: &mut BufReader<UnixStream>, what: &str) -> Value {
     let mut text = String::new();
@@ -5394,14 +5441,13 @@ fn a_gone_workspace_history_pages_its_own_log_and_its_forked_from_parent() {
     write_forked_logs(&dir, &parent, &sid, &workspace);
     let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
     let history = |args: Value, id: &str| {
-        let (reader, _writer, relays) = route_gone(
+        let (answer, _writer, relays) = route_gone_while_reading(
             &hub,
             &sid,
             crate::testkit::args(json!({"id": id, "command": "history", "args": args})),
             id,
+            |lines| next_client_line(lines, "the history answer"),
         );
-        let mut lines = BufReader::new(reader);
-        let answer = next_client_line(&mut lines, "the history answer");
         drop(relays);
         answer
     };
@@ -5504,16 +5550,15 @@ fn a_history_for_a_gone_workspace_with_no_parent_log_is_unfit() {
     )
     .unwrap();
     let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
-    let (reader, _writer, relays) = route_gone(
+    let (refused, _writer, relays) = route_gone_while_reading(
         &hub,
         &sid,
         crate::testkit::args(
             json!({"id": "c_par", "command": "history", "args": {"session_id": parent}}),
         ),
         "c_par",
+        |lines| next_client_line(lines, "the refusal"),
     );
-    let mut lines = BufReader::new(reader);
-    let refused = next_client_line(&mut lines, "the refusal");
     assert_eq!(refused["kind"], "command_rejected", "{refused}");
     assert_eq!(refused["payload"]["code"], "invalid_arguments", "{refused}");
     assert_eq!(
@@ -5868,16 +5913,15 @@ fn a_history_window_counts_from_and_to_exactly() {
     last.push(gone_line(&sid, 9, "fiber_exited", json!({})));
     write_gone_log(&dir, &sid, &workspace, &last);
     let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
-    let (reader, _writer, relays) = route_gone(
+    let (answered, _writer, relays) = route_gone_while_reading(
         &hub,
         &sid,
         crate::testkit::args(
             json!({"id": "c_win", "command": "history", "args": {"from_seq": 5, "to_seq": 7}}),
         ),
         "c_win",
+        |lines| next_client_line(lines, "the history answer"),
     );
-    let mut lines = BufReader::new(reader);
-    let answered = next_client_line(&mut lines, "the history answer");
     assert_eq!(answered["kind"], "command_accepted", "{answered}");
     let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
         .as_array()
@@ -5906,14 +5950,13 @@ fn a_history_without_from_takes_the_last_page() {
     write_gone_log(&dir, &sid, &workspace, &last);
     let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
     let page = |args: Value, id: &str| {
-        let (reader, _writer, relays) = route_gone(
+        let (answered, _writer, relays) = route_gone_while_reading(
             &hub,
             &sid,
             crate::testkit::args(json!({"id": id, "command": "history", "args": args})),
             id,
+            |lines| next_client_line(lines, "the history answer"),
         );
-        let mut lines = BufReader::new(reader);
-        let answered = next_client_line(&mut lines, "the history answer");
         drop(relays);
         answered
     };
@@ -5985,16 +6028,15 @@ fn a_history_window_ignores_lines_past_to() {
     last.push(gone_line(&sid, 9, "fiber_exited", json!({})));
     write_gone_log(&dir, &sid, &workspace, &last);
     let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
-    let (reader, _writer, relays) = route_gone(
+    let (answered, _writer, relays) = route_gone_while_reading(
         &hub,
         &sid,
         crate::testkit::args(
             json!({"id": "c_win", "command": "history", "args": {"from_seq": 5, "to_seq": 7}}),
         ),
         "c_win",
+        |lines| next_client_line(lines, "the history answer"),
     );
-    let mut lines = BufReader::new(reader);
-    let answered = next_client_line(&mut lines, "the history answer");
     assert_eq!(answered["kind"], "command_accepted", "{answered}");
     let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
         .as_array()
