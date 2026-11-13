@@ -2325,6 +2325,66 @@ fn restore_detached_rejects_paths_outside_root_or_without_an_existing_file() {
     assert_eq!(registry.list_text(), "No jobs.\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn restore_detached_rejects_a_fifo_before_opening_or_admitting() {
+    let dir = TempDir::new("fiber-jobs-restore-detached-fifo");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("d_fifo.log");
+    fakes::fifo(&path);
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Arc::new(Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_calls = Arc::clone(&calls);
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker_registry = Arc::clone(&registry);
+    let worker_root = root.clone();
+    let worker_path = path.clone();
+    let worker = thread::spawn(move || {
+        let result = worker_registry.restore_detached(
+            detached_started("j_fifo", &worker_path),
+            &worker_root,
+            Stop(Box::new(move || {
+                stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        );
+        result_tx.send(result).unwrap();
+    });
+    let result = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&result_rx) {
+        Some(result) => result,
+        None => {
+            // If append-open regresses to blocking on the FIFO, open both
+            // ends to release the worker before failing the bounded test.
+            let _release = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            let result = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&result_rx)
+                .expect("the FIFO reader releases the append-open");
+            if let Ok(opened) = result {
+                drop(opened.end);
+            }
+            worker.join().unwrap();
+            panic!("restore blocked while opening a FIFO");
+        }
+    };
+    worker.join().unwrap();
+    let Err(error) = result else {
+        panic!("a FIFO was admitted as a detached output");
+    };
+    assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!registry.contains("j_fifo"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(registry.list_text(), "No jobs.\n");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn restore_detached_rejects_a_symlink_log_without_touching_its_target() {
