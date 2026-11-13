@@ -1349,8 +1349,7 @@ jobs:
             exit 0
           fi
           cat "$mutant_list"
-          # Temporary evidence run: exercise the missing-fake guard without
-          # the shard build step; restore the build before the final head.
+          cargo build -q -p fakes --example process-extension
           # The Linux x86_64 tests passed on this head before the shard
           # started, so the baseline run adds nothing (docs/ci.md).
           sudo loginctl enable-linger "$USER"
