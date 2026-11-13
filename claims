@@ -133,3 +133,4 @@ docs/configuration.md	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/U
 crates/cli/src/config.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/models.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/prune.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/connection_tests.rs	fiber-4598	grant	2026-11-13T00:26:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
