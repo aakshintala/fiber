@@ -321,7 +321,10 @@ fn dropping_the_loop_ends_a_hub_thread_that_reads() {
         Ok(_) => panic!("the first input is the connection"),
         Err(err) => panic!("waited {DEADLINE:?} for the connection: {err}"),
     };
-    assert_eq!(lp.step(connected, &rx), None);
+    assert_eq!(
+        (lp.step(connected, &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.connected());
     // The hub's end stays open: only the loop's hang-up ends the read.
     drop(lp);

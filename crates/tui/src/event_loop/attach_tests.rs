@@ -205,7 +205,9 @@ fn attach_bounded_live_events_stay_within_k_while_the_fold_is_held() {
         .name("attach-run".to_owned())
         .spawn(move || {
             pause::install(reached_tx, release);
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -752,8 +754,14 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
                 let initial = terminal.app.on_line(Line::Hub(hello()));
                 let initial: serde_json::Value = serde_json::from_str(&initial[0]).unwrap();
                 assert_eq!(initial["command"], "feed");
-                assert_eq!(terminal.handle(Input::Disconnected), None);
-                assert_eq!(terminal.handle(connected), None);
+                assert_eq!(
+                    (terminal.handle(Input::Disconnected)).expect("event loop result succeeds"),
+                    None
+                );
+                assert_eq!(
+                    (terminal.handle(connected)).expect("event loop result succeeds"),
+                    None
+                );
                 handled.send(()).unwrap();
             });
             assert_eq!(
@@ -2375,7 +2383,9 @@ fn reopened_history(older_ending: bool) {
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
         pause::install_page_zero(b"\x1b[6~", page_zero_tx);
-        let code = lp.run(&rx);
+        let code = lp
+            .run(&rx)
+            .expect("loop completes without terminal failure");
         done_tx.send((code, lp)).unwrap_or(());
     });
     for input in super::to_the_top() {
@@ -2512,7 +2522,9 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
         let (done_tx, done) = mpsc::channel();
         std::thread::spawn(move || {
             pause::install(reached_tx, release);
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx.send((code, lp)).unwrap_or(());
         });
         Deadline::after(DEADLINE).recv_or_fail(&reached, "chunk one to wait");
@@ -2612,7 +2624,9 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
             .name("attach-run".to_owned())
             .spawn(move || {
                 pause::install(reached_tx, release);
-                let code = lp.run(&rx);
+                let code = lp
+                    .run(&rx)
+                    .expect("loop completes without terminal failure");
                 done_tx.send((code, lp)).unwrap_or(());
             })
             .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2924,7 +2938,7 @@ fn the_raise_is_written_after_the_frame_draws() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     let (mut lp, out) = first.join().unwrap_or_else(|_| panic!("the worker"));
-    assert_eq!(out, None);
+    assert_eq!((out).expect("event loop result succeeds"), None);
     drop(tx1);
     let lines: Vec<serde_json::Value> = seen
         .iter()
@@ -3026,7 +3040,11 @@ fn the_raise_is_written_after_the_frame_draws() {
     let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["args"], json!({"level": "full"}));
-    assert_eq!(worker.join().unwrap_or_else(|_| panic!("the worker")), None);
+    assert_eq!(
+        (worker.join().unwrap_or_else(|_| panic!("the worker")))
+            .expect("event loop result succeeds"),
+        None
+    );
 }
 
 // The open's tail read: the scripted hub, the loop it drives, and the
@@ -3388,26 +3406,38 @@ fn tail_open_prepared(
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let wait = Deadline::after(DEADLINE);
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     // The launch clear ran with `Connected`: a seed landing now
     // survives to the ended install, while `prepare` ran before it.
     after_connected(&mut lp.app);
     // The hub answers feed and recent: neither frame reads yet.
     for what in ["the feed answer", "the recent answer"] {
         let input = wait.recv_or_fail(&rx, what);
-        assert_eq!(lp.step(input, &rx), None);
+        assert_eq!(
+            (lp.step(input, &rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     // Summary acceptance releases commands and starts the tail read.
     // Its commands reply can be stashed while the read awaits history.
     let summary = wait.recv_or_fail(&rx, "the summary subscribe answer");
-    assert_eq!(lp.step(summary, &rx), None);
+    assert_eq!(
+        (lp.step(summary, &rx)).expect("event loop result succeeds"),
+        None
+    );
     let commands = lp
         .hub
         .pop_stashed()
         .unwrap_or_else(|| panic!("the stashed commands reply"));
     assert!(matches!(&commands, Input::Hub(Line::Session(envelope))
         if envelope.payload.get("result").is_some_and(|result| result.get("commands").is_some())));
-    assert_eq!(lp.step(commands, &rx), None);
+    assert_eq!(
+        (lp.step(commands, &rx)).expect("event loop result succeeds"),
+        None
+    );
     if want_full && !want_drop {
         wait.recv_or_fail(&full_seen, "the hub to read the raise");
     }
@@ -4061,7 +4091,10 @@ fn an_empty_log_draws_no_history_and_raises() {
     );
     let wait = Deadline::after(DEADLINE);
     let ack = wait.recv_or_fail(&open.rx, "the raise's ack");
-    assert_eq!(open.lp.step(ack, &open.rx), None);
+    assert_eq!(
+        (open.lp.step(ack, &open.rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(!open.lp.app.pass_open());
     assert_eq!(open.lp.app.take_raise(), None);
 }
@@ -4086,7 +4119,10 @@ fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
     );
     assert!(open.lp.hub.answer_stash_peak() <= 3);
     drop(open.tx);
-    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(
+        (open.lp.run(&open.rx)).expect("event loop result succeeds"),
+        0
+    );
     let texts: Vec<String> = open
         .lp
         .app
@@ -4203,7 +4239,9 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
         pause::report_ends(ended_tx, release);
-        let code = lp.run(&rx);
+        let code = lp
+            .run(&rx)
+            .expect("loop completes without terminal failure");
         done_tx.send((code, lp)).unwrap_or(());
     });
     let mut taken = Vec::new();
@@ -4404,7 +4442,9 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
         pause::report_ends(ended_tx, release);
-        let code = lp.run(&rx);
+        let code = lp
+            .run(&rx)
+            .expect("loop completes without terminal failure");
         done_tx.send((code, lp)).unwrap_or(());
     });
     let mut taken = Vec::new();
@@ -4504,7 +4544,10 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
         whole.apply(envelope);
     }
     drop(open.tx);
-    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(
+        (open.lp.run(&open.rx)).expect("event loop result succeeds"),
+        0
+    );
     assert_eq!(open.lp.app.pages().index().total(), whole.index().total());
     assert!(!open.lp.app.pass_open());
     assert_eq!(open.lp.app.take_raise(), None);
@@ -4873,7 +4916,10 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
         "the tail read goes out"
     );
     drop(open.tx);
-    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(
+        (open.lp.run(&open.rx)).expect("event loop result succeeds"),
+        0
+    );
     let screen = rendered(&open.lp.app);
     assert!(screen.contains("quokkas"), "{screen}");
     assert!(!screen.contains("turn 0"), "{screen}");
@@ -4980,7 +5026,10 @@ fn a_held_reconnect_replay_leaves_one_job_card() {
     let wait = Deadline::after(DEADLINE);
     for _ in 0..log.len() + 1 {
         let input = wait.recv_or_fail(&open.rx, "the replay");
-        assert_eq!(open.lp.step(input, &open.rx), None);
+        assert_eq!(
+            (open.lp.step(input, &open.rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     assert!(!open.lp.app.pass_open());
     assert_eq!(rendered(&held).matches("task 1").count(), 1);
@@ -5397,7 +5446,10 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
         }
     };
     let (tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let mut seen = Vec::new();
     for _ in 0..3 {
         seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
@@ -5534,7 +5586,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
         "the raise follows the root-filled frame"
     );
     let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
-    assert_eq!(out, None);
+    assert_eq!((out).expect("event loop result succeeds"), None);
     let mut joint = crate::window::Pages::new(60);
     for line in ancestor.iter().chain(&child) {
         joint.apply(line);
@@ -5628,7 +5680,10 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
         }
     };
     let (tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     // The launch open's lines: feed, recent and the summary subscribe.
     let mut seen = Vec::new();
     for _ in 0..3 {
@@ -5767,7 +5822,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
         "the raise follows the count"
     );
     let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
-    assert_eq!(out, None);
+    assert_eq!((out).expect("event loop result succeeds"), None);
     // The ancestor count is included: the joint total spans the chain,
     // and the ancestor stays paged under its own session.
     let mut joint = crate::window::Pages::new(60);
@@ -6577,7 +6632,11 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
         .unwrap_or_else(|err| panic!("queue the reopening: {err}"));
     }
     drop(tx);
-    assert_eq!(lp.frame_inner(&rx), None, "the reopened install draws");
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None,
+        "the reopened install draws"
+    );
 
     let path = home
         .path()
@@ -6861,7 +6920,10 @@ mod attach_span_tests {
         lp.timing.start_attach_wait();
         lp.attached_frame = lp.timing.attached_frame();
         let (_tx, rx) = mpsc::channel();
-        assert_eq!(lp.frame_inner(&rx), None);
+        assert_eq!(
+            (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+            None
+        );
         assert!(attach_op_lines(home.path()).is_empty());
         lp.timing.discard_attach_spans();
         crate::timing::discard(lp.attached_frame.take());
@@ -6909,7 +6971,10 @@ mod attach_span_tests {
         // Buffered answers stay queued; any read past them fails fast
         // as lost instead of hanging the frame.
         drop(tx);
-        assert_eq!(lp.frame_inner(&rx), None);
+        assert_eq!(
+            (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+            None
+        );
         let lines = attach_op_lines(home.path());
         let ops: Vec<&str> = lines
             .iter()
@@ -6975,7 +7040,11 @@ mod attach_span_tests {
             // The frame's later count read sees the closed channel and
             // returns as lost, after the attached-history draw emitted.
             drop(tx);
-            assert_eq!(worker.join().unwrap(), None, "the rejected history draws");
+            assert_eq!(
+                (worker.join().unwrap()).expect("event loop result succeeds"),
+                None,
+                "the rejected history draws"
+            );
         });
         let lines = attach_op_lines(home.path());
         let ops: Vec<&str> = lines
@@ -7351,7 +7420,9 @@ fn drive_exited_replay(hold_first_answer: bool) -> ExitedReplay {
     std::thread::Builder::new()
         .name("attach-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -7651,7 +7722,9 @@ fn failed_resume_keeps_draft_and_loop() {
     std::thread::Builder::new()
         .name("attach-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx
                 .send((code, lp))
                 .unwrap_or_else(|err| panic!("send: {err}"));
