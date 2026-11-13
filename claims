@@ -498,3 +498,17 @@ docs/extensions.md:1008-1008	fiber-4473	plan	2026-11-13T14:37:08Z	roundhouse-701
 docs/permissions.md:585-586	fiber-4473	plan	2026-11-13T14:37:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4473-reviewer-reason-first	
 docs/testing/fakes.md:255-255	fiber-4473	plan	2026-11-13T14:37:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4473-reviewer-reason-first	
 xtask/src/select/compiled_in.rs:78-79	fiber-4473	plan	2026-11-13T14:37:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4473-reviewer-reason-first	
+crates/doors/src/lib.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/lib.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/resume.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/session_command.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/support/mod.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/sessions.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/connect_jig.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/doors.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/socket.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/attach.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/src/session_tests.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/commands/stdout_errors.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/session_command_tests.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/invocation.md	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
