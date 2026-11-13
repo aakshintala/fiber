@@ -3285,7 +3285,10 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
         assert!(want.contains(&default), "{key}");
     }
     assert_eq!(number_list("hub.idle_exit_ms"), None);
-    assert_eq!(number_list("session.keep_exited"), Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..]));
+    assert_eq!(
+        number_list("session.keep_exited"),
+        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
+    );
     assert_eq!(number_list("tui.rail.width"), None);
     assert_eq!(
         text_list("model_lists.refresh_after"),
@@ -3720,9 +3723,6 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
 /// A width row counts columns after region limits, read from terminal width
 /// while draw width keeps room and cut (`docs/tui.md`, `/settings`, "Controls").
 
-
-
-
 #[test]
 fn keep_exited_lists_and_persists_the_documented_session_counts() {
     let row = |shown| {
@@ -3778,22 +3778,6 @@ fn listed_numbers_step_from_exact_middle_values_in_both_directions() {
     assert_eq!(next_number_value(values, 10.0, false), Some(5.0));
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[test]
 fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
     let (minimum, maximum, step) = (0.5, 0.9, 0.05);
@@ -3813,8 +3797,6 @@ fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
         minimum
     );
 }
-
-
 
 #[test]
 fn a_width_row_counts_columns_for_its_width() {
