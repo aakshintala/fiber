@@ -571,6 +571,7 @@ impl DelegateMessage {
             | ErrorCode::McpServerUnavailable
             | ErrorCode::McpToolRemoved
             | ErrorCode::ModelAmbiguous
+            | ErrorCode::ModelDeprecated
             | ErrorCode::ModelInvalid
             | ErrorCode::ModelOmitted
             | ErrorCode::ModelNotFound

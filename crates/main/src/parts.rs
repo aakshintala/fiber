@@ -543,10 +543,16 @@ fn parts_inner(
         &launch,
     )?;
     startup_notices.extend(notices);
-    startup_notices.extend(extensions::models_dev::apply(
+    let catalog = extensions::models_dev::apply(
         &home,
         config::models_dev_enabled(&config),
+        Some(config::refresh_after(&config)),
+        clock.wall(),
         &mut providers,
+    );
+    startup_notices.extend(catalog.notices);
+    let model_deprecations = Arc::new(extensions::models_dev::ModelDeprecations::new(
+        catalog.deprecated,
     ));
     #[cfg(not(test))]
     let catalog_fetch = extensions::models_dev::live_fetch();
@@ -584,6 +590,9 @@ fn parts_inner(
         &extensions,
         &launch,
     )?;
+    if let Some(notice) = model_deprecations.notice_for(&model.reference()) {
+        startup_notices.push(notice);
+    }
     let context_window = settle(
         settings::context_window(model.model, &model.reference()),
         &extensions,
@@ -764,7 +773,8 @@ fn parts_inner(
         loaded,
         loader,
         reads,
-    );
+    )
+    .deprecations(Arc::clone(&model_deprecations));
     // The model's provider file loads at its credential read; other
     // provider files wait for their own first use.
     // The session log's path is set by the caller, which mints the session
