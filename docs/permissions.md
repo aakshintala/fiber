@@ -582,8 +582,9 @@ only an explicit pick may name it.
 
 ### Its verdict
 
-`allow` or `block`, plus a reason. There is no risk scale: a number a model
-assigns is only as calibrated as the model, and nothing here reads one.
+`allow` or `block`, plus a reason. The reason comes first, and the verdict
+word alone comes last. There is no risk scale: a number a model assigns is
+only as calibrated as the model, and nothing here reads one.
 
 ## What happens on a block
 
