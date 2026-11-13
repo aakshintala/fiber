@@ -372,3 +372,4 @@ docs/testing/screens.md	fiber-4583	plan	2026-11-13T20:25:15Z	roundhouse-7010-plu
 docs/workflow.md	fiber-4583	plan	2026-11-13T20:25:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 GLOSSARY.md	fiber-4583	plan	2026-11-13T20:25:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/config_views.rs	fiber-4583	plan	2026-11-13T21:00:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/model_picker_tests.rs	fiber-4675	plan	2026-11-13T21:19:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
