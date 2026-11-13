@@ -328,3 +328,4 @@ crates/tui/src/skills_view.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-70
 crates/tui/src/skills_view_tests.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/offer.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/offer_tests.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-13T06:40:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
