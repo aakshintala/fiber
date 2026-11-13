@@ -3022,6 +3022,33 @@ fn settings_editing() {
 
 // Geometry, scrolling and redaction.
 
+#[test]
+fn every_unset_control_reads_default_and_only_pages_keep_the_arrow() {
+    let controls = [
+        (SettingControl::Fixed(vec!["one".to_owned()]), "Default"),
+        (SettingControl::Theme, "Default"),
+        (SettingControl::Boolean, "Default"),
+        (SettingControl::Model, "Default ›"),
+        (SettingControl::StringList, "Default ›"),
+        (SettingControl::RepositoryExtensions, "Default ›"),
+        (SettingControl::Number, "Default"),
+        (SettingControl::Text, "Default"),
+        (SettingControl::Json, "Default"),
+    ];
+    for (index, (control, want)) in controls.into_iter().enumerate() {
+        let row = on(
+            SettingsTab::Advanced,
+            "Unset",
+            &format!("test.unset.{index}"),
+            Shown::Unset,
+            "default",
+            ANY,
+            control,
+        );
+        assert_eq!(shown_value(&row).0, want, "{}", row.key);
+    }
+}
+
 /// The layout of the open tab with `lines` things said, `height` tall.
 fn said_layout(lines: usize, height: usize) -> super::Layout {
     let fake = Fake::new(rows());
