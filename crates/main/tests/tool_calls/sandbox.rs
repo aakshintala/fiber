@@ -1404,7 +1404,7 @@ fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
         // denial returns to the model, whose closing turn needs a scripted
         // answer like every other terminal turn.
         text_reply("check"),
-        text_reply("block no pushes"),
+        text_reply("no pushes\nblock"),
         hello(),
     ])
     .unwrap();

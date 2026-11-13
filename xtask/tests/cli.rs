@@ -377,7 +377,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"stress\":false,\"test\":false,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
+        "jobs={\"bug_red\":true,\"clippy_macos\":false,\"lint\":true,\"mutants\":true,\"release\":false,\"scripts_self_test_macos\":false,\"stress\":false,\"test\":false,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
     );
     let bad = [
         "plan",
@@ -394,6 +394,149 @@ fn plan_prints_the_jobs_and_shards() {
     let mut not_a_count = args.to_vec();
     *not_a_count.last_mut().unwrap() = "many";
     assert_eq!(xtask(&dir, &not_a_count, &[], "").0, 2);
+}
+
+#[test]
+fn plan_does_not_select_scripts_job_for_deleted_script_path() {
+    let dir = workspace();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "-f", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "base probe"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    git(&dir, &["rm", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "delete probe"]);
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["scripts_self_test_macos"], false);
+}
+
+#[test]
+fn plan_keeps_unreadable_script_path_present() {
+    let dir = workspace();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "-f", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "base probe"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write("scripts/probe", "#!/bin/sh\n# changed\n");
+    git(&dir, &["add", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "change probe"]);
+    std::fs::remove_file(dir.path().join("scripts/probe")).unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts/probe")).unwrap();
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["scripts_self_test_macos"], true);
+}
+
+#[test]
+fn plan_uses_rename_detected_head_diff_paths_for_scripts_job() {
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    for (source, destination, expected) in [
+        ("src/probe", "scripts/probe", true),
+        ("scripts/probe", "other/probe", false),
+    ] {
+        let dir = workspace();
+        if source.starts_with("scripts/") {
+            std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        }
+        dir.write(source, "#!/bin/sh\n");
+        git(&dir, &["add", "-f", source]);
+        git(&dir, &["commit", "-qm", "base probe"]);
+        git(&dir, &["switch", "-qc", "pr"]);
+        if destination.starts_with("scripts/") {
+            std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        }
+        if destination.starts_with("other/") {
+            std::fs::create_dir_all(dir.path().join("other")).unwrap();
+        }
+        git(&dir, &["config", "diff.renames", "false"]);
+        git(&dir, &["mv", source, destination]);
+        git(&dir, &["commit", "-qm", "move probe"]);
+        let (code, out) = xtask(&dir, &args, &[], "");
+        assert_eq!(code, 0, "{out}");
+        let jobs: serde_json::Value = serde_json::from_str(
+            out.lines()
+                .next()
+                .and_then(|line| line.strip_prefix("jobs="))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            jobs["scripts_self_test_macos"], expected,
+            "{source} -> {destination}"
+        );
+    }
 }
 
 /// `HOME` and `TMPDIR` point at the temp dir, so a test that runs `git`

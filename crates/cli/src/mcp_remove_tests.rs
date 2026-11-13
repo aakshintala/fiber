@@ -236,6 +236,38 @@ fn remove_of_a_name_no_layer_declares_names_none() {
 }
 
 #[test]
+fn repository_remove_refuses_fiber_home_without_changing_bytes() {
+    let setup = Setup::new();
+    let home = setup.workspace().join(".fiber");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("config.json");
+    fs::write(
+        &file,
+        r#"{"mcp":{"servers":{"docs":{"url":"https://example.test/mcp"}}}}"#,
+    )
+    .unwrap();
+    let before = fs::read(&file).unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let result = run_remove(
+        &home,
+        &setup.workspace(),
+        Layer::Repository,
+        "docs",
+        Streams {
+            out: &mut out,
+            err: &mut err,
+        },
+    );
+
+    let failure = result.unwrap_err();
+    assert_eq!(failure.code(), contract::ErrorCode::Usage, "{failure}");
+    assert!(failure.to_string().contains("global"), "{failure}");
+    assert_eq!(fs::read(&file).unwrap(), before);
+}
+
+#[test]
 fn remove_from_the_repository_leaves_the_approval_and_the_secret() {
     let setup = Setup::new();
     setup.declare(Layer::Repository, "docs");

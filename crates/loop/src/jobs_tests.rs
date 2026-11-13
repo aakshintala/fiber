@@ -242,12 +242,17 @@ fn rendered(id: &str) -> String {
     format!("Fiber: background job {id} ended: failed.\nExit code 1.\nLast output:\n1 failing")
 }
 
-/// A reply that calls `name` with `{}`.
+/// A reply that calls `name` with the supplied arguments.
 fn calls(name: &str) -> Scripted {
+    calls_with(name, json!({}))
+}
+
+fn calls_with(name: &str, arguments: Value) -> Scripted {
+    let encoded = serde_json::to_string(&arguments).unwrap();
     let mut end = fakes::reply("");
     end.actions.push(ReplyAction::ToolCall(ToolCallRequested {
         name: name.into(),
-        arguments: json!({}),
+        arguments,
         provider_id: None,
         repair: None,
         ran_by: None,
@@ -257,7 +262,7 @@ fn calls(name: &str) -> Scripted {
         deltas: vec![Delta::ToolCallArguments(ToolCallArgumentsDelta {
             index: 0,
             name: Some(name.into()),
-            text: "{}".into(),
+            text: encoded,
         })],
         end: Ok(end),
     }
@@ -4035,6 +4040,146 @@ fn a_refused_notice_kept_by_a_cancelled_turn_starts_no_turn() {
     world.send(Delivery::Close(ignore()));
     assert_eq!(world.turn(), None);
     assert_eq!(asked.count(), 1, "the take claims the kept notice once");
+}
+
+#[test]
+fn a_restored_detached_stop_is_reviewed_and_its_end_starts_no_loop_delivery() {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let root = fakes::TempDir::new("fiber-loop-restored-detached");
+    let detached = root.path().join("detached");
+    std::fs::create_dir(&detached).unwrap();
+    let output = detached.join("d_restored.log");
+    std::fs::write(&output, b"").unwrap();
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg("exec sleep 60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let child = command.spawn().unwrap();
+    let pgid = child.id();
+    let watchdog = fakes::Watchdog::group(pgid);
+    fakes::wait_until(
+        "restored detached group is alive",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || fakes::group_alive(pgid),
+    );
+    let stop_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_record = Arc::clone(&stop_called);
+    let clock = fakes::clock::FakeClock::new();
+    let registry = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        Arc::new(fakes::Recorder::default()),
+    );
+    let opened = registry
+        .restore_detached(
+            JobStarted {
+                job_id: JobId("j_restored".into()),
+                tool: Some("shell".into()),
+                extension: None,
+                description: "restored process".into(),
+                output_path: output.to_string_lossy().into_owned(),
+                pgid: Some(pgid),
+                start_time: None,
+                kind: Some(contract::events::JobKind::Detached),
+            },
+            Stop(Box::new(move || {
+                stop_record.store(true, Ordering::SeqCst);
+                assert!(fakes::kill_group(pgid, "TERM").unwrap());
+            })),
+        )
+        .unwrap();
+    let end = opened.end;
+    let (ended_tx, ended_rx) = mpsc::channel();
+    let supervisor = thread::spawn(move || {
+        let mut child = child;
+        let _status = child.wait().expect("reap stopped process");
+        assert!(fakes::group_empties(
+            pgid,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ));
+        end.0(JobCompleted {
+            job_id: JobId("j_restored".into()),
+            status: Outcome::Cancelled,
+            error: None,
+            process: None,
+            output_tail: None,
+            notice: None,
+            changed_by: None,
+            protected_paths: None,
+        });
+        ended_tx.send(()).unwrap();
+    });
+    let tool_registry = Arc::clone(&registry);
+    let mut world = World::new(
+        vec![
+            calls_with("jobs", json!({"action":"stop", "job_id":"j_restored"})),
+            Scripted::text("Stopped."),
+        ],
+        Vec::new(),
+        move |_| vec![Arc::new(jobs::JobsTool::new(Arc::clone(&tool_registry)))],
+    )
+    .with_jobs(registry);
+    let watcher = world.log.watch();
+    let (request_tx, request_rx) = mpsc::channel();
+    let watcher_thread = thread::spawn(move || {
+        let (_, lines) = read_until(watcher, "restored stop review", |line| {
+            line.kind() == EventKind::PermissionRequested
+        });
+        request_tx
+            .send(RequestId(
+                lines.last().unwrap().payload["request_id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+            ))
+            .unwrap();
+    });
+    let turn = world.spawn();
+    world.send(prompt("stop restored job"));
+    let request = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&request_rx)
+        .expect("unreadable identity requires approval");
+    watcher_thread.join().unwrap();
+    assert!(fakes::group_alive(pgid), "no signal before approval");
+    assert!(!stop_called.load(Ordering::SeqCst));
+    world.send(allow(request));
+    assert_eq!(
+        world.join(&turn, &Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        Some(TurnOutcome::Completed)
+    );
+    assert!(
+        stop_called.load(Ordering::SeqCst),
+        "approved stop reaches the restored callback"
+    );
+    assert!(fakes::group_empties(
+        pgid,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&ended_rx)
+        .expect("detached End completes without waking the loop");
+    supervisor.join().unwrap();
+    let turn_lines = world.turn_lines();
+    assert!(kinds(&turn_lines).contains(&EventKind::PermissionRequested));
+    assert!(kinds(&turn_lines).contains(&EventKind::PermissionResolved));
+    assert!(!kinds(&turn_lines).contains(&EventKind::JobCompleted));
+    world.send(Delivery::Close(ignore()));
+    assert_eq!(world.turn(), None, "detached End creates no loop turn");
+    let all = log::read(&world.dir).unwrap();
+    assert_eq!(
+        all.iter()
+            .filter(|line| line.kind() == EventKind::JobCompleted)
+            .count(),
+        0,
+        "detached End is not delivered or durably logged"
+    );
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
