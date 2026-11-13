@@ -12,7 +12,7 @@
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
-//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutants true|false --mutant-count N`:
+//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutants true|false --mutant-count N [--pr-body BODY]`:
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
@@ -250,6 +250,17 @@ fn run(args: &[String]) -> Result<bool, String> {
                 mutants,
                 mutant_count,
             );
+            let body = optional(rest, "--pr-body").unwrap_or_default();
+            let bug_red_was_selected = plan.jobs.get("bug_red") == Some(&true);
+            let plan = select::plan_with_budget_breach_body(plan, bug, &body);
+            if event == "pull_request"
+                && bug_red_was_selected
+                && plan.jobs.get("bug_red") == Some(&false)
+            {
+                eprintln!(
+                    "budget breach exemption: bug-red jobs skipped; reviewers judge Base/Head measurements"
+                );
+            }
             let plan =
                 select::plan_with_changed_paths(plan, event == "pull_request", &changed_paths);
             let shards: Vec<u64> = (0..plan.shards).collect();

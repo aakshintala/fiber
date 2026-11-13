@@ -168,6 +168,47 @@ fn a_code_pull_request_runs_what_it_selected() {
 }
 
 #[test]
+fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
+    let complete = "## Budget breach\nThe change fixes the measured regression.\nBase: 10 bytes\nHead: 12 bytes\n";
+    let cases = [
+        ("complete section", complete, true),
+        ("missing section", "Cause\nBase: 10\nHead: 12", false),
+        ("missing Base", "## Budget breach\nCause\nHead: 12", false),
+        ("missing Head", "## Budget breach\nCause\nBase: 10", false),
+        (
+            "fenced heading",
+            "```md\n## Budget breach\nCause\nBase: 10\nHead: 12\n```",
+            false,
+        ),
+    ];
+
+    for (name, body, exempt) in cases {
+        let selected = plan(
+            "crates",
+            &strings(&["log"]),
+            "pull_request",
+            false,
+            true,
+            false,
+            0,
+        );
+        let selected = plan_with_budget_breach_body(selected, true, body);
+        assert_eq!(selected.jobs["bug_red"], !exempt, "{name}");
+    }
+
+    let non_bug = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        false,
+        0,
+    );
+    assert!(!plan_with_budget_breach_body(non_bug, false, complete).jobs["bug_red"]);
+}
+
+#[test]
 fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
     let plan = plan(
         "all",

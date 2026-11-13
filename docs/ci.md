@@ -21,13 +21,18 @@ which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
 (`lint` and `test_linux`, plus `bug_red_linux` when an issue its
 body resolves carries the `bug` label) and macOS arm64 jobs
-(`bug_red_macos` on the same bug pull requests, `clippy_macos`
-when its diff touches a file containing `target_os`, and
-`scripts_self_test_macos` when its diff touches `scripts/`; the latter two
+(`bug_red_macos` on the same bug pull requests unless their body has a
+complete `## Budget breach` section, `clippy_macos` when its diff touches a
+file containing `target_os`, and `scripts_self_test_macos` when its diff
+touches `scripts/`; the latter two
 run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
 Linux-side job changes. The scripts job is selected only for pull requests
-with a path under `scripts/`, never on the backstop. Draft and ready pull requests select
+with a path under `scripts/`, never on the backstop. A bug pull request that
+exempts the two `bug_red` legs must include an unfenced `## Budget breach`
+section with prose stating the cause and `Base:` and `Head:` measurement
+lines. CI checks only that the section and both lines are present; reviewers
+judge the measurements. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff

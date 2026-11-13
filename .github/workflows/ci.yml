@@ -148,6 +148,7 @@ jobs:
           PACKAGES: ${{ steps.select.outputs.packages }}
           DRAFT: ${{ github.event.pull_request.draft || 'false' }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
           BASE: ${{ steps.base.outputs.base }}
           # Mutants run on a ready pull request and on a draft labelled `mutants`,
           # never on the backstop.
@@ -246,7 +247,8 @@ jobs:
             mutants=false
           fi
           cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
+            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" \\
+            --pr-body "$PR_BODY" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
