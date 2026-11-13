@@ -308,3 +308,4 @@ crates/extensions/src/lua/vm.rs	fiber-4767	plan	2026-11-13T18:10:11Z	roundhouse-
 crates/extensions/src/host_tests.rs	fiber-4767	plan	2026-11-13T18:10:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/lua/schedule_tests.rs	fiber-4767	plan	2026-11-13T18:10:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/extension_host/extension_codemode.rs	fiber-4767	plan	2026-11-13T18:10:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/architecture.md	fiber-4637	plan	2026-11-13T18:19:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
