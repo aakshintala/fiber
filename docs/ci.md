@@ -19,8 +19,8 @@ x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
-(`lint` and `test_linux`, plus `bug_red_linux` when an issue its
-body resolves carries the `bug` label) and macOS arm64 jobs
+(`lint` and `test_linux`, plus `bug_red_linux` on bug pull requests unless
+their body has a complete `## Budget breach` section) and macOS arm64 jobs
 (`bug_red_macos` on the same bug pull requests unless their body has a
 complete `## Budget breach` section, `clippy_macos` when its diff touches a
 file containing `target_os`, and `scripts_self_test_macos` when its diff
@@ -29,7 +29,7 @@ run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
 Linux-side job changes. The scripts job is selected only for pull requests
 with a path under `scripts/`, never on the backstop. A bug pull request that
-exempts the two `bug_red` legs must include an unfenced `## Budget breach`
+exempts `bug_red_linux` and `bug_red_macos` must include an unfenced `## Budget breach`
 section with prose stating the cause and `Base:` and `Head:` measurement
 lines. CI checks only that the section and both lines are present; reviewers
 judge the measurements. Draft and ready pull requests select

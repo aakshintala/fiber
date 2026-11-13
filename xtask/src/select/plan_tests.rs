@@ -209,6 +209,51 @@ fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
 }
 
 #[test]
+fn budget_breach_fences_require_matching_marker_and_sufficient_width() {
+    let cases = [
+        (
+            "tilde fenced heading",
+            "~~~md\n## Budget breach\nBase: x\nHead: y\n~~~",
+            false,
+        ),
+        (
+            "mismatched fence marker",
+            "```md\n~~~\n## Budget breach\nBase: x\nHead: y\n~~~\n```",
+            false,
+        ),
+        (
+            "short closing fence",
+            "````md\n## Budget breach\nBase: x\nHead: y\n```\n",
+            false,
+        ),
+        (
+            "matching wide close",
+            "~~~md\n## Budget breach\nBase: x\nHead: y\n~~~~\n",
+            false,
+        ),
+        (
+            "heading whitespace",
+            "##  Budget breach\nBase: x\nHead: y",
+            true,
+        ),
+        ("exact heading", "## Budget breach\nBase: x\nHead: y", true),
+    ];
+    for (name, body, exempt) in cases {
+        let selected = plan(
+            "crates",
+            &strings(&["log"]),
+            "pull_request",
+            false,
+            true,
+            false,
+            0,
+        );
+        let result = plan_with_budget_breach_body(selected, true, body);
+        assert_eq!(result.jobs["bug_red"], !exempt, "{name}");
+    }
+}
+
+#[test]
 fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
     let plan = plan(
         "all",
