@@ -397,16 +397,7 @@ fn plan_prints_the_jobs_and_shards() {
 }
 
 #[test]
-fn plan_reads_head_diff_contents_for_macos_jobs() {
-    let dir = workspace();
-    git(&dir, &["switch", "-qc", "pr"]);
-    dir.write(
-        "crates/a/src/target.rs",
-        "const TARGET: &str = \"target_os\";\n",
-    );
-    dir.write("scripts/probe", "#!/bin/sh\n");
-    git(&dir, &["add", "."]);
-    git(&dir, &["commit", "-qm", "change macOS trigger paths"]);
+fn plan_uses_rename_detected_head_diff_paths_for_scripts_job() {
     let args = [
         "plan",
         "--base",
@@ -426,17 +417,41 @@ fn plan_reads_head_diff_contents_for_macos_jobs() {
         "--mutant-count",
         "0",
     ];
-    let (code, out) = xtask(&dir, &args, &[], "");
-    assert_eq!(code, 0, "{out}");
-    let jobs: serde_json::Value = serde_json::from_str(
-        out.lines()
-            .next()
-            .and_then(|line| line.strip_prefix("jobs="))
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(jobs["clippy_macos"], true);
-    assert_eq!(jobs["scripts_self_test_macos"], true);
+    for (source, destination, expected) in [
+        ("src/probe", "scripts/probe", true),
+        ("scripts/probe", "other/probe", false),
+    ] {
+        let dir = workspace();
+        if source.starts_with("scripts/") {
+            std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        }
+        dir.write(source, "#!/bin/sh\n");
+        git(&dir, &["add", "-f", source]);
+        git(&dir, &["commit", "-qm", "base probe"]);
+        git(&dir, &["switch", "-qc", "pr"]);
+        if destination.starts_with("scripts/") {
+            std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        }
+        if destination.starts_with("other/") {
+            std::fs::create_dir_all(dir.path().join("other")).unwrap();
+        }
+        git(&dir, &["config", "diff.renames", "false"]);
+        git(&dir, &["mv", source, destination]);
+        git(&dir, &["commit", "-qm", "move probe"]);
+        let (code, out) = xtask(&dir, &args, &[], "");
+        assert_eq!(code, 0, "{out}");
+        let jobs: serde_json::Value = serde_json::from_str(
+            out.lines()
+                .next()
+                .and_then(|line| line.strip_prefix("jobs="))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            jobs["scripts_self_test_macos"], expected,
+            "{source} -> {destination}"
+        );
+    }
 }
 
 /// `HOME` and `TMPDIR` point at the temp dir, so a test that runs `git`

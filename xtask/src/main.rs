@@ -1039,16 +1039,25 @@ fn plan_changed_paths(base: &str) -> Result<Vec<select::ChangedPath>, String> {
     let merge_base = merge_base(base)?;
     let paths = split_nul(&output(
         "git",
-        &["diff", "--name-only", "-z", &format!("{merge_base}..HEAD")],
+        &[
+            "diff",
+            "--name-only",
+            "-M",
+            "-z",
+            &format!("{merge_base}..HEAD"),
+        ],
     )?);
     Ok(paths
         .into_iter()
         .map(|path| {
-            let path_state = select::path_state_from_read(fs::read(&path));
-            select::ChangedPath {
-                path,
-                state: path_state,
-            }
+            let state = match fs::read(&path) {
+                Ok(contents) => select::PathState::Present(Some(contents)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    select::PathState::Deleted
+                }
+                Err(_) => select::PathState::Present(None),
+            };
+            select::ChangedPath { path, state }
         })
         .collect())
 }

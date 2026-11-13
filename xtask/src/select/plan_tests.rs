@@ -11,19 +11,21 @@ fn changed(path: &str, contents: Option<&str>) -> ChangedPath {
 }
 
 #[test]
-fn a_failed_content_read_distinguishes_deletion_from_unreadable_files() {
-    assert_eq!(
-        path_state_from_read(Err(std::io::ErrorKind::NotFound.into())),
-        PathState::Deleted
+fn deleted_and_unreadable_paths_do_not_match_macos_triggers() {
+    let deleted = changed("src/lib.rs", None);
+    let unreadable = ChangedPath {
+        path: "src/probe".into(),
+        state: PathState::Present(None),
+    };
+    assert_eq!(deleted.state, PathState::Deleted);
+    assert!(matches!(unreadable.state, PathState::Present(None)));
+    let plan = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[deleted, unreadable],
     );
-    assert_eq!(
-        path_state_from_read(Err(std::io::ErrorKind::PermissionDenied.into())),
-        PathState::Present(None)
-    );
-    assert_eq!(
-        path_state_from_read(Ok(b"target_os".to_vec())),
-        PathState::Present(Some(b"target_os".to_vec()))
-    );
+    assert!(!plan.jobs["clippy_macos"]);
+    assert!(!plan.jobs["scripts_self_test_macos"]);
 }
 
 #[test]

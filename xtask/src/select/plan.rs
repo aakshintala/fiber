@@ -221,14 +221,6 @@ pub(crate) struct ChangedPath {
     pub(crate) state: PathState,
 }
 
-pub(crate) fn path_state_from_read(result: Result<Vec<u8>, std::io::Error>) -> PathState {
-    match result {
-        Ok(contents) => PathState::Present(Some(contents)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathState::Deleted,
-        Err(_) => PathState::Present(None),
-    }
-}
-
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {
@@ -310,9 +302,12 @@ pub(crate) fn plan_with_changed_paths(
         && changed_paths
             .iter()
             .any(|entry| entry.path.starts_with("scripts/"));
-    plan.jobs.insert("clippy_macos", clippy_macos);
     plan.jobs
-        .insert("scripts_self_test_macos", scripts_self_test_macos);
+        .entry("clippy_macos")
+        .and_modify(|value| *value = clippy_macos);
+    plan.jobs
+        .entry("scripts_self_test_macos")
+        .and_modify(|value| *value = scripts_self_test_macos);
     plan
 }
 
