@@ -364,8 +364,8 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
 /// key costs a `git` call, so it is computed only then (ruling 17). A
 /// declaration that does not read still counts as declaring, so the
 /// repository path reports the failure as today.
-fn declares_extensions(workspace: &Path) -> bool {
-    match config::declared(workspace) {
+fn declares_extensions(home: &Path, workspace: &Path) -> bool {
+    match config::declared(workspace, home) {
         Ok(declared) => !declared.extensions.is_empty(),
         Err(_) => true,
     }
@@ -377,7 +377,7 @@ fn repository_project(
     home: &Path,
     workspace: &Path,
 ) -> Result<Option<config::ProjectKey>, CliError> {
-    if !declares_extensions(workspace) {
+    if !declares_extensions(home, workspace) {
         return Ok(None);
     }
     crate::project_of(home, workspace).map(|(_, project)| Some(project))

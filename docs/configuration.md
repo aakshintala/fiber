@@ -32,6 +32,9 @@ Configuration never holds a secret. Secrets live in `credentials/`
 
 ## Layers
 
+When the workspace's `.fiber` directory is Fiber home, there is no repository
+layer: it is not read, and a write to it fails with `usage`.
+
 Configuration comes in layers. A later layer wins over an earlier one, key by
 key:
 

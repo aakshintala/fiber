@@ -61,6 +61,10 @@ impl ExtensionSettings {
         self.overlay.insert(full_name(extension), repository);
     }
 
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// The workspace whose `.fiber/` is the repository layer.
     pub fn workspace(&self) -> &Path {
         &self.workspace
@@ -116,6 +120,9 @@ impl ExtensionSettings {
         let mut merged = Value::Object(Map::new());
         let mut notices = Vec::new();
         for (file, repo) in files {
+            if repo && crate::same_repository_home(&self.workspace, &self.home) {
+                continue;
+            }
             if repo && let Some(overlay) = self.overlay.get(extension) {
                 // The authorized replacement still reports what the raw
                 // file holds that the manifest forbids, so a disallowed
@@ -263,7 +270,9 @@ impl ExtensionSettings {
             &self.home.join("projects").join(self.project.as_str()),
             extension,
         );
-        let repository_subtree = if let Some(overlay) = self.overlay.get(extension) {
+        let repository_subtree = if crate::same_repository_home(&self.workspace, &self.home) {
+            None
+        } else if let Some(overlay) = self.overlay.get(extension) {
             // The overlay already holds only authorized entries, so a
             // withheld repository value never names the repository layer.
             // A corrupt raw file still errors through `merged` above.

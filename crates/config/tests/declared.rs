@@ -91,7 +91,9 @@ fn a_malformed_entry_is_config_invalid() {
             "{e}"
         );
         assert_eq!(
-            config::declared(&setup.workspace()).unwrap_err().code(),
+            config::declared(&setup.workspace(), &setup.home())
+                .unwrap_err()
+                .code(),
             ErrorCode::ConfigInvalid,
             "{bad}"
         );
@@ -102,12 +104,12 @@ fn a_malformed_entry_is_config_invalid() {
 fn a_repository_with_nothing_declared_gets_an_empty_set() {
     let setup = Setup::new();
     assert_eq!(
-        config::declared(&setup.workspace()).unwrap(),
+        config::declared(&setup.workspace(), &setup.home()).unwrap(),
         Declared::default()
     );
     setup.write(&setup.repository(), r#"{"model": "a/b"}"#);
     assert_eq!(
-        config::declared(&setup.workspace()).unwrap(),
+        config::declared(&setup.workspace(), &setup.home()).unwrap(),
         Declared::default()
     );
 }
@@ -125,7 +127,7 @@ fn declared_returns_extensions_hooks_and_servers() {
         &setup.workspace().join(".fiber").join(HOOKS_FILE),
         r#"{"hooks": {"fmt": {"point": "after_tool", "command": "cargo", "args": ["fmt"]}}}"#,
     );
-    let declared = config::declared(&setup.workspace()).unwrap();
+    let declared = config::declared(&setup.workspace(), &setup.home()).unwrap();
     assert_eq!(
         declared.extensions,
         vec![
@@ -151,6 +153,31 @@ fn declared_returns_extensions_hooks_and_servers() {
 }
 
 #[test]
+fn declared_skips_repository_config_and_hooks_when_they_are_fiber_home() {
+    let setup = Setup::new();
+    let fiber_home = setup.workspace().join(".fiber");
+    setup.write(&fiber_home.join("config.json"), "{");
+    setup.write(&fiber_home.join(HOOKS_FILE), "{");
+    assert_eq!(
+        config::declared(&setup.workspace(), &fiber_home).unwrap(),
+        Declared::default()
+    );
+}
+
+#[test]
+fn declared_skips_repository_config_and_hooks_when_fiber_home_is_symlinked() {
+    let setup = Setup::new();
+    let home = setup.home();
+    setup.write(&home.join("config.json"), "{");
+    setup.write(&home.join(HOOKS_FILE), "{");
+    symlink(&home, setup.workspace().join(".fiber")).unwrap();
+    assert_eq!(
+        config::declared(&setup.workspace(), &home).unwrap(),
+        Declared::default()
+    );
+}
+
+#[test]
 fn declared_reads_only_the_repository_layer() {
     let setup = Setup::new();
     setup.write(
@@ -162,7 +189,7 @@ fn declared_reads_only_the_repository_layer() {
         r#"{"hooks": {"mine": {"command": "x"}}}"#,
     );
     assert_eq!(
-        config::declared(&setup.workspace()).unwrap(),
+        config::declared(&setup.workspace(), &setup.home()).unwrap(),
         Declared::default()
     );
 }
@@ -174,7 +201,7 @@ fn a_hooks_setting_that_is_not_an_object_is_config_invalid() {
         &setup.workspace().join(".fiber").join(HOOKS_FILE),
         r#"{"hooks": ["fmt"]}"#,
     );
-    let e = config::declared(&setup.workspace()).unwrap_err();
+    let e = config::declared(&setup.workspace(), &setup.home()).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
 }
 
@@ -186,7 +213,9 @@ fn a_symbolic_link_repository_file_is_refused() {
     std::fs::create_dir_all(setup.workspace().join(".fiber")).unwrap();
     symlink(&outside, setup.repository()).unwrap();
     assert_eq!(
-        config::declared(&setup.workspace()).unwrap_err().code(),
+        config::declared(&setup.workspace(), &setup.home())
+            .unwrap_err()
+            .code(),
         ErrorCode::ConfigInvalid
     );
 }
@@ -202,7 +231,7 @@ fn an_entry_with_only_emptied_objects_is_not_a_declaration() {
         &json!({"mcp": {"servers": {"fx": {"tools": {"echo": {"hints": {"read_only": true}}}}}}})
             .to_string(),
     );
-    let declared = config::declared(&setup.workspace()).unwrap();
+    let declared = config::declared(&setup.workspace(), &setup.home()).unwrap();
     assert!(
         declared.mcp_servers.is_empty(),
         "{:?}",
@@ -220,7 +249,7 @@ fn an_entry_with_any_value_is_a_declaration() {
                                         "ghost": {"tools": {"echo": {"hints": {"read_only": true}}}}}}})
             .to_string(),
     );
-    let declared = config::declared(&setup.workspace()).unwrap();
+    let declared = config::declared(&setup.workspace(), &setup.home()).unwrap();
     assert_eq!(
         declared.mcp_servers.keys().cloned().collect::<Vec<_>>(),
         vec!["fx".to_owned()]
@@ -240,7 +269,7 @@ fn dropping_empty_entries_leaves_hooks_unchanged() {
         &setup.workspace().join(".fiber").join(HOOKS_FILE),
         r#"{"hooks": {"fmt": {"point": "after_tool", "command": "cargo"}}}"#,
     );
-    let declared = config::declared(&setup.workspace()).unwrap();
+    let declared = config::declared(&setup.workspace(), &setup.home()).unwrap();
     assert!(declared.mcp_servers.is_empty());
     assert_eq!(
         serde_json::Value::Object(declared.hooks),
