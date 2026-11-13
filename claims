@@ -372,3 +372,4 @@ crates/extensions/src/models_dev.rs:215-220	fiber-4755	plan	2026-11-13T12:26:13Z
 crates/extensions/src/models_dev.rs:235-236	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
 crates/extensions/src/models_dev.rs:396-397	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
 crates/extensions/tests/models.rs:158-159	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
+crates/main/tests/screens/snapshots/screens__journeys__model_picker_by_name.snap	fiber-4675	plan	2026-11-13T12:30:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
