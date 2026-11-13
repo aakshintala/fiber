@@ -73,7 +73,7 @@ impl TestPause {
             release_tx,
         )
     }
-    fn new() -> TestPauseParts {
+    fn with_points() -> TestPauseParts {
         let (reader, reader_arrived, release_reader) = Self::point();
         let (drop, drop_arrived, release_drop) = Self::point();
         TestPauseParts {
@@ -585,7 +585,7 @@ impl Client {
             if let Some(client) = weak.upgrade() {
                 #[cfg(test)]
                 if let Some(pause) = &pause {
-                    // Hold EOF before marking dead so the test can observe retained-list removal order.
+                    // EOF must not mark the peer dead before Attached can shut down and retain it.
                     pause.reader.pause();
                 }
                 client.dead.store(true, Ordering::Release);
@@ -894,7 +894,7 @@ impl Drop for Attached {
         }
         #[cfg(test)]
         if let Some(pause) = &self.pause {
-            // Hold after shutdown and before retain so EOF cannot hide an attached peer.
+            // Shutdown first, then hold before retain so EOF cannot hide the attached peer.
             pause.drop.pause();
         }
         if let Some(retained) = self.retained.upgrade() {

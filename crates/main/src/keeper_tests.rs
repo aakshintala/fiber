@@ -603,7 +603,7 @@ fn ready_times_out_at_the_deadline_and_the_drop_ends_the_connection() {
         release_reader,
         drop_arrived,
         release_drop,
-    } = TestPause::new();
+    } = TestPause::with_points();
     let (host, clock, _peers, peer, attached) =
         attached_host_with_pause(vec![kept("call_0", "j_one")], b"", Some(pause));
     assert_eq!(host.handover_peers(), vec![Pid(std::process::id())]);
