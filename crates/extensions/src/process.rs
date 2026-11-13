@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::runtime::{FunctionRef, Runtime};
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "temporary mutation-test evidence")]
 fn issue_4775_evidence_mutant() -> bool {
     true
 }
