@@ -200,7 +200,10 @@ fn a_light_report_through_the_loop_repaints_light() {
     use crate::Input;
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (_, step_rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &step_rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &step_rx)).expect("event loop result succeeds"),
+        None
+    );
     // The loop starts dark: the page paints on the panel tint
     // (`docs/tui.md`, "Themes").
     assert_eq!(
@@ -208,7 +211,8 @@ fn a_light_report_through_the_loop_repaints_light() {
         Color::Rgb(0x0c, 0x0c, 0x11)
     );
     assert_eq!(
-        lp.step(Input::Bytes(b"\x1b[?997;2n".to_vec()), &step_rx),
+        (lp.step(Input::Bytes(b"\x1b[?997;2n".to_vec()), &step_rx))
+            .expect("event loop result succeeds"),
         None
     );
     assert_eq!(

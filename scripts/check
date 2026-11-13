@@ -412,28 +412,7 @@ EOF
 fi
 
 if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
-  echo "== leak-scan self-test"
-  scripts/test-leak-scan
-  echo "== look-diff self-test"
-  scripts/test-look-diff
-  echo "== flaky-tests self-test"
-  scripts/test-flaky-tests
-  echo "== flake-report self-test"
-  scripts/test-flake-report
-  echo "== retry-filter self-test"
-  scripts/test-retry-filter
-  echo "== stress-plan self-test"
-  scripts/test-stress-plan
-  echo "== journey-report self-test"
-  scripts/test-journey-report
-  echo "== mutants-rotation self-test"
-  scripts/test-mutants-rotation
-  echo "== mutants-shard-finish self-test"
-  scripts/test-mutants-shard-finish
-  echo "== bug-red self-test"
-  scripts/test-bug-red
-  echo "== class-data self-test"
-  scripts/test-class-data
+  /bin/bash scripts/test-script-selftests || exit $?
   echo "== cargo clippy -q --all-targets -- -D warnings"
   build_step cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so

@@ -9,6 +9,8 @@
 
 #[path = "../extension_harness/mod.rs"]
 mod extension_harness;
+#[path = "../support/hub_start.rs"]
+mod hub_start;
 #[path = "../support/mod.rs"]
 mod support;
 
@@ -35,6 +37,7 @@ mod release_pack;
 mod setup;
 mod slash_aliases;
 mod startup_log;
+mod stdout_errors;
 mod tui_silent_exit;
 mod tui_startup_failure;
 mod update;

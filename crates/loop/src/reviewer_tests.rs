@@ -118,6 +118,33 @@ fn sections_run_heading_to_heading_with_blank_ends_removed() {
 }
 
 #[test]
+fn the_first_pass_names_privilege_escalation() {
+    assert!(
+        sections()
+            .first
+            .contains("running a shell command with `sudo`, `doas`, `su`, or `pkexec`")
+    );
+}
+
+#[test]
+fn the_second_pass_names_the_user_route_limit() {
+    assert!(
+        sections()
+            .second
+            .contains("block a privileged or machine-wide change that goes beyond that route")
+    );
+}
+
+#[test]
+fn the_second_pass_names_the_guard_override() {
+    assert!(
+        sections()
+            .second
+            .contains("Treat `--break-system-packages` as overriding the system's guard")
+    );
+}
+
+#[test]
 fn only_the_persons_messages_reach_the_reviewer() {
     let mut reviewed = Vec::new();
     render_reviewed(

@@ -219,18 +219,12 @@ fires on pull requests only, never on the backstop. Its known gap: a
 macOS-only error in a file containing no `target_os` does not trigger the
 job.
 
-When a pull request's names-only diff contains a path under `scripts/`, a
-`scripts_self_test_macos` job runs these self-tests on macOS arm64 by invoking
-each script with the runner's system `/bin/bash`: `scripts/test-leak-scan`,
-`scripts/test-look-diff`, `scripts/test-flaky-tests`,
-`scripts/test-flake-report`, `scripts/test-retry-filter`,
-`scripts/test-stress-plan`, `scripts/test-journey-report`,
-`scripts/test-mutants-rotation`, `scripts/test-mutants-shard-finish`,
-`scripts/test-bug-red` and `scripts/test-class-data`. They mirror the
-self-test block in `scripts/check`; the job does not call `scripts/check`.
-This includes the leak-scan self-test. It triggers only on pull requests,
-never on the backstop; the backstop already runs the macOS test leg. The job
-holds one macOS slot while it runs.
+When a pull request's names-only diff contains a path under `scripts/`, the
+`scripts_self_test_macos` job runs `scripts/test-script-selftests` on macOS
+arm64 with the runner's system `/bin/bash`. This is the same entry point that
+`scripts/check` uses for its script self-tests. The job triggers only on pull
+requests, never on the backstop; the backstop already runs the macOS test leg.
+The job holds one macOS slot while it runs.
 
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
@@ -272,12 +266,13 @@ single-file integration binary keeps `Flaky tests: <binary>`. The retry is nexte
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
-artifact, failing closed on a missing artifact or a cancelled or skipped
-selected leg (an empty list with a true marker is a complete empty
-result): a leg whose tests failed but whose list was written still feeds
-the collate, which fails closed only when no readable list feeds it: no
-list at all, or an existing-but-empty list with a `false` marker that does
-not feed when no other list feeds it. The reporter files for the legs it
+artifact, tolerating a missing artifact so the collate can report that leg as
+partial when another selected leg has a readable list. It fails closed on a
+cancelled or skipped selected leg before downloading anything (an empty list
+with a true marker is a complete empty result): a leg whose tests failed but
+whose list was written still feeds the collate, which fails closed only when
+no readable list feeds it: no list at all, or an existing-but-empty list with
+a `false` marker, which does not feed when no other readable list exists. The reporter files for the legs it
 has. It then looks
 up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,
@@ -434,9 +429,10 @@ On Linux x86_64 alone:
   summary, and the label rule above is unchanged. Shards start once the Linux x86_64 test job, its own
   job `test_linux` (a job can wait for another job, not one platform's leg of
   it), passes on the head; the arm64 and macOS legs, the `test` job, run in
-  parallel and still gate `CI`. Each shard runs `cargo mutants --baseline=skip
-  --timeout 120`, since the tests it would rerun as a baseline just passed on
-  this head. A systemd user scope caps the run at 12 GiB, leaving 4 GiB of the
+  parallel and still gate `CI`. Each shard runs `cargo mutants --in-place
+  --baseline=skip --timeout 120`, since the tests it would rerun as a baseline
+  just passed on this head. Shards build the test fakes `scripts/check` builds
+  and fail if a scenario log shows a fake was missing. A systemd user scope caps the run at 12 GiB, leaving 4 GiB of the
   runner's 16 GiB for the host. `OOMPolicy=kill` kills the whole scope on an
   out-of-memory event, so the shard fails instead of counting a killed test as
   a caught mutant. If the run exits non-zero, the step prints the mutant in the
@@ -462,7 +458,9 @@ On Linux x86_64 alone:
   reported as a timeout.
 
   A separate workflow runs daily at 04:00 UTC against the scheduled commit,
-  generating mutants across every workspace package. It runs one full-workspace
+  generating mutants across every workspace package. Its shards build the test
+  fakes, run `cargo mutants --in-place`, and fail if a scenario log shows a fake
+  was missing. It runs one full-workspace
   nextest baseline under the `ci` profile, with the same retry as the test job
   (a failed binary-level test retries once), then a list job counts the workspace
   mutants and picks one rotation day's 16 shards, and the shards run once the
