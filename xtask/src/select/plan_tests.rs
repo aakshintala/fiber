@@ -79,6 +79,18 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
 }
 
 #[test]
+fn changed_paths_restore_missing_macos_job_keys() {
+    let mut plan = plan("docs", &[], "pull_request", false, false, false, 0);
+    plan.jobs.remove("clippy_macos");
+    plan.jobs.remove("scripts_self_test_macos");
+
+    let plan = plan_with_changed_paths(plan, true, &[changed("scripts/test-x", Some("plain"))]);
+
+    assert_eq!(plan.jobs.get("clippy_macos"), Some(&false));
+    assert_eq!(plan.jobs.get("scripts_self_test_macos"), Some(&true));
+}
+
+#[test]
 fn moved_matching_file_uses_its_head_path_and_content() {
     let plan = plan_with_changed_paths(
         plan("docs", &[], "pull_request", false, false, false, 0),

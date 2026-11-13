@@ -302,12 +302,9 @@ pub(crate) fn plan_with_changed_paths(
         && changed_paths.iter().any(|entry| {
             entry.path.starts_with("scripts/") && matches!(entry.state, PathState::Present(_))
         });
+    plan.jobs.insert("clippy_macos", clippy_macos);
     plan.jobs
-        .entry("clippy_macos")
-        .and_modify(|value| *value = clippy_macos);
-    plan.jobs
-        .entry("scripts_self_test_macos")
-        .and_modify(|value| *value = scripts_self_test_macos);
+        .insert("scripts_self_test_macos", scripts_self_test_macos);
     plan
 }
 
