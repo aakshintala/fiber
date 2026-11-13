@@ -136,3 +136,10 @@ crates/main/src/keeper_tests.rs	fiber-4713	plan	2026-11-13T02:12:32Z	roundhouse-
 crates/cli/src/prune_tests.rs	fiber-4704	grant	2026-11-13T02:55:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
 crates/cli/src/sessions_tests.rs	fiber-4704	grant	2026-11-13T02:55:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
 crates/cli/src/sessions_search_tests.rs	fiber-4704	grant	2026-11-13T02:55:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
+.github/workflows/ci.yml	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/main.rs	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/select/plan.rs	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/select/plan_tests.rs	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/tests/cli.rs	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
