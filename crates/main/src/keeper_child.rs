@@ -156,6 +156,7 @@ struct Hooks {
     before_switch: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
+    accept_error: Option<Box<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>>,
 }
 
 struct Runtime {
@@ -756,10 +757,38 @@ impl Runtime {
         });
         let runtime = Arc::clone(self);
         thread::spawn(move || {
-            for accepted in listener.incoming() {
+            let mut incoming = listener.incoming();
+            #[cfg(test)]
+            let mut inject = true;
+            loop {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
+                #[cfg(test)]
+                let accepted = if inject {
+                    inject = false;
+                    runtime
+                        .hooks
+                        .accept_error
+                        .as_ref()
+                        .and_then(|hook| hook())
+                        .map_or_else(
+                            || {
+                                incoming
+                                    .next()
+                                    .unwrap_or_else(|| Err(io::Error::other("listener ended")))
+                            },
+                            |kind| Err(io::Error::from(kind)),
+                        )
+                } else {
+                    incoming
+                        .next()
+                        .unwrap_or_else(|| Err(io::Error::other("listener ended")))
+                };
+                #[cfg(not(test))]
+                let accepted = incoming
+                    .next()
+                    .unwrap_or_else(|| Err(io::Error::other("listener ended")));
                 let Ok(stream) = accepted else { break };
                 // One thread per candidate: a stalled one holds up nothing.
                 let runtime = Arc::clone(&runtime);

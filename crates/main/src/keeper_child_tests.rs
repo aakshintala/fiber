@@ -25,6 +25,65 @@ fn runtime(
 }
 
 #[test]
+fn accept_error_keeps_acceptor_alive() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::Mutex;
+
+    let home = fakes::TempDir::new("keeper-accept-error");
+    let socket = home.path().join("keeper.sock");
+    let listener = UnixListener::bind(&socket).expect("listener");
+    let id = SessionId("s_0123456789abcdef".into());
+    let (control, _peer) = UnixStream::pair().expect("control");
+    let (done, _) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let accept_error = Box::new(move || {
+        ready_tx.send(()).ok()?;
+        release_rx.lock().ok()?.recv().ok()?;
+        Some(std::io::ErrorKind::ConnectionAborted)
+    });
+    let runtime = super::Runtime::new(
+        home.path().to_path_buf(),
+        id.clone(),
+        fakes::clock::FakeClock::new(),
+        control,
+        done,
+        super::Hooks {
+            accept_error: Some(accept_error),
+            ..super::Hooks::default()
+        },
+    );
+    runtime.listen(socket.clone(), listener);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&ready_rx, "injected accept pause");
+    let writer = UnixStream::connect(&socket).expect("connect to listener");
+    let reader = writer.try_clone().expect("clone reader");
+    let (send, frames) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let frame = crate::keeper::read_reply(&mut reader).ok().flatten();
+        let _ = send.send(frame);
+    });
+    let mut peer = Peer { writer, frames };
+    say(&mut peer, &ToKeeper::Identify(id));
+    release_tx.send(()).expect("release accept error");
+    let identity = hear(&peer, "identity after accept error");
+    let listening = super::lock(&runtime.listening);
+    listening
+        .as_ref()
+        .expect("listener state")
+        .stop
+        .store(true, Ordering::Release);
+    drop(listening);
+    let _wake = UnixStream::connect(&socket);
+    assert!(
+        matches!(&identity, Some(FromKeeper::Identity { .. })),
+        "expected Identity after accept error, heard {}",
+        describe(&identity)
+    );
+}
+
+#[test]
 fn dropping_a_keeper_log_unlinks_its_socket_and_releases_its_lock() {
     let home = fakes::TempDir::new("keeper-socket-release");
     let sessions = home.path().join("projects/p/sessions");
