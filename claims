@@ -380,3 +380,9 @@ xtask/src/select.rs:27-28	fiber-4809	plan	2026-11-13T21:32:47Z	roundhouse-7010-p
 xtask/src/select/plan.rs:290-291	fiber-4809	plan	2026-11-13T21:32:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 xtask/src/select/plan_tests.rs:169-170	fiber-4809	plan	2026-11-13T21:32:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 crates/tui/src/view/model_picker.rs:867-901	fiber-4675	grant	2026-11-13T21:36:03Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-click-enter	
+crates/tui/src/remote.rs	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/remote_tests.rs	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/configure.rs	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/configure/remote.rs	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/configure/remote_tests.rs	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/invocation.md	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
