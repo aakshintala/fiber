@@ -96,6 +96,16 @@ fn settings_omit_repository_scope_when_workspace_fiber_is_home() {
         row(&seam, &workspace, "compaction.tokens").scope,
         WriteScope::Any { repo: false }
     );
+    // Union settings declare Any without repository writes. With both
+    // operands false, repository scope must remain unavailable.
+    assert_eq!(
+        row(&seam, &workspace, "skills.disabled").scope,
+        WriteScope::Any { repo: false }
+    );
+    assert_eq!(
+        row(&seam, &dirs.workspace("two"), "compaction.tokens").scope,
+        WriteScope::Any { repo: true }
+    );
 }
 
 #[test]
