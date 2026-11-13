@@ -215,9 +215,10 @@ the local check; CI uses `--report` on each platform and `--collect` to make
 the single required check. The squash merge still lands one commit. A pull
 request whose every changed file is a docs file, as "Selection" defines it,
 passes the check with a message saying so: the doc was wrong and the code
-was right, so no test can show the bug. A pull request fixing a budget
-breach that only a main-only job can show, such as the release size, states
-the cause and the measurement at base and head in place of a red commit.
+was right, so no test can show the bug. A pull request fixing a break or a
+budget breach that only a main-only job can show, such as a release build
+that fails to compile or the release size, states the cause and that job's
+result at base and head in place of a red commit.
 
 A ticket whose defect is in test code, such as a flaky test, or in CI
 configuration (`.github/` or a script only CI runs), carries the `test-only`
