@@ -141,3 +141,6 @@ crates/extensions/src/repository/declared.rs	fiber-4702	plan	2026-11-13T00:17:30
 crates/extensions/src/repository/declared_tests.rs	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/cli_tests.rs	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/configuration.md	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/config.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/models.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/prune.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
