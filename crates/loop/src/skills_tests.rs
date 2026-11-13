@@ -1508,6 +1508,44 @@ fn a_repo_only_skill_does_not_divert() {
 }
 
 #[test]
+fn repository_and_personal_overlap_is_listed_once_as_personal() {
+    // The workspace is the parent of Fiber home, so both places name
+    // Fiber home's skills directory.
+    let tree = Tree::new();
+    let top = tree.top();
+    let home = top.join(".fiber");
+    skill(&home.join("skills"), "same", "fiber-home", "d");
+    let mut inputs = tree.inputs();
+    inputs.home = home;
+    let found = discover(&inputs, &top);
+    assert_eq!(names(&found), ["fiber-home"]);
+    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
+    assert!(found.notices.is_empty(), "{:?}", messages(&found));
+
+    // The Repository .agents place and personal agents home name the same
+    // canonical directory.
+    let tree = Tree::new();
+    let top = tree.top();
+    skill(&top.join(".agents/skills"), "same", "agents-home", "d");
+    let mut inputs = tree.inputs();
+    inputs.agents_home = Some(top.clone());
+    let found = discover(&inputs, &top);
+    assert_eq!(names(&found), ["agents-home"]);
+    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
+    assert!(found.notices.is_empty(), "{:?}", messages(&found));
+
+    // Distinct repository and personal places retain repository precedence.
+    let tree = Tree::new();
+    let top = tree.top();
+    skill(&top.join(".fiber/skills"), "same", "repo", "d");
+    skill(&tree.home().join("skills"), "same", "personal", "d");
+    let found = discover(&tree.inputs(), &top);
+    assert_eq!(names(&found), ["repo"]);
+    assert_eq!(found.skills[0].listed.source, SkillSource::Repository);
+    assert_eq!(found.notices.len(), 1);
+}
+
+#[test]
 fn a_two_mebibyte_valid_pair_diverts_through_the_unbounded_read() {
     let tree = Tree::new();
     let body = "x".repeat(2 * 1024 * 1024);
