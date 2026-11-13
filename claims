@@ -305,3 +305,8 @@ docs/invocation.md:333-334	fiber-4704	plan	2026-11-13T05:37:32Z	roundhouse-7010-
 scripts/look-diff	fiber-4780	grant	2026-11-13T05:46:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4780-shared-selftest-list	
 crates/main/tests/hub_daemon/hub_list.rs	fiber-4598	plan	2026-11-13T06:04:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/invocation.md	fiber-4598	plan	2026-11-13T06:09:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/runtime/queued.rs	fiber-4788	plan	2026-11-13T06:12:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/runtime.rs	fiber-4788	plan	2026-11-13T06:12:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/command_calls.rs	fiber-4788	plan	2026-11-13T06:12:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/hooks.rs	fiber-4788	plan	2026-11-13T06:12:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/runtime_tests.rs	fiber-4788	plan	2026-11-13T06:12:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
