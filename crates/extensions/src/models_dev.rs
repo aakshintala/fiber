@@ -155,34 +155,88 @@ pub fn spawn_if_due(
 }
 
 /// Merge the cached catalog into rows before provider admission validates them.
-pub(crate) fn merge_admission(
+pub fn merge_admission(
     home: &Path,
     extension_dir: &Path,
     provider: &str,
     models: Vec<ModelData>,
     enabled: bool,
 ) -> Vec<ModelData> {
-    if !enabled {
-        return models;
-    }
-    let Some(catalog) = config::read_models_dev(home)
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-    else {
-        return models;
+    let catalog = if enabled {
+        config::read_models_dev(home)
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .unwrap_or_else(|| Value::Object(Default::default()))
+    } else {
+        Value::Object(Default::default())
     };
     let path = extension_dir
         .join("providers")
         .join(format!("{provider}.json"));
-    let Some(meta) = fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|file| meta_of(&file))
-    else {
-        return models;
+    let Ok(bytes) = fs::read(path) else {
+        return cautious(models);
     };
-    merge(models, &meta, &catalog)
+    let Ok(file) = serde_json::from_slice::<Value>(&bytes) else {
+        return cautious(models);
+    };
+    let meta = meta_of(&file).unwrap_or_default();
+    let generated: Vec<ModelData> = file
+        .get("models")
+        .cloned()
+        .and_then(|models| serde_json::from_value(models).ok())
+        .unwrap_or_default();
+    enrich(models, &generated, &meta, &catalog)
+}
+
+fn cautious(models: Vec<ModelData>) -> Vec<ModelData> {
+    models.into_iter().map(cautious_model).collect()
+}
+
+fn cautious_model(mut model: ModelData) -> ModelData {
+    model.is_new = true;
+    model.input = vec!["text".to_owned()];
+    model.thinking_levels.clear();
+    model.thinking_default = None;
+    model.context_window = Some(128_000);
+    model.max_output_tokens = Some(8_192);
+    model.cost = None;
+    model
+}
+
+fn enrich(
+    models: Vec<ModelData>,
+    generated: &[ModelData],
+    meta: &CatalogMeta,
+    catalog: &Value,
+) -> Vec<ModelData> {
+    models
+        .into_iter()
+        .map(|mut model| {
+            let table = generated.iter().find(|known| known.id == model.id);
+            let (source, id) = resolve(&model.id, meta);
+            let fetched = catalog.get(&source).and_then(|value| value.get(&id));
+            if table.is_none() && fetched.is_none() {
+                return cautious_model(model);
+            }
+            model.is_new = false;
+            if let Some(table) = table {
+                model.name.clone_from(&table.name);
+                model.context_window = table.context_window;
+                model.max_output_tokens = table.max_output_tokens;
+                model.input.clone_from(&table.input);
+                model.cost.clone_from(&table.cost);
+                model.thinking_levels.clone_from(&table.thinking_levels);
+                model.thinking_default = table.thinking_default;
+            }
+            if fetched.is_some() {
+                if let Some(merged) = merge(vec![model.clone()], meta, catalog).into_iter().next() {
+                    model = merged;
+                }
+            }
+            model
+        })
+        .collect()
 }
 
 /// Merge cached catalog fields into installed provider rows without adding models.
@@ -191,46 +245,17 @@ pub fn apply(
     enabled: bool,
     providers: &mut Providers,
 ) -> Vec<contract::events::Notice> {
-    if !enabled {
-        return Vec::new();
-    }
-    let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
-        return Vec::new();
-    };
-    let Ok(catalog) = serde_json::from_slice::<Value>(&bytes) else {
-        return Vec::new();
-    };
     let names: Vec<String> = providers.names().map(str::to_owned).collect();
     let mut notices = Vec::new();
     for name in names {
-        let Ok(dir) = provider_dir(home, providers, &name) else {
-            continue;
-        };
-        let Ok(bytes) = fs::read(dir) else {
-            continue;
-        };
-        let Ok(file) = serde_json::from_slice::<Value>(&bytes) else {
-            continue;
-        };
-        let Some(meta) = meta_of(&file) else {
-            continue;
-        };
+        let base = providers
+            .provider_source_dir(&name)
+            .unwrap_or_else(|| home.join("providers").join(&name));
         let mut data = providers.data(&name);
-        data.models = merge(data.models, &meta, &catalog);
+        data.models = merge_admission(home, &base, &name, data.models, enabled);
         notices.extend(providers.set_models(&name, data.models));
     }
     notices
-}
-
-fn provider_dir(
-    home: &Path,
-    providers: &Providers,
-    provider: &str,
-) -> Result<PathBuf, std::io::Error> {
-    let base = providers
-        .provider_source_dir(provider)
-        .unwrap_or_else(|| home.join("providers").join(provider));
-    Ok(base.join("providers").join(format!("{provider}.json")))
 }
 
 /// Merge fetched fields into each generated row while retaining pins and Fiber-only fields.

@@ -21,6 +21,103 @@ use serde_json::json;
 use std::time::Duration;
 
 #[test]
+fn vendor_only_models_receive_cautious_defaults_and_a_host_marker() {
+    let setup = Setup::new();
+    let extension_dir = setup.source(
+        "vendor-only",
+        &manifest("vendor-only"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models": [],
+            "models_dev": {"source": "fake"}
+        })],
+    );
+    let models = vec![
+        serde_json::from_value(json!({
+            "id": "vendor-only",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap(),
+    ];
+
+    let enriched = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &extension_dir,
+        "fake",
+        models,
+        false,
+    );
+    let model = enriched
+        .first()
+        .expect("the vendor-listed model is retained");
+    assert_eq!(model.input, ["text"]);
+    assert!(model.thinking_levels.is_empty());
+    assert_eq!(model.context_window, Some(128_000));
+    assert_eq!(model.max_output_tokens, Some(8_192));
+    assert!(model.cost.is_none());
+    assert!(model.is_new);
+}
+
+#[test]
+fn admission_clears_the_new_marker_for_generated_and_fetched_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": [{
+                "id": "table-known",
+                "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1",
+                "context_window": 4096,
+                "max_output_tokens": 128,
+                "input": ["text", "image"]
+            }]
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"catalog-known":{"limit":{"context":8192,"output":256},"modalities":{"input":["text"]}}}}"#,
+    )
+    .unwrap();
+    let models = ["table-known", "catalog-known"]
+        .into_iter()
+        .map(|id| {
+            serde_json::from_value(json!({
+                "id": id,
+                "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1"
+            }))
+            .unwrap()
+        })
+        .collect();
+
+    let enriched =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", models, true);
+    let table = enriched
+        .iter()
+        .find(|model| model.id == "table-known")
+        .unwrap();
+    assert!(!table.is_new);
+    assert_eq!(table.context_window, Some(4096));
+    assert_eq!(table.max_output_tokens, Some(128));
+    assert_eq!(table.input, ["text", "image"]);
+    let fetched = enriched
+        .iter()
+        .find(|model| model.id == "catalog-known")
+        .unwrap();
+    assert!(!fetched.is_new);
+    assert_eq!(fetched.context_window, Some(8192));
+    assert_eq!(fetched.max_output_tokens, Some(256));
+    assert_eq!(fetched.input, ["text"]);
+}
+
+#[test]
 fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
     let mut models: Vec<ModelData> =
         serde_json::from_value(provider("acme", &["m1", "m2"])["models"].clone()).unwrap();
@@ -1016,7 +1113,7 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
 }
 
 #[test]
-fn a_warm_cache_names_an_invalid_model_once() {
+fn a_warm_cache_rederives_cautious_values_for_an_unknown_model() {
     let setup = Setup::new();
     // A data-file provider under a warm cache: the cached list stands
     // in for the data file's at load and again in `add_lua`.
@@ -1035,10 +1132,11 @@ fn a_warm_cache_names_an_invalid_model_once() {
     )
     .unwrap();
     let (mut providers, load_notices) = Providers::load(&setup.home()).unwrap();
-    assert!(matches!(
-        providers.resolve("acme/bad").unwrap_err(),
-        Error::UnknownModel { .. }
-    ));
+    let model = providers
+        .resolve("acme/bad")
+        .expect("vendor-only cache row is usable");
+    assert!(model.model.is_new);
+    assert_eq!(model.model.context_window, Some(128_000));
     let load_invalid: Vec<_> = load_notices
         .iter()
         .filter(|notice| notice.code == ErrorCode::ModelInvalid)
@@ -1054,31 +1152,20 @@ fn a_warm_cache_names_an_invalid_model_once() {
         &fakes::children::grouped_output,
         &|_| None,
     );
-    assert!(matches!(
-        providers.resolve("acme/bad").unwrap_err(),
-        Error::UnknownModel { .. }
-    ));
+    let model = providers
+        .resolve("acme/bad")
+        .expect("warm cache remains usable");
+    assert!(model.model.is_new);
     let lua_invalid: Vec<_> = lua_notices
         .iter()
         .filter(|notice| notice.code == ErrorCode::ModelInvalid)
         .collect();
-    assert_eq!(
-        load_invalid.len() + lua_invalid.len(),
-        1,
-        "one `model_invalid` per reason across load and `add_lua`: \
-         load {load_notices:?}, `add_lua` {lua_notices:?}"
-    );
-    assert_eq!(load_invalid.len(), 1, "{load_notices:?}");
+    assert!(load_invalid.is_empty(), "{load_notices:?}");
     assert!(lua_invalid.is_empty(), "{lua_notices:?}");
-    assert_eq!(load_invalid[0].extension.as_deref(), Some("acme-ext"));
-    assert_eq!(
-        load_invalid[0].message,
-        "The model `acme/bad` declares no `context_window`."
-    );
 }
 
 #[test]
-fn a_disabled_process_package_warm_cache_names_an_invalid_model_once() {
+fn a_disabled_process_package_warm_cache_admits_a_vendor_only_model() {
     fakes::within(
         "Providers::load_enabled",
         Deadline::after(MUST_SUCCEED_WITHIN),
@@ -1102,17 +1189,12 @@ fn a_disabled_process_package_warm_cache_names_an_invalid_model_once() {
             let configuration = config(&setup, &["extensions.acme.enabled=false"]);
             let (providers, notices) =
                 Providers::load_enabled(&setup.home(), &configuration).unwrap();
-            assert!(matches!(
-                providers.resolve("acme/bad").unwrap_err(),
-                Error::UnknownModel { .. }
-            ));
-            assert_eq!(notices.len(), 1, "{notices:?}");
-            assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
-            assert_eq!(notices[0].extension.as_deref(), Some("acme"));
-            assert_eq!(
-                notices[0].message,
-                "The model `acme/bad` declares no `context_window`."
-            );
+            let model = providers
+                .resolve("acme/bad")
+                .expect("cached vendor row is usable");
+            assert!(model.model.is_new);
+            assert_eq!(model.model.context_window, Some(128_000));
+            assert!(notices.is_empty(), "{notices:?}");
         },
     );
 }
