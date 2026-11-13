@@ -209,6 +209,18 @@ pub(crate) struct Plan {
     pub(crate) shards: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PathState {
+    Present(Option<String>),
+    Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChangedPath {
+    pub(crate) path: String,
+    pub(crate) state: PathState,
+}
+
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {
@@ -240,6 +252,28 @@ pub(crate) fn plan(
     mutants: bool,
     mutant_count: u64,
 ) -> Plan {
+    plan_with_changed_paths(
+        mode,
+        packages,
+        event,
+        draft,
+        bug,
+        mutants,
+        mutant_count,
+        &[],
+    )
+}
+
+pub(crate) fn plan_with_changed_paths(
+    mode: &str,
+    packages: &[String],
+    event: &str,
+    draft: bool,
+    bug: bool,
+    mutants: bool,
+    mutant_count: u64,
+    changed_paths: &[ChangedPath],
+) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
@@ -253,7 +287,16 @@ pub(crate) fn plan(
     // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
     // "The merge gate"), so the selection ignores it.
     let _ = draft;
+    let clippy_macos = pr && changed_paths.iter().any(|entry| {
+        matches!(&entry.state, PathState::Present(Some(contents)) if contents.contains("target_os"))
+    });
+    let scripts_self_test_macos = pr
+        && changed_paths
+            .iter()
+            .any(|entry| entry.path.starts_with("scripts/"));
     let jobs = BTreeMap::from([
+        ("clippy_macos", clippy_macos),
+        ("scripts_self_test_macos", scripts_self_test_macos),
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
         // Linux x86_64 runs the selected tests on every event; `test` runs
