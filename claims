@@ -431,3 +431,7 @@ xtask/tests/cli.rs:500-501	fiber-4801	plan	2026-11-13T22:44:12Z	roundhouse-7010-
 xtask/tests/cli.rs:1427-1427	fiber-4801	plan	2026-11-13T22:44:12Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4801-mutants-reuse-xtask	
 xtask/tests/cli.rs:1543-1544	fiber-4801	plan	2026-11-13T22:44:12Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4801-mutants-reuse-xtask	
 xtask/tests/cli.rs:2839-2970	fiber-4801	plan	2026-11-13T22:44:12Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4801-mutants-reuse-xtask	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4675	plan	2026-11-13T23:09:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screens/journeys.rs	fiber-4675	plan	2026-11-13T23:09:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screens/terminal.rs	fiber-4675	plan	2026-11-13T23:09:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4675	plan	2026-11-13T23:09:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
