@@ -167,7 +167,7 @@ pub(crate) fn merge_admission(
     if !enabled {
         return models;
     }
-    let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
+    let Some(file) = config::open_models_dev(home).ok().flatten() else {
         return models;
     };
     let path = extension_dir
@@ -181,7 +181,7 @@ pub(crate) fn merge_admission(
         return models;
     };
     let selected = selections(&models, &meta);
-    let Some(catalog) = select_catalog(&bytes, &selected) else {
+    let Some(catalog) = select_catalog(file, &selected) else {
         return models;
     };
     merge(models, &meta, &catalog)
@@ -196,7 +196,7 @@ pub fn apply(
     if !enabled {
         return Vec::new();
     }
-    let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
+    let Some(file) = config::open_models_dev(home).ok().flatten() else {
         return Vec::new();
     };
     let names: Vec<String> = providers.names().map(str::to_owned).collect();
@@ -221,7 +221,7 @@ pub fn apply(
         }
         pending.push((name.clone(), meta, data.models.clone()));
     }
-    let Some(catalog) = select_catalog(&bytes, &selected) else {
+    let Some(catalog) = select_catalog(file, &selected) else {
         return Vec::new();
     };
     let mut notices = Vec::new();
@@ -265,8 +265,8 @@ fn selections(models: &[ModelData], meta: &CatalogMeta) -> Selection {
     selected
 }
 
-fn select_catalog(bytes: &[u8], selected: &Selection) -> Option<Value> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+fn select_catalog(reader: impl Read, selected: &Selection) -> Option<Value> {
+    let mut deserializer = serde_json::Deserializer::from_reader(std::io::BufReader::new(reader));
     let catalog = SelectionSeed(selected)
         .deserialize(&mut deserializer)
         .ok()?;
@@ -538,7 +538,7 @@ mod retained_catalog_tests {
         let mut selected = Selection::default();
         selected.insert("served".to_owned(), "model".to_owned());
 
-        let retained = select_catalog(bytes, &selected).unwrap();
+        let retained = select_catalog(&bytes[..], &selected).unwrap();
 
         assert_eq!(retained, json!({"served":{"model":{"name":"kept"}}}));
     }

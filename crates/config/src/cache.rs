@@ -142,6 +142,15 @@ pub fn models_dev_age(home: &Path, now: SystemTime) -> Result<Option<Duration>, 
     Ok(Some(now.duration_since(modified).unwrap_or(Duration::ZERO)))
 }
 
+/// Open the cached catalog for streaming; a missing or unreadable copy is no copy.
+pub fn open_models_dev(home: &Path) -> Result<Option<fs::File>, ConfigError> {
+    let file = models_dev_cache_file(home)?;
+    match fs::File::open(file) {
+        Ok(file) => Ok(Some(file)),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Read the catalog bytes; a missing or unreadable copy is no copy.
 pub fn read_models_dev(home: &Path) -> Result<Option<Vec<u8>>, ConfigError> {
     let file = models_dev_cache_file(home)?;
