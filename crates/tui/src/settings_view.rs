@@ -2385,19 +2385,21 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         (SettingControl::Boolean, Shown::Value(text)) => {
             if text == "true" { "[x] On" } else { "[ ] Off" }.to_owned()
         }
-        (SettingControl::Model, Shown::Unset) => "Not set ›".to_owned(),
+        (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Unset) => {
-            "none ›".to_owned()
+            "Default ›".to_owned()
         }
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Value(text)) => {
             format!("{} ›", list_text(text))
+        }
+        (SettingControl::Number | SettingControl::Text | SettingControl::Json, Shown::Unset) => {
+            "Default".to_owned()
         }
         (SettingControl::Number, Shown::Value(text)) => number_text(&row.key, text),
         (SettingControl::Text, Shown::Value(text)) if row.key == "model_lists.refresh_after" => {
             refresh_text(text)
         }
-        (_, Shown::Unset) => "Not set".to_owned(),
         (_, Shown::Value(text)) => as_typed(text),
     };
     let tag = match (&row.value, row.layer.as_str()) {

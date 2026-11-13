@@ -983,12 +983,12 @@ impl Write for FailSecondWrite {
 
 fn check_forwarded_closed(got: Result<(), CliError>) {
     let failure = got.unwrap_err();
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
     assert!(
         matches!(
             failure,
-            CliError::Forwarded(ref forwarded)
-                if forwarded.code == ErrorCode::IoFailed
-                    && forwarded.message == "standard output: closed"
+            CliError::StandardOutput(ref error)
+                if error.kind() == io::ErrorKind::Other && error.to_string() == "closed"
         ),
         "{failure:?}"
     );
