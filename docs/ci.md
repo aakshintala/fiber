@@ -465,7 +465,9 @@ On Linux x86_64 alone:
   reported as a timeout.
 
   A separate workflow runs daily at 04:00 UTC against the scheduled commit,
-  generating mutants across every workspace package. It runs one full-workspace
+  generating mutants across every workspace package. Its shards build the test
+  fakes, run `cargo mutants --in-place`, and fail if a scenario log shows a fake
+  was missing. It runs one full-workspace
   nextest baseline under the `ci` profile, with the same retry as the test job
   (a failed binary-level test retries once), then a list job counts the workspace
   mutants and picks one rotation day's 16 shards, and the shards run once the
