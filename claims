@@ -371,3 +371,7 @@ xtask/src/select/plan.rs	fiber-4800	plan	2026-11-13T12:55:27Z	roundhouse-7010-pl
 xtask/src/main.rs	fiber-4800	plan	2026-11-13T12:55:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4800	plan	2026-11-13T12:55:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 .config/nextest.toml	fiber-4800	plan	2026-11-13T12:55:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/keeper.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_restore.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/resume.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
