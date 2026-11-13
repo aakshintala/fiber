@@ -488,6 +488,7 @@ fn the_settings_view_matches_the_doc() {
     assert!(!is_bold(&grid, footer, "change"));
     // Notifications: wait for the slider, then move to Bell before using
     // Right to leave the tab.
+    run.write(b"\x1b[C");
     run.wait_screen("the focused Quota notice slider", |grid| {
         focused_label(grid).as_deref() == Some("Quota notice")
     });
