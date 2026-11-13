@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::{
-    CommitSha, Current, MatchedReuse, PullRequestNumber, RunId, matched_reuse, matched_reuse_files,
+    CommitSha, Current, MatchedReuse, PullRequestNumber, RunId, matched_reuse_files,
     reuse_candidate_ids,
 };
 
@@ -82,7 +82,7 @@ fn successful_shards_on(base: &str, total: usize) -> Value {
 }
 
 fn decide_with(current: &Current, runs: &Value, jobs: &Value) -> bool {
-    matched_reuse(current, &runs.to_string(), &jobs.to_string()).is_some()
+    matched_raw(current, &runs.to_string(), &jobs.to_string()).is_some()
 }
 
 fn matched_with(current: &Current, runs: &Value, jobs: &Value) -> Option<MatchedReuse> {
@@ -90,7 +90,15 @@ fn matched_with(current: &Current, runs: &Value, jobs: &Value) -> Option<Matched
 }
 
 fn matched_raw(current: &Current, runs: &str, jobs: &str) -> Option<MatchedReuse> {
-    matched_reuse(current, runs, jobs)
+    let candidate_ids = reuse_candidate_ids(runs)?;
+    let jobs: Value = serde_json::from_str(jobs).ok()?;
+    let temp = fakes::TempDir::new("xtask-reuse-fixture");
+    for id in candidate_ids {
+        let run_jobs = jobs.get(id.to_string())?.as_array()?;
+        let path = format!("jobs/{id}.json");
+        temp.write(&path, &format!("{}\n", json!({ "jobs": run_jobs })));
+    }
+    matched_reuse_files(current, runs, &temp.path().join("jobs"))
 }
 
 fn matched_run(run_id: u64, pr_head: &str) -> MatchedReuse {
