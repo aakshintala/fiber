@@ -357,9 +357,6 @@ docs/ci.md	fiber-4473	plan	2026-11-13T10:16:22Z	roundhouse-7010-plus-1:/home/aak
 xtask/src/select/compiled_in.rs	fiber-4473	plan	2026-11-13T11:45:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4800	plan	2026-11-13T11:53:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/mutants.md	fiber-4800	plan	2026-11-13T11:53:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/bench/examples/bench/linux.rs:121-121	fiber-4791	plan	2026-11-13T11:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
-crates/bench/examples/bench/linux_tests.rs:146-147	fiber-4791	plan	2026-11-13T11:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
-crates/bench/examples/bench/linux_tests.rs:176-176	fiber-4791	plan	2026-11-13T11:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
 crates/main/tests/screens/journeys.rs	fiber-4675	plan	2026-11-13T12:00:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/model_picker_keys.rs	fiber-4675	plan	2026-11-13T12:00:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4675	plan	2026-11-13T12:00:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -368,3 +365,7 @@ crates/main/tests/screens/snapshots/screens__journeys__model_picker_open.snap	fi
 crates/main/src/keeper.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/keeper_restore.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/bench/examples/bench/linux.rs:121-121	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
+crates/bench/examples/bench/linux_tests.rs:146-147	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
+crates/bench/examples/bench/linux_tests.rs:173-178	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
+crates/bench/examples/bench/linux_tests.rs:179-180	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
