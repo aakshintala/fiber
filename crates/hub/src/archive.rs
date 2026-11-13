@@ -27,19 +27,19 @@ pub(crate) fn try_archive(
     hub: &Hub,
     candidate: &RecentRow,
     snapshot: &[RecentRow],
-) -> BTreeSet<SessionId> {
+) -> Vec<RecentRow> {
     let _gate = match hub.resume_gate.try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
-        Err(TryLockError::WouldBlock) => return BTreeSet::new(),
+        Err(TryLockError::WouldBlock) => return Vec::new(),
     };
     let _recent = match hub.feed.recent_mutation().try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
-        Err(TryLockError::WouldBlock) => return BTreeSet::new(),
+        Err(TryLockError::WouldBlock) => return Vec::new(),
     };
     let mut visited = BTreeSet::new();
-    let mut archived = BTreeSet::new();
+    let mut archived = Vec::new();
     if archive_tree(hub, candidate, snapshot, &mut visited, &mut archived).is_err() {
         archived.clear();
     }
@@ -53,14 +53,15 @@ fn archive_tree(
     candidate: &RecentRow,
     snapshot: &[RecentRow],
     visited: &mut BTreeSet<SessionId>,
-    archived: &mut BTreeSet<SessionId>,
+    archived: &mut Vec<RecentRow>,
 ) -> Result<(), Refused> {
     let session = &candidate.session_id;
     if !visited.insert(session.clone()) {
         return Ok(());
     }
-    archive_one(hub, candidate)?;
-    archived.insert(session.clone());
+    if archive_one(hub, candidate)? {
+        archived.push(marked(candidate.clone()));
+    }
     for child in snapshot.iter().filter(|row| {
         row.how == Left::Exited
             && row
@@ -78,7 +79,7 @@ fn archive_tree(
 
 /// Applies the normal archive event and index effects to one already loaded
 /// recent row. Both serialization guards are held by the caller.
-fn archive_one(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
+fn archive_one(hub: &Hub, candidate: &RecentRow) -> Result<bool, Refused> {
     let session = &candidate.session_id;
     let Some((project, dir)) = recent::lookup_logged(&hub.home, session) else {
         return Err(not_found(session));
@@ -98,7 +99,7 @@ fn archive_one(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
     };
     let already_archived = log::is_archived(&dir);
     if already_archived && candidate.archived {
-        return Ok(());
+        return Ok(false);
     }
     if !already_archived {
         log.append(&Event::Archived(Empty {}), None, None)
@@ -107,7 +108,7 @@ fn archive_one(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
     let row = marked(candidate.clone());
     recent::append(&hub.home, &row).map_err(|error| io_failed(session, &error))?;
     hub.feed.forget(&session.0, &project, Forgotten::Archived);
-    Ok(())
+    Ok(true)
 }
 
 /// `archive`: appends `archived` to `session`'s log and re-appends its
@@ -183,7 +184,7 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
 /// individual delegates leave them eligible for a later archive attempt.
 fn cascade_descendants(hub: &Hub, parent: &SessionId, rows: &[RecentRow]) {
     let mut visited = BTreeSet::from([parent.clone()]);
-    let mut archived = BTreeSet::new();
+    let mut archived = Vec::new();
     for child in rows.iter().filter(|row| {
         row.how == Left::Exited
             && row

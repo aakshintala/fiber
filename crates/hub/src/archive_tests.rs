@@ -806,7 +806,11 @@ fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
             session_id: SessionId(testkit::id(1)),
             ts: 1,
             project: "-w".to_owned(),
-            workspace: temp.dir.join("missing-workspace").to_string_lossy().into_owned(),
+            workspace: temp
+                .dir
+                .join("missing-workspace")
+                .to_string_lossy()
+                .into_owned(),
             name: "newly archived".to_owned(),
             how: crate::recent::Left::Exited,
             status: None,
