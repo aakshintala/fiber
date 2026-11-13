@@ -63,7 +63,9 @@ fn accept_error_keeps_acceptor_alive() {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(reader);
         let frame = crate::keeper::read_reply(&mut reader).ok().flatten();
-        let _ = send.send(frame);
+        match send.send(frame) {
+            Ok(()) | Err(_) => {}
+        }
     });
     let mut peer = Peer { writer, frames };
     say(&mut peer, &ToKeeper::Identify(id));
