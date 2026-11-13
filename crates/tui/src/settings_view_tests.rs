@@ -540,9 +540,9 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 | Appearance   Notifications   Models   Permissions   Sessions   Advanced
 |
-|› Reviewer model          Not set ›
+|› Reviewer model          Default ›
 |
-|  Sandbox writable paths  none ›
+|  Sandbox writable paths  Default ›
 |
 |  Sandbox                 [x] On  repository
 |
@@ -571,7 +571,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Compaction tokens      400k tokens
 |
-|  Repository extensions  none ›
+|  Repository extensions  Default ›
 |
 |  Skills                 Open /skills ›
 |
@@ -3818,7 +3818,7 @@ fn settings_search_matches_label_and_path_across_tabs() {
         let shown = screen(&settings);
         assert_eq!(
             row_of(&shown, "Reviewer model"),
-            "› Reviewer model Not set › Permissions",
+            "› Reviewer model Default › Permissions",
             "{query}"
         );
     }
@@ -3830,7 +3830,7 @@ fn settings_search_matches_label_and_path_across_tabs() {
 |
 |/ reviewer
 |
-|› Reviewer model  Not set ›                                          Permissions
+|› Reviewer model  Default ›                                          Permissions
 |
 |
 |
