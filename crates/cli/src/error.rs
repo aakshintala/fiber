@@ -30,6 +30,9 @@ pub enum CliError {
     /// The terminal could not be read or written.
     #[error("the terminal: {0}")]
     Terminal(#[source] io::Error),
+    /// Standard output could not be written.
+    #[error("standard output: {0}")]
+    StandardOutput(#[source] io::Error),
     /// Standard error could not be written.
     #[error("standard error: {0}")]
     StandardError(#[source] io::Error),
@@ -871,6 +874,7 @@ impl CliError {
             Self::DeleteNobody => ErrorCode::Usage,
             Self::SessionNotFoundOnHub { .. } => ErrorCode::SessionNotFound,
             Self::Terminal(_)
+            | Self::StandardOutput(_)
             | Self::StandardError(_)
             | Self::StandardInput(_)
             | Self::CurrentDirectory(_)
@@ -953,6 +957,7 @@ impl From<CliError> for Failure {
             | CliError::CredentialFile(_)
             | CliError::Extensions(_)
             | CliError::Terminal(_)
+            | CliError::StandardOutput(_)
             | CliError::StandardError(_)
             | CliError::StandardInput(_)
             | CliError::CurrentDirectory(_)

@@ -81,6 +81,15 @@ fn terminal_names_the_terminal() {
 }
 
 #[test]
+fn standard_output_names_standard_output() {
+    check(
+        &CliError::StandardOutput(io::Error::other("boom")),
+        ErrorCode::IoFailed,
+        "standard output: boom",
+    );
+}
+
+#[test]
 fn standard_error_names_standard_error() {
     check(
         &CliError::StandardError(io_error()),
