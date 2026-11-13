@@ -535,10 +535,10 @@ server's tool or another extension's. It returns the call's outcome: `status`,
 It carries no `details` or `changes`, which the model never sees. The outcome
 reaches the script whole: an inner call bypasses the loop's cut, and the
 read tool's own cut does not apply to it, while the outer call's own result
-to the model stays bounded (`docs/tools.md`, "Bounded results"). The shell's
-1 MiB spill is the one tool-level bound that still applies on the inner path:
-a shell call past 1 MiB names its artifact as it does outside (`docs/tools.md`,
-"Shell", "Result and output"). A call that does not complete is an ordinary return, not a
+to the model stays bounded (`docs/tools.md`, "Bounded results"). An inner
+shell call also bypasses the shell's spill, so its whole output reaches the
+script without a shell artifact. Direct shell calls retain the 1 MiB spill
+(`docs/tools.md`, "Shell", "Result and output"). A call that does not complete is an ordinary return, not a
 Lua error, so the extension decides what to do next. A codemode extension is
 built on it: the model sends one script, and the script calls tools, filters
 their output and returns only what the model needs
@@ -595,7 +595,9 @@ as the model's, not to contain an extension.
 which runs a Lua script. The script calls tools with `host.tool` ("Running a
 tool"), filters what they return and prints only what the model needs. Every
 other tool the session can call is reachable this way: a built-in, an MCP
-server's tool or another extension's.
+server's tool or another extension's. Its shipped manifest raises the Lua
+memory cap to 16 MiB so an inner result reaches the script whole up to what
+fits.
 
 - **Input.** An object with one required string, `source`, the Lua to run:
   `{"source": "print('hi')"}`. The script's output is what it passes to

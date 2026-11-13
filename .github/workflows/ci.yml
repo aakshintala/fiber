@@ -253,10 +253,16 @@ jobs:
           # at HEAD, so a file the pull request moved still fires and a
           # deleted file never does.
           clippy_macos=false
+          scripts_self_test_macos=false
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             while IFS= read -r -d '' path; do
+              if [[ "$path" == scripts/* ]]; then
+                scripts_self_test_macos=true
+              fi
               if [ -n "$path" ] && [ -f "$path" ] && grep -q 'target_os' -- "$path"; then
                 clippy_macos=true
+              fi
+              if [ "$scripts_self_test_macos" = true ] && [ "$clippy_macos" = true ]; then
                 break
               fi
             done < <(git diff -z --name-only "$BASE...HEAD")
@@ -267,7 +273,7 @@ jobs:
           # vacuously.
           jobs_json=$(grep '^jobs=' "$GITHUB_OUTPUT" | tail -n 1 | sed 's/^jobs=//')
           [ -n "$jobs_json" ] || exit 1
-          merged=$(printf '%s' "$jobs_json" | jq -c --argjson clippy_macos "$clippy_macos" '. + {clippy_macos: $clippy_macos}') || exit 1
+          merged=$(printf '%s' "$jobs_json" | jq -c --argjson clippy_macos "$clippy_macos" --argjson scripts_self_test_macos "$scripts_self_test_macos" '. + {clippy_macos: $clippy_macos, scripts_self_test_macos: $scripts_self_test_macos}') || exit 1
           echo "jobs=$merged" >>"$GITHUB_OUTPUT"
 
   lint:
@@ -856,6 +862,34 @@ jobs:
           fi
           echo "== cargo clippy -q --all-targets -- -D warnings"
           cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
+
+  # Run scripts/check's platform-specific self-tests with the system Bash
+  # on macOS when a pull request changes a script; the push backstop's test
+  # job already runs the macOS leg.
+  scripts_self_test_macos:
+    name: Scripts self-tests (macOS arm64)
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).scripts_self_test_macos
+    runs-on: macos-26
+    # No history yet: a generous bound, retuned to twice the median after
+    # twenty runs (docs/ci.md, "Job time limits").
+    timeout-minutes: 30
+    steps:
+      - *checkout-full
+      - name: scripts/check self-test block with system Bash
+        run: |
+          /bin/bash --version
+          /bin/bash scripts/test-leak-scan
+          /bin/bash scripts/test-look-diff
+          /bin/bash scripts/test-flaky-tests
+          /bin/bash scripts/test-flake-report
+          /bin/bash scripts/test-retry-filter
+          /bin/bash scripts/test-stress-plan
+          /bin/bash scripts/test-journey-report
+          /bin/bash scripts/test-mutants-rotation
+          /bin/bash scripts/test-mutants-shard-finish
+          /bin/bash scripts/test-bug-red
+          /bin/bash scripts/test-class-data
 
   # The tests the push touches, each run 30 times (100 when the
   # push fixes a flaky test), beside the test jobs on the backstop: one failure
@@ -2284,7 +2318,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test_linux, test, clippy_macos, mutants, bug_red, release, stress]
+    needs: [select, lint, test_linux, test, clippy_macos, scripts_self_test_macos, mutants, bug_red, release, stress]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.

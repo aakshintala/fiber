@@ -80,69 +80,6 @@
       },
       "context_window": 1000000,
       "cost": {
-        "cache_read": 0.003,
-        "input": 0.15,
-        "output": 0.6
-      },
-      "id": "deepseek-v4-flash",
-      "input": [
-        "text"
-      ],
-      "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Flash",
-      "protocol": "openai-completions",
-      "subscription": true,
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true,
-        "store": false
-      },
-      "context_window": 1000000,
-      "cost": {
-        "cache_read": 0.003,
-        "input": 0.15,
-        "output": 0.6
-      },
-      "id": "deepseek-v4-flash-vision-exp",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Flash Vision Exp",
-      "protocol": "openai-completions",
-      "subscription": true,
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true,
-        "store": false
-      },
-      "context_window": 1000000,
-      "cost": {
         "cache_read": 0.022,
         "input": 0.66,
         "output": 1.98
@@ -152,7 +89,7 @@
         "text"
       ],
       "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Pro (New)",
+      "name": "DeepSeek V4 Pro",
       "protocol": "openai-completions",
       "subscription": true,
       "thinking_levels": [
@@ -184,7 +121,7 @@
         "image"
       ],
       "max_output_tokens": 384000,
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "protocol": "openai-completions",
       "subscription": true,
       "thinking_levels": [
@@ -416,43 +353,6 @@
           }
         ]
       },
-      "id": "grok-4.6",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 500000,
-      "name": "Grok 4.6",
-      "protocol": "openai-responses",
-      "subscription": true,
-      "thinking_levels": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "store": false
-      },
-      "context_window": 500000,
-      "cost": {
-        "cache_read": 0.5,
-        "input": 2,
-        "output": 6,
-        "tiers": [
-          {
-            "cache_read": 1,
-            "cache_write": 0,
-            "input": 4,
-            "input_tokens_above": 200000,
-            "output": 12
-          }
-        ]
-      },
       "id": "grok-4.7",
       "input": [
         "text",
@@ -627,6 +527,7 @@
       "context_window": 1048576,
       "cost": {
         "cache_read": 0.3,
+        "cache_write": 3,
         "input": 3,
         "output": 15
       },
@@ -725,38 +626,6 @@
       ],
       "max_output_tokens": 262144,
       "name": "LongCat 2.5 Free",
-      "protocol": "openai-completions",
-      "subscription": true,
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true,
-        "store": false
-      },
-      "context_window": 1000000,
-      "cost": {
-        "cache_read": 0,
-        "input": 0,
-        "output": 0
-      },
-      "id": "longcat-2.5-preview-free",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 131072,
-      "name": "LongCat 2.5 Preview Free",
       "protocol": "openai-completions",
       "subscription": true,
       "thinking_levels": [
@@ -887,36 +756,6 @@
         "low",
         "medium",
         "high",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session"
-      },
-      "context_window": 204800,
-      "cost": {
-        "cache_read": 0.06,
-        "cache_write": 0.375,
-        "input": 0.3,
-        "output": 1.2
-      },
-      "id": "minimax-m2.7",
-      "input": [
-        "text"
-      ],
-      "max_output_tokens": 131072,
-      "name": "MiniMax-M2.7",
-      "protocol": "anthropic-messages",
-      "subscription": true,
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
         "max"
       ]
     },
@@ -1154,38 +993,6 @@
         "max_tokens": true,
         "store": false
       },
-      "context_window": 1048576,
-      "cost": {
-        "cache_read": 0.03,
-        "cache_write": 0,
-        "input": 0.15,
-        "output": 0.6
-      },
-      "id": "space-bunny",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 524288,
-      "name": "Space Bunny",
-      "protocol": "openai-completions",
-      "subscription": true,
-      "thinking_levels": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true,
-        "store": false
-      },
       "context_window": 1000000,
       "cost": {
         "cache_read": 0.1,
@@ -1206,37 +1013,6 @@
         "medium",
         "high"
       ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true,
-        "store": false
-      },
-      "context_window": 1000000,
-      "cost": {
-        "cache_read": 0,
-        "input": 0,
-        "output": 0
-      },
-      "id": "step-5-preview-free",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 65536,
-      "name": "Step 5 Preview Free",
-      "protocol": "openai-completions",
-      "subscription": true,
-      "thinking_levels": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
     }
   ],
   "models_dev": {
@@ -1246,14 +1022,6 @@
         "subscription"
       ],
       "claude-haiku-5-5": [
-        "compat",
-        "subscription"
-      ],
-      "deepseek-v4-flash": [
-        "compat",
-        "subscription"
-      ],
-      "deepseek-v4-flash-vision-exp": [
         "compat",
         "subscription"
       ],
@@ -1286,10 +1054,6 @@
         "subscription"
       ],
       "gpt-6-luna": [
-        "compat",
-        "subscription"
-      ],
-      "grok-4.6": [
         "compat",
         "subscription"
       ],
@@ -1333,10 +1097,6 @@
         "compat",
         "subscription"
       ],
-      "longcat-2.5-preview-free": [
-        "compat",
-        "subscription"
-      ],
       "mimo-v2.5": [
         "compat",
         "subscription"
@@ -1350,10 +1110,6 @@
         "subscription"
       ],
       "mimo-v2.6-pro": [
-        "compat",
-        "subscription"
-      ],
-      "minimax-m2.7": [
         "compat",
         "subscription"
       ],
@@ -1385,15 +1141,7 @@
         "compat",
         "subscription"
       ],
-      "space-bunny": [
-        "compat",
-        "subscription"
-      ],
       "step-5-preview": [
-        "compat",
-        "subscription"
-      ],
-      "step-5-preview-free": [
         "compat",
         "subscription"
       ]
