@@ -2649,3 +2649,29 @@ fn bind_delegate_records_its_id_for_a_later_abandon() {
     drop(unsent);
     assert_cancelled_free(&fake, &["j_bind"]);
 }
+
+#[test]
+fn resumed_tool_memory_error_is_a_lua_string_error() {
+    const MEMORY_ERROR: &str = "Lua memory cap exceeded";
+    const MEMORY_CAP: usize = 1024 * 1024;
+    let lua = mlua::Lua::new();
+    lua.set_memory_limit(MEMORY_CAP).unwrap();
+    lua.set_named_registry_value(
+        "fiber.memory_cap_error",
+        lua.create_string(MEMORY_ERROR).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        lua.used_memory() < MEMORY_CAP,
+        "test setup fits under its cap"
+    );
+    let thread = lua.create_thread(lua.load("local ok, err = pcall(function() local _, message = coroutine.yield('tool'); error(message, 0) end); return ok, err").into_function().unwrap()).unwrap();
+    let yielded: String = thread.resume(()).unwrap();
+    assert_eq!(yielded, "tool");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let outcome = serde_json::json!({"content": [{"text": "x".repeat(MEMORY_CAP * 2)}]});
+    let values = crate::host::resume_values(&lua, &clock, Reply::Tool(Ok(outcome))).unwrap();
+    let (ok, message): (bool, String) = thread.resume(values).unwrap();
+    assert!(!ok);
+    assert_eq!(message, MEMORY_ERROR);
+}

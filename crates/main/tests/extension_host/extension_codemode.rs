@@ -78,9 +78,17 @@ fn script(setup: &Setup, name: &str, script: &Value) {
 
 /// Installs the real `codemode` package from the repository.
 fn install_codemode(setup: &Setup) {
-    let request = extensions::Request::Path(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode"),
+    let source = setup.root.path().join("codemode-fixture");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": CODEMODE_NAME, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "memory_mib": 1}),
     );
+    std::fs::write(
+        source.join("init.lua"),
+        include_str!("../../../../extensions/codemode/init.lua"),
+    )
+    .unwrap();
+    let request = extensions::Request::Path(source);
     support::install_with_retry(
         &setup.home(),
         setup.deadline.start_wait(),
@@ -1243,4 +1251,82 @@ print(o.content[1].text)"#;
     let stored = std::fs::read(run.session_dir(&setup).join(path)).unwrap();
     assert_eq!(stored, b"full hook output");
     assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn an_oversized_inner_shell_result_errors_at_the_call_site() {
+    const MEMORY_CAP: u64 = 1024 * 1024;
+    let output_bytes = MEMORY_CAP * 2;
+    for (wrapped, expected_status) in [(true, "Script finished"), (false, "Script failed:")] {
+        let source = if wrapped {
+            format!(
+                "local earlier = host.tool('read', {{ path = 'small.txt' }})\nprint('before')\nlocal ok, err = pcall(function() return host.tool('shell', {{ command = 'yes x | head -c {output_bytes}' }}) end)\nprint(ok)\nprint(tostring(err))"
+            )
+        } else {
+            format!(
+                "local earlier = host.tool('read', {{ path = 'small.txt' }})\nprint('before')\nlocal result = host.tool('shell', {{ command = 'yes x | head -c {output_bytes}' }})"
+            )
+        };
+        let setup = reviewed_setup(&calling(&source), &allow());
+        std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+        let run = ask(&setup, "run it");
+        assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+        assert!(
+            run.of("tool_call_completed").iter().any(|line| {
+                line["payload"]["content"].as_array().is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains(expected_status))
+                    })
+                })
+            }),
+            "expected {expected_status:?}; completed: {:?}; tool errors: {:?}; stderr: {}",
+            run.of("tool_call_completed")
+                .iter()
+                .map(|line| {
+                    let content = line["payload"]["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|part| part["text"].as_str())
+                        .map(|text| text.chars().take(400).collect::<String>())
+                        .collect::<Vec<_>>();
+                    (line["payload"]["status"].clone(), content)
+                })
+                .collect::<Vec<_>>(),
+            run.of("tool_error")
+                .iter()
+                .map(|line| &line["payload"])
+                .collect::<Vec<_>>(),
+            run.stderr,
+        );
+        let completed = completed_holding(&run, expected_status);
+        let text = completed_text(completed);
+        assert!(text.starts_with("before\n"), "prior print: {text}");
+        assert!(text.contains("Lua memory cap"), "cap error: {text}");
+        if wrapped {
+            assert!(text.contains("false\n"), "pcall catches the string: {text}");
+            assert!(text.contains("Script finished"), "script continues: {text}");
+        } else {
+            assert!(
+                text.contains("Script failed: Lua memory cap"),
+                "script fails normally: {text}"
+            );
+        }
+        assert!(
+            text.contains("- read completed"),
+            "earlier ledger row remains: {text}"
+        );
+        assert!(
+            !text.contains("- shell "),
+            "raised call has no ledger row: {text}"
+        );
+        assert_eq!(completed["payload"]["status"], "completed");
+        assert!(
+            !run.of("tool_error")
+                .iter()
+                .any(|line| line["payload"]["tool"] == "codemode")
+        );
+    }
 }
