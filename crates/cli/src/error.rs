@@ -829,6 +829,12 @@ fn manager_failed_message(
     format!("`{program} {}` failed with {code}{said}.", args.join(" "))
 }
 
+impl From<Box<CliError>> for CliError {
+    fn from(error: Box<CliError>) -> Self {
+        *error
+    }
+}
+
 impl CliError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {

@@ -256,8 +256,8 @@ fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
 /// Writes one line to `out`: the line plus one line feed. A write failure
 /// is the shared standard-output failure, for the caller to propagate or
 /// ignore as it already did.
-fn write_line(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
-    writeln!(out, "{line}").map_err(CliError::StandardOutput)
+fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Box<CliError>> {
+    writeln!(out, "{line}").map_err(|error| Box::new(CliError::StandardOutput(error)))
 }
 
 /// Runs `run` with Fiber home and the current directory, mapping any
@@ -270,16 +270,15 @@ fn with_dirs<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<(), E>)
 /// integer success code and mapping any failure to its exit code. Home
 /// is read before the current directory, as each wrapper did.
 fn with_dirs_code<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<i32, E>) -> i32 {
-    let ran = ::config::fiber_home_from_env()
-        .map_err(|e| CliError::Forwarded(failed(e.code(), e)))
-        .and_then(|home| {
-            let workspace = std::env::current_dir().map_err(|e| {
-                CliError::Forwarded(failed(
-                    ErrorCode::IoFailed,
-                    format!("the current directory: {e}"),
-                ))
-            })?;
-            run(&home, &workspace).map_err(Into::into)
-        });
+    let ran = match ::config::fiber_home_from_env() {
+        Ok(home) => match std::env::current_dir() {
+            Ok(workspace) => run(&home, &workspace).map_err(Into::into),
+            Err(error) => Err(CliError::Forwarded(failed(
+                ErrorCode::IoFailed,
+                format!("the current directory: {error}"),
+            ))),
+        },
+        Err(error) => Err(CliError::Forwarded(failed(error.code(), error))),
+    };
     finish_code(ran)
 }

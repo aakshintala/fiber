@@ -9,6 +9,8 @@
 
 #[path = "../extension_harness/mod.rs"]
 mod extension_harness;
+#[path = "../support/hub_start.rs"]
+mod hub_start;
 #[path = "../support/mod.rs"]
 mod support;
 

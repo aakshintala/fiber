@@ -62,7 +62,7 @@ pub fn hub_status(json: bool, clock: &dyn Clock) -> i32 {
             } else {
                 render_text(&status)
             };
-            write_line(&mut io::stdout(), &text)
+            write_line(&mut io::stdout(), &text).map_err(CliError::from)
         });
     finish(ran)
 }

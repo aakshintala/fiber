@@ -12,8 +12,7 @@ use std::process::Stdio;
 
 use crate::support::{self, Setup};
 
-#[path = "../support/hub_start.rs"]
-mod hub_start;
+use crate::hub_start;
 use serde_json::{Value, json};
 
 fn installed_hub(setup: &Setup) -> hub_start::Served {
@@ -27,7 +26,11 @@ fn installed_hub(setup: &Setup) -> hub_start::Served {
                 .ok()
                 .and_then(|text| serde_json::from_str(&text).ok())
                 .unwrap_or(json!({}));
-            config["hub"]["port"] = json!(port);
+            let root = config.as_object_mut().unwrap();
+            let hub = root.entry("hub").or_insert_with(|| json!({}));
+            hub.as_object_mut()
+                .unwrap()
+                .insert("port".to_owned(), json!(port));
             support::write_json(&path, &config);
             setup.fiber(&["hub", "serve", "--installed"])
         },
