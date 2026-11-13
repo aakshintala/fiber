@@ -386,6 +386,8 @@ pub(crate) fn run_with(
         }
     };
     let mut terminal = Loop {
+        #[cfg(test)]
+        screen_fault: None,
         app,
         parser: Parser::default(),
         screen,
@@ -520,6 +522,8 @@ struct Programs {
 
 /// The loop's state.
 struct Loop<B: Backend> {
+    #[cfg(test)]
+    screen_fault: Option<ScreenFault>,
     app: App,
     parser: Parser,
     screen: Screen<B>,
@@ -584,7 +588,26 @@ struct Loop<B: Backend> {
     tick: crate::tick::TickThread,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ScreenFault {
+    Resize,
+    Frame,
+    LogoRepaint,
+    LogoDraw,
+}
+
 impl<B: Backend> Loop<B> {
+    #[cfg(test)]
+    fn take_screen_fault(&mut self, fault: ScreenFault) -> Option<io::Error> {
+        if self.screen_fault == Some(fault) {
+            self.screen_fault = None;
+            Some(io::Error::other("injected screen failure"))
+        } else {
+            None
+        }
+    }
+
     /// Handles inputs until one quits, or every sender is gone: those a
     /// frame held while it waited first, then the channel's. Ready hub
     /// lines and ticks share one frame; anything else ends the batch
@@ -632,11 +655,12 @@ impl<B: Backend> Loop<B> {
                     if let Input::Bytes(bytes) = input {
                         let events = self.parser.feed(&bytes);
                         let wheel = Self::wheel_only(&events);
-                        if framed && !(wheel_prev && wheel) {
-                            if let Some(quit) = self.frame(rx)? {
-                                code = Some(quit);
-                                break;
-                            }
+                        if framed
+                            && !(wheel_prev && wheel)
+                            && let Some(quit) = self.frame(rx)?
+                        {
+                            code = Some(quit);
+                            break;
                         }
                         framed = true;
                         wheel_prev = wheel;
@@ -1082,6 +1106,10 @@ impl<B: Backend> Loop<B> {
                     self.app.set_size_inner(width, height);
                     let lock = Arc::clone(&self.tty_lock);
                     let _guard = lock.loop_write();
+                    #[cfg(test)]
+                    if let Some(error) = self.take_screen_fault(ScreenFault::Resize) {
+                        return Err(draw_cause(error));
+                    }
                     if let Err(error) = self.screen.resize(width, height) {
                         return Err(draw_cause(error));
                     }
@@ -1193,7 +1221,18 @@ impl<B: Backend> Loop<B> {
         let lock = Arc::clone(&self.tty_lock);
         let draw_result = {
             let _guard = lock.loop_write();
-            self.screen.draw(&mut self.app, self.pointer.at)
+            #[cfg(test)]
+            if let Some(error) = self.take_screen_fault(ScreenFault::Frame) {
+                Err(error)
+            } else {
+                self.screen
+                    .draw(&mut self.app, self.pointer.at)
+                    .map_err(|error| io::Error::other(error.to_string()))
+            }
+            #[cfg(not(test))]
+            self.screen
+                .draw(&mut self.app, self.pointer.at)
+                .map_err(|error| io::Error::other(error.to_string()))
         };
         if let Err(error) = draw_result {
             self.timing.discard_attach_spans();
@@ -1525,10 +1564,24 @@ impl<B: Backend> Loop<B> {
         if after.repaint {
             let lock = Arc::clone(&self.tty_lock);
             let _guard = lock.loop_write();
+            #[cfg(test)]
+            if let Some(error) = self.take_screen_fault(ScreenFault::LogoRepaint) {
+                return Err(ExitCause::new(
+                    "terminal: could not draw the logo",
+                    Some(error),
+                ));
+            }
             if let Err(error) = self.screen.repaint() {
                 return Err(ExitCause::new(
                     "terminal: could not draw the logo",
                     Some(io::Error::other(error.to_string())),
+                ));
+            }
+            #[cfg(test)]
+            if let Some(error) = self.take_screen_fault(ScreenFault::LogoDraw) {
+                return Err(ExitCause::new(
+                    "terminal: could not draw the logo",
+                    Some(error),
                 ));
             }
             if let Err(error) = self.screen.draw(&mut self.app, self.pointer.at) {

@@ -1,6 +1,6 @@
 //! Tests for the loop, and for `run` through a pseudo-terminal.
 
-use super::{Input, Loop, Screen, hub::Connection};
+use super::{Input, Loop, Screen, ScreenFault, hub::Connection};
 use crate::app::App;
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Event;
@@ -324,6 +324,8 @@ impl<B: Backend> Loop<B> {
         let reader = super::Reader::spawn(&tty, files_out.clone())
             .unwrap_or_else(|err| panic!("the reader started: {err}"));
         Self {
+            #[cfg(test)]
+            screen_fault: None,
             app,
             parser: crate::keys::Parser::default(),
             screen,
@@ -456,7 +458,8 @@ fn models_diagnostic_records_post_apply_catalogue_size() {
     ));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.diag = diag;
-    lp.handle_inner(Input::Models(Err("failed read".to_owned())));
+    lp.handle_inner(Input::Models(Err("failed read".to_owned())))
+        .expect("applying a failed model read does not stop the loop");
     let text = std::fs::read_to_string(
         home.path()
             .join("logs")
@@ -494,7 +497,8 @@ fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
             price: None,
         }],
         ..Catalogue::default()
-    })));
+    })))
+    .expect("applying a model catalogue does not stop the loop");
     let text = std::fs::read_to_string(
         home.path()
             .join("logs")
@@ -3913,5 +3917,98 @@ fn loop_exit_cause_displays_family_and_optional_source() {
 
         let sourced = super::ExitCause::new(family, Some(io::Error::other("write failed")));
         assert_eq!(sourced.to_string(), format!("{family}: write failed"));
+    }
+}
+
+#[test]
+fn frame_draw_failure_carries_source_and_io_failed_code() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.screen_fault = Some(ScreenFault::Frame);
+    let (_tx, rx) = mpsc::channel();
+
+    let cause = lp.frame_inner(&rx).expect_err("injected frame draw fails");
+    assert_eq!(
+        cause.to_string(),
+        "terminal: could not draw the screen: injected screen failure"
+    );
+    assert_eq!(
+        super::Error::from(cause).code(),
+        contract::ErrorCode::IoFailed
+    );
+}
+
+#[test]
+fn resize_failure_carries_screen_draw_cause() {
+    let pair = open();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(pair.slave));
+    lp.screen_fault = Some(ScreenFault::Resize);
+
+    let cause = lp
+        .handle_inner(Input::Resize)
+        .expect_err("injected resize fails");
+    assert_eq!(
+        cause.to_string(),
+        "terminal: could not draw the screen: injected screen failure"
+    );
+}
+
+#[test]
+fn logo_tty_write_failure_carries_logo_cause() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.tty = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap_or_else(|err| panic!("/dev/full: {err}"));
+
+    let cause = lp
+        .logo_write(
+            crate::graphics::logo::Protocol::Iterm,
+            crate::graphics::logo::After {
+                bytes: b"logo".to_vec(),
+                repaint: false,
+            },
+        )
+        .expect_err("the full terminal rejects the logo write");
+    let message = cause.to_string();
+    assert!(
+        message.starts_with("terminal: could not draw the logo: "),
+        "cause includes its logo family and write source: {message}"
+    );
+    assert!(
+        std::error::Error::source(&cause).is_some(),
+        "a tty write failure retains its source"
+    );
+    assert_eq!(
+        super::Error::from(cause).code(),
+        contract::ErrorCode::IoFailed
+    );
+}
+
+#[test]
+fn logo_repaint_and_draw_failures_carry_logo_cause() {
+    for fault in [ScreenFault::LogoRepaint, ScreenFault::LogoDraw] {
+        let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+        lp.logo.after_frame(
+            crate::graphics::logo::Protocol::Iterm,
+            Some(ratatui::layout::Rect::new(0, 0, 32, 4)),
+            false,
+            false,
+            Some((
+                crate::graphics::logo::Tint {
+                    wave: (1, 2, 3),
+                    stops: [(1, 2, 3); 5],
+                },
+                [0, 0, 0],
+            )),
+        );
+        lp.screen_fault = Some(fault);
+
+        let cause = lp
+            .logo_step()
+            .expect_err("injected logo screen operation fails");
+        assert_eq!(
+            cause.to_string(),
+            "terminal: could not draw the logo: injected screen failure"
+        );
     }
 }

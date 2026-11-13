@@ -413,7 +413,8 @@ fn a_graphics_error_event_fails_the_transmitted_image() {
     let (mut lp, _rx) = stepped(lp, rx, display_answer(&command));
     drop(tx);
 
-    lp.handle_events(vec![Event::Reply(Reply::Graphics { id: 1, ok: false })]);
+    lp.handle_events(vec![Event::Reply(Reply::Graphics { id: 1, ok: false })])
+        .expect("a failed graphics reply leaves the loop running");
 
     assert_eq!(
         lp.app.notice(),

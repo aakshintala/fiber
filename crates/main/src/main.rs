@@ -573,8 +573,12 @@ fn mcp_declaration(args: &cli::McpAddArgs) -> Result<::cli::McpDeclaration, Stri
 }
 
 fn fail(e: Failure) -> i32 {
+    fail_with(e, &mut io::stderr())
+}
+
+fn fail_with(e: Failure, stderr: &mut impl Write) -> i32 {
     // A closed stderr leaves nobody to tell.
-    writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
+    writeln!(stderr, "fiber: {}", e.message).unwrap_or(());
     doors::exit_code(&e)
 }
 
@@ -1499,4 +1503,26 @@ fn failed(code: ErrorCode, e: impl Display) -> Failure {
 fn ask_failed(e: Failure) -> i32 {
     startup_log::record(&e, Arc::new(clock::System));
     doors::exit_before_session(e, &mut io::stdout(), &mut io::stderr())
+}
+
+#[cfg(test)]
+mod tui_exit_cause_tests {
+    use super::{ErrorCode, fail_with, failed};
+
+    #[test]
+    fn terminal_tui_error_prints_cause_and_returns_failure() {
+        let failure = failed(
+            ErrorCode::IoFailed,
+            "terminal: could not draw the screen: broken pipe",
+        );
+        let mut stderr = Vec::new();
+
+        let status = fail_with(failure, &mut stderr);
+
+        assert_eq!(status, 1);
+        assert_eq!(
+            String::from_utf8(stderr).expect("stderr is valid UTF-8"),
+            "fiber: terminal: could not draw the screen: broken pipe\n"
+        );
+    }
 }
