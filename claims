@@ -436,3 +436,5 @@ crates/main/tests/screens/journeys.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amogh
 crates/main/tests/screens/terminal.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/detached.rs	fiber-4816	plan	2026-11-13T23:39:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/detached_tests.rs	fiber-4816	plan	2026-11-13T23:53:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4816	plan	2026-11-13T23:53:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
