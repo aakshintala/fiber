@@ -41,16 +41,7 @@ crates/main/src/main.rs	fiber-4746	plan	2026-11-12T19:29:33Z	Amoghs-MacBook-Pro:
 crates/main/tests/commands/tui_silent_exit.rs	fiber-4746	plan	2026-11-12T19:29:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_panel_tests.rs	fiber-4746	plan	2026-11-12T19:46:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/timing_tests.rs	fiber-4746	plan	2026-11-12T19:46:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/prompt/reviewer.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/reviewer/request.rs	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/permissions.md	fiber-4748	plan	2026-11-12T19:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/errors.md	fiber-4746	plan	2026-11-12T19:53:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/reviewer_tests.rs	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/prompt_tests.rs	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing/fakes.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/code-quality/lints.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/ci.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4748	plan	2026-11-12T20:03:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/lib_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/idle_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/directories_tests.rs	fiber-4598	plan	2026-11-12T20:11:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
