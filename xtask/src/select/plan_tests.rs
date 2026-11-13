@@ -1,6 +1,118 @@
 use super::*;
 use crate::select::tests::strings;
 
+fn changed(path: &str, contents: Option<&str>) -> ChangedPath {
+    ChangedPath {
+        path: path.to_owned(),
+        state: contents.map_or(PathState::Deleted, |text| {
+            PathState::Present(Some(text.as_bytes().to_vec()))
+        }),
+    }
+}
+
+#[test]
+fn deleted_and_unreadable_paths_do_not_match_macos_triggers() {
+    let deleted = changed("src/lib.rs", None);
+    let unreadable = ChangedPath {
+        path: "src/probe".into(),
+        state: PathState::Present(None),
+    };
+    assert_eq!(deleted.state, PathState::Deleted);
+    assert!(matches!(unreadable.state, PathState::Present(None)));
+    let plan_result = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[deleted, unreadable],
+    );
+    assert!(!plan_result.jobs["clippy_macos"]);
+    assert!(!plan_result.jobs["scripts_self_test_macos"]);
+
+    let deleted_script = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[changed("scripts/probe", None)],
+    );
+    assert!(!deleted_script.jobs["scripts_self_test_macos"]);
+
+    let unreadable_script = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[ChangedPath {
+            path: "scripts/probe".into(),
+            state: PathState::Present(None),
+        }],
+    );
+    assert!(unreadable_script.jobs["scripts_self_test_macos"]);
+}
+
+#[test]
+fn macos_jobs_follow_pull_request_paths_and_contents() {
+    let cases = [
+        (vec![changed("src/lib.rs", Some("plain"))], false, false),
+        (vec![changed("src/lib.rs", Some("target_os"))], true, false),
+        (vec![changed("scripts/test-x", Some("plain"))], false, true),
+        (vec![changed("scripts", Some("plain"))], false, false),
+        (
+            vec![changed("scripts-extra/test-x", Some("plain"))],
+            false,
+            false,
+        ),
+        (vec![changed("old.rs", None)], false, false),
+        (
+            vec![ChangedPath {
+                path: "src/lib.rs".into(),
+                state: PathState::Present(None),
+            }],
+            false,
+            false,
+        ),
+    ];
+    for (paths, clippy, scripts) in cases {
+        let plan = plan_with_changed_paths(
+            plan("docs", &[], "pull_request", false, false, false, 0),
+            true,
+            &paths,
+        );
+        assert_eq!(plan.jobs["clippy_macos"], clippy);
+        assert_eq!(plan.jobs["scripts_self_test_macos"], scripts);
+    }
+}
+
+#[test]
+fn changed_paths_restore_missing_macos_job_keys() {
+    let mut plan = plan("docs", &[], "pull_request", false, false, false, 0);
+    plan.jobs.remove("clippy_macos");
+    plan.jobs.remove("scripts_self_test_macos");
+
+    let plan = plan_with_changed_paths(plan, true, &[changed("scripts/test-x", Some("plain"))]);
+
+    assert_eq!(plan.jobs.get("clippy_macos"), Some(&false));
+    assert_eq!(plan.jobs.get("scripts_self_test_macos"), Some(&true));
+}
+
+#[test]
+fn moved_matching_file_uses_its_head_path_and_content() {
+    let plan = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[changed("renamed.rs", Some("target_os"))],
+    );
+    assert!(plan.jobs["clippy_macos"]);
+}
+
+#[test]
+fn macos_jobs_are_off_for_non_pull_request_events() {
+    for event in ["push", "workflow_dispatch"] {
+        let plan = plan_with_changed_paths(
+            plan("all", &[], event, false, false, false, 0),
+            event == "pull_request",
+            &[changed("scripts/test-x", Some("target_os"))],
+        );
+        assert!(!plan.jobs["clippy_macos"]);
+        assert!(!plan.jobs["scripts_self_test_macos"]);
+    }
+}
+
 fn jobs(
     lint: bool,
     test_linux: bool,
@@ -11,6 +123,8 @@ fn jobs(
     stress: bool,
 ) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
+        ("clippy_macos", false),
+        ("scripts_self_test_macos", false),
         ("lint", lint),
         ("test_linux", test_linux),
         ("test", test),
