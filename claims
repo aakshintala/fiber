@@ -435,3 +435,4 @@ crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4675	plan	2026-11-13
 crates/main/tests/screens/journeys.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/terminal.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/detached.rs	fiber-4816	plan	2026-11-13T23:39:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
