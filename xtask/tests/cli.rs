@@ -397,6 +397,47 @@ fn plan_prints_the_jobs_and_shards() {
 }
 
 #[test]
+fn plan_does_not_select_scripts_job_for_deleted_script_path() {
+    let dir = workspace();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "-f", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "base probe"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    git(&dir, &["rm", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "delete probe"]);
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["scripts_self_test_macos"], false);
+}
+
+#[test]
 fn plan_uses_rename_detected_head_diff_paths_for_scripts_job() {
     let args = [
         "plan",

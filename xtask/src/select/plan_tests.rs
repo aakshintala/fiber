@@ -19,13 +19,30 @@ fn deleted_and_unreadable_paths_do_not_match_macos_triggers() {
     };
     assert_eq!(deleted.state, PathState::Deleted);
     assert!(matches!(unreadable.state, PathState::Present(None)));
-    let plan = plan_with_changed_paths(
+    let plan_result = plan_with_changed_paths(
         plan("docs", &[], "pull_request", false, false, false, 0),
         true,
         &[deleted, unreadable],
     );
-    assert!(!plan.jobs["clippy_macos"]);
-    assert!(!plan.jobs["scripts_self_test_macos"]);
+    assert!(!plan_result.jobs["clippy_macos"]);
+    assert!(!plan_result.jobs["scripts_self_test_macos"]);
+
+    let deleted_script = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[changed("scripts/probe", None)],
+    );
+    assert!(!deleted_script.jobs["scripts_self_test_macos"]);
+
+    let unreadable_script = plan_with_changed_paths(
+        plan("docs", &[], "pull_request", false, false, false, 0),
+        true,
+        &[ChangedPath {
+            path: "scripts/probe".into(),
+            state: PathState::Present(None),
+        }],
+    );
+    assert!(unreadable_script.jobs["scripts_self_test_macos"]);
 }
 
 #[test]

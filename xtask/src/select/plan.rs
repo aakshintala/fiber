@@ -299,9 +299,9 @@ pub(crate) fn plan_with_changed_paths(
         matches!(&entry.state, PathState::Present(Some(contents)) if contents.windows(b"target_os".len()).any(|window| window == b"target_os"))
     });
     let scripts_self_test_macos = pull_request
-        && changed_paths
-            .iter()
-            .any(|entry| entry.path.starts_with("scripts/"));
+        && changed_paths.iter().any(|entry| {
+            entry.path.starts_with("scripts/") && matches!(entry.state, PathState::Present(_))
+        });
     plan.jobs
         .entry("clippy_macos")
         .and_modify(|value| *value = clippy_macos);
