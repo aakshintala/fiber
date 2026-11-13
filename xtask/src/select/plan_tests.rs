@@ -5,7 +5,7 @@ fn changed(path: &str, contents: Option<&str>) -> ChangedPath {
     ChangedPath {
         path: path.to_owned(),
         state: contents.map_or(PathState::Deleted, |text| {
-            PathState::Present(Some(text.to_owned()))
+            PathState::Present(Some(text.as_bytes().to_vec()))
         }),
     }
 }
@@ -21,8 +21,8 @@ fn a_failed_content_read_distinguishes_deletion_from_unreadable_files() {
         PathState::Present(None)
     );
     assert_eq!(
-        path_state_from_read(Ok("target_os".to_owned())),
-        PathState::Present(Some("target_os".to_owned()))
+        path_state_from_read(Ok(b"target_os".to_vec())),
+        PathState::Present(Some(b"target_os".to_vec()))
     );
 }
 
@@ -51,7 +51,7 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
     for (paths, clippy, scripts) in cases {
         let plan = plan_with_changed_paths(
             plan("docs", &[], "pull_request", false, false, false, 0),
-            "pull_request",
+            true,
             &paths,
         );
         assert_eq!(plan.jobs["clippy_macos"], clippy);
@@ -63,7 +63,7 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
 fn moved_matching_file_uses_its_head_path_and_content() {
     let plan = plan_with_changed_paths(
         plan("docs", &[], "pull_request", false, false, false, 0),
-        "pull_request",
+        true,
         &[changed("renamed.rs", Some("target_os"))],
     );
     assert!(plan.jobs["clippy_macos"]);
@@ -74,7 +74,7 @@ fn macos_jobs_are_off_for_non_pull_request_events() {
     for event in ["push", "workflow_dispatch"] {
         let plan = plan_with_changed_paths(
             plan("all", &[], event, false, false, false, 0),
-            event,
+            event == "pull_request",
             &[changed("scripts/test-x", Some("target_os"))],
         );
         assert!(!plan.jobs["clippy_macos"]);

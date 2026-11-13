@@ -211,7 +211,7 @@ pub(crate) struct Plan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PathState {
-    Present(Option<String>),
+    Present(Option<Vec<u8>>),
     Deleted,
 }
 
@@ -221,7 +221,7 @@ pub(crate) struct ChangedPath {
     pub(crate) state: PathState,
 }
 
-pub(crate) fn path_state_from_read(result: Result<String, std::io::Error>) -> PathState {
+pub(crate) fn path_state_from_read(result: Result<Vec<u8>, std::io::Error>) -> PathState {
     match result {
         Ok(contents) => PathState::Present(Some(contents)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathState::Deleted,
@@ -300,12 +300,11 @@ pub(crate) fn plan(
 /// current contents, while leaving release-path selection separate.
 pub(crate) fn plan_with_changed_paths(
     mut plan: Plan,
-    event: &str,
+    pull_request: bool,
     changed_paths: &[ChangedPath],
 ) -> Plan {
-    let pull_request = event == "pull_request";
     let clippy_macos = pull_request && changed_paths.iter().any(|entry| {
-        matches!(&entry.state, PathState::Present(Some(contents)) if contents.contains("target_os"))
+        matches!(&entry.state, PathState::Present(Some(contents)) if contents.windows(b"target_os".len()).any(|window| window == b"target_os"))
     });
     let scripts_self_test_macos = pull_request
         && changed_paths
