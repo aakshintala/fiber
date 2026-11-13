@@ -3122,15 +3122,15 @@ fn a_number_row_shows_its_unit_in_row_text() {
     );
     assert_eq!(
         number("compaction.window_fraction", "0.525"),
-        "52.5% of the context window (custom)"
+        "52.5% of the context window"
     );
     assert_eq!(
         number("compaction.window_fraction", "0.95"),
-        "95% of the context window (custom)"
+        "95% of the context window"
     );
     assert_eq!(
         number("compaction.window_fraction", "0.45"),
-        "45% of the context window (custom)"
+        "45% of the context window"
     );
     assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
     assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
