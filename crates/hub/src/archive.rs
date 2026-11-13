@@ -22,7 +22,7 @@ use crate::relay::valid_session_id;
 use crate::resume::not_found;
 
 /// Tries the archive path for a listing candidate without waiting for
-/// either lock. `false` leaves it eligible for a later listing.
+/// either lock. An empty set leaves it eligible for a later listing.
 pub(crate) fn try_archive(
     hub: &Hub,
     candidate: &RecentRow,
