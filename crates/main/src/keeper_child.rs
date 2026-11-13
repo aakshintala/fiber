@@ -1208,7 +1208,7 @@ pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
         }
     };
     eprintln!("FIBER4351_TRACE entering serve");
-    match serve(home, SessionId(id), clock, std::io::stdin().lock(), control) {
+    let status = match serve(home, SessionId(id), clock, std::io::stdin().lock(), control) {
         Ok(()) => {
             eprintln!("FIBER4351_TRACE successful return");
             0
@@ -1217,7 +1217,13 @@ pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
             eprintln!("FIBER4351_TRACE error return: {error}");
             1
         }
+    };
+    if let Some(path) = std::env::var_os("FIBER4351_TRACE_FILE") {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "FIBER4351_TRACE keeper exit status: {status}");
+        }
     }
+    status
 }
 
 #[cfg(test)]

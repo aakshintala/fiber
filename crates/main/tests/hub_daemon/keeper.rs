@@ -335,6 +335,17 @@ fn keeper_state_at_expiry(
     format!("{sample}\n{case}{window}\n{tail}")
 }
 
+fn keeper_trace(setup: &Setup) -> String {
+    let path = setup.home().join("keeper-4351-trace.log");
+    match read_bounded_tail(&path) {
+        Ok(bytes) => format!(
+            "keeper stderr and exit status (bounded tail):\n{}",
+            String::from_utf8_lossy(&bytes)
+        ),
+        Err(error) => format!("keeper stderr and exit status: unavailable ({error})"),
+    }
+}
+
 fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf, keeper_state: &str) -> String {
     let connect_error = last_error.unwrap_or_else(|| "no connect error was observed".to_owned());
     let socket_state = match fs::metadata(path) {
@@ -377,7 +388,10 @@ pub(super) fn wait_for_refuse_only_socket(
                 kill_marker.as_deref(),
             ),
         );
-        panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
+        panic!(
+            "waited until the deadline for keeper refuse-only socket to accept; {diagnostic}\n{}",
+            keeper_trace(setup)
+        );
     }
 }
 
@@ -608,6 +622,10 @@ fn crash_after(
     if let Some(bound_ms) = bound_ms {
         ask.env("FIBER_KEEPER_BOUND_MS", bound_ms);
     }
+    ask.env(
+        "FIBER4351_TRACE_FILE",
+        setup.home().join("keeper-4351-trace.log"),
+    );
     let (mut child, session_watchdog) = spawn_watched(&mut ask);
     let group = child.id();
     let guard = KillGroup(group);
