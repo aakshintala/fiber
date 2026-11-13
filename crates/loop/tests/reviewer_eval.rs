@@ -1365,10 +1365,10 @@ fn started_session() -> Session {
     );
     session.reviewer(vec![
         fakes::Scripted::text("check"),
-        fakes::Scripted::text("allow: fine"),
+        fakes::Scripted::text("fine\nallow"),
         fakes::Scripted::text("1"),
         fakes::Scripted::text("check"),
-        fakes::Scripted::text("block: no"),
+        fakes::Scripted::text("no\nblock"),
     ]);
     prompt_turn(&mut session, "never push to main");
     prompt_turn(&mut session, "say hi");

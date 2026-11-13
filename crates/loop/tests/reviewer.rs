@@ -270,7 +270,7 @@ fn the_request_body_holds_only_what_the_reviewer_is_shown() {
 fn a_check_then_an_allow_sends_two_requests_identical_up_to_the_stage() {
     let (session, tool, reviewer, lines) = reviewed_turn(vec![
         Scripted::text("check"),
-        Scripted::text("allow looks fine"),
+        Scripted::text("looks fine\nallow"),
     ]);
     assert_eq!(
         kinds(&lines),
@@ -324,7 +324,7 @@ fn every_reviewer_stage_asks_for_the_lowest_declared_thinking_level() {
         vec![
             Scripted::text("maybe"),
             Scripted::text("check"),
-            Scripted::text("allow fine"),
+            Scripted::text("fine\nallow"),
         ],
         vec![ThinkingLevel::High, ThinkingLevel::Minimal],
     );
@@ -367,7 +367,7 @@ fn every_reviewer_stage_asks_for_the_lowest_declared_thinking_level() {
 fn a_block_returns_the_reason_and_the_turn_continues() {
     let (session, tool, reviewer, lines) = reviewed_turn(vec![
         Scripted::text("check"),
-        Scripted::text("block force-pushes to main"),
+        Scripted::text("force-pushes to main\nblock"),
     ]);
     assert_eq!(
         kinds(&lines),
@@ -776,13 +776,13 @@ fn the_third_consecutive_block_asks_a_person() {
         Session::with_tools(paired_turns(4), None, vec![tool.clone() as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("check"),
-        Scripted::text("block first reason"),
+        Scripted::text("first reason\nblock"),
         Scripted::text("check"),
-        Scripted::text("block second reason"),
+        Scripted::text("second reason\nblock"),
         Scripted::text("check"),
-        Scripted::text("block third reason"),
+        Scripted::text("third reason\nblock"),
         Scripted::text("check"),
-        Scripted::text("block fourth reason"),
+        Scripted::text("fourth reason\nblock"),
     ]);
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -850,14 +850,14 @@ fn an_allow_between_blocks_resets_the_consecutive_count() {
         Session::with_tools(paired_turns(5), None, vec![tool.clone() as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("check"),
-        Scripted::text("block one"),
+        Scripted::text("one\nblock"),
         Scripted::text("allow"),
         Scripted::text("check"),
-        Scripted::text("block two"),
+        Scripted::text("two\nblock"),
         Scripted::text("check"),
-        Scripted::text("block three"),
+        Scripted::text("three\nblock"),
         Scripted::text("check"),
-        Scripted::text("block four"),
+        Scripted::text("four\nblock"),
     ]);
     // T2's allow runs the call; every other turn denies without asking. The
     // flag tells whether the turn opens the session.
@@ -929,9 +929,9 @@ fn the_session_limit_escalates_with_a_raised_consecutive_limit() {
             Scripted::text("check"),
             Scripted::text("check"),
             Scripted::text("check"),
-            Scripted::text("block one"),
-            Scripted::text("block two"),
-            Scripted::text("block three"),
+            Scripted::text("one\nblock"),
+            Scripted::text("two\nblock"),
+            Scripted::text("three\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 1000,
@@ -1008,11 +1008,11 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
         Session::with_tools(paired_turns(4), None, vec![tool.clone() as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("check"),
-        Scripted::text("block one"),
+        Scripted::text("one\nblock"),
         Scripted::text("check"),
-        Scripted::text("block two"),
+        Scripted::text("two\nblock"),
         Scripted::text("check"),
-        Scripted::text("block three"),
+        Scripted::text("three\nblock"),
     ]);
     for turn in 0..2 {
         session.inbox.send(delivery("go")).unwrap();
@@ -1123,8 +1123,8 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
         vec![
             Scripted::text("check"),
             Scripted::text("check"),
-            Scripted::text("block one"),
-            Scripted::text("block two"),
+            Scripted::text("one\nblock"),
+            Scripted::text("two\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 1000,
@@ -1183,7 +1183,7 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
 fn a_colon_block_is_handled_as_a_block() {
     let (session, tool, reviewer, lines) = reviewed_turn(vec![
         Scripted::text("check"),
-        Scripted::text("block: force-pushes to main"),
+        Scripted::text("force-pushes to main\nblock"),
     ]);
     assert_eq!(
         kinds(&lines),
@@ -1210,7 +1210,7 @@ fn a_colon_block_is_handled_as_a_block() {
 fn a_colon_allow_carries_its_reason() {
     let (session, tool, reviewer, lines) = reviewed_turn(vec![
         Scripted::text("check"),
-        Scripted::text("allow: looks fine"),
+        Scripted::text("looks fine\nallow"),
     ]);
     assert_eq!(
         kinds(&lines),
@@ -1511,7 +1511,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         Scripted::text("check"),
         failed(),
         failed(),
-        Scripted::text("block third reason"),
+        Scripted::text("third reason\nblock"),
     ]);
     // Swapping in an unrelated sender drops the session's only one: every
     // escalation raises its request and ends with no answer, so nothing
@@ -1626,8 +1626,8 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
         vec![
             Scripted::text("check"),
             Scripted::text("check"),
-            Scripted::text("block first reason"),
-            Scripted::text("block second reason"),
+            Scripted::text("first reason\nblock"),
+            Scripted::text("second reason\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 1,
@@ -1964,7 +1964,7 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
     let reviewer = session.reviewer_limits(
         vec![
             Scripted::text("check"),
-            Scripted::text("block first reason"),
+            Scripted::text("first reason\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 1,
@@ -2061,7 +2061,10 @@ fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
         vec![tool.clone() as Arc<dyn Tool>],
     );
     let reviewer = session.reviewer_limits(
-        vec![Scripted::text("check"), Scripted::text("block only reason")],
+        vec![
+            Scripted::text("check"),
+            Scripted::text("only reason\nblock"),
+        ],
         r#loop::BlockLimits {
             consecutive: 1000,
             session: 1,
@@ -2204,11 +2207,11 @@ fn a_remembered_allow_taken_before_the_shutdown_stands_and_the_call_never_runs()
         Session::with_tools(paired_turns(3), None, vec![tool.clone() as Arc<dyn Tool>]);
     let _reviewer = session.reviewer(vec![
         Scripted::text("check"),
-        Scripted::text("block one"),
+        Scripted::text("one\nblock"),
         Scripted::text("check"),
-        Scripted::text("block two"),
+        Scripted::text("two\nblock"),
         Scripted::text("check"),
-        Scripted::text("block three"),
+        Scripted::text("three\nblock"),
     ]);
     go(&mut session);
     go(&mut session);
@@ -2348,9 +2351,9 @@ fn the_notes_prefix_every_reviewer_request_and_survive_a_second_call() {
             .reviewer_notes(notes);
     let reviewer = session.reviewer(vec![
         Scripted::text("check"),
-        Scripted::text("allow looks fine"),
+        Scripted::text("looks fine\nallow"),
         Scripted::text("check"),
-        Scripted::text("allow looks fine"),
+        Scripted::text("looks fine\nallow"),
     ]);
     let _first = go(&mut session);
     let _second = go(&mut session);
@@ -2422,7 +2425,7 @@ fn a_stage_1_allow_marks_its_usage_with_the_call() {
 fn a_check_then_an_allow_marks_both_usages_with_the_call() {
     let (_, _, _, lines) = reviewed_turn(vec![
         Scripted::text("check"),
-        Scripted::text("allow looks fine"),
+        Scripted::text("looks fine\nallow"),
     ]);
     // The whole turn in order, so a duplicated, missing or reordered
     // event fails (`docs/testing.md`, "Event streams").
@@ -2528,7 +2531,7 @@ fn a_reviewed_call_counts_only_the_session_model_requests() {
 fn a_block_below_the_limits_logs_the_calls_declared_effects() {
     let (session, tool, reviewer, lines) = reviewed_turn(vec![
         Scripted::text("check"),
-        Scripted::text("block force-pushes to main"),
+        Scripted::text("force-pushes to main\nblock"),
     ]);
     assert_eq!(
         kinds(&lines),
@@ -2566,7 +2569,7 @@ fn a_headless_block_at_the_limit_logs_the_calls_declared_effects() {
     session.reviewer_limits(
         vec![
             Scripted::text("check"),
-            Scripted::text("block force-pushes to main"),
+            Scripted::text("force-pushes to main\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 1,
@@ -2687,7 +2690,7 @@ fn an_always_reviewed_call_logs_always_reviewed_on_its_denial() {
         None,
         vec![tool.clone() as Arc<dyn Tool>],
     );
-    session.reviewer(vec![Scripted::text("check"), Scripted::text("block no")]);
+    session.reviewer(vec![Scripted::text("check"), Scripted::text("no\nblock")]);
     let lines = go(&mut session);
     assert_eq!(
         kinds(&lines),
@@ -2715,9 +2718,9 @@ fn a_block_a_person_answers_leaves_the_effects_on_the_request_alone() {
     session.reviewer_limits(
         vec![
             Scripted::text("check"),
-            Scripted::text("block first reason"),
+            Scripted::text("first reason\nblock"),
             Scripted::text("check"),
-            Scripted::text("block second reason"),
+            Scripted::text("second reason\nblock"),
         ],
         r#loop::BlockLimits {
             consecutive: 2,
@@ -2829,7 +2832,7 @@ fn an_always_reviewed_call_starts_and_asks_with_always_reviewed() {
         vec![tool.clone() as Arc<dyn Tool>],
     );
     session.reviewer_limits(
-        vec![Scripted::text("check"), Scripted::text("block no")],
+        vec![Scripted::text("check"), Scripted::text("no\nblock")],
         r#loop::BlockLimits {
             consecutive: 1,
             session: 20,

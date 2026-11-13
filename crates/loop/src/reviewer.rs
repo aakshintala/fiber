@@ -133,31 +133,63 @@ pub(crate) fn read_first(text: &str) -> Result<First, String> {
     }
 }
 
-/// Reads a second-stage verdict: `allow` or `block` plus a reason. The
-/// verdict word may carry its separator, as in `allow: fine`. A `block`
-/// with an empty reason does not read; an `allow` may have none.
+/// Reads a second-stage verdict: reason lines followed by `allow` or
+/// `block` alone on the last non-empty line. A `block` with an empty reason
+/// does not read; an `allow` may have none.
 pub(crate) fn read_second(text: &str) -> Result<Second, String> {
-    let trimmed = text.trim_start();
-    let mut words = trimmed.split_whitespace();
-    let Some(first) = words.next() else {
-        return Err("expected `allow` or `block` with a reason, but got nothing".to_owned());
+    let mut lines = text.split('\n').collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    let Some(verdict_line) = lines.pop() else {
+        return Err("expected a reason, then `allow` or `block` alone on the last line".to_owned());
     };
-    let after = trimmed.strip_prefix(first).unwrap_or("");
-    let (word, rest) = match first.split_once(':') {
-        Some((head, tail)) => (head, [tail, after].concat()),
-        None => (first, after.to_owned()),
+    let verdict = verdict_line.trim();
+    let verdict = if let Some(inner) = verdict
+        .strip_prefix("**")
+        .and_then(|inner| inner.strip_suffix("**"))
+    {
+        inner
+    } else if let Some(inner) = verdict
+        .strip_prefix('*')
+        .and_then(|inner| inner.strip_suffix('*'))
+    {
+        inner
+    } else if let Some(inner) = verdict
+        .strip_prefix('`')
+        .and_then(|inner| inner.strip_suffix('`'))
+    {
+        inner
+    } else {
+        verdict
     };
-    let reason = rest
-        .trim_start_matches(|c: char| c == ':' || c == '-' || c.is_whitespace())
-        .trim_end()
-        .to_owned();
-    match clean(word).as_str() {
-        "allow" => Ok(Second::Allow {
+    let verdict = verdict.strip_suffix('.').unwrap_or(verdict).trim();
+    let allow = verdict.eq_ignore_ascii_case("allow");
+    let block = verdict.eq_ignore_ascii_case("block");
+    if !allow && !block {
+        return Err("expected a reason, then `allow` or `block` alone on the last line".to_owned());
+    }
+
+    if let Some(first) = lines.first_mut() {
+        *first = first.trim_start_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '-' | '—' | ':')
+        });
+        if first.is_empty() {
+            lines.remove(0);
+        }
+    }
+    let reason = lines.join("\n");
+    let reason = reason.trim_end().to_owned();
+    if block {
+        if reason.is_empty() {
+            Err("expected a reason, then `allow` or `block` alone on the last line".to_owned())
+        } else {
+            Ok(Second::Block { reason })
+        }
+    } else {
+        Ok(Second::Allow {
             reason: (!reason.is_empty()).then_some(reason),
-        }),
-        "block" if !reason.is_empty() => Ok(Second::Block { reason }),
-        "block" => Err("a `block` needs a reason in one sentence, but got none".to_owned()),
-        _ => Err("expected `allow` or `block` with a reason".to_owned()),
+        })
     }
 }
 

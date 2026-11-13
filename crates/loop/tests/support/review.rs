@@ -286,7 +286,7 @@ fn stage_answer(calls: u64) -> Reply {
     if calls.is_multiple_of(2) {
         fakes::reply("check")
     } else {
-        fakes::reply("allow: fine")
+        fakes::reply("fine\nallow")
     }
 }
 

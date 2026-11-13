@@ -805,7 +805,7 @@ fn check_then_block_denies_at_stage_two() {
     let (outcome, _) = drive_on(
         vec![
             Scripted::text("check"),
-            Scripted::text("block: it writes outside the workspace"),
+            Scripted::text("it writes outside the workspace\nblock"),
         ],
         &entry,
         &empty_model(),
@@ -1076,7 +1076,7 @@ fn a_three_run_sweep_aggregates_per_entry_and_pools_runs() {
             Scripted::text("allow"),
             Scripted::text("allow"),
             Scripted::text("check"),
-            Scripted::text("block: no"),
+            Scripted::text("no\nblock"),
         ],
         &[entry],
         3,
@@ -1110,11 +1110,11 @@ fn sweep_tallies_each_entry_across_its_runs() {
             Scripted::text("allow"),
             Scripted::text("allow"),
             Scripted::text("check"),
-            Scripted::text("block: no"),
+            Scripted::text("no\nblock"),
             Scripted::text("check"),
-            Scripted::text("block: no"),
+            Scripted::text("no\nblock"),
             Scripted::text("check"),
-            Scripted::text("block: no"),
+            Scripted::text("no\nblock"),
         ],
         &[first, second],
         3,
@@ -1615,13 +1615,13 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
         Scripted::text("allow"),
         Scripted::text("allow"),
         Scripted::text("check"),
-        Scripted::text("block: outlier"),
+        Scripted::text("outlier\nblock"),
         Scripted::text("check"),
-        Scripted::text("block: reads keys"),
+        Scripted::text("reads keys\nblock"),
         Scripted::text("check"),
-        Scripted::text("block: sends data"),
+        Scripted::text("sends data\nblock"),
         Scripted::text("check"),
-        Scripted::text("block: deletes work"),
+        Scripted::text("deletes work\nblock"),
     ]));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let clock = clock();
@@ -1690,10 +1690,10 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
     // (`docs/testing/fakes.md`, "Live calls and evals").
     assert_eq!(stage_texts(&outcomes[0]), vec!["allow"]);
     assert_eq!(stage_texts(&outcomes[1]), vec!["allow"]);
-    assert_eq!(stage_texts(&outcomes[2]), vec!["check", "block: outlier"]);
+    assert_eq!(stage_texts(&outcomes[2]), vec!["check", "outlier\nblock"]);
     assert_eq!(
         stage_texts(&outcomes[3]),
-        vec!["check", "block: reads keys"]
+        vec!["check", "reads keys\nblock"]
     );
     let reasons = |outcome: &Outcome| match outcome {
         Outcome::Ran(ran_at) => ran_at.reason.clone(),
@@ -1726,10 +1726,10 @@ fn run_rows_match_the_fake_verdicts_run_by_run() {
         render_run_detail(&rows, &outcomes, 3),
         "set p_1 r1 allow stage1 reason=- s1=10/3 s2=0/0 lat=0ms allow [0ms]\n\
          set p_1 r2 allow stage1 reason=- s1=10/3 s2=0/0 lat=0ms allow [0ms]\n\
-         set p_1 r3 block stage2 reason=outlier s1=10/3 s2=10/3 lat=0ms check [0ms] | block: outlier [0ms]\n\
-         set b_1 r1 block stage2 reason=reads keys s1=10/3 s2=10/3 lat=0ms check [0ms] | block: reads keys [0ms]\n\
-         set b_1 r2 block stage2 reason=sends data s1=10/3 s2=10/3 lat=0ms check [0ms] | block: sends data [0ms]\n\
-         set b_1 r3 block stage2 reason=deletes work s1=10/3 s2=10/3 lat=0ms check [0ms] | block: deletes work [0ms]\n"
+         set p_1 r3 block stage2 reason=outlier s1=10/3 s2=10/3 lat=0ms check [0ms] | outlier block [0ms]\n\
+         set b_1 r1 block stage2 reason=reads keys s1=10/3 s2=10/3 lat=0ms check [0ms] | reads keys block [0ms]\n\
+         set b_1 r2 block stage2 reason=sends data s1=10/3 s2=10/3 lat=0ms check [0ms] | sends data block [0ms]\n\
+         set b_1 r3 block stage2 reason=deletes work s1=10/3 s2=10/3 lat=0ms check [0ms] | deletes work block [0ms]\n"
     );
     assert_eq!(
         render_entry_table(&tallies, 3),
@@ -1746,7 +1746,7 @@ fn a_reasked_stage_tapes_every_text_in_order() {
         vec![
             Scripted::text("huh?"),
             Scripted::text("check"),
-            Scripted::text("allow: fine"),
+            Scripted::text("fine\nallow"),
         ],
         &entry,
         &empty_model(),
@@ -1764,7 +1764,7 @@ fn a_reasked_stage_tapes_every_text_in_order() {
         .iter()
         .map(|stage| stage.text.as_str())
         .collect();
-    assert_eq!(texts, vec!["huh?", "check", "allow: fine"]);
+    assert_eq!(texts, vec!["huh?", "check", "fine\nallow"]);
 }
 
 /// The per-run detail renders one line per run with single-lined reasons
@@ -1774,7 +1774,7 @@ fn multiline_reasons_render_on_one_line() {
     let entry = synthetic_entry("a_01", Some(Label::Block));
     let scripted = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
-        Scripted::text("block: first line\nsecond line"),
+        Scripted::text("first line\nsecond line\nblock"),
     ]));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
     let budget = Arc::new(RequestBudget::new());
@@ -1846,7 +1846,7 @@ fn drive_stops_at_170_real_requests() {
         script.push(Scripted::text("huh?"));
         script.push(Scripted::text("check"));
         script.push(Scripted::text("huh?"));
-        script.push(Scripted::text("block: no"));
+        script.push(Scripted::text("no\nblock"));
     }
     let scripted = Arc::new(ScriptedProvider::new(script));
     let provider: Arc<dyn contract::provider::Provider> = scripted.clone();
