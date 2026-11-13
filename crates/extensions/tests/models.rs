@@ -192,6 +192,32 @@ fn models_dev_apply_returns_only_fresh_catalog_deprecated_references() {
 }
 
 #[test]
+fn applied_retain_listed_drops_only_catalog_deprecated_models() {
+    let setup = Setup::new();
+    let mut providers = installed(
+        &setup,
+        &[("acme", provider("acme", &["retired", "active"]))],
+    );
+    let applied = extensions::models_dev::Applied {
+        notices: Vec::new(),
+        deprecated: ["acme/retired".to_owned()].into_iter().collect(),
+    };
+
+    let notices = applied.retain_listed(&mut providers);
+
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        providers
+            .data("acme")
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["active"]
+    );
+}
+
+#[test]
 fn models_dev_deprecation_tracker_notices_once_per_session() {
     let tracker = extensions::models_dev::ModelDeprecations::new([
         "acme/old".to_owned(),
