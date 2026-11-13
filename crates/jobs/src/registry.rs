@@ -195,12 +195,6 @@ enum Phase {
     Ended(Box<JobCompleted>),
 }
 
-// `support::group::alive` refuses pgids <= 1, so the `>`→`>=` change is equivalent and no consumer can observe it.
-#[cfg_attr(false, mutants::skip)]
-fn restorable_pgid(pgid: Option<u32>) -> Option<u32> {
-    pgid.filter(|pgid| *pgid > 1)
-}
-
 impl Registry {
     /// Jobs whose output files are created in `artifacts`. `clock` is the
     /// session clock: a `wait` deadline is read from it. `emit` carries the
@@ -430,7 +424,9 @@ impl Registry {
             .into_iter()
             .filter_map(|id| {
                 let started = outstanding.remove(&id)?;
-                let pgid = restorable_pgid(started.pgid)?;
+                let pgid = started
+                    .pgid
+                    .filter(|pgid| !support::group::refused(*pgid))?;
                 if !support::group::alive(pgid) {
                     return None;
                 }

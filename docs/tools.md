@@ -1041,9 +1041,8 @@ The kinds are `docs/events.md`.
   signals. An approved stop rechecks identity, sends TERM, escalates after
   the grace period if needed; a group disappearing during that stop or on its
   own produces one failed `indeterminate` end. Detached ends stay in the
-  registry but do not send
-  a completion notice or write `job_completed`. A process without a durable
-  `job_started` row is not restored; the unrecorded launch interval before
+  registry but do not send a completion notice or write `job_completed`. A
+  process without a durable `job_started` row is not restored; the unrecorded launch interval before
   that row is written remains outside resume recovery.
 - The call that starts a job completes in its own turn with a receipt naming
   the `job_id` and the path of the job's output file in the session's

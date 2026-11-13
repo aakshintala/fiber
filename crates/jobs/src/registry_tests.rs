@@ -2605,8 +2605,7 @@ fn restore_detached_rows_removes_a_start_with_its_matching_completion() {
 
 #[cfg(unix)]
 #[test]
-fn restore_detached_rows_keeps_the_pgid_one_safety_guard() {
-    // Defense in depth: `support::group::alive` independently refuses pgids <= 1.
+fn restore_detached_rows_omits_a_group_with_pgid_one() {
     let (_dir, registry) = world();
     let started = restore_row_started("j_rows_one", 1);
     let mut calls = 0;
@@ -2622,10 +2621,7 @@ fn restore_detached_rows_keeps_the_pgid_one_safety_guard() {
             },
         )
     }));
-    assert!(
-        rows.is_ok(),
-        "pgid 1 must be rejected before liveness probing"
-    );
+    assert!(rows.is_ok(), "pgid 1 must not panic or be admitted");
     assert!(rows.unwrap().is_empty());
     assert_eq!(calls, 0);
 }
