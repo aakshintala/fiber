@@ -351,6 +351,8 @@ fn select_fails_without_a_base() {
     assert!(out.starts_with("xtask: git merge-base"), "{out}");
 }
 
+/// `docs/ci.md`, "On every pull request that changes code": 40 mutants
+/// produce three shards.
 #[test]
 fn plan_prints_the_jobs_and_shards() {
     let dir = workspace();
@@ -367,6 +369,8 @@ fn plan_prints_the_jobs_and_shards() {
         "--draft",
         "false",
         "--bug",
+        "true",
+        "--mutants",
         "true",
         "--mutant-count",
         "40",
@@ -430,6 +434,8 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
         "false",
         "--bug",
         "false",
+        "--mutants",
+        "true",
         "--mutant-count",
         "40",
         "--lookup-ok",
@@ -1462,6 +1468,8 @@ fn release_plan_args(base: &str) -> Vec<&str> {
         "false",
         "--bug",
         "false",
+        "--mutants",
+        "false",
         "--mutant-count",
         "0",
     ]
@@ -1497,6 +1505,8 @@ fn pr_plan_args(base: &str) -> Vec<&str> {
         "false",
         "--bug",
         "false",
+        "--mutants",
+        "true",
         "--mutant-count",
         "0",
     ]
