@@ -83,7 +83,6 @@ export LOOK_DIFF_OUT="$PWD/$diff"
 export LOOK_DIFF_VERDICT="$PWD/$verdict_file"
 if ! CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo nextest run -p main --test look_diff --run-ignored only >>"$log" 2>&1; then
   printf 'look: error %s comparator failed: %s\n' "$filter" "$PWD/$log"
-  cat "$log" >&2
   exit 2
 fi
 line=$(cat "$verdict_file")

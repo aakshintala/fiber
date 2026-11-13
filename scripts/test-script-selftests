@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 for test_name in \
   leak-scan \
@@ -15,5 +15,5 @@ for test_name in \
   class-data
 do
   echo "== $test_name self-test"
-  /bin/bash "scripts/test-$test_name" || exit $?
+  /bin/bash "scripts/test-$test_name"
 done
