@@ -310,6 +310,56 @@ fn a_check_then_an_allow_sends_two_requests_identical_up_to_the_stage() {
 }
 
 #[test]
+fn a_reason_first_second_stage_allows_at_the_loop_boundary() {
+    let (_, tool, reviewer, lines) = reviewed_turn(vec![
+        Scripted::text("check"),
+        Scripted::text("— reason\nallow"),
+    ]);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(resolved.payload["reason"], "reason");
+    assert_eq!(resolved.payload["reviewer"]["stage"], 2);
+    assert_eq!(tool.ran().len(), 1);
+    assert_eq!(reviewer.requests().len(), 2);
+}
+
+#[test]
+fn an_old_verdict_first_second_stage_fails_closed_at_the_loop_boundary() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let reviewer = session.reviewer(vec![
+        Scripted::text("check"),
+        Scripted::text("block\n— reason"),
+        Scripted::text("still unreadable"),
+    ]);
+    let answered = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |id| inbox.send(reply_delivery(id, deny(None))).unwrap()
+    });
+    let lines = go(&mut session);
+    answered.join().unwrap();
+
+    let requested = line(&lines, "permission_requested");
+    assert_eq!(requested.payload["escalation"]["cause"], "reviewer_failed");
+    assert_eq!(
+        requested.payload["escalation"]["error"]["code"],
+        "unreadable_reply"
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "person");
+    assert_eq!(tool.ran().len(), 0);
+    assert_eq!(reviewer.requests().len(), 3);
+}
+
+#[test]
 fn every_reviewer_stage_asks_for_the_lowest_declared_thinking_level() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
