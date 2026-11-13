@@ -347,3 +347,17 @@ crates/tui/src/remote_run_tests.rs	fiber-4636	plan	2026-11-13T18:52:16Z	Amoghs-M
 crates/tui/src/remote_tests.rs	fiber-4636	plan	2026-11-13T18:52:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/journey.rs	fiber-4636	plan	2026-11-13T18:52:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/journeys.rs	fiber-4636	plan	2026-11-13T18:52:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/tests/invariants.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/main/src/resume_tests.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/doors/src/sessions_tests.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/jobs/src/keeper.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/jobs/src/keeper_tests.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+docs/tools.md	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+docs/events.md	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+docs/state.md	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+docs/architecture.md	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+docs/dependencies.md	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/extensions/src/repository/store_remove_tests.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/extensions/src/repository/store_sync_tests.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/support/src/clock.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
+crates/fakes/src/clock.rs	fiber-4351	plan	2026-11-13T18:53:24Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
