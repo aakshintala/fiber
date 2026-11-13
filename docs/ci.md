@@ -530,7 +530,7 @@ every push ("The backstop on `main`").
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pushed
 commit (`scripts/release-size`). It checks that the stripped binary is
-under 26 MiB and runs the benchmarks that judge each push, every row at 5
+under 30 MiB and runs the benchmarks that judge each push, every row at 5
 runs including the 10-busy-turns workload (`docs/performance.md`). A breach
 fails the backstop, which files an issue instead of stopping a merge. A
 commit that does not build fails the job the same way.
