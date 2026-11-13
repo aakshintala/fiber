@@ -189,6 +189,7 @@ jobs:
           cargo build -q -p fakes --example process-extension
           mutant_args=(
             --workspace
+            --in-place
             --test-tool nextest
             --baseline=skip
             --timeout 120
