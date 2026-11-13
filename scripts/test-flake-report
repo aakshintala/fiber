@@ -1251,13 +1251,11 @@ expect_summary "$collate_no_report_leg/out" "the flaky-tests-macos-26 list is mi
 # The writer consumes the readable leg's real row once while reporting
 # the absent selected leg as partial.
 collate_absent_writer=$tmp/collate-absent-writer
-setup_case collate-absent-writer
-mkdir -p "$collate_absent_writer/flaky" "$collate_absent_writer/temp/flaky"
+mkdir -p "$collate_absent_writer/flaky" "$collate_absent_writer/temp/flaky" "$collate_absent_writer/temp/report-data" "$collate_absent_writer/calls"
 printf 'main::probe a\td1\n' >"$collate_absent_writer/flaky/flaky-tests-ubuntu-24.04-arm.txt"
 printf 'main::probe a\td1\n' >"$collate_absent_writer/temp/flaky/flaky-tests-ubuntu-24.04-arm.txt"
 echo true >"$collate_absent_writer/flaky/collection-complete-ubuntu-24.04-arm.txt"
-echo true >"$collate_absent_writer/flaky/collection-complete-macos-26.txt"
-printf '%s\n' "$decide_new" >"$collate_absent_writer/decisions.jsonl"
+printf '%s\n' '{"action": "file-new", "title": "Flaky tests: main::probe"}' >"$collate_absent_writer/decisions.jsonl"
 code=$(classify_case "$collate_absent_writer" push "" "" "")
 expect_exit collate-absent-writer-classify "$code" 0
 code=$(run_collate_status "$collate_absent_writer" TEST_SELECTED=true)
@@ -1266,6 +1264,7 @@ expect_summary "$collate_absent_writer/out" "the flaky-tests-macos-26 list is mi
 code=$(run_step "$collate_absent_writer" push "" "$empty_open" "" decisions.jsonl)
 expect_exit collate-absent-writer "$code" 0
 expect_writes "$collate_absent_writer" 1
+expect_write "$collate_absent_writer" 0 "$(printf 'create Flaky tests: main::probe\nThe test `main::probe a` passed after a retry on ubuntu-24.04-arm: %s.\ntested %s\n%s\nd1\n%s\nlabel=test-only' "$url" "$sha" "$fence" "$fence")"
 # The Linux-only completed-empty result stays a success with no flakes:
 # no list was ever uploaded, and none is expected.
 collate_linux_only_empty=$tmp/collate-linux-only-empty
