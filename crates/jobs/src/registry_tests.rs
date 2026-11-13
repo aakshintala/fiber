@@ -2356,8 +2356,8 @@ fn restore_detached_rejects_a_fifo_before_opening_or_admitting() {
         result_tx.send(result).unwrap();
     });
     let result = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&result_rx) {
-        Some(result) => result,
-        None => {
+        Ok(result) => result,
+        Err(_) => {
             // If append-open regresses to blocking on the FIFO, open both
             // ends to release the worker before failing the bounded test.
             let _release = std::fs::OpenOptions::new()
