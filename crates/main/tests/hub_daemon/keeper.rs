@@ -887,7 +887,23 @@ fn a_resume_takes_a_running_job_from_its_keeper_and_writes_its_ending() {
         setup.deadline.start_wait(),
         move || log::lock_label(&holder).as_deref() == Some(pid.as_str()),
     );
+    eprintln!(
+        "FIBER4351_TRACE {} test release job={}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros(),
+        crashed.job
+    );
     release(&fixture.gate, setup.deadline);
+    eprintln!(
+        "FIBER4351_TRACE {} test waiting-job-completed job={}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros(),
+        crashed.job
+    );
     serving.until("the restored job's ending", |line| {
         line["kind"] == "job_completed"
     });
