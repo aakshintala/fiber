@@ -1335,38 +1335,6 @@ jobs:
           path: ${{ runner.temp }}/flake-report-data
           if-no-files-found: error
 
-  # Temporary runner probe for #4800; remove before implementing the timeout change.
-  main_mutant_timeout_probe:
-    name: Main mutant timeout probe
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft
-    runs-on: ubuntu-24.04
-    steps:
-      - *checkout-full
-      - *reclaim-disk
-      - *toolchain
-      - *cache-restore
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-mutants@27.1.0,cargo-nextest
-      # The completion tests load `fiber completion`'s scripts in bash, zsh
-      # and fish (crates/main/tests/commands/completion.rs).
-      - *shell-debs-key
-      - *shell-debs-restore
-      - *install-shells
-      - *shell-debs-save
-      - name: Build test targets and process-extension fake
-        run: |
-          cargo build --workspace --all-targets
-          cargo build -q -p fakes --example process-extension
-      - name: Measure main tests twice
-        shell: bash
-        run: |
-          set -o pipefail
-          for run in 1 2; do
-            echo "=== main test run $run ==="
-            /usr/bin/time -p cargo nextest run -p main --bins --tests --profile mutants 2>&1 | tee "$RUNNER_TEMP/main-tests-$run.log"
-          done
-
   mutants:
     name: Mutants (shard ${{ matrix.shard }}, base ${{ needs.select.outputs.base }})
     needs: [select, test_linux]
@@ -2354,7 +2322,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test_linux, test, clippy_macos, scripts_self_test_macos, mutants, main_mutant_timeout_probe, bug_red, release, stress]
+    needs: [select, lint, test_linux, test, clippy_macos, scripts_self_test_macos, mutants, bug_red, release, stress]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.
