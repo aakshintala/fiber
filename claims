@@ -254,10 +254,6 @@ scripts/test-bug-red	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Us
 .github/workflows/ci.yml	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/archive.rs	fiber-4598	plan	2026-11-13T07:37:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/check	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-.github/workflows/ci.yml	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/test-script-selftests	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/ci.md	fiber-4780	plan	2026-11-13T07:45:51Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/cli/src/config.rs:180-180	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
 crates/cli/src/config.rs:192-193	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
 crates/cli/src/config_extension_tests.rs:606-607	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
