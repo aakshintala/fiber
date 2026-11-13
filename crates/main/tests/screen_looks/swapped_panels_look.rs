@@ -496,7 +496,7 @@ fn the_settings_view_matches_the_doc() {
         focused_label(grid).as_deref() == Some("Bell")
     });
     run.write(b"\x1b[C");
-    grid = run.wait_screen("the Models tab", |grid| {
+    run.wait_screen("the Models tab", |grid| {
         find_row(grid, "Default model").is_some_and(|y| {
             let text = grid.rows[usize::from(y)].trim_end();
             text.contains("scripted/s.json ›") && !text.contains("\"scripted/s.json\"")
