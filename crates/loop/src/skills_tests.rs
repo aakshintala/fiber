@@ -1537,10 +1537,11 @@ fn repository_and_personal_overlap_is_listed_once_as_personal() {
     // Distinct repository and personal places retain repository precedence.
     let tree = Tree::new();
     let top = tree.top();
-    skill(&top.join(".fiber/skills"), "same", "repo", "d");
-    skill(&tree.home().join("skills"), "same", "personal", "d");
+    skill(&top.join(".fiber/skills"), "a", "same", "repo");
+    skill(&tree.home().join("skills"), "a", "same", "personal");
     let found = discover(&tree.inputs(), &top);
-    assert_eq!(names(&found), ["repo"]);
+    assert_eq!(names(&found), ["same"]);
+    assert_eq!(found.skills[0].listed.description, "repo");
     assert_eq!(found.skills[0].listed.source, SkillSource::Repository);
     assert_eq!(found.notices.len(), 1);
 }
