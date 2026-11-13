@@ -188,9 +188,17 @@ fn models_dev_startup_apply_overlays_selected_model() {
     data["models_dev"] = json!({"source": "acme", "pins": {}});
     let source = setup.source("acme", &manifest("acme"), &[data]);
     install(&setup.home(), &source, "0.1.0").unwrap();
-    config::write_models_dev(&setup.home(), br#"{"acme":{"m":{"name":"From catalog","limit":{"context":321}}},"other":{"ignored":{"name":"Irrelevant"}}}"#).unwrap();
     let configuration = config(&setup, &[]);
     let (mut providers, _) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].name.as_deref(),
+        None
+    );
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].context_window,
+        Some(1000)
+    );
+    config::write_models_dev(&setup.home(), br#"{"acme":{"m":{"name":"From catalog","limit":{"context":321}}},"other":{"ignored":{"name":"Irrelevant"}}}"#).unwrap();
 
     extensions::models_dev::apply(&setup.home(), true, &mut providers);
 

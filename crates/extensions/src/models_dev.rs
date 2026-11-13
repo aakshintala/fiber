@@ -286,6 +286,8 @@ impl<'de> DeserializeSeed<'de> for SelectionSeed<'_> {
         struct CatalogVisitor<'a>(&'a Selection);
         impl<'de> Visitor<'de> for CatalogVisitor<'_> {
             type Value = Value;
+            // Catalog parse errors are discarded by select_catalog; this text is not consumer-visible.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("a models.dev catalog object")
             }
@@ -317,6 +319,8 @@ impl<'de> DeserializeSeed<'de> for ModelRows<'_> {
         struct RowsVisitor<'a>(&'a BTreeSet<String>);
         impl<'de> Visitor<'de> for RowsVisitor<'_> {
             type Value = Value;
+            // Provider-row parse errors are discarded by select_catalog; this text is not consumer-visible.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("a models.dev provider object")
             }
@@ -338,25 +342,38 @@ impl<'de> DeserializeSeed<'de> for ModelRows<'_> {
                 while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
                 Ok(Value::Null)
             }
-            // Non-object rows have no selectable fields, so represent them as Null.
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Value, E> {
                 Ok(Value::Null)
             }
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Value, E> {
                 Ok(Value::Null)
             }
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Value, E> {
                 Ok(Value::Null)
             }
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Value, E> {
                 Ok(Value::Null)
             }
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
                 Ok(Value::Null)
             }
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Value, E> {
                 Ok(Value::Null)
             }
+            // Non-object rows have no selectable fields; default Value is Null and remains so.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
                 Ok(Value::Null)
             }
@@ -534,12 +551,16 @@ mod retained_catalog_tests {
 
     #[test]
     fn retains_only_selected_catalog_rows() {
-        let bytes = br#"{"served":{"model":{"name":"kept"},"unserved-model":{"name":"drop"}},"unserved-source":{"model":{"name":"drop"}}}"#;
+        let bytes = br#"{"served":["not an object"],"later":{"model":{"name":"kept"}},"unserved-source":{"model":{"name":"drop"}}}"#;
         let mut selected = Selection::default();
         selected.insert("served".to_owned(), "model".to_owned());
+        selected.insert("later".to_owned(), "model".to_owned());
 
         let retained = select_catalog(&bytes[..], &selected).unwrap();
 
-        assert_eq!(retained, json!({"served":{"model":{"name":"kept"}}}));
+        assert_eq!(
+            retained,
+            json!({"served":null,"later":{"model":{"name":"kept"}}})
+        );
     }
 }
