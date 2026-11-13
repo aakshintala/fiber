@@ -140,3 +140,7 @@ xtask/tests/cli.rs	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/
 docs/ci.md	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4779	plan	2026-11-13T02:59:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/tui.md	fiber-4675	plan	2026-11-13T03:14:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/check	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/ci.yml	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/test-script-selftests	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
