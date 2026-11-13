@@ -150,3 +150,5 @@ crates/hub/src/relay_tests.rs	fiber-4693	plan	2026-11-13T03:30:13Z	Amoghs-MacBoo
 .github/workflows/mutants-scheduled.yml:190-191	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
 .github/workflows/mutants-scheduled.yml:205-206	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
 docs/ci.md:438-440	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+crates/cli/src/doctor.rs	fiber-4704	plan	2026-11-13T04:26:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/doctor/doctor_tests.rs	fiber-4704	plan	2026-11-13T04:26:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
