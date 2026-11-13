@@ -871,3 +871,69 @@ fn receipt_names_the_job_log_and_stop_action() {
         "Started detached. Job j_abc123. Output: /home/a/.fiber/detached/d_48200_0.log. Stop it with `jobs stop j_abc123`.\n"
     );
 }
+
+#[test]
+fn restored_disappearance_preserves_indeterminate_failure_payload() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-payload");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let marker = "restored-payload-unique-7f3a";
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!(
+            "printf '%s\\n' '{marker}'; echo $$ > '{}'; exec sleep 60",
+            ready.path().display()
+        ),
+    );
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-payload-supervisor".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    super::track_restored(opened, restored, clock, &spawner).unwrap();
+    let _supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("restored supervisor started");
+    let log_path = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(Result::unwrap)
+        .map(|entry| entry.path())
+        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("d_"))
+        .expect("restored job log exists");
+    assert_eq!(
+        std::fs::read_to_string(log_path).unwrap(),
+        format!("{marker}\n"),
+        "the unique payload is in the restored job log before disappearance"
+    );
+    assert!(fakes::group_alive(pgid));
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("restored group disappearance reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    let error = ended.error.expect("failed End carries an error");
+    assert_eq!(error.code, contract::ErrorCode::Indeterminate);
+    assert_eq!(
+        error.message,
+        "The command was stopped, and Fiber cannot tell whether it completed."
+    );
+    let tail = ended
+        .output_tail
+        .expect("failed End preserves the log tail");
+    assert!(!tail.is_empty(), "the output tail is non-empty");
+    assert!(tail.contains(marker), "output tail: {tail:?}");
+    assert_eq!(jobs.end_count(), 1, "exactly one failed End is reported");
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
