@@ -757,6 +757,10 @@ impl Runtime {
         });
         let runtime = Arc::clone(self);
         thread::spawn(move || {
+            let backoff = Arc::new(support::clock::Parker::new());
+            let waker: Arc<dyn Wake> = backoff.clone();
+            runtime.clock.subscribe(Arc::downgrade(&waker));
+            let mut delay = Duration::from_millis(10);
             let mut incoming = listener.incoming();
             #[cfg(test)]
             let mut inject = true;
@@ -789,10 +793,25 @@ impl Runtime {
                 let accepted = incoming
                     .next()
                     .unwrap_or_else(|| Err(io::Error::other("listener ended")));
-                let Ok(stream) = accepted else { break };
+                let Ok(stream) = accepted else {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let seen = backoff.generation();
+                    let until = runtime.clock.now() + delay;
+                    backoff.park(&*runtime.clock, Some(until), seen);
+                    delay = delay.saturating_mul(2).min(Duration::from_secs(1));
+                    continue;
+                };
+                delay = Duration::from_millis(10);
                 // One thread per candidate: a stalled one holds up nothing.
                 let runtime = Arc::clone(&runtime);
-                thread::spawn(move || runtime.candidate(stream));
+                let Ok(_candidate) = thread::Builder::new()
+                    .name("keeper-candidate".into())
+                    .spawn(move || runtime.candidate(stream))
+                else {
+                    continue;
+                };
             }
         });
     }

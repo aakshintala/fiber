@@ -43,10 +43,11 @@ fn accept_error_keeps_acceptor_alive() {
         release_rx.lock().ok()?.recv().ok()?;
         Some(std::io::ErrorKind::ConnectionAborted)
     });
+    let clock = fakes::clock::FakeClock::new();
     let runtime = super::Runtime::new(
         home.path().to_path_buf(),
         id.clone(),
-        fakes::clock::FakeClock::new(),
+        clock.clone(),
         control,
         done,
         super::Hooks {
@@ -67,6 +68,9 @@ fn accept_error_keeps_acceptor_alive() {
     let mut peer = Peer { writer, frames };
     say(&mut peer, &ToKeeper::Identify(id));
     release_tx.send(()).expect("release accept error");
+    clock
+        .advance_when_parked_in(Duration::from_millis(10), Duration::from_secs(10))
+        .expect("accept backoff parks before clock advances");
     let identity = hear(&peer, "identity after accept error");
     let listening = super::lock(&runtime.listening);
     listening
