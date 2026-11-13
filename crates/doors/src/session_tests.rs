@@ -68,16 +68,23 @@ fn stdout_copy_preserves_the_writer_error_kind() {
         clock.as_ref(),
         &Event::Clients(Clients { count: 0 }),
     );
-    for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::Other] {
+    for (kind, code) in [
+        (io::ErrorKind::BrokenPipe, 0),
+        (io::ErrorKind::StorageFull, 1),
+    ] {
         let error = write_until_stop(&mut FailedStdout(kind), &line)
             .expect_err("the copy returns the original write error");
         assert_eq!(error.kind(), kind);
+        assert_eq!(crate::stdout_write_exit_code(&error), code);
+        if code != 0 {
+            assert!(format!("stdout could not be written: {error}").contains(&error.to_string()));
+        }
     }
 }
 
 #[test]
 fn stdout_stop_control_drain_propagates_writer_errors_without_stopping_session() {
-    for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::Other] {
+    for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::StorageFull] {
         let opened = Opened::open(Vec::new());
         let mut watcher = opened.log.watch();
         watcher.injector().push_kept(crate::client::control_line(

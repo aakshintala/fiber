@@ -310,12 +310,7 @@ pub(crate) fn ask_resume(
             ) {
                 Ok(code) => code,
                 Err(doors::SessionError::StdoutFailed { source }) => {
-                    if doors::stdout_write_exit_code(&source) == 0 {
-                        0
-                    } else {
-                        let error = doors::SessionError::StdoutFailed { source };
-                        crate::fail(failed(error.code(), error))
-                    }
+                    attach_stdout_exit_code(source)
                 }
                 Err(e) => ask_failed(Failure::from(e)),
             }
@@ -365,6 +360,33 @@ fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
 /// the launch project; anything else must pass the launch-project predicate.
 /// The recreatable check runs first, so `in_project` is not called for a
 /// recreatable worktree.
+fn attach_stdout_exit_code(source: io::Error) -> i32 {
+    if doors::stdout_write_exit_code(&source) == 0 {
+        0
+    } else {
+        let error = doors::SessionError::StdoutFailed { source };
+        crate::fail(failed(error.code(), error))
+    }
+}
+
+#[cfg(test)]
+mod stdout_exit_tests {
+    use super::attach_stdout_exit_code;
+    use std::io;
+
+    #[test]
+    fn attach_stdout_exit_code_quiets_only_broken_pipe() {
+        assert_eq!(
+            attach_stdout_exit_code(io::Error::from(io::ErrorKind::BrokenPipe)),
+            0
+        );
+        assert_eq!(
+            attach_stdout_exit_code(io::Error::other("writer failed")),
+            1
+        );
+    }
+}
+
 fn resume_refused(
     recorded: Option<&Worktree>,
     dir: &Path,
