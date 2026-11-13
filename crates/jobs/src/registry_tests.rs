@@ -2453,3 +2453,279 @@ fn restore_refuses_a_job_already_recorded() {
     assert!(registry.restore(clash, stop, None, false).is_err());
     drop((first.end, opened.end));
 }
+
+// `restore_detached_rows`: fold the event log and admit only outstanding,
+// live detached groups whose recorded identity still matches.
+
+#[cfg(unix)]
+fn restore_row_line(seq: u64, event: contract::events::Event) -> contract::Envelope {
+    contract::Envelope {
+        kind: contract::events::EventKind::from_name(event.kind()),
+        session_id: contract::SessionId("restore-rows".into()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+#[cfg(unix)]
+fn restore_row_started(id: &str, pgid: u32) -> contract::events::JobStarted {
+    let mut started = detached_started(id, std::path::Path::new("detached.log"));
+    started.pgid = Some(pgid);
+    started.start_time = support::group::start_time(pgid);
+    started
+}
+
+#[cfg(unix)]
+fn live_restore_row_group() -> (std::process::Child, fakes::Watchdog) {
+    use std::os::unix::process::CommandExt as _;
+    let mut command = std::process::Command::new("sleep");
+    command.arg("60").process_group(0);
+    let child = command.spawn().expect("start a controlled process group");
+    let watchdog = fakes::Watchdog::group(child.id());
+    (child, watchdog)
+}
+
+#[cfg(unix)]
+fn reap_restore_row_group(mut child: std::process::Child, watchdog: fakes::Watchdog) {
+    drop(watchdog);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(child.wait());
+    });
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("the restored-row child was reaped")
+        .expect("wait for the restored-row child");
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_returns_the_valid_detached_start() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let pgid = child.id();
+    let started = restore_row_started("j_rows_valid", pgid);
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started.clone()),
+        ))],
+        |_| (Stop(Box::new(|| {})), "tracked"),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.started, started);
+    assert_eq!(rows[0].1, "tracked");
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_uses_the_event_kind_discriminator() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_kind", child.id());
+    let line = restore_row_line(1, contract::events::Event::JobStarted(started));
+    assert_eq!(line.kind(), contract::events::EventKind::JobStarted);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows([Ok::<_, ()>(line)], |_| {
+        calls += 1;
+        (Stop(Box::new(|| {})), ())
+    });
+    assert_eq!(rows.len(), 1);
+    assert_eq!(calls, 1);
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_live_non_detached_start() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let mut started = restore_row_started("j_rows_plain", child.id());
+    started.kind = None;
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_removes_a_start_with_its_matching_completion() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_done", child.id());
+    let completed = JobCompleted {
+        job_id: started.job_id.clone(),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    };
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [
+            Ok::<_, ()>(restore_row_line(
+                1,
+                contract::events::Event::JobStarted(started),
+            )),
+            Ok(restore_row_line(
+                2,
+                contract::events::Event::JobCompleted(completed),
+            )),
+        ],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_admits_a_live_group_above_one_against_less_mutation() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_gt_less", child.id());
+    assert!(child.id() > 1);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(calls, 1);
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_admits_a_live_group_above_one_against_equal_mutation() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_gt_equal", child.id());
+    assert!(child.id() > 1);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(calls, 1);
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_rejects_the_group_one_boundary_without_probing_it() {
+    let (_dir, registry) = world();
+    let started = restore_row_started("j_rows_one", 1);
+    let mut calls = 0;
+    let rows = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.restore_detached_rows(
+            [Ok::<_, ()>(restore_row_line(
+                1,
+                contract::events::Event::JobStarted(started),
+            ))],
+            |_| {
+                calls += 1;
+                (Stop(Box::new(|| {})), ())
+            },
+        )
+    }));
+    assert!(
+        rows.is_ok(),
+        "pgid 1 must be rejected before liveness probing"
+    );
+    assert!(rows.unwrap().is_empty());
+    assert_eq!(calls, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_reaped_group_without_calling_parts() {
+    let (_dir, registry) = world();
+    let (mut child, watchdog) = live_restore_row_group();
+    let pgid = child.id();
+    drop(watchdog);
+    child
+        .wait()
+        .expect("reap the child once before testing its group");
+    assert!(!support::group::alive(pgid));
+    let started = restore_row_started("j_rows_dead", pgid);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_live_group_with_a_mismatched_start_time() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let mut started = restore_row_started("j_rows_identity", child.id());
+    let actual_start_time = started
+        .start_time
+        .expect("the live process group has a readable start time");
+    started.start_time = Some(actual_start_time.wrapping_add(1));
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
