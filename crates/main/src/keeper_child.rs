@@ -20,7 +20,7 @@ use jobs::keeper::{Step, Supervisor};
 use log::Log;
 use rustix::process::Signal;
 
-fn trace_lock_holders(path: &std::path::Path) {
+fn trace_lock_holders(path: &std::path::Path, processes: &BTreeMap<String, Arc<Process>>) {
     use std::os::unix::fs::MetadataExt as _;
 
     let Ok(metadata) = fs::metadata(path) else {
@@ -52,8 +52,12 @@ fn trace_lock_holders(path: &std::path::Path) {
                 .to_owned()))
             .unwrap_or_else(|| "unknown".to_owned())
     );
+    let runtime_groups: Vec<_> = processes
+        .iter()
+        .map(|(id, process)| (id.as_str(), process.pgid))
+        .collect();
     eprintln!(
-        "FIBER4351_TRACE proc_lock_scan path={path:?} device={lock_device} matching_locks={matching_locks:?}"
+        "FIBER4351_TRACE proc_lock_scan path={path:?} device={lock_device} matching_locks={matching_locks:?} runtime_process_groups={runtime_groups:?} (runtime-derived, not Supervisor fields)"
     );
     let Ok(entries) = fs::read_dir("/proc") else {
         return;
@@ -79,22 +83,46 @@ fn trace_lock_holders(path: &std::path::Path) {
             }
             let stat_path = entry.path().join("stat");
             let stat = fs::read_to_string(stat_path).ok();
-            let (ppid, start) = stat
+            let (ppid, pgrp, start) = stat
                 .as_deref()
                 .and_then(|s| {
                     s.rsplit_once(')').map(|(_, rest)| {
                         let fields: Vec<_> = rest.split_whitespace().collect();
                         (
                             fields.get(1).copied().unwrap_or("unknown"),
+                            fields.get(2).copied().unwrap_or("unknown"),
                             fields.get(19).copied().unwrap_or("unknown"),
                         )
                     })
                 })
-                .unwrap_or(("unknown", "unknown"));
+                .unwrap_or(("unknown", "unknown", "unknown"));
             let cmdline = fs::read(entry.path().join("cmdline"))
                 .ok()
                 .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
                 .unwrap_or_else(|| "unavailable".into());
+            let role = if pid == std::process::id() {
+                "this_keeper"
+            } else if let Ok(group) = pgrp.parse::<u32>() {
+                if let Some((id, _)) = runtime_groups.iter().find(|(_, pgid)| *pgid == group) {
+                    if *id == "call_0" {
+                        "call_0 job_id=j_6fe0376e94d77e1f"
+                    } else if *id == "call_1" {
+                        "call_1"
+                    } else {
+                        "child_job"
+                    }
+                } else if cmdline.contains("keeper") && cmdline.contains("--id") {
+                    "earlier_keeper"
+                } else if cmdline.contains("hub_daemon") {
+                    "test_process"
+                } else {
+                    "unknown"
+                }
+            } else if cmdline.contains("hub_daemon") {
+                "test_process"
+            } else {
+                "unknown"
+            };
             let fdnum = fd.file_name().to_string_lossy().into_owned();
             let info =
                 fs::read_to_string(entry.path().join("fdinfo").join(&fdnum)).unwrap_or_default();
@@ -103,7 +131,7 @@ fn trace_lock_holders(path: &std::path::Path) {
                 .find(|line| line.starts_with("flags:"))
                 .unwrap_or("flags: unavailable");
             eprintln!(
-                "FIBER4351_TRACE lock_fd pid={pid} ppid={ppid} starttime={start} cmdline={cmdline:?} role=unknown fd={fdnum} {flags:?} O_CLOEXEC={} proc_locks={:?}",
+                "FIBER4351_TRACE lock_fd pid={pid} ppid={ppid} pgrp={pgrp} starttime={start} cmdline={cmdline:?} role={role} fd={fdnum} {flags:?} O_CLOEXEC={} proc_locks={:?}",
                 flags
                     .split_once(':')
                     .and_then(|(_, value)| u32::from_str_radix(value.trim(), 8).ok())
@@ -387,6 +415,19 @@ impl Runtime {
                             if let Some(pause) = &self.hooks.before_bind {
                                 pause();
                             }
+                            eprintln!(
+                                "FIBER4351_TRACE keeper_socket_creator_pid={} ppid={} socket_bind=doors::bind session_dir={}",
+                                std::process::id(),
+                                fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
+                                    .ok()
+                                    .and_then(|stat| stat.rsplit_once(')').map(|(_, rest)| rest
+                                        .split_whitespace()
+                                        .nth(1)
+                                        .unwrap_or("unknown")
+                                        .to_owned()))
+                                    .unwrap_or_else(|| "unknown".to_owned()),
+                                dir.display()
+                            );
                             eprintln!("FIBER4351_TRACE before socket bind");
                             let bound = doors::bind(&self.home, &dir);
                             eprintln!(
@@ -419,7 +460,7 @@ impl Runtime {
                         }
                         Err(error @ log::Error::Held { .. }) => {
                             eprintln!("FIBER4351_TRACE Log::open_as Err={error:?}");
-                            trace_lock_holders(&dir.join("session.lock"));
+                            trace_lock_holders(&dir.join("session.lock"), &lock(&self.processes));
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
                             eprintln!("FIBER4351_TRACE lock_lost steps={steps:?}");

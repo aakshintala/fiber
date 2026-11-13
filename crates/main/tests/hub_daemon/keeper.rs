@@ -638,6 +638,11 @@ fn crash_after(
         session_dir(setup, &fixture.id).join(started["payload"]["output_path"].as_str().unwrap());
     settle(&output);
     let kill_marker = kill_marker_file(setup, &fixture.id);
+    eprintln!(
+        "FIBER4351_TRACE test crash_after resumed_fiber_pid={} process_group_leader={} (socket_creator_not_proven)",
+        child.id(),
+        group
+    );
     fakes::kill_group(group, "KILL").unwrap();
     assert!(!reap(child, setup.deadline).success());
     assert!(fakes::group_empties(group, setup.deadline.start_wait()));
