@@ -879,17 +879,7 @@ jobs:
       - name: scripts/check self-test block with system Bash
         run: |
           /bin/bash --version
-          /bin/bash scripts/test-leak-scan
-          /bin/bash scripts/test-look-diff
-          /bin/bash scripts/test-flaky-tests
-          /bin/bash scripts/test-flake-report
-          /bin/bash scripts/test-retry-filter
-          /bin/bash scripts/test-stress-plan
-          /bin/bash scripts/test-journey-report
-          /bin/bash scripts/test-mutants-rotation
-          /bin/bash scripts/test-mutants-shard-finish
-          /bin/bash scripts/test-bug-red
-          /bin/bash scripts/test-class-data
+          /bin/bash scripts/test-script-selftests
 
   # The tests the push touches, each run 30 times (100 when the
   # push fixes a flaky test), beside the test jobs on the backstop: one failure

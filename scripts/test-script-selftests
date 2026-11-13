@@ -1,0 +1,19 @@
+#!/bin/bash
+set -e
+
+for test_name in \
+  leak-scan \
+  look-diff \
+  flaky-tests \
+  flake-report \
+  retry-filter \
+  stress-plan \
+  journey-report \
+  mutants-rotation \
+  mutants-shard-finish \
+  bug-red \
+  class-data
+do
+  echo "== $test_name self-test"
+  "scripts/test-$test_name" || exit $?
+done
