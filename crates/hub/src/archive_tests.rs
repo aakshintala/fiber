@@ -858,8 +858,8 @@ fn a_cascaded_missing_delegate_is_not_appended_twice_in_one_listing() {
     temp.indexed(21, &missing, Some(&testkit::id(20)));
     temp.indexed(20, &missing, None);
 
-    // `docs/state.md`, "Recently exited sessions": each session gets one
-    // appended archived row; the cascade must not append its delegate twice.
+    // `docs/invocation.md`, "Archiving": the cascade archives the exited
+    // delegate with its parent and must not append that delegate twice.
     let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
         .unwrap()
         .unwrap();
