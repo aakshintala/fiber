@@ -219,18 +219,12 @@ fires on pull requests only, never on the backstop. Its known gap: a
 macOS-only error in a file containing no `target_os` does not trigger the
 job.
 
-When a pull request's names-only diff contains a path under `scripts/`, a
-`scripts_self_test_macos` job runs these self-tests on macOS arm64 by invoking
-each script with the runner's system `/bin/bash`: `scripts/test-leak-scan`,
-`scripts/test-look-diff`, `scripts/test-flaky-tests`,
-`scripts/test-flake-report`, `scripts/test-retry-filter`,
-`scripts/test-stress-plan`, `scripts/test-journey-report`,
-`scripts/test-mutants-rotation`, `scripts/test-mutants-shard-finish`,
-`scripts/test-bug-red` and `scripts/test-class-data`. They mirror the
-self-test block in `scripts/check`; the job does not call `scripts/check`.
-This includes the leak-scan self-test. It triggers only on pull requests,
-never on the backstop; the backstop already runs the macOS test leg. The job
-holds one macOS slot while it runs.
+When a pull request's names-only diff contains a path under `scripts/`, the
+`scripts_self_test_macos` job runs `scripts/test-script-selftests` on macOS
+arm64 with the runner's system `/bin/bash`. This is the same entry point that
+`scripts/check` uses for its script self-tests. The job triggers only on pull
+requests, never on the backstop; the backstop already runs the macOS test leg.
+The job holds one macOS slot while it runs.
 
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
