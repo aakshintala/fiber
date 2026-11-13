@@ -354,8 +354,9 @@ research/decision-models/README.md	fiber-4473	plan	2026-11-13T10:16:22Z	roundhou
 docs/workflow.md	fiber-4473	plan	2026-11-13T10:16:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4473	plan	2026-11-13T10:16:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-4473	plan	2026-11-13T10:16:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/bench/examples/bench/linux.rs	fiber-4791	plan	2026-11-13T10:24:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/bench/examples/bench/linux_tests.rs	fiber-4791	plan	2026-11-13T10:24:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/select/compiled_in.rs	fiber-4473	plan	2026-11-13T11:45:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4800	plan	2026-11-13T11:53:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/mutants.md	fiber-4800	plan	2026-11-13T11:53:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/bench/examples/bench/linux.rs:121-121	fiber-4791	plan	2026-11-13T11:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
+crates/bench/examples/bench/linux_tests.rs:146-147	fiber-4791	plan	2026-11-13T11:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
+crates/bench/examples/bench/linux_tests.rs:176-176	fiber-4791	plan	2026-11-13T11:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
