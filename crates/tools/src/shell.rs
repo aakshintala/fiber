@@ -345,6 +345,8 @@ impl Shell {
                     pgid,
                     control,
                     log_root,
+                    #[cfg(debug_assertions)]
+                    liveness: None,
                 },
                 clock,
                 &spawner,

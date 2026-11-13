@@ -221,6 +221,21 @@ pub(super) struct Restored {
     pub pgid: u32,
     pub control: Arc<StopControl>,
     pub log_root: PathBuf,
+    #[cfg(debug_assertions)]
+    pub(super) liveness: Option<RestoredLivenessHook>,
+}
+
+#[cfg(debug_assertions)]
+pub(super) struct RestoredLivenessHook {
+    observed: Sender<RestoredLivenessEvent>,
+    answers: Receiver<bool>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RestoredLivenessEvent {
+    AfterKillLoopTop,
+    DrainDeadline,
 }
 
 /// Starts a childless supervisor for a process group admitted from the
@@ -290,6 +305,19 @@ struct RestoredSupervisor {
 }
 
 impl RestoredSupervisor {
+    fn group_alive(&self, event: RestoredLivenessEvent) -> bool {
+        #[cfg(debug_assertions)]
+        if let Some(hook) = &self.restored.liveness {
+            hook.observed
+                .send(event)
+                .expect("test observes liveness check");
+            return hook.answers.recv().expect("test answers liveness check");
+        }
+        support::group::alive(self.restored.pgid)
+    }
+}
+
+impl RestoredSupervisor {
     fn report(self, status: Outcome, error: Option<ShellError>) {
         let completed = JobCompleted {
             job_id: self.opened.started.job_id.clone(),
@@ -339,7 +367,15 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
                 }
             }
         }
-        if !support::group::alive(pgid) {
+        #[cfg(debug_assertions)]
+        let alive = if drain_deadline.is_some() {
+            supervisor.group_alive(RestoredLivenessEvent::AfterKillLoopTop)
+        } else {
+            support::group::alive(pgid)
+        };
+        #[cfg(not(debug_assertions))]
+        let alive = support::group::alive(pgid);
+        if !alive {
             if cancelled {
                 supervisor.report(Outcome::Failed, Some(ShellError::Indeterminate));
             } else {
@@ -356,7 +392,9 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
             }
             drain_deadline = Some(now.checked_add(support::group::DRAIN).unwrap_or(now));
         }
-        if drain_deadline.is_some_and(|deadline| now >= deadline && support::group::alive(pgid)) {
+        if drain_deadline.is_some_and(|deadline| {
+            now >= deadline && supervisor.group_alive(RestoredLivenessEvent::DrainDeadline)
+        }) {
             supervisor.fail_indeterminate();
             return;
         }

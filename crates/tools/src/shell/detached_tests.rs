@@ -585,6 +585,8 @@ fn restored_fixture(
             pgid,
             control,
             log_root,
+            #[cfg(debug_assertions)]
+            liveness: None,
         },
         pgid,
         watchdog,
@@ -906,7 +908,12 @@ fn restored_disappearance_preserves_indeterminate_failure_payload() {
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| entry.path())
-        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("d_"))
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("d_")
+        })
         .expect("restored job log exists");
     assert_eq!(
         std::fs::read_to_string(log_path).unwrap(),
@@ -931,6 +938,147 @@ fn restored_disappearance_preserves_indeterminate_failure_payload() {
     assert!(!tail.is_empty(), "the output tail is non-empty");
     assert!(tail.contains(marker), "output tail: {tail:?}");
     assert_eq!(jobs.end_count(), 1, "exactly one failed End is reported");
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn restored_drain_deadline_survivor_reports_only_at_deadline() {
+    use super::RestoredLivenessEvent::{AfterKillLoopTop, DrainDeadline};
+
+    let dir = fakes::TempDir::new("fiber-detached-restored-drain-deadline");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, mut restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!(
+            "trap '' TERM; echo $$ > '{}'; exec sleep 60",
+            ready.path().display()
+        ),
+    );
+    let (observed_tx, observed_rx) = mpsc::channel();
+    let (answers_tx, answers_rx) = mpsc::channel();
+    restored.liveness = Some(super::RestoredLivenessHook {
+        observed: observed_tx,
+        answers: answers_rx,
+    });
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-drain-deadline".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    let job_id = opened.started.job_id.clone();
+    super::track_restored(opened, restored, clock.clone(), &spawner).unwrap();
+    let supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("restored supervisor started");
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_result = Arc::clone(&stopped);
+    let mark = clock.advance_when_parked_then(
+        None,
+        Some(supervisor),
+        Duration::ZERO,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || stop_result.store(jobs.stop(&job_id), Ordering::SeqCst),
+    );
+    assert!(stopped.load(Ordering::SeqCst));
+    assert!(fakes::group_alive(pgid), "TERM is ignored during grace");
+    let grace = clock.now().checked_add(support::group::GRACE).unwrap();
+    assert!(clock.await_parked_since(
+        &mark,
+        Some(grace),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    let after_grace = clock.advance_when_parked(
+        Some(grace),
+        Some(supervisor),
+        support::group::GRACE,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        AfterKillLoopTop
+    );
+    answers_tx.send(true).unwrap();
+    let drain = grace.checked_add(support::group::DRAIN).unwrap();
+    assert!(clock.await_parked_since(
+        &after_grace,
+        Some(drain),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    let before = support::group::DRAIN / 2;
+    let before_mark = clock.advance_when_parked(
+        Some(drain),
+        Some(supervisor),
+        before,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        AfterKillLoopTop
+    );
+    answers_tx.send(true).unwrap();
+    assert!(clock.await_parked_since(
+        &before_mark,
+        Some(drain),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert!(
+        jobs.ended(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "no End before deadline"
+    );
+    assert_eq!(
+        observed_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty),
+        "drain condition not reached early"
+    );
+    clock.advance_when_parked(
+        Some(drain),
+        Some(supervisor),
+        support::group::DRAIN - before,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        AfterKillLoopTop
+    );
+    answers_tx.send(true).unwrap();
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        DrainDeadline
+    );
+    answers_tx.send(true).unwrap();
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("surviving group reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    let error = ended.error.expect("failed End includes error");
+    assert_eq!(error.code, contract::ErrorCode::Indeterminate);
+    assert_eq!(
+        error.message,
+        "The command was stopped, and Fiber cannot tell whether it completed."
+    );
+    assert_eq!(jobs.end_count(), 1, "exactly one End");
     assert!(fakes::group_empties(
         pgid,
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
