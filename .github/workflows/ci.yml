@@ -247,7 +247,7 @@ jobs:
             mutants=false
           fi
           cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" \\
+            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" \
             --pr-body "$PR_BODY" | tee -a "$GITHUB_OUTPUT"
 
   lint:
