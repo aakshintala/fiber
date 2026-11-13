@@ -240,7 +240,7 @@ impl Config {
         let project_dir = home.join("projects").join(sources.project.as_str());
         let mut notices = Vec::new();
         let mut layers = vec![(Source::Default, keys::defaults())];
-        let (repository_file, repository) = read_repository(&sources.workspace)?;
+        let (repository_file, repository) = read_repository(&sources.workspace, &home)?;
         let global_file = global_config_file(&home);
         let project_file = project_config_file(&home, &sources.project);
         let files = [
@@ -261,7 +261,9 @@ impl Config {
 
         let mut settings_files = BTreeMap::new();
         for (dir, repo) in [(&home, false), (&fiber, true), (&project_dir, false)] {
-            snapshot_settings(dir, repo, &mut settings_files)?;
+            if !(repo && same_repository_home(&sources.workspace, &home)) {
+                snapshot_settings(dir, repo, &mut settings_files)?;
+            }
         }
         let extensions = ExtensionSettings::new(
             home.clone(),
@@ -629,9 +631,9 @@ const HOOKS_EXTENSION: &str = "github.com/aakshintala/fiber/extensions/hooks";
 /// Reads what the workspace's `.fiber/` declares, under the same plain-file
 /// checks as [`Config::load`]. A repository with none gets an empty
 /// [`Declared`].
-pub fn declared(workspace: &Path, _fiber_home: &Path) -> Result<Declared, ConfigError> {
+pub fn declared(workspace: &Path, fiber_home: &Path) -> Result<Declared, ConfigError> {
     let mut declared = Declared::default();
-    let (file, repository) = read_repository(workspace)?;
+    let (file, repository) = read_repository(workspace, fiber_home)?;
     if let Some(value) = repository {
         let Value::Object(layer) = value else {
             return Err(top_level(&file.display().to_string()));
@@ -665,7 +667,9 @@ pub fn declared(workspace: &Path, _fiber_home: &Path) -> Result<Declared, Config
         }
     }
     let mut settings_files = BTreeMap::new();
-    snapshot_settings(&workspace.join(".fiber"), true, &mut settings_files)?;
+    if !same_repository_home(workspace, fiber_home) {
+        snapshot_settings(&workspace.join(".fiber"), true, &mut settings_files)?;
+    }
     let hooks_file = write::settings_file(&workspace.join(".fiber"), HOOKS_EXTENSION);
     if let Some(bytes) = settings_files.get(&hooks_file) {
         let Value::Object(map) = parse(&hooks_file, bytes)? else {
@@ -698,13 +702,31 @@ fn has_value(entry: &Value) -> bool {
     }
 }
 
+/// Whether the workspace's `.fiber/` and Fiber home identify the same
+/// canonical directory. A symlink spelling does not change the answer;
+/// if either path cannot be canonicalized, returns `false`.
+pub fn same_repository_home(workspace: &Path, fiber_home: &Path) -> bool {
+    workspace
+        .join(".fiber")
+        .canonicalize()
+        .ok()
+        .zip(fiber_home.canonicalize().ok())
+        .is_some_and(|(repository, home)| repository == home)
+}
+
 /// The workspace's `.fiber/config.json`: plain-file checks, then the
 /// parsed value, shared by [`Config::load`] and [`declared`]. `None` when
-/// there is no such file.
-fn read_repository(workspace: &Path) -> Result<(PathBuf, Option<Value>), ConfigError> {
+/// there is no such file or it is Fiber home.
+fn read_repository(
+    workspace: &Path,
+    fiber_home: &Path,
+) -> Result<(PathBuf, Option<Value>), ConfigError> {
+    let file = repository_config_file(workspace);
+    if same_repository_home(workspace, fiber_home) {
+        return Ok((file, None));
+    }
     let fiber = workspace.join(".fiber");
     plain(&fiber, true)?;
-    let file = repository_config_file(workspace);
     let value = if plain(&file, false)? {
         read(&file)?
     } else {
