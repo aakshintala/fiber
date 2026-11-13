@@ -47,13 +47,13 @@ impl TestPausePoint {
     }
 }
 #[cfg(test)]
-type TestPauseParts = (
-    Arc<TestPause>,
-    mpsc::Receiver<()>,
-    mpsc::Sender<()>,
-    mpsc::Receiver<()>,
-    mpsc::Sender<()>,
-);
+struct TestPauseParts {
+    hook: Arc<TestPause>,
+    reader_arrived: mpsc::Receiver<()>,
+    release_reader: mpsc::Sender<()>,
+    drop_arrived: mpsc::Receiver<()>,
+    release_drop: mpsc::Sender<()>,
+}
 #[cfg(test)]
 struct TestPause {
     reader: TestPausePoint,
@@ -76,13 +76,13 @@ impl TestPause {
     fn new() -> TestPauseParts {
         let (reader, reader_arrived, release_reader) = Self::point();
         let (drop, drop_arrived, release_drop) = Self::point();
-        (
-            Arc::new(Self { reader, drop }),
+        TestPauseParts {
+            hook: Arc::new(Self { reader, drop }),
             reader_arrived,
             release_reader,
             drop_arrived,
             release_drop,
-        )
+        }
     }
 }
 struct Client {
@@ -585,6 +585,7 @@ impl Client {
             if let Some(client) = weak.upgrade() {
                 #[cfg(test)]
                 if let Some(pause) = &pause {
+                    // Hold EOF before marking dead so the test can observe retained-list removal order.
                     pause.reader.pause();
                 }
                 client.dead.store(true, Ordering::Release);
@@ -893,6 +894,7 @@ impl Drop for Attached {
         }
         #[cfg(test)]
         if let Some(pause) = &self.pause {
+            // Hold after shutdown and before retain so EOF cannot hide an attached peer.
             pause.drop.pause();
         }
         if let Some(retained) = self.retained.upgrade() {

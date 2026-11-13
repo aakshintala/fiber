@@ -28,25 +28,24 @@ fn spec(id: &str) -> Spawn {
         sandbox: None,
     }
 }
-fn fixture(
-    fail_first: bool,
-) -> (
+type Fixture = (
     Arc<Host>,
     Arc<FakeClock>,
     mpsc::Receiver<UnixStream>,
     Arc<AtomicUsize>,
-) {
+);
+type AttachedFixture = (
+    Arc<Host>,
+    Arc<FakeClock>,
+    mpsc::Receiver<UnixStream>,
+    UnixStream,
+    Attached,
+);
+
+fn fixture(fail_first: bool) -> Fixture {
     fixture_with_pause(fail_first, None)
 }
-fn fixture_with_pause(
-    fail_first: bool,
-    pause: Option<Arc<TestPause>>,
-) -> (
-    Arc<Host>,
-    Arc<FakeClock>,
-    mpsc::Receiver<UnixStream>,
-    Arc<AtomicUsize>,
-) {
+fn fixture_with_pause(fail_first: bool, pause: Option<Arc<TestPause>>) -> Fixture {
     let clock = FakeClock::new();
     let (send, peers) = mpsc::channel();
     let count = Arc::new(AtomicUsize::new(0));
@@ -521,29 +520,14 @@ fn deadline_fake() -> fakes::Deadline {
 
 /// A host that took a handover from a scripted keeper: the host, its clock,
 /// the keeper's end, and the attached handover.
-fn attached_host(
-    running: Vec<KeptJob>,
-    trailing: &[u8],
-) -> (
-    Arc<Host>,
-    Arc<FakeClock>,
-    mpsc::Receiver<UnixStream>,
-    UnixStream,
-    Attached,
-) {
+fn attached_host(running: Vec<KeptJob>, trailing: &[u8]) -> AttachedFixture {
     attached_host_with_pause(running, trailing, None)
 }
 fn attached_host_with_pause(
     running: Vec<KeptJob>,
     trailing: &[u8],
     pause: Option<Arc<TestPause>>,
-) -> (
-    Arc<Host>,
-    Arc<FakeClock>,
-    mpsc::Receiver<UnixStream>,
-    UnixStream,
-    Attached,
-) {
+) -> AttachedFixture {
     let (host, clock, peers, _) = fixture_with_pause(false, pause);
     let (session, mut peer) = UnixStream::pair().unwrap();
     let (_, result) = negotiating(session, &clock);
@@ -613,7 +597,13 @@ fn ready_sends_adopted_once_and_waits_for_the_acknowledgement() {
 
 #[test]
 fn ready_times_out_at_the_deadline_and_the_drop_ends_the_connection() {
-    let (pause, reader_arrived, release_reader, drop_arrived, release_drop) = TestPause::new();
+    let TestPauseParts {
+        hook: pause,
+        reader_arrived,
+        release_reader,
+        drop_arrived,
+        release_drop,
+    } = TestPause::new();
     let (host, clock, _peers, peer, attached) =
         attached_host_with_pause(vec![kept("call_0", "j_one")], b"", Some(pause));
     assert_eq!(host.handover_peers(), vec![Pid(std::process::id())]);
@@ -645,13 +635,7 @@ fn ready_times_out_at_the_deadline_and_the_drop_ends_the_connection() {
     deadline().recv_or_fail(&drop_arrived, "drop pause before retain");
     release_reader.send(()).unwrap();
     release_drop.send(()).unwrap();
-    let (joined, join_result) = mpsc::channel();
-    thread::spawn(move || match joined.send(waiting.join()) {
-        Ok(()) | Err(_) => {}
-    });
-    deadline()
-        .recv_or_fail(&join_result, "timed-out handover worker to finish")
-        .unwrap();
+    waiting.join().unwrap();
     assert!(host.handover_peers().is_empty());
 }
 
