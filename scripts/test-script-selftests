@@ -15,5 +15,5 @@ for test_name in \
   class-data
 do
   echo "== $test_name self-test"
-  "scripts/test-$test_name" || exit $?
+  /bin/bash "scripts/test-$test_name" || exit $?
 done
