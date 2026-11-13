@@ -531,6 +531,338 @@ fn supervisor_signal_failure_reports_one_failed_end() {
     assert!(reported.try_recv().is_err(), "one End is reported");
 }
 
+struct NoAsk;
+
+impl contract::tool::Ask for NoAsk {
+    fn action(&self) -> contract::ActionId {
+        contract::ActionId("a_test".into())
+    }
+
+    fn answerable(&self) -> bool {
+        false
+    }
+
+    fn ask(&self, _asking: contract::tool::Asking) -> contract::tool::Answered {
+        contract::tool::Answered::NoAnswer
+    }
+}
+
+fn restored_fixture(
+    dir: &Path,
+    ready: &Ready,
+    _clock: Arc<FakeClock>,
+    command: &str,
+) -> (
+    Arc<FakeJobs>,
+    contract::jobs::Opened,
+    super::Restored,
+    u32,
+    fakes::Watchdog,
+) {
+    let started = launch(dir, FIBER_PID, super::super::shell_program(), command, dir).unwrap();
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let control = super::StopControl::new();
+    let stop_control = Arc::clone(&control);
+    let jobs = FakeJobs::new(dir);
+    let opened = jobs
+        .open(contract::jobs::Opening {
+            tool: "shell".into(),
+            description: "restored detached command".into(),
+            stop: contract::jobs::Stop(Box::new(move || stop_control.request_stop(pgid))),
+            lines: false,
+            input: None,
+            identity: Some(started.identity),
+            detached: Some(started.log.clone()),
+        })
+        .unwrap();
+    drop(started);
+    let log_root = opened.path.parent().unwrap().to_path_buf();
+    (
+        jobs,
+        opened,
+        super::Restored {
+            pgid,
+            control,
+            log_root,
+            #[cfg(debug_assertions)]
+            liveness: None,
+        },
+        pgid,
+        watchdog,
+    )
+}
+
+#[test]
+fn restored_signal_failure_reports_one_failed_end_without_signalling() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-signal-failure");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!("echo $$ > '{}'; exec sleep 60", ready.path().display()),
+    );
+    {
+        let mut stop = support::lock(&restored.control.stop);
+        stop.requested = true;
+        stop.result = Some(Err(std::io::Error::other("injected TERM failure")));
+    }
+    let (started_tx, started_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let started_tx = started_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-signal-failure".into())
+            .spawn(move || {
+                let _sent = started_tx.send(());
+                task();
+            })
+            .map(drop)
+    });
+    super::track_restored(opened, restored, clock, &spawner).unwrap();
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&started_rx)
+        .expect("restored supervisor started");
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("restored signal failure reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    let error = ended.error.expect("failed signal carries an error");
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert!(error.message.contains("injected TERM failure"));
+    assert_eq!(jobs.end_count(), 1);
+    assert!(
+        fakes::group_alive(pgid),
+        "failed TERM did not signal the group"
+    );
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn restored_group_disappearance_reports_one_failed_indeterminate_end() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-spontaneous");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!("echo $$ > '{}'; exec sleep 60", ready.path().display()),
+    );
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-supervisor".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    super::track_restored(opened, restored, clock, &spawner).unwrap();
+    let _supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("restored supervisor started");
+    assert!(fakes::group_alive(pgid));
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("spontaneous disappearance reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        ended.error.unwrap().code,
+        contract::ErrorCode::Indeterminate
+    );
+    assert_eq!(jobs.end_count(), 1);
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn restored_stop_escalates_after_grace_and_reports_one_cancelled_end() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-stop");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!(
+            "trap '' TERM; echo $$ > '{}'; exec sleep 60",
+            ready.path().display()
+        ),
+    );
+    let job_id = opened.started.job_id.clone();
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-stop-supervisor".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    super::track_restored(opened, restored, clock.clone(), &spawner).unwrap();
+    let supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("restored supervisor started");
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_result = Arc::clone(&stopped);
+    let mark = clock.advance_when_parked_then(
+        None,
+        Some(supervisor),
+        Duration::ZERO,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || stop_result.store(jobs.stop(&job_id), Ordering::SeqCst),
+    );
+    assert!(
+        stopped.load(Ordering::SeqCst),
+        "Registry approves and sends TERM"
+    );
+    assert!(
+        fakes::group_alive(pgid),
+        "TERM is ignored during the grace period"
+    );
+    let deadline = clock.now().checked_add(support::group::GRACE).unwrap();
+    assert!(clock.await_parked_since(
+        &mark,
+        Some(deadline),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(supervisor),
+        support::group::GRACE,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("restored supervisor reports after escalation empties the group");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        ended.error.as_ref().map(|error| error.code.clone()),
+        Some(contract::ErrorCode::Indeterminate)
+    );
+    assert_eq!(jobs.end_count(), 1);
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn restored_supervisor_spawn_failure_reports_once_without_signalling() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-spawn-failure");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!("echo $$ > '{}'; exec sleep 60", ready.path().display()),
+    );
+    let spawner: Spawner = Arc::new(|_| Err(std::io::Error::other("thread refused")));
+    let error = super::track_restored(opened, restored, clock, &spawner).unwrap_err();
+    assert!(error.to_string().contains("thread refused"));
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("spawn failure reports End synchronously");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        ended.error.unwrap().code,
+        contract::ErrorCode::Indeterminate
+    );
+    assert_eq!(jobs.end_count(), 1);
+    assert!(
+        fakes::group_alive(pgid),
+        "failure must not signal the group"
+    );
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn restored_confirmed_leader_uses_bare_kill_fast_path() {
+    use contract::tool::Tool as _;
+
+    let dir = fakes::TempDir::new("fiber-detached-restored-owned-kill");
+    let ready = Ready::new(dir.path());
+    let started = launch(
+        dir.path(),
+        FIBER_PID,
+        super::super::shell_program(),
+        &format!("echo $$ > '{}'; exec sleep 60", ready.path().display()),
+        dir.path(),
+    )
+    .unwrap();
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let jobs = FakeJobs::new(dir.path());
+    let opened = jobs
+        .open(contract::jobs::Opening {
+            tool: "shell".into(),
+            description: "keeper-restored detached command".into(),
+            stop: contract::jobs::Stop(Box::new(|| {})),
+            lines: false,
+            input: None,
+            identity: Some(started.identity),
+            detached: Some(started.log.clone()),
+        })
+        .unwrap();
+    let shell = super::super::Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs)
+        .with_detached(dir.path().join("detached"));
+    assert!(
+        shell.owns_live_leader(pgid),
+        "restored identity is confirmed"
+    );
+    let arguments = json!({"command": format!("kill {pgid}")})
+        .as_object()
+        .unwrap()
+        .clone();
+    let effects = shell.effects(&arguments).unwrap();
+    assert!(
+        effects.declared.effects.is_empty(),
+        "the owned pid is fast-pathed"
+    );
+    let output = shell.run_with_effects(
+        &arguments,
+        &effects,
+        &CancelToken::new(),
+        &Recorder::default(),
+        &NoAsk,
+    );
+    assert!(
+        output.error.is_none(),
+        "bare kill fast path: {:?}",
+        output.error
+    );
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    drop(opened.end);
+    drop(started);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
 #[test]
 fn receipt_names_the_job_log_and_stop_action() {
     assert_eq!(
@@ -540,4 +872,216 @@ fn receipt_names_the_job_log_and_stop_action() {
         ),
         "Started detached. Job j_abc123. Output: /home/a/.fiber/detached/d_48200_0.log. Stop it with `jobs stop j_abc123`.\n"
     );
+}
+
+#[test]
+fn restored_disappearance_preserves_indeterminate_failure_payload() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-payload");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let marker = "restored-payload-unique-7f3a";
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!(
+            "printf '%s\\n' '{marker}'; echo $$ > '{}'; exec sleep 60",
+            ready.path().display()
+        ),
+    );
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-payload-supervisor".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    super::track_restored(opened, restored, clock, &spawner).unwrap();
+    let _supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("restored supervisor started");
+    let log_path = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(Result::unwrap)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("d_")
+        })
+        .expect("restored job log exists");
+    assert_eq!(
+        std::fs::read_to_string(log_path).unwrap(),
+        format!("{marker}\n"),
+        "the unique payload is in the restored job log before disappearance"
+    );
+    assert!(fakes::group_alive(pgid));
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("restored group disappearance reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    let error = ended.error.expect("failed End carries an error");
+    assert_eq!(error.code, contract::ErrorCode::Indeterminate);
+    assert_eq!(
+        error.message,
+        "The command was stopped, and Fiber cannot tell whether it completed."
+    );
+    let tail = ended
+        .output_tail
+        .expect("failed End preserves the log tail");
+    assert!(!tail.is_empty(), "the output tail is non-empty");
+    assert!(tail.contains(marker), "output tail: {tail:?}");
+    assert_eq!(jobs.end_count(), 1, "exactly one failed End is reported");
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn restored_group_surviving_kill_reports_once_at_drain_deadline() {
+    use super::RestoredLivenessEvent::{AfterKillLoopTop, DrainDeadline};
+
+    let dir = fakes::TempDir::new("fiber-detached-restored-drain-deadline");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, mut restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!(
+            "trap '' TERM; echo $$ > '{}'; exec sleep 60",
+            ready.path().display()
+        ),
+    );
+    let (observed_tx, observed_rx) = mpsc::channel();
+    let (answers_tx, answers_rx) = mpsc::channel();
+    restored.liveness = Some(super::RestoredLivenessHook {
+        observed: observed_tx,
+        answers: answers_rx,
+    });
+    let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let supervisor_tx = supervisor_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-drain-deadline".into())
+            .spawn(move || {
+                let _sent = supervisor_tx.send(std::thread::current().id());
+                task();
+            })
+            .map(drop)
+    });
+    let job_id = opened.started.job_id.clone();
+    super::track_restored(opened, restored, clock.clone(), &spawner).unwrap();
+    let supervisor = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&supervisor_rx)
+        .expect("restored supervisor started");
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_result = Arc::clone(&stopped);
+    let mark = clock.advance_when_parked_then(
+        None,
+        Some(supervisor),
+        Duration::ZERO,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || stop_result.store(jobs.stop(&job_id), Ordering::SeqCst),
+    );
+    assert!(stopped.load(Ordering::SeqCst));
+    assert!(fakes::group_alive(pgid), "TERM is ignored during grace");
+    let grace = clock.now().checked_add(support::group::GRACE).unwrap();
+    assert!(clock.await_parked_since(
+        &mark,
+        Some(grace),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    let after_grace = clock.advance_when_parked(
+        Some(grace),
+        Some(supervisor),
+        support::group::GRACE,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        AfterKillLoopTop
+    );
+    answers_tx.send(true).unwrap();
+    let drain = grace.checked_add(support::group::DRAIN).unwrap();
+    assert!(clock.await_parked_since(
+        &after_grace,
+        Some(drain),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    let before = support::group::DRAIN / 2;
+    let before_mark = clock.advance_when_parked(
+        Some(drain),
+        Some(supervisor),
+        before,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        AfterKillLoopTop
+    );
+    answers_tx.send(true).unwrap();
+    assert!(clock.await_parked_since(
+        &before_mark,
+        Some(drain),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert!(
+        jobs.ended(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "no End before deadline"
+    );
+    assert_eq!(
+        observed_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty),
+        "drain condition not reached early"
+    );
+    clock.advance_when_parked(
+        Some(drain),
+        Some(supervisor),
+        support::group::DRAIN.saturating_sub(before),
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        AfterKillLoopTop
+    );
+    answers_tx.send(true).unwrap();
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&observed_rx)
+            .unwrap(),
+        DrainDeadline
+    );
+    answers_tx.send(true).unwrap();
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("surviving group reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    let error = ended.error.expect("failed End includes error");
+    assert_eq!(error.code, contract::ErrorCode::Indeterminate);
+    assert_eq!(
+        error.message,
+        "The command was stopped, and Fiber cannot tell whether it completed."
+    );
+    assert_eq!(jobs.end_count(), 1, "exactly one End");
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }

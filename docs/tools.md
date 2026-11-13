@@ -1031,7 +1031,19 @@ The kinds are `docs/events.md`.
   commands, monitors and delegates are jobs (`docs/delegates.md`). The
   registry also lists detached processes as `detached` entries. You can list
   or stop a detached entry; `wait` and `write` do not apply to it. Detached
-  entries do not hold the session open.
+  entries do not hold the session open. On resume, Fiber restores outstanding
+  detached `job_started` rows before exposing tools. A live group with
+  confirmed identity stays listed, even when its log is missing or is not a
+  regular file; Fiber never opens that log during restoration. A live group
+  with missing or unreadable leader identity stays listed but requires review
+  to stop. Rows without a process-group ID, dead groups, contradicted
+  identities and rows completed later are dropped silently. Restore never
+  signals. An approved stop rechecks identity, sends TERM, escalates after
+  the grace period if needed; a group disappearing during that stop or on its
+  own produces one failed `indeterminate` end. Detached ends stay in the
+  registry but do not send a completion notice or write `job_completed`. A
+  process without a durable `job_started` row is not restored; the unrecorded
+  launch interval before that row is written remains outside resume recovery.
 - The call that starts a job completes in its own turn with a receipt naming
   the `job_id` and the path of the job's output file in the session's
   `artifacts/`. A Fiber delegate's output file is its own `events.jsonl`
