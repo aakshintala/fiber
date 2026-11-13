@@ -389,7 +389,8 @@ pub(super) fn wait_for_refuse_only_socket(
             ),
         );
         panic!(
-            "waited until the deadline for keeper refuse-only socket to accept; {diagnostic}\n{}",
+            "waited until the deadline for keeper refuse-only socket to accept; socket path {} (creator unknown); {diagnostic}\n{}",
+            path.display(),
             keeper_trace(setup)
         );
     }

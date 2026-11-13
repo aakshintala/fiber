@@ -250,7 +250,9 @@ impl Runtime {
                 }
                 Step::HoldLog => {
                     let Some((_, dir)) = log::find_session(&self.home, &self.id) else {
+                        eprintln!("FIBER4351_TRACE HoldLog find_session=None");
                         let steps = lock(&self.supervisor).lock_lost();
+                        eprintln!("FIBER4351_TRACE lock_lost steps={steps:?}");
                         return self.apply(log, steps);
                     };
                     let sessions = dir
@@ -321,12 +323,20 @@ impl Runtime {
                                 held();
                             }
                         }
-                        Err(log::Error::Held { .. }) => {
+                        Err(error @ log::Error::Held { .. }) => {
+                            eprintln!("FIBER4351_TRACE Log::open_as Err={error:?}");
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
+                            eprintln!("FIBER4351_TRACE lock_lost steps={steps:?}");
                             return self.apply(log, steps);
                         }
-                        Err(error) => return Err(io::Error::other(error.to_string())),
+                        Err(error) => {
+                            let returned = io::Error::other(error.to_string());
+                            eprintln!(
+                                "FIBER4351_TRACE Log::open_as Err={error}; returned Err={returned}"
+                            );
+                            return Err(returned);
+                        }
                     }
                 }
                 Step::WriteJobCompleted {
@@ -388,6 +398,7 @@ impl Runtime {
                             Ok(()) | Err(_) => {}
                         }
                     }
+                    eprintln!("FIBER4351_TRACE done Ok source=apply Step::Exit");
                     match self.done.send(Ok(())) {
                         Ok(()) | Err(_) => {}
                     }
@@ -752,7 +763,31 @@ impl Runtime {
 
     fn takeover(self: &Arc<Self>) -> io::Result<()> {
         let crash_at = self.clock.now();
-        self.decide(Supervisor::lifeline_eof)?;
+        self.decide(|supervisor| {
+            let steps = supervisor.lifeline_eof();
+            let processes = lock(&self.processes);
+            let running: Vec<_> = processes
+                .iter()
+                .map(|(id, process)| {
+                    let state = lock(&process.state);
+                    let status = if state.ended {
+                        "ended"
+                    } else if state.stopping.is_some() {
+                        "stopping"
+                    } else {
+                        "running"
+                    };
+                    let adoption = if state.adoption.is_some() {
+                        "adopted"
+                    } else {
+                        "not-adopted"
+                    };
+                    (id.clone(), status, adoption)
+                })
+                .collect();
+            eprintln!("FIBER4351_TRACE lifeline_eof steps={steps:?} Runtime.processes={running:?}");
+            steps
+        })?;
         // The crash left jobs behind: watch the bound from the crash instant.
         self.watch_bound(crash_at);
         Ok(())
@@ -1062,13 +1097,18 @@ impl Runtime {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             let request: ToKeeper = serde_json::from_str(&line)?;
             match request {
-                ToKeeper::Start(spec) => self.start(spec)?,
+                ToKeeper::Start(spec) => {
+                    eprintln!("FIBER4351_TRACE control Start id={}", spec.id);
+                    self.start(spec)?;
+                }
                 ToKeeper::Stop(id) => {
+                    eprintln!("FIBER4351_TRACE control Stop id={id}");
                     if let Some(process) = lock(&self.processes).get(&id) {
                         self.stop(process);
                     }
                 }
                 ToKeeper::Write { id, text } => {
+                    eprintln!("FIBER4351_TRACE control Write id={id}");
                     if let Some(process) = lock(&self.processes).get(&id)
                         && let Some(input) = &process.input
                     {
@@ -1086,6 +1126,7 @@ impl Runtime {
                     errors_path,
                     lines,
                 } => {
+                    eprintln!("FIBER4351_TRACE control Adopt id={id} job_id={job_id:?}");
                     let _log = lock(&self.log);
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
                         && let Some(process) = lock(&self.processes).get(&id)
@@ -1098,16 +1139,30 @@ impl Runtime {
                     }
                 }
                 ToKeeper::Confirmed(id) => {
+                    eprintln!("FIBER4351_TRACE control Confirmed id={id}");
                     self.decide(|sup| sup.confirmed(&id))?;
                 }
                 ToKeeper::Shutdown(true) => {
+                    eprintln!("FIBER4351_TRACE control Shutdown true");
                     self.discard();
                     self.decide(Supervisor::shutdown_requested)?;
                 }
-                ToKeeper::Shutdown(false) => return Err(io::Error::other("shutdown must be true")),
+                ToKeeper::Shutdown(false) => {
+                    eprintln!("FIBER4351_TRACE control Shutdown false");
+                    return Err(io::Error::other("shutdown must be true"));
+                }
                 // Only a candidate on the keeper's socket may negotiate; the
                 // session's own control connection never does.
-                ToKeeper::Identify(_) | ToKeeper::Handover(_) | ToKeeper::Adopted(_) => {
+                ToKeeper::Identify(_) => {
+                    eprintln!("FIBER4351_TRACE control Identify");
+                    return Err(io::Error::other("handshake frame on the session's control"));
+                }
+                ToKeeper::Handover(_) => {
+                    eprintln!("FIBER4351_TRACE control Handover");
+                    return Err(io::Error::other("handshake frame on the session's control"));
+                }
+                ToKeeper::Adopted(_) => {
+                    eprintln!("FIBER4351_TRACE control Adopted");
                     return Err(io::Error::other("handshake frame on the session's control"));
                 }
             }
@@ -1172,9 +1227,14 @@ fn drive(
         .join()
         .map_err(|_| io::Error::other("keeper control reader panicked"))??;
     runtime.takeover()?;
-    result
+    let received = result
         .recv()
-        .map_err(|_| io::Error::other("keeper ending lost"))?
+        .map_err(|_| io::Error::other("keeper ending lost"))?;
+    eprintln!(
+        "FIBER4351_TRACE drive result={:?}",
+        received.as_ref().map(|()| ())
+    );
+    received
 }
 
 fn write_frame(writer: &mut impl Write, line: &FromKeeper) -> io::Result<()> {
