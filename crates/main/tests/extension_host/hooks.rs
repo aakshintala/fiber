@@ -19,7 +19,7 @@ use crate::support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -27,7 +27,7 @@ use std::time::Duration;
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
-    KillGroup, Run, Setup, function_call, hello_single_delta as hello, is_status, on_disk,
+    KillGroup, Run, Setup, function_call, hello_single_delta as hello, on_disk, run_from,
     spawn_watched, stream,
 };
 
@@ -138,20 +138,6 @@ impl Setup {
 fn write(file: &Path, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
-}
-
-pub(super) fn run_from(output: Output) -> Run {
-    let lines = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
 }
 
 impl Run {

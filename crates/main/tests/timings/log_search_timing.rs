@@ -20,23 +20,7 @@ use std::path::PathBuf;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Run, Setup, function_call, hello, is_status, run_to_exit, stream, write_json};
-
-// Parses stdout into one JSON value per line, skipping status lines.
-// This file's copy; every binary test file carries its own.
-fn run_from(output: std::process::Output) -> Run {
-    let lines = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
+use support::{Run, Setup, function_call, hello, run_from, run_to_exit, stream, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, and writes configuration naming `fake/m` with `extra`.

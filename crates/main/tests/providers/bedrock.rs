@@ -17,11 +17,9 @@
 
 use crate::support;
 
-use std::process::Output;
-
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::Value;
-use support::{Run, Setup, is_status, run_to_exit};
+use support::{Run, Setup, run_from, run_to_exit};
 
 /// The Invoke probe's recorded reply to "Say hello in five words.".
 const PLAIN: &[u8] =
@@ -40,22 +38,6 @@ const ENDPOINT: &str = "https://bedrock-runtime.{region}.amazonaws.com";
 const BAD_BEARER: &str = r#"{"Message":"Invalid API Key format: Delimiter ':' not found"}"#;
 const ACCESS_DENIED: &str =
     "AccessDeniedException:http://internal.amazon.com/coral/com.amazon.coral.service/";
-
-/// Parses `fiber ask` stdout into a run: one JSON value per line, without
-/// `session_status` lines, which an observer thread writes.
-fn run_from(output: Output) -> Run {
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines = stdout
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
 
 /// Runs `fiber` with `args` and the extra environment `env` to its exit
 /// under the test's deadline.
