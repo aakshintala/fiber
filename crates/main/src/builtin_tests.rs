@@ -187,6 +187,19 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     ));
     dead_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let missing_path = detached.join("d_missing.log");
+    let directory_path = detached.join("d_directory.log");
+    std::fs::create_dir(&directory_path).unwrap();
+    let nested_root = detached.join("nested");
+    std::fs::create_dir(&nested_root).unwrap();
+    let nested_path = nested_root.join("d_nested.log");
+    std::fs::write(&nested_path, b"nested").unwrap();
+    let outside_path = home.join("outside.log");
+    std::fs::write(&outside_path, b"outside").unwrap();
+    let symlink_path = detached.join("d_symlink.log");
+    std::os::unix::fs::symlink(&outside_path, &symlink_path).unwrap();
+    let fifo_path = detached.join("d_fifo.log");
+    #[cfg(unix)]
+    fakes::fifo(&fifo_path);
     let rows = [
         event_line(
             "s_test",
@@ -263,6 +276,52 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             10,
             &started_detached("j_dead", &ended_path, Some(dead_pgid), Some(dead_start)),
         ),
+        event_line(
+            "s_test",
+            11,
+            &started_detached(
+                "j_directory",
+                &directory_path,
+                Some(valid_pgid),
+                Some(valid_start),
+            ),
+        ),
+        event_line(
+            "s_test",
+            12,
+            &started_detached(
+                "j_nested",
+                &nested_path,
+                Some(valid_pgid),
+                Some(valid_start),
+            ),
+        ),
+        event_line(
+            "s_test",
+            13,
+            &started_detached(
+                "j_outside",
+                &outside_path,
+                Some(valid_pgid),
+                Some(valid_start),
+            ),
+        ),
+        event_line(
+            "s_test",
+            14,
+            &started_detached(
+                "j_symlink",
+                &symlink_path,
+                Some(valid_pgid),
+                Some(valid_start),
+            ),
+        ),
+        #[cfg(unix)]
+        event_line(
+            "s_test",
+            15,
+            &started_detached("j_fifo", &fifo_path, Some(valid_pgid), Some(valid_start)),
+        ),
     ];
     let mut log_text = String::new();
     for row in rows {
@@ -298,7 +357,7 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
         .map(|(_, tool)| Arc::clone(tool))
         .expect("jobs tool is registered");
     let listed = ran(
-        jobs_tool,
+        Arc::clone(&jobs_tool),
         serde_json::json!({"action":"list"})
             .as_object()
             .unwrap()
@@ -306,10 +365,19 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     );
     let text = fakes::text_of(&listed);
     assert!(text.contains("j_valid"), "restore is synchronous: {text}");
-    assert!(
-        text.contains("j_missing_file"),
-        "missing output log does not block restore: {text}"
-    );
+    for admitted in [
+        "j_missing_file",
+        "j_directory",
+        "j_nested",
+        "j_outside",
+        "j_symlink",
+        "j_fifo",
+    ] {
+        assert!(
+            text.contains(admitted),
+            "invalid log path dropped {admitted}: {text}"
+        );
+    }
     assert!(
         text.contains("j_unreadable"),
         "unknown identity remains listed for review: {text}"
@@ -326,20 +394,28 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             "{omitted} was not restored: {text}"
         );
     }
-    assert_eq!(
-        registry.owned_identities(),
-        vec![
-            contract::jobs::JobIdentity {
-                pgid: valid_pgid,
-                start_time: valid_start,
-            },
-            contract::jobs::JobIdentity {
-                pgid: valid_pgid,
-                start_time: valid_start,
-            },
-        ],
-        "identity-confirmed restored leaders remain owned even with missing logs"
+    let identities = registry.owned_identities();
+    assert_eq!(identities.len(), 7, "every surviving path case is owned");
+    assert!(
+        identities
+            .iter()
+            .all(|identity| { identity.pgid == valid_pgid && identity.start_time == valid_start })
     );
+    for id in [
+        "j_missing_file",
+        "j_directory",
+        "j_nested",
+        "j_outside",
+        "j_symlink",
+        "j_fifo",
+    ] {
+        let args = serde_json::json!({"action":"stop", "job_id":id});
+        let effects = jobs_tool.effects(args.as_object().unwrap()).unwrap();
+        assert!(
+            effects.declared.effects.is_empty(),
+            "confirmed identity keeps the normal stop fast path for {id}"
+        );
+    }
     assert!(
         fakes::group_alive(valid_pgid),
         "restore never signals survivors"
