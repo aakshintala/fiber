@@ -2626,7 +2626,7 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
             &json!({"path": lua, "content": "return {}\n"}),
         )]),
         text_reply("check"),
-        text_reply("block Lua files may run as code"),
+        text_reply("Lua files may run as code\nblock"),
         hello(),
     ])
     .unwrap();
@@ -3095,7 +3095,7 @@ fn a_markdown_write_escaping_its_data_directory_through_a_link_is_reviewed_and_b
             &json!({"path": link, "content": "changed\n"}),
         )]),
         text_reply("check"),
-        text_reply("block the link leaves its data directory"),
+        text_reply("the link leaves its data directory\nblock"),
         hello(),
     ])
     .unwrap();
@@ -3127,7 +3127,7 @@ fn a_shell_read_of_proc_environ_is_reviewed_and_blocked() {
             &json!({"command": "cat /proc/self/environ"}),
         )]),
         text_reply("check"),
-        text_reply("block it reads the environment"),
+        text_reply("it reads the environment\nblock"),
         hello(),
     ])
     .unwrap();

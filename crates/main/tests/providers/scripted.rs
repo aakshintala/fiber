@@ -855,7 +855,7 @@ fn a_reviewed_call_then_a_compaction_marks_only_the_reviewer_lines() {
         "r.json",
         &json!({"steps": [
             {"text": "check"},
-            {"text": "allow: fine"},
+            {"text": "fine\nallow"},
             {"text": "1"}
         ]}),
     );
