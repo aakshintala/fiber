@@ -78,14 +78,19 @@ fn script(setup: &Setup, name: &str, script: &Value) {
 
 /// Installs the real `codemode` package from the repository.
 fn install_codemode(setup: &Setup) {
+    install_codemode_with_memory_mib(setup, 16);
+}
+
+/// Installs codemode with a fixture-specific VM memory cap.
+fn install_codemode_with_memory_mib(setup: &Setup, memory_mib: u64) {
     let source = setup.root.path().join("codemode-fixture");
     support::write_json(
         &source.join("extension.json"),
-        &json!({"name": CODEMODE_NAME, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "memory_mib": 1}),
+        &json!({"name": CODEMODE_NAME, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "memory_mib": memory_mib}),
     );
-    std::fs::write(
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode/init.lua"),
         source.join("init.lua"),
-        include_str!("../../../../extensions/codemode/init.lua"),
     )
     .unwrap();
     let request = extensions::Request::Path(source);
@@ -116,11 +121,15 @@ fn ask(setup: &Setup, prompt: &str) -> Run {
 
 /// A setup whose scripted model and reviewer run `session` and `reviewer`.
 fn reviewed_setup(session: &Value, reviewer: &Value) -> Setup {
+    reviewed_setup_with_memory_mib(session, reviewer, 16)
+}
+
+fn reviewed_setup_with_memory_mib(session: &Value, reviewer: &Value, memory_mib: u64) -> Setup {
     let setup = Setup::new();
     script(&setup, "s.json", session);
     script(&setup, "r.json", reviewer);
     configure(&setup);
-    install_codemode(&setup);
+    install_codemode_with_memory_mib(&setup, memory_mib);
     setup
 }
 
@@ -1267,7 +1276,7 @@ fn an_oversized_inner_shell_result_errors_at_the_call_site() {
                 "local earlier = host.tool('read', {{ path = 'small.txt' }})\nprint('before')\nlocal result = host.tool('shell', {{ command = 'yes x | head -c {output_bytes}' }})"
             )
         };
-        let setup = reviewed_setup(&calling(&source), &allow());
+        let setup = reviewed_setup_with_memory_mib(&calling(&source), &allow(), 1);
         std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
         let run = ask(&setup, "run it");
         assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);

@@ -932,7 +932,17 @@ pub(crate) fn resume_values(
         ])),
         // A `host.tool` outcome is one table; an error in the calling
         // code is nil with the string the Lua half raises.
-        Reply::Tool(Ok(outcome)) => Ok(MultiValue::from_vec(vec![to_lua(lua, &outcome)?])),
+        Reply::Tool(Ok(outcome)) => match to_lua(lua, &outcome) {
+            Ok(value) => Ok(MultiValue::from_vec(vec![value])),
+            Err(mlua::Error::MemoryError(_)) => {
+                let message = lua.named_registry_value("fiber.memory_cap_error")?;
+                Ok(MultiValue::from_vec(vec![
+                    LuaValue::Nil,
+                    LuaValue::String(message),
+                ]))
+            }
+            Err(error) => Err(error),
+        },
         Reply::Tool(Err(message)) => Ok(MultiValue::from_vec(vec![
             LuaValue::Nil,
             LuaValue::String(lua.create_string(message)?),
