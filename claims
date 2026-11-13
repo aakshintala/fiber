@@ -133,3 +133,6 @@ docs/testing/mutants.md	fiber-4775	plan	2026-11-13T01:11:34Z	roundhouse-7010-plu
 crates/main/tests/commands/archive.rs	fiber-4704	plan	2026-11-13T01:31:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/keeper.rs	fiber-4713	plan	2026-11-13T02:12:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/keeper_tests.rs	fiber-4713	plan	2026-11-13T02:12:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/prune_tests.rs	fiber-4704	grant	2026-11-13T02:55:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
+crates/cli/src/sessions_tests.rs	fiber-4704	grant	2026-11-13T02:55:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
+crates/cli/src/sessions_search_tests.rs	fiber-4704	grant	2026-11-13T02:55:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
