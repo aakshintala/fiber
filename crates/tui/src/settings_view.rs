@@ -2567,7 +2567,8 @@ fn slider_step(
     }
     let position = (value - minimum) / step;
     let nearest = position.round();
-    let on_tick = within_slider_tick_tolerance(position, nearest);
+    let distance = (position - nearest).abs();
+    let on_tick = within_slider_tick_tolerance(distance);
     let tick = if on_tick {
         nearest + if forward { 1.0 } else { -1.0 }
     } else if forward {
@@ -2585,8 +2586,8 @@ fn slider_step(
 
 // Mutating this tolerance boundary does not change reachable stepping behaviour.
 #[cfg_attr(false, mutants::skip)]
-fn within_slider_tick_tolerance(position: f64, nearest: f64) -> bool {
-    (position - nearest).abs() < 1e-9
+fn within_slider_tick_tolerance(distance: f64) -> bool {
+    distance < 1e-9
 }
 
 fn numeric_default(key: &str) -> Option<&'static str> {
@@ -2706,7 +2707,7 @@ fn number_text(key: &str, text: &str) -> String {
             as_typed(text)
         };
     };
-    let shown = match spec.format {
+    match spec.format {
         NumberFormat::Width => format!("{}% of screen width", trimmed(n)),
         NumberFormat::PercentUsed => format!("{}% used", trimmed(n)),
         NumberFormat::FractionPercent => {
@@ -2728,15 +2729,7 @@ fn number_text(key: &str, text: &str) -> String {
         ),
         NumberFormat::Milliseconds => listed(n, number_list(key).unwrap_or(&[]), ms_text(n)),
         NumberFormat::RefreshDuration => refresh_text(text),
-    };
-    if let Some((minimum, maximum, step)) = number_slider(key) {
-        let position = (n - minimum) / step;
-        let custom = n < minimum || n > maximum || (position - position.round()).abs() >= 1e-9;
-        if custom {
-            return format!("{shown} (custom)");
-        }
     }
-    shown
 }
 
 /// A duration string with its unit word spaced out: "24h" reads

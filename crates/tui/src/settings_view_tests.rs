@@ -3558,8 +3558,11 @@ fn number_control_edges_do_not_write_and_slider_maximum_steps_down() {
 }
 
 #[test]
-fn number_text_marks_non_tick_slider_values_custom() {
-    assert_eq!(number_text("tui.rail.width", "15"), "15% of screen width");
+fn number_text_shows_non_tick_slider_values_without_custom_suffix() {
+    assert_eq!(
+        number_text("tui.rail.width", "15.5"),
+        "15.5% of screen width"
+    );
 }
 
 #[test]
