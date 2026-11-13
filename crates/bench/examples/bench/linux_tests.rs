@@ -145,6 +145,28 @@ fn a_named_thread_carries_its_name_in_its_entry() {
 }
 
 #[test]
+fn exited_thread_note_uses_sampled_name() {
+    let before = BTreeMap::from([(4102, named(1, 0, "status"))]);
+    let mut notes = Vec::new();
+    idle_switches(&before, &BTreeMap::new(), &mut notes);
+    assert_eq!(
+        notes,
+        vec!["thread 4102 (status) exited during the idle window".to_owned()]
+    );
+}
+
+#[test]
+fn exited_thread_note_reports_name_unavailable() {
+    let before = BTreeMap::from([(4102, counts(1, 0))]);
+    let mut notes = Vec::new();
+    idle_switches(&before, &BTreeMap::new(), &mut notes);
+    assert_eq!(
+        notes,
+        vec!["thread 4102 (name unavailable) exited during the idle window".to_owned()]
+    );
+}
+
+#[test]
 fn idle_switches_are_the_per_thread_deltas() {
     let before = BTreeMap::from([(4101, counts(10, 2)), (4102, counts(5, 0))]);
     let after = BTreeMap::from([(4101, counts(10, 2)), (4102, counts(6, 1))]);
@@ -173,7 +195,7 @@ fn a_thread_that_appears_or_vanishes_in_the_window_is_a_self_check_failure() {
     assert_eq!(
         notes,
         vec![
-            "thread 4102 exited during the idle window".to_owned(),
+            "thread 4102 (name unavailable) exited during the idle window".to_owned(),
             "thread 4103 started during the idle window".to_owned(),
         ]
     );
