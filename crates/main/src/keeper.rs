@@ -30,6 +30,61 @@ struct Pending {
     reply: mpsc::Sender<Result<Started, HostError>>,
     events: mpsc::SyncSender<HostEvent>,
 }
+#[cfg(test)]
+struct TestPausePoint {
+    arrived: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+#[cfg(test)]
+impl TestPausePoint {
+    fn pause(&self) {
+        match self.arrived.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        match lock(&self.release).recv() {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+#[cfg(test)]
+struct TestPauseParts {
+    hook: Arc<TestPause>,
+    reader_arrived: mpsc::Receiver<()>,
+    release_reader: mpsc::Sender<()>,
+    drop_arrived: mpsc::Receiver<()>,
+    release_drop: mpsc::Sender<()>,
+}
+#[cfg(test)]
+struct TestPause {
+    reader: TestPausePoint,
+    drop: TestPausePoint,
+}
+#[cfg(test)]
+impl TestPause {
+    fn point() -> (TestPausePoint, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (arrived, arrived_rx) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+        (
+            TestPausePoint {
+                arrived,
+                release: Mutex::new(release),
+            },
+            arrived_rx,
+            release_tx,
+        )
+    }
+    fn with_points() -> TestPauseParts {
+        let (reader, reader_arrived, release_reader) = Self::point();
+        let (drop, drop_arrived, release_drop) = Self::point();
+        TestPauseParts {
+            hook: Arc::new(Self { reader, drop }),
+            reader_arrived,
+            release_reader,
+            drop_arrived,
+            release_drop,
+        }
+    }
+}
 struct Client {
     writer: Mutex<UnixStream>,
     _lifeline: Box<dyn Send + Sync>,
@@ -55,6 +110,8 @@ pub(crate) struct Host {
     clients: Mutex<mpsc::Receiver<Weak<Client>>>,
     #[cfg(test)]
     client_sender: mpsc::Sender<Weak<Client>>,
+    #[cfg(test)]
+    pause: Option<Arc<TestPause>>,
 }
 /// Reads one line from a peer within the wire's line cap, without its line
 /// feed. `Ok(None)` is a clean end; a line cut short or longer than the cap
@@ -182,7 +239,21 @@ impl Host {
             clients: Mutex::new(clients),
             #[cfg(test)]
             client_sender,
+            #[cfg(test)]
+            pause: None,
         })
+    }
+    #[cfg(test)]
+    fn new_with_pause(
+        spawner: Spawner,
+        clock: Arc<dyn Clock>,
+        pause: Option<Arc<TestPause>>,
+    ) -> Arc<Self> {
+        let mut host = Self::new(spawner, clock);
+        Arc::get_mut(&mut host)
+            .expect("new host has one owner")
+            .pause = pause;
+        host
     }
     pub(crate) fn session(
         fiber: PathBuf,
@@ -307,6 +378,8 @@ impl Host {
                 waiters,
                 adopted,
                 done: Some(done),
+                #[cfg(test)]
+                pause: self.pause.clone(),
             },
         )?;
         lock(&self.retained).push(Arc::clone(&client));
@@ -324,6 +397,8 @@ impl Host {
             finished,
             retained: Arc::downgrade(&self.retained),
             clock: Arc::clone(&self.clock),
+            #[cfg(test)]
+            pause: self.pause.clone(),
             keep: false,
         })
     }
@@ -440,6 +515,8 @@ struct Parts {
     waiters: HashMap<String, mpsc::SyncSender<HostEvent>>,
     adopted: HashMap<JobId, String>,
     done: Option<mpsc::Sender<()>>,
+    #[cfg(test)]
+    pause: Option<Arc<TestPause>>,
 }
 impl Client {
     fn new(connection: Connection, host: &Host) -> io::Result<Arc<Self>> {
@@ -455,6 +532,8 @@ impl Client {
                 waiters: HashMap::new(),
                 adopted: HashMap::new(),
                 done: None,
+                #[cfg(test)]
+                pause: host.pause.clone(),
             },
         )
     }
@@ -468,6 +547,8 @@ impl Client {
             waiters,
             adopted,
             done,
+            #[cfg(test)]
+            pause,
         } = parts;
         let changed = Arc::new(support::clock::Parker::new());
         let waker: Arc<dyn Wake> = changed.clone();
@@ -502,6 +583,11 @@ impl Client {
                 }
             }
             if let Some(client) = weak.upgrade() {
+                #[cfg(test)]
+                if let Some(pause) = &pause {
+                    // EOF must not mark the peer dead before Attached can shut down and retain it.
+                    pause.reader.pause();
+                }
                 client.dead.store(true, Ordering::Release);
                 let ids: Vec<_> = lock(&client.pending).keys().cloned().collect();
                 for id in ids {
@@ -751,6 +837,8 @@ pub(crate) struct Attached {
     finished: mpsc::Receiver<()>,
     retained: Weak<Mutex<Vec<Arc<Client>>>>,
     clock: Arc<dyn Clock>,
+    #[cfg(test)]
+    pause: Option<Arc<TestPause>>,
     keep: bool,
 }
 
@@ -803,6 +891,11 @@ impl Drop for Attached {
         }
         match lock(&self.client.writer).shutdown(std::net::Shutdown::Both) {
             Ok(()) | Err(_) => {}
+        }
+        #[cfg(test)]
+        if let Some(pause) = &self.pause {
+            // Shutdown first, then hold before retain so EOF cannot hide the attached peer.
+            pause.drop.pause();
         }
         if let Some(retained) = self.retained.upgrade() {
             lock(&retained).retain(|held| !Arc::ptr_eq(held, &self.client));

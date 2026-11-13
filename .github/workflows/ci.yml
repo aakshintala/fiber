@@ -876,20 +876,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - *checkout-full
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
       - name: scripts/check self-test block with system Bash
         run: |
           /bin/bash --version
-          /bin/bash scripts/test-leak-scan
-          /bin/bash scripts/test-look-diff
-          /bin/bash scripts/test-flaky-tests
-          /bin/bash scripts/test-flake-report
-          /bin/bash scripts/test-retry-filter
-          /bin/bash scripts/test-stress-plan
-          /bin/bash scripts/test-journey-report
-          /bin/bash scripts/test-mutants-rotation
-          /bin/bash scripts/test-mutants-shard-finish
-          /bin/bash scripts/test-bug-red
-          /bin/bash scripts/test-class-data
+          /bin/bash scripts/test-script-selftests
 
   # The tests the push touches, each run 30 times (100 when the
   # push fixes a flaky test), beside the test jobs on the backstop: one failure
@@ -1386,6 +1379,7 @@ jobs:
             exit 0
           fi
           cat "$mutant_list"
+          cargo build -q -p fakes --example process-extension
           # The Linux x86_64 tests passed on this head before the shard
           # started, so the baseline run adds nothing (docs/ci.md).
           sudo loginctl enable-linger "$USER"
@@ -1405,6 +1399,7 @@ jobs:
           fi
           mutant_args=(
             --in-diff "$RUNNER_TEMP/diff.patch"
+            --in-place
             --test-tool nextest
             --baseline=skip
             # Recent mutants take 13 to 27 s; 120 s leaves room for test deadlines (docs/ci.md).
@@ -1416,9 +1411,15 @@ jobs:
           # OOMPolicy=kill fails the whole scope instead of letting nextest count a killed test as caught.
           run_log=/dev/shm/mutants-run-$SHARD.log
           if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"; then
-            :
+            status=0
           else
             status=$?
+          fi
+          if grep -rFq 'is not built; run cargo build' mutants.out/log; then
+            echo "::error title=Missing process-extension fake::Mutants shard $SHARD scenario log reports a fake was not built"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
               | sort -nr | head -n 1 | cut -d' ' -f2- || true)
             echo "cargo mutants failed with status $status; last mutant:"
