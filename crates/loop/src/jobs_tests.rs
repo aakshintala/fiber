@@ -4060,7 +4060,7 @@ fn a_restored_detached_stop_is_reviewed_and_its_end_starts_no_loop_delivery() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut child = command.spawn().unwrap();
+    let child = command.spawn().unwrap();
     let pgid = child.id();
     let watchdog = fakes::Watchdog::group(pgid);
     fakes::wait_until(
@@ -4099,7 +4099,7 @@ fn a_restored_detached_stop_is_reviewed_and_its_end_starts_no_loop_delivery() {
     let (ended_tx, ended_rx) = mpsc::channel();
     let supervisor = thread::spawn(move || {
         let mut child = child;
-        let _ = child.wait();
+        let _status = child.wait().expect("reap stopped process");
         assert!(fakes::group_empties(
             pgid,
             Deadline::after(fakes::MUST_SUCCEED_WITHIN)

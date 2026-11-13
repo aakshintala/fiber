@@ -180,7 +180,7 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     let (mut unreadable_child, unreadable_pgid, _, unreadable_watchdog) = live_group();
     let (mut dead_child, dead_pgid, dead_start, dead_watchdog) = live_group();
     assert!(fakes::kill_group(dead_pgid, "KILL").unwrap());
-    let _ = dead_child.wait();
+    let _status = dead_child.wait().expect("reap dead process");
     assert!(fakes::group_empties(
         dead_pgid,
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -351,10 +351,12 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     for pgid in [valid_pgid, contradicted_pgid, ended_pgid, unreadable_pgid] {
         assert!(fakes::kill_group(pgid, "KILL").unwrap());
     }
-    let _ = valid_child.wait();
-    let _ = contradicted_child.wait();
-    let _ = ended_child.wait();
-    let _ = unreadable_child.wait();
+    let _valid_status = valid_child.wait().expect("reap valid process");
+    let _contradicted_status = contradicted_child
+        .wait()
+        .expect("reap contradicted process");
+    let _ended_status = ended_child.wait().expect("reap ended process");
+    let _unreadable_status = unreadable_child.wait().expect("reap unreadable process");
     valid_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     contradicted_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     ended_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));

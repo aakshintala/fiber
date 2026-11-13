@@ -276,25 +276,23 @@ fn restore_detached_jobs(
     let mut present = HashSet::new();
     for line in lines {
         let Ok(line) = line else { continue };
-        if !matches!(line.kind(), EventKind::JobStarted | EventKind::JobCompleted) {
-            continue;
-        }
-        let Ok(Some(event)) = Event::from_envelope(&line) else {
-            continue;
-        };
-        match event {
-            Event::JobStarted(started) if started.kind == Some(JobKind::Detached) => {
+        if line.kind() == EventKind::JobStarted {
+            let Ok(Some(Event::JobStarted(started))) = Event::from_envelope(&line) else {
+                continue;
+            };
+            if started.kind == Some(JobKind::Detached) {
                 let id = started.job_id.clone();
                 if present.insert(id.clone()) {
                     order.push(id.clone());
                 }
                 outstanding.insert(id, started);
             }
-            Event::JobCompleted(ended) => {
-                outstanding.remove(&ended.job_id);
-                present.remove(&ended.job_id);
-            }
-            _ => {}
+        } else if line.kind() == EventKind::JobCompleted {
+            let Ok(Some(Event::JobCompleted(ended))) = Event::from_envelope(&line) else {
+                continue;
+            };
+            outstanding.remove(&ended.job_id);
+            present.remove(&ended.job_id);
         }
     }
 
