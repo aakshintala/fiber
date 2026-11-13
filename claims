@@ -375,3 +375,4 @@ crates/main/src/keeper.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pr
 crates/main/src/keeper_restore.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-13T13:21:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_child.rs	fiber-4351	plan	2026-11-13T13:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
