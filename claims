@@ -145,3 +145,7 @@ crates/tui/src/settings_view.rs	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-
 crates/tui/src/settings_view_tests.rs	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/ci.yml	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/mutants-scheduled.yml	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/process.rs	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
