@@ -43,9 +43,14 @@ pub(crate) fn answer(
         recent::archive_candidates(&snapshot, project, hub.keep_exited, &running, |workspace| {
             std::fs::metadata(workspace).map(|_| ())
         });
-    for row in &mut snapshot {
-        if candidates.contains(&row.session_id) && crate::archive::try_archive(hub, row) {
-            row.archived = true;
+    for candidate in snapshot.clone() {
+        if candidates.contains(&candidate.session_id) && !candidate.archived {
+            let archived = crate::archive::try_archive(hub, &candidate, &snapshot);
+            for row in &mut snapshot {
+                if archived.contains(&row.session_id) {
+                    row.archived = true;
+                }
+            }
         }
     }
     // `listed_from_rows` accepts file order and applies `newest_first` itself.

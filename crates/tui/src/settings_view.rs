@@ -2539,13 +2539,7 @@ fn slider_bar((minimum, maximum, _step): (f64, f64, f64), shown: &Shown) -> Opti
     let Shown::Value(text) = shown else {
         return None;
     };
-    let value = as_number(text)?;
-    if value < minimum {
-        return Some(format!("▕{}▏", "░".repeat(8)));
-    }
-    if value > maximum {
-        return Some(format!("▕{}▏", "█".repeat(8)));
-    }
+    let value = as_number(text)?.clamp(minimum, maximum);
     let fraction = (value - minimum) / (maximum - minimum);
     let fill = (0_u32..8)
         .take_while(|tick| fraction >= (f64::from(*tick) + 0.5) / 8.0)
@@ -2566,10 +2560,10 @@ fn slider_step(
     forward: bool,
     enter: bool,
 ) -> f64 {
-    if value < minimum {
+    if value.total_cmp(&minimum).is_lt() {
         return minimum;
     }
-    if value > maximum {
+    if value.total_cmp(&maximum).is_gt() {
         return if enter && forward { minimum } else { maximum };
     }
     let position = (value - minimum) / step;
@@ -2607,18 +2601,18 @@ fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
 
 /// A list's next value, with directional selection for custom values.
 fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
-    let at = values.iter().position(|value| *value == current);
-    let to = match at {
-        Some(at) if forward => (at + 1) % values.len(),
-        Some(at) => (at + values.len() - 1) % values.len(),
-        None if forward => values
-            .iter()
-            .position(|value| *value > current)
-            .unwrap_or(0),
-        None => values
-            .iter()
-            .rposition(|value| *value < current)
-            .unwrap_or(values.len() - 1),
+    let lower = values.partition_point(|value| value.total_cmp(&current).is_lt());
+    let upper = values.partition_point(|value| !value.total_cmp(&current).is_gt());
+    let to = if lower < upper {
+        if forward {
+            (lower + 1) % values.len()
+        } else {
+            (lower + values.len() - 1) % values.len()
+        }
+    } else if forward {
+        upper % values.len()
+    } else {
+        lower.checked_sub(1).unwrap_or(values.len() - 1)
     };
     values.get(to).copied()
 }
@@ -2642,22 +2636,22 @@ fn next_text_value(
     forward: bool,
 ) -> Option<&'static str> {
     let current_ms = refresh_millis(current)?;
-    let at = values
-        .iter()
-        .position(|value| refresh_millis(value) == Some(current_ms));
-    let to = match at {
-        Some(at) if forward => (at + 1) % values.len(),
-        Some(at) => (at + values.len() - 1) % values.len(),
-        None if forward => values
-            .iter()
-            .position(|value| refresh_millis(value).is_some_and(|candidate| candidate > current_ms))
-            .unwrap_or(0),
-        None => values
-            .iter()
-            .rposition(|value| {
-                refresh_millis(value).is_some_and(|candidate| candidate < current_ms)
-            })
-            .unwrap_or(values.len() - 1),
+    let lower = values.partition_point(|value| {
+        refresh_millis(value).is_some_and(|candidate| candidate.cmp(&current_ms).is_lt())
+    });
+    let upper = values.partition_point(|value| {
+        refresh_millis(value).is_some_and(|candidate| !candidate.cmp(&current_ms).is_gt())
+    });
+    let to = if lower < upper {
+        if forward {
+            (lower + 1) % values.len()
+        } else {
+            (lower + values.len() - 1) % values.len()
+        }
+    } else if forward {
+        upper % values.len()
+    } else {
+        lower.checked_sub(1).unwrap_or(values.len() - 1)
     };
     values.get(to).copied()
 }
@@ -2716,8 +2710,11 @@ fn number_text(key: &str, text: &str) -> String {
         ),
     };
     if let Some((minimum, maximum, step)) = number_slider(key) {
-        let position = (n - minimum) / step;
-        let custom = n < minimum || n > maximum || (position - position.round()).abs() >= 1e-9;
+        // Every slider minimum is aligned to its step, so the distance to
+        // the nearest zero-origin step is the distance to its tick grid.
+        let remainder = n.rem_euclid(step);
+        let distance = remainder.min(step - remainder);
+        let custom = n < minimum || n > maximum || distance >= step * 1e-9;
         if custom {
             return format!("{shown} (custom)");
         }

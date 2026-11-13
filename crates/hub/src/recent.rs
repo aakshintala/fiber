@@ -203,6 +203,7 @@ pub(crate) fn archive_candidates(
     for row in rows {
         if row.archived
             || row.how != Left::Exited
+            || row.delegate()
             || running.contains(&row.session_id.0)
             || project.is_some_and(|key| row.project != key)
         {

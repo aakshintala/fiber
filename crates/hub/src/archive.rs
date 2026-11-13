@@ -5,6 +5,7 @@
 //! refused `session_held`; resuming an archived session unarchives it,
 //! since the marker only counts past the last `fiber_started`.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, TryLockError};
 
@@ -22,23 +23,62 @@ use crate::resume::not_found;
 
 /// Tries the archive path for a listing candidate without waiting for
 /// either lock. `false` leaves it eligible for a later listing.
-pub(crate) fn try_archive(hub: &Hub, candidate: &RecentRow) -> bool {
+pub(crate) fn try_archive(
+    hub: &Hub,
+    candidate: &RecentRow,
+    snapshot: &[RecentRow],
+) -> BTreeSet<SessionId> {
     let _gate = match hub.resume_gate.try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
-        Err(TryLockError::WouldBlock) => return false,
+        Err(TryLockError::WouldBlock) => return BTreeSet::new(),
     };
     let _recent = match hub.feed.recent_mutation().try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
-        Err(TryLockError::WouldBlock) => return false,
+        Err(TryLockError::WouldBlock) => return BTreeSet::new(),
     };
-    archive_loaded(hub, candidate).is_ok()
+    let mut visited = BTreeSet::new();
+    let mut archived = BTreeSet::new();
+    if archive_tree(hub, candidate, snapshot, &mut visited, &mut archived).is_err() {
+        archived.clear();
+    }
+    archived
 }
 
-/// Applies the normal archive event and index effects to an already loaded
+/// Archives a candidate and its exited delegate descendants from the same
+/// loaded index snapshot. Both serialization guards are held by the caller.
+fn archive_tree(
+    hub: &Hub,
+    candidate: &RecentRow,
+    snapshot: &[RecentRow],
+    visited: &mut BTreeSet<SessionId>,
+    archived: &mut BTreeSet<SessionId>,
+) -> Result<(), Refused> {
+    let session = &candidate.session_id;
+    if !visited.insert(session.clone()) {
+        return Ok(());
+    }
+    archive_one(hub, candidate)?;
+    archived.insert(session.clone());
+    for child in snapshot.iter().filter(|row| {
+        row.how == Left::Exited
+            && row
+                .status
+                .as_ref()
+                .and_then(|status| status.parent.as_ref())
+                == Some(session)
+    }) {
+        if archive_tree(hub, child, snapshot, visited, archived).is_err() {
+            continue;
+        }
+    }
+    Ok(())
+}
+
+/// Applies the normal archive event and index effects to one already loaded
 /// recent row. Both serialization guards are held by the caller.
-fn archive_loaded(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
+fn archive_one(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
     let session = &candidate.session_id;
     let Some((project, dir)) = recent::lookup_logged(&hub.home, session) else {
         return Err(not_found(session));
@@ -56,7 +96,11 @@ fn archive_loaded(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
         Err(log::Error::NotFound(_)) => return Err(not_found(session)),
         Err(error) => return Err(io_failed(session, &error)),
     };
-    if !log::is_archived(&dir) {
+    let already_archived = log::is_archived(&dir);
+    if already_archived && candidate.archived {
+        return Ok(());
+    }
+    if !already_archived {
         log.append(&Event::Archived(Empty {}), None, None)
             .map_err(|error| io_failed(session, &error))?;
     }
@@ -116,6 +160,8 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
             recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
         }
         hub.feed.forget(&session.0, &project, Forgotten::Archived);
+        let rows = recent::newest_first(recent::read_all(&hub.home));
+        cascade_descendants(hub, &session, &rows);
         return Ok(None);
     }
     log.append(&Event::Archived(Empty {}), None, None)
@@ -128,7 +174,28 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
     // append refuses without rolling back the log's event.
     recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
     hub.feed.forget(&session.0, &project, Forgotten::Archived);
+    let rows = recent::newest_first(recent::read_all(&hub.home));
+    cascade_descendants(hub, &session, &rows);
     Ok(None)
+}
+
+/// Archives exited delegates under an already archived parent; failures for
+/// individual delegates leave them eligible for a later archive attempt.
+fn cascade_descendants(hub: &Hub, parent: &SessionId, rows: &[RecentRow]) {
+    let mut visited = BTreeSet::from([parent.clone()]);
+    let mut archived = BTreeSet::new();
+    for child in rows.iter().filter(|row| {
+        row.how == Left::Exited
+            && row
+                .status
+                .as_ref()
+                .and_then(|status| status.parent.as_ref())
+                == Some(parent)
+    }) {
+        if archive_tree(hub, child, rows, &mut visited, &mut archived).is_err() {
+            continue;
+        }
+    }
 }
 
 /// `session` (a minted id) and nothing else; `None` for any other shape.

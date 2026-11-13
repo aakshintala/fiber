@@ -799,6 +799,52 @@ fn automatic_archive_candidates_union_missing_and_retention_without_recounting()
 }
 
 #[test]
+fn retention_skips_archived_crashed_delegate_running_and_other_project_rows() {
+    let temp = Temp::new();
+    let mut archived = temp.row(5, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    let mut delegate = temp.row(4, "p", Left::Exited, Some("idle"));
+    delegate.status =
+        Some(serde_json::from_value(status("delegate", "/w", "idle", Some(&id(2)))).unwrap());
+    let rows = vec![
+        temp.row(8, "q", Left::Exited, Some("idle")),
+        temp.row(7, "q", Left::Exited, Some("idle")),
+        temp.row(6, "p", Left::Crashed, Some("idle")),
+        archived,
+        delegate,
+        temp.row(3, "p", Left::Exited, Some("idle")),
+        temp.row(2, "p", Left::Exited, Some("idle")),
+        temp.row(1, "p", Left::Exited, Some("idle")),
+    ];
+    let running = BTreeSet::from([id(3)]);
+    let selected = archive_candidates(&rows, Some("p"), 1, &running, |_| Ok(()));
+    assert_eq!(selected, BTreeSet::from([SessionId(id(1))]));
+}
+
+#[test]
+fn a_missing_workspace_and_an_old_retention_row_are_independent_candidates() {
+    let temp = Temp::new();
+    let mut rows = Vec::new();
+    for n in 1..=3 {
+        rows.push(temp.row(n, "p", Left::Exited, Some("idle")));
+    }
+    rows[2].workspace = "/missing-newest".to_owned();
+    rows[0].workspace = "/existing-oldest".to_owned();
+    rows.reverse();
+    let selected = archive_candidates(&rows, None, 2, &BTreeSet::new(), |workspace| {
+        if workspace == "/missing-newest" {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(
+        selected,
+        BTreeSet::from([SessionId(id(1)), SessionId(id(3))])
+    );
+}
+
+#[test]
 fn automatic_archive_zero_keeps_all_except_missing_and_scopes_stats() {
     let temp = Temp::new();
     let mut rows = vec![temp.row(1, "p", Left::Exited, None)];

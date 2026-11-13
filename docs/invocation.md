@@ -1609,7 +1609,7 @@ session (`docs/tui.md`, "The session list"):
     in the project asked for; an archived row is not checked again.
   - in each project, every exited session past the `session.keep_exited`
     most recent (`docs/configuration.md`), 10 by default; 0 keeps them
-    all. Live sessions do not count.
+    all. Live sessions do not count. Delegates do not count; archiving a session by any route archives its delegates with it.
 
   It archives as `archive` does and asks nothing. A session whose lock
   another process holds is skipped and tried again at the next answer.

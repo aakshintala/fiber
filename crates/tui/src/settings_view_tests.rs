@@ -1853,6 +1853,23 @@ fn a_repository_only_key_saves_to_the_repository_never_global() {
 }
 
 #[test]
+fn enter_on_an_unbounded_number_opens_its_text_field() {
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Unbounded number",
+        "test.unbounded_number",
+        value("17"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    )]);
+    let mut settings = at(&fake, "test.unbounded_number");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Field(_)));
+    assert!(fake.writes().is_empty());
+}
+
+#[test]
 fn ctrl_g_opens_the_focused_rows_file_and_the_global_one_for_a_default() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "model");
@@ -3081,6 +3098,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     let number = |key: &str, json: &str| text(key, Number, json);
     // Sliders: any value shows plain with its unit.
     assert_eq!(number("tui.rail.width", "15"), "15% of screen width");
+    assert_eq!(number("tui.rail.width", "40"), "40% of screen width");
     assert_eq!(number("tui.panel.width", "21"), "21% of screen width");
     assert_eq!(number("quota.notice_at", "80"), "80% used");
     // The stored value is a fraction: the built-in 0.7 reads as 70%.
@@ -3359,6 +3377,13 @@ fn keep_exited_lists_and_persists_the_documented_session_counts() {
 }
 
 #[test]
+fn listed_numbers_step_from_exact_middle_values_in_both_directions() {
+    let values = number_list("session.keep_exited").unwrap();
+    assert_eq!(next_number_value(values, 10.0, true), Some(20.0));
+    assert_eq!(next_number_value(values, 10.0, false), Some(5.0));
+}
+
+#[test]
 fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
     let values = number_list("compaction.tokens").unwrap();
     assert_eq!(next_number_value(values, 300_000.0, true), Some(400_000.0));
@@ -3372,16 +3397,27 @@ fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
         Some(100_000.0)
     );
     assert_eq!(next_number_value(values, 0.0, true), Some(100_000.0));
+    assert_eq!(next_number_value(values, 0.0, false), Some(1_000_000.0));
+    assert_eq!(next_number_value(values, 99_999.0, true), Some(100_000.0));
+    assert_eq!(next_number_value(values, 100_001.0, false), Some(100_000.0));
     assert_eq!(
         next_number_value(values, 2_000_000.0, false),
         Some(1_000_000.0)
     );
     let refresh = text_list("model_lists.refresh_after").unwrap();
+    assert_eq!(next_text_value(refresh, "59m", true), Some("1h"));
+    assert_eq!(next_text_value(refresh, "59m", false), Some("7d"));
+    assert_eq!(next_text_value(refresh, "61m", true), Some("6h"));
+    assert_eq!(next_text_value(refresh, "61m", false), Some("1h"));
     assert_eq!(next_text_value(refresh, "90m", true), Some("6h"));
     assert_eq!(next_text_value(refresh, "90m", false), Some("1h"));
+    assert_eq!(next_text_value(refresh, "12h", true), Some("24h"));
+    assert_eq!(next_text_value(refresh, "12h", false), Some("6h"));
     assert_eq!(next_text_value(refresh, "1h", false), Some("7d"));
     assert_eq!(next_text_value(refresh, "7d", true), Some("1h"));
+    assert_eq!(next_text_value(refresh, "30m", false), Some("7d"));
     assert_eq!(refresh_millis("90m"), Some(5_400_000));
+    assert_eq!(refresh_millis("1s"), Some(1_000));
 }
 
 #[test]
@@ -3539,6 +3575,47 @@ fn budget_zero_is_custom_and_arrows_move_between_zero_and_unset() {
     assert_eq!(shown_value(settings.selected().unwrap()).0, "Default");
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "1")]);
+
+    let fake = Fake::new(vec![row(Shown::Unset)]);
+    let mut settings = at(&fake, "budget.usd");
+    edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "100")]);
+
+    let fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Compaction tokens",
+        "compaction.tokens",
+        value("0"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    )]);
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "100000")]
+    );
+}
+
+#[test]
+fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
+    let (minimum, maximum, step) = (0.5, 0.9, 0.05);
+    assert!(
+        (super::slider_step(maximum, minimum, maximum, step, false, false) - 0.85).abs() < 1e-12
+    );
+    assert_eq!(
+        super::slider_step(maximum, minimum, maximum, step, true, false),
+        maximum
+    );
+    assert_eq!(
+        super::slider_step(maximum, minimum, maximum, step, true, true),
+        minimum
+    );
+    assert_eq!(
+        super::slider_step(minimum, minimum, maximum, step, false, false),
+        minimum
+    );
 }
 
 #[test]
@@ -3548,6 +3625,21 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
     assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, false), 0.9);
     assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, true), 0.5);
     assert_eq!(super::slider_step(0.45, 0.5, 0.9, 0.05, true, false), 0.5);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, false), 0.9);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, true), 0.9);
+    assert_eq!(super::slider_step(0.5, 0.5, 0.9, 0.05, true, false), 0.55);
+    assert_eq!(
+        super::slider_step(0.5e-9, 0.0, 0.5e-9, 1.0, true, true),
+        0.0
+    );
+    assert_eq!(
+        super::slider_step(1.0e-9, 0.0, 1.0e-9, 1.0, true, true),
+        1.0e-9
+    );
+    assert_eq!(
+        super::slider_step(2.0e-9, 0.0, 2.0e-9, 1.0, true, true),
+        2.0e-9
+    );
     let stepped = (0..8).fold(0.5, |value, _| {
         super::slider_step(value, 0.5, 0.9, 0.05, true, false)
     });

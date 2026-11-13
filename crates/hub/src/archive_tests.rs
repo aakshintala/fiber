@@ -883,7 +883,10 @@ fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
     let mut sub = Sub::new(&hub.feed);
     let mut initial = String::new();
     sub.read.read_line(&mut initial).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&initial).unwrap()["kind"], "keepers");
+    assert_eq!(
+        serde_json::from_str::<Value>(&initial).unwrap()["kind"],
+        "keepers"
+    );
 
     let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
         .unwrap()
@@ -895,9 +898,19 @@ fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
     for n in [2, 3] {
         assert!(archived_lines(&temp.log_text(n)).is_empty(), "session {n}");
     }
-    for n in [1, 4, 5] {
-        sub.forgot("session_archived", &testkit::id(n), "-w");
+    let mut archived_ids = Vec::new();
+    for _ in 0..3 {
+        let mut text = String::new();
+        sub.read.read_line(&mut text).unwrap();
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(line["kind"], "session_archived");
+        assert_eq!(line["payload"]["project"], "-w");
+        archived_ids.push(line["payload"]["session_id"].as_str().unwrap().to_owned());
     }
+    archived_ids.sort();
+    let mut expected_ids = [testkit::id(1), testkit::id(4), testkit::id(5)];
+    expected_ids.sort();
+    assert_eq!(archived_ids, expected_ids);
     let rows = crate::recent::read_all(&temp.dir);
     for n in [1, 4, 5] {
         assert!(
@@ -909,6 +922,66 @@ fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
             "session {n} has an archived recent row"
         );
     }
+}
+
+#[test]
+fn a_running_delegate_does_not_block_archiving_its_parent() {
+    let mut temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    temp.indexed(1, &workspace, None);
+    temp.indexed(2, &workspace, Some(&testkit::id(1)));
+    temp.running(2);
+    temp.start_feed(&hub);
+    temp.await_running(&hub, 2);
+
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(1)})),
+        Ok(None)
+    );
+    assert_eq!(archived_lines(&temp.log_text(1)).len(), 1);
+    assert!(archived_lines(&temp.log_text(2)).is_empty());
+}
+
+#[test]
+fn a_parent_archive_does_not_reappend_an_already_archived_delegate() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    temp.indexed(1, &workspace, None);
+    temp.indexed(2, &workspace, Some(&testkit::id(1)));
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(2)})),
+        Ok(None)
+    );
+    let delegate_log = temp.log_text(2);
+    let delegate_row_count = crate::recent::read_all(&temp.dir)
+        .iter()
+        .filter(|row| row.session_id.0 == testkit::id(2))
+        .count();
+
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(1)})),
+        Ok(None)
+    );
+
+    assert_eq!(temp.log_text(2), delegate_log);
+    assert_eq!(
+        crate::recent::read_all(&temp.dir)
+            .iter()
+            .filter(|row| row.session_id.0 == testkit::id(2))
+            .count(),
+        delegate_row_count
+    );
+    assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
 }
 
 #[test]
@@ -928,6 +1001,30 @@ fn a_missing_workspace_delegate_is_archived_independently_of_retention() {
         .unwrap();
     assert!(archived_lines(&temp.log_text(1)).is_empty());
     assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
+}
+
+#[test]
+fn cursor_after_multiple_pre_archive_rows_keeps_its_exact_page_position() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    for n in 1..=4 {
+        temp.logged(n, &["fiber_exited"]);
+        let path = if n == 3 {
+            temp.dir.join("removed-cursor-workspace")
+        } else {
+            PathBuf::from(&workspace)
+        };
+        temp.indexed(n, &path.to_string_lossy(), None);
+    }
+
+    let page = feed::recent_for_hub(&hub, &args(serde_json::json!({"before": testkit::id(2)})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["sessions"][0]["session_id"], testkit::id(1));
 }
 
 #[test]
