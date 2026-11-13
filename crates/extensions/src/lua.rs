@@ -1201,7 +1201,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 }
 
 pub(crate) mod asks;
-mod command_calls;
+pub(crate) mod command_calls;
 mod declared;
 mod delegates;
 mod errors;
