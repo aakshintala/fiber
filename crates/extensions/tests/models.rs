@@ -157,6 +157,63 @@ fn models_dev_fills_vendor_context_before_load_admission() {
 }
 
 #[test]
+fn models_dev_admission_overlays_selected_model_and_leaves_absent_row_unchanged() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["m", "missing"]);
+    data["models_dev"] = json!({"source": "acme", "pins": {}});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    config::write_models_dev(&setup.home(), br#"{"acme":{"m":{"name":"Live","limit":{"context":200}}},"other":{"ignored":{"name":"Irrelevant"}}}"#).unwrap();
+    let configuration = config(&setup, &[]);
+
+    let (providers, notices) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.code != ErrorCode::ModelInvalid)
+    );
+    let models = &providers.get("acme").unwrap().models;
+    let live = models.iter().find(|model| model.id == "m").unwrap();
+    assert_eq!(live.name.as_deref(), Some("Live"));
+    assert_eq!(live.context_window, Some(200));
+    let absent = models.iter().find(|model| model.id == "missing").unwrap();
+    assert_eq!(absent.context_window, Some(1000));
+}
+
+#[test]
+fn models_dev_startup_apply_overlays_selected_model() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["m"]);
+    data["models_dev"] = json!({"source": "acme", "pins": {}});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let configuration = config(&setup, &[]);
+    let (mut providers, _) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].name.as_deref(),
+        None
+    );
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].context_window,
+        Some(1000)
+    );
+    config::write_models_dev(&setup.home(), br#"{"acme":{"m":{"name":"From catalog","limit":{"context":321}}},"other":{"ignored":{"name":"Irrelevant"}}}"#).unwrap();
+
+    extensions::models_dev::apply(&setup.home(), true, &mut providers);
+
+    let model = providers
+        .get("acme")
+        .unwrap()
+        .models
+        .iter()
+        .find(|model| model.id == "m")
+        .unwrap();
+    assert_eq!(model.name.as_deref(), Some("From catalog"));
+    assert_eq!(model.context_window, Some(321));
+}
+
+#[test]
 fn models_dev_forced_refresh_skips_a_held_lock() {
     let setup = Setup::new();
     let home = setup.home();

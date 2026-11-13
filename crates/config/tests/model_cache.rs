@@ -8,11 +8,12 @@ mod common;
 
 use common::Setup;
 use config::{
-    model_cache_file, models_dev_age, models_dev_cache_file, models_dev_lock_file,
+    model_cache_file, models_dev_age, models_dev_cache_file, models_dev_lock_file, open_models_dev,
     read_model_cache, read_models_dev, write_model_cache, write_models_dev,
 };
 use contract::clock::Clock;
 use serde_json::json;
+use std::io::Read;
 
 #[test]
 fn models_dev_cache_round_trips_raw_bytes_and_uses_a_separate_lock() {
@@ -30,6 +31,19 @@ fn models_dev_cache_round_trips_raw_bytes_and_uses_a_separate_lock() {
         models_dev_lock_file(&home).unwrap(),
         home.join("cache/models.dev/api.lock")
     );
+}
+
+#[test]
+fn models_dev_cache_opens_stream_for_raw_bytes() {
+    let setup = Setup::new();
+    let home = setup.home();
+    assert!(open_models_dev(&home).unwrap().is_none());
+    let bytes = br#"{"provider":{"model":{}}}"#;
+    write_models_dev(&home, bytes).unwrap();
+    let mut stream = open_models_dev(&home).unwrap().unwrap();
+    let mut actual = Vec::new();
+    stream.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, bytes);
 }
 
 #[test]
