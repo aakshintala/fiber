@@ -1033,8 +1033,11 @@ The kinds are `docs/events.md`.
   or stop a detached entry; `wait` and `write` do not apply to it. Detached
   entries do not hold the session open. On resume, Fiber restores outstanding
   detached `job_started` rows before exposing tools. It keeps a row only when
-  the recorded process group is live and its identity is not contradicted;
-  a live group with a missing or unreadable leader identity stays listed but
+  the recorded process group is live and its identity is not contradicted.
+  Resume restores a live detached entry whose identity is confirmed even
+  when its log is missing or is not a regular file; Fiber never opens the log
+  to restore it.
+  A live group with a missing or unreadable leader identity stays listed but
   requires review to stop. Rows without a process-group ID, dead groups and
   contradicted identities are dropped silently. Restore never signals. An
   approved stop rechecks identity, sends

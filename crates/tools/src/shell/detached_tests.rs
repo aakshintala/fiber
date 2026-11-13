@@ -577,10 +577,15 @@ fn restored_fixture(
         })
         .unwrap();
     drop(started);
+    let log_root = opened.path.parent().unwrap().to_path_buf();
     (
         jobs,
         opened,
-        super::Restored { pgid, control },
+        super::Restored {
+            pgid,
+            control,
+            log_root,
+        },
         pgid,
         watchdog,
     )

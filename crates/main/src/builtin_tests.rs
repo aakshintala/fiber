@@ -307,6 +307,10 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     let text = fakes::text_of(&listed);
     assert!(text.contains("j_valid"), "restore is synchronous: {text}");
     assert!(
+        text.contains("j_missing_file"),
+        "missing output log does not block restore: {text}"
+    );
+    assert!(
         text.contains("j_unreadable"),
         "unknown identity remains listed for review: {text}"
     );
@@ -314,7 +318,6 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
         "j_contradicted",
         "j_ordinary",
         "j_no_pgid",
-        "j_missing_file",
         "j_completed",
         "j_dead",
     ] {
@@ -325,11 +328,17 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     }
     assert_eq!(
         registry.owned_identities(),
-        vec![contract::jobs::JobIdentity {
-            pgid: valid_pgid,
-            start_time: valid_start,
-        }],
-        "only the identity-confirmed restored leader is owned"
+        vec![
+            contract::jobs::JobIdentity {
+                pgid: valid_pgid,
+                start_time: valid_start,
+            },
+            contract::jobs::JobIdentity {
+                pgid: valid_pgid,
+                start_time: valid_start,
+            },
+        ],
+        "identity-confirmed restored leaders remain owned even with missing logs"
     );
     assert!(
         fakes::group_alive(valid_pgid),

@@ -897,8 +897,35 @@ pub(super) fn to_completed_reported(
 
 /// The last [`TAIL_BYTES`] of the file, read from there, decoded lossily.
 pub(super) fn output_tail(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
+    output_tail_from(path, None)
+}
+
+/// Reads a detached log only when it is still a regular direct child of its
+/// expected root. `O_NOFOLLOW | O_NONBLOCK` closes the symlink/FIFO race.
+pub(super) fn output_tail_from(path: &Path, expected_root: Option<&Path>) -> Option<String> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    if let Some(root) = expected_root
+        && (!path.is_absolute() || path.parent() != Some(root) || path.file_name().is_none())
+    {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.file_type().is_file()
+        || (opened.dev(), opened.ino()) != (metadata.dev(), metadata.ino())
+    {
+        return None;
+    }
+    let len = opened.len();
     let window = u64::try_from(TAIL_BYTES).unwrap_or(u64::MAX);
     file.seek(SeekFrom::Start(len.saturating_sub(window)))
         .ok()?;

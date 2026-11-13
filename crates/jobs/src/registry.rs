@@ -315,34 +315,24 @@ impl Registry {
     }
 
     /// Restores a detached job under the `job_started` the session log
-    /// already holds. Its output must be an existing direct child of
-    /// `detached_root`; it is opened for appending, without creating or
-    /// truncating it. No start event is written and no id is minted.
-    /// Invalid paths, failed opens and duplicate ids record nothing.
+    /// already holds. The recorded output path is retained without opening
+    /// or validating it; the detached process writes the log. No start event
+    /// is written and no id is minted.
     pub fn restore_detached(
         &self,
         started: JobStarted,
-        detached_root: &Path,
+        _detached_root: &Path,
         stop: Stop,
     ) -> Result<Opened, OpenError> {
         let path = PathBuf::from(&started.output_path);
-        let invalid = |source: &str| OpenError {
-            path: path.clone(),
-            source: std::io::Error::new(std::io::ErrorKind::InvalidInput, source.to_owned()),
-        };
         if started.kind != Some(contract::events::JobKind::Detached) {
-            return Err(invalid("the job is not detached"));
-        }
-        if !path.is_absolute() || path.parent() != Some(detached_root) || path.file_name().is_none()
-        {
-            return Err(invalid(
-                "a detached output must be a direct child of detached",
-            ));
-        }
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => return Err(invalid("a detached output must be a regular file")),
-            Err(source) => return Err(OpenError { path, source }),
+            return Err(OpenError {
+                path: path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the job is not detached",
+                ),
+            });
         }
         let Some(registry) = self.me.upgrade() else {
             return Err(OpenError {
@@ -364,10 +354,13 @@ impl Registry {
                 ),
             });
         }
-        let file = match std::fs::OpenOptions::new().append(true).open(&path) {
-            Ok(file) => file,
-            Err(source) => return Err(OpenError { path, source }),
-        };
+        // Restored detached supervisors never use this ordinary-job file
+        // handle. Opening the recorded output here could block on a FIFO or
+        // follow a symlink, so keep the handle unrelated to that path.
+        let file = File::open("/dev/null").map_err(|source| OpenError {
+            path: path.clone(),
+            source,
+        })?;
         let job_id = started.job_id.clone();
         let end = End(Box::new(move |completed| {
             registry.finish_run(

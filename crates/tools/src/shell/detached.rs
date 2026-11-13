@@ -220,6 +220,7 @@ pub(super) fn system_spawner() -> Spawner {
 pub(super) struct Restored {
     pub pgid: u32,
     pub control: Arc<StopControl>,
+    pub log_root: PathBuf,
 }
 
 /// Starts a childless supervisor for a process group admitted from the
@@ -295,7 +296,10 @@ impl RestoredSupervisor {
             status: Outcome::Cancelled,
             error: None,
             process: None,
-            output_tail: super::background::output_tail(&self.opened.path),
+            output_tail: super::background::output_tail_from(
+                &self.opened.path,
+                Some(&self.restored.log_root),
+            ),
             notice: None,
             changed_by: None,
             protected_paths: None,
@@ -304,19 +308,28 @@ impl RestoredSupervisor {
     }
 
     fn fail_indeterminate(self) {
-        (self.opened.end.0)(failed(
-            self.opened.started.job_id,
-            &self.opened.path,
-            ShellError::Indeterminate,
-        ));
+        self.report_failed(ShellError::Indeterminate);
     }
 
     fn fail_signal(self, source: io::Error) {
-        (self.opened.end.0)(failed(
-            self.opened.started.job_id,
-            &self.opened.path,
-            ShellError::NotStarted { source },
-        ));
+        self.report_failed(ShellError::NotStarted { source });
+    }
+
+    fn report_failed(self, error: ShellError) {
+        let completed = JobCompleted {
+            job_id: self.opened.started.job_id.clone(),
+            status: Outcome::Failed,
+            error: Some(failure(error)),
+            process: None,
+            output_tail: super::background::output_tail_from(
+                &self.opened.path,
+                Some(&self.restored.log_root),
+            ),
+            notice: None,
+            changed_by: None,
+            protected_paths: None,
+        };
+        (self.opened.end.0)(completed);
     }
 }
 

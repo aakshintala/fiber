@@ -313,7 +313,7 @@ fn restore_detached_jobs(
         {
             continue;
         }
-        let (stop, track) = shell.detached_restore_parts(pgid);
+        let (stop, track) = shell.detached_restore_parts(pgid, detached_root.clone());
         let Ok(opened) = registry.restore_detached(started, &detached_root, stop) else {
             continue;
         };

@@ -29,9 +29,44 @@ use super::super::moved::Moved;
 use super::super::output::{OUTPUT_CAP, Shared, align_char_boundary, lock, note_eof};
 use super::{
     GroupMembers, MoveAsk, PS_BOUND, deadline_note, description_of, format_rows, group_members,
-    leftover_line, output_tail, parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt,
-    to_completed, with_deadline, with_spill_line,
+    leftover_line, output_tail, output_tail_from, parse_ps, receipt, shell_sentence, stop_of, take,
+    terminal_receipt, to_completed, with_deadline, with_spill_line,
 };
+
+#[cfg(unix)]
+#[test]
+fn detached_output_tail_rejects_nonregular_links_and_paths_outside_root() {
+    let dir = fakes::TempDir::new("fiber-detached-output-tail-guard");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let regular = root.join("regular.log");
+    std::fs::write(&regular, b"safe").unwrap();
+    assert_eq!(
+        output_tail_from(&regular, Some(&root)).as_deref(),
+        Some("safe")
+    );
+
+    let fifo = root.join("fifo.log");
+    fakes::fifo(&fifo);
+    assert!(output_tail_from(&fifo, Some(&root)).is_none());
+
+    let external = dir.path().join("external.log");
+    std::fs::write(&external, b"outside").unwrap();
+    assert!(output_tail_from(&external, Some(&root)).is_none());
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let nested_file = nested.join("file.log");
+    std::fs::write(&nested_file, b"nested").unwrap();
+    assert!(output_tail_from(&nested_file, Some(&root)).is_none());
+
+    #[cfg(target_os = "linux")]
+    {
+        let link = root.join("link.log");
+        std::os::unix::fs::symlink(&external, &link).unwrap();
+        assert!(output_tail_from(&link, Some(&root)).is_none());
+        assert_eq!(std::fs::read(&external).unwrap(), b"outside");
+    }
+}
 
 fn finished(
     status: Option<std::process::ExitStatus>,

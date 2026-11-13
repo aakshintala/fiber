@@ -328,6 +328,7 @@ impl Shell {
     pub fn detached_restore_parts(
         &self,
         pgid: u32,
+        log_root: PathBuf,
     ) -> (
         Stop,
         impl FnOnce(Opened) -> Result<(), std::io::Error> + Send + 'static,
@@ -340,7 +341,11 @@ impl Shell {
         let track = move |opened| {
             detached::track_restored(
                 opened,
-                detached::Restored { pgid, control },
+                detached::Restored {
+                    pgid,
+                    control,
+                    log_root,
+                },
                 clock,
                 &spawner,
             )

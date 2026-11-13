@@ -2264,7 +2264,7 @@ fn detached_started(id: &str, path: &std::path::Path) -> contract::events::JobSt
 }
 
 #[test]
-fn restore_detached_appends_existing_file_without_a_second_start() {
+fn restore_detached_keeps_existing_log_and_writes_no_second_start() {
     let dir = TempDir::new("fiber-jobs-restore-detached");
     let root = dir.path().join("detached");
     std::fs::create_dir(&root).unwrap();
@@ -2280,7 +2280,6 @@ fn restore_detached_appends_existing_file_without_a_second_start() {
             Stop(Box::new(|| {})),
         )
         .unwrap();
-    opened.file.sync_all().unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"kept\\n");
     assert_eq!(opened.started.job_id, JobId("j_detached".into()));
     assert!(
@@ -2292,7 +2291,7 @@ fn restore_detached_appends_existing_file_without_a_second_start() {
 }
 
 #[test]
-fn restore_detached_rejects_paths_outside_root_or_without_an_existing_file() {
+fn restore_detached_admits_paths_outside_root_and_missing_files() {
     let dir = TempDir::new("fiber-jobs-restore-detached-path");
     let root = dir.path().join("detached");
     std::fs::create_dir(&root).unwrap();
@@ -2318,16 +2317,20 @@ fn restore_detached_rejects_paths_outside_root_or_without_an_existing_file() {
             &root,
             Stop(Box::new(|| panic!("restore must not signal"))),
         );
-        assert!(result.is_err(), "{} was admitted", path.display());
-        assert!(!registry.contains(id), "failed restore recorded {id}");
+        let opened = result.unwrap_or_else(|error| panic!("{} rejected: {error}", path.display()));
+        assert_eq!(opened.path, path);
+        assert!(registry.contains(id), "restore omitted {id}");
+        drop(opened.end);
     }
     assert_eq!(std::fs::read(&external).unwrap(), b"untouched");
-    assert_eq!(registry.list_text(), "No jobs.\n");
+    for id in ["j_outside", "j_nested", "j_missing", "j_root"] {
+        assert!(registry.list_text().contains(id), "{id} was not listed");
+    }
 }
 
 #[cfg(unix)]
 #[test]
-fn restore_detached_rejects_a_fifo_before_opening_or_admitting() {
+fn restore_detached_admits_fifo_without_opening_or_blocking() {
     let dir = TempDir::new("fiber-jobs-restore-detached-fifo");
     let root = dir.path().join("detached");
     std::fs::create_dir(&root).unwrap();
@@ -2376,18 +2379,16 @@ fn restore_detached_rejects_a_fifo_before_opening_or_admitting() {
         }
     };
     worker.join().unwrap();
-    let Err(error) = result else {
-        panic!("a FIFO was admitted as a detached output");
-    };
-    assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(!registry.contains("j_fifo"));
+    let opened = result.unwrap_or_else(|error| panic!("FIFO admission failed: {error}"));
+    assert!(registry.contains("j_fifo"));
+    assert!(registry.list_text().contains("j_fifo"));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-    assert_eq!(registry.list_text(), "No jobs.\n");
+    drop(opened.end);
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn restore_detached_rejects_a_symlink_log_without_touching_its_target() {
+fn restore_detached_admits_symlink_path_without_following_it() {
     use std::os::unix::fs::symlink;
 
     let dir = TempDir::new("fiber-jobs-restore-detached-symlink");
@@ -2412,9 +2413,11 @@ fn restore_detached_rejects_a_symlink_log_without_touching_its_target() {
             stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         })),
     );
-    assert!(result.is_err(), "symlink logs are not admitted");
-    assert!(!registry.contains("j_symlink"));
+    let opened = result.unwrap_or_else(|error| panic!("symlink admission failed: {error}"));
+    assert!(registry.contains("j_symlink"));
+    assert!(registry.list_text().contains("j_symlink"));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(opened.end);
     assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
 }
 
