@@ -38,10 +38,22 @@ struct TestPausePoint {
 #[cfg(test)]
 impl TestPausePoint {
     fn pause(&self) {
-        let _ = self.arrived.send(());
-        let _ = lock(&self.release).recv();
+        match self.arrived.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        match lock(&self.release).recv() {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
+#[cfg(test)]
+type TestPauseParts = (
+    Arc<TestPause>,
+    mpsc::Receiver<()>,
+    mpsc::Sender<()>,
+    mpsc::Receiver<()>,
+    mpsc::Sender<()>,
+);
 #[cfg(test)]
 struct TestPause {
     reader: TestPausePoint,
@@ -61,13 +73,7 @@ impl TestPause {
             release_tx,
         )
     }
-    fn new() -> (
-        Arc<Self>,
-        mpsc::Receiver<()>,
-        mpsc::Sender<()>,
-        mpsc::Receiver<()>,
-        mpsc::Sender<()>,
-    ) {
+    fn new() -> TestPauseParts {
         let (reader, reader_arrived, release_reader) = Self::point();
         let (drop, drop_arrived, release_drop) = Self::point();
         (
