@@ -172,6 +172,7 @@ mod ticket;
 mod visibility;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -236,16 +237,21 @@ fn run(args: &[String]) -> Result<bool, String> {
             let mutant_count: u64 = flag(rest, "--mutant-count")?
                 .parse()
                 .map_err(|e| format!("--mutant-count: {e}"))?;
-            let release_paths = release_paths(&flag(rest, "--base")?)?;
+            let base = flag(rest, "--base")?;
+            let release_paths = release_paths(&base)?;
+            let changed_paths = plan_changed_paths(&base)?;
+            let event = flag(rest, "--event")?;
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
-                &flag(rest, "--event")?,
+                &event,
                 draft,
                 bug,
                 mutants,
                 mutant_count,
             );
+            let plan =
+                select::plan_with_changed_paths(plan, event == "pull_request", &changed_paths);
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
                 "jobs={}",
@@ -1010,11 +1016,15 @@ fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
 
 /// Files that differ from the merge base with `base`, uncommitted and
 /// untracked changes included.
-fn changed_files(base: &str) -> Result<Vec<String>, String> {
-    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
+fn merge_base(base: &str) -> Result<String, String> {
+    git_lines(&["merge-base", base, "HEAD"])?
         .into_iter()
         .next()
-        .ok_or("no merge base")?;
+        .ok_or_else(|| "no merge base".to_owned())
+}
+
+fn changed_files(base: &str) -> Result<Vec<String>, String> {
+    let merge_base = merge_base(base)?;
     let mut files: BTreeSet<String> = git_lines(&["diff", "--name-only", &merge_base])?
         .into_iter()
         .collect();
@@ -1022,15 +1032,42 @@ fn changed_files(base: &str) -> Result<Vec<String>, String> {
     Ok(files.into_iter().collect())
 }
 
+/// The head diff's paths and current contents for the Select trigger rules.
+/// A missing path is a deletion; a path whose contents cannot be read stays
+/// present with no readable content, so it cannot match `target_os`.
+fn plan_changed_paths(base: &str) -> Result<Vec<select::ChangedPath>, String> {
+    let merge_base = merge_base(base)?;
+    let paths = split_nul(&output(
+        "git",
+        &[
+            "diff",
+            "--name-only",
+            "-M",
+            "-z",
+            &format!("{merge_base}..HEAD"),
+        ],
+    )?);
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            let state = match fs::read(&path) {
+                Ok(contents) => select::PathState::Present(Some(contents)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    select::PathState::Deleted
+                }
+                Err(_) => select::PathState::Present(None),
+            };
+            select::ChangedPath { path, state }
+        })
+        .collect())
+}
+
 /// Paths for the release rule from the merge base with `base`: committed
 /// changes with renames reported as both endpoints, plus untracked files.
 /// Both reads are NUL-delimited, so non-ASCII paths arrive literally,
 /// never git-quoted; a non-UTF-8 path fails with an error, never a skip.
 fn release_paths(base: &str) -> Result<Vec<String>, String> {
-    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
-        .into_iter()
-        .next()
-        .ok_or("no merge base")?;
+    let merge_base = merge_base(base)?;
     let mut files: BTreeSet<String> = BTreeSet::new();
     files.extend(split_nul(&output(
         "git",
