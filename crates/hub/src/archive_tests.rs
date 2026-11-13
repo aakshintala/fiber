@@ -842,6 +842,30 @@ fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
 }
 
 #[test]
+fn a_cascaded_missing_delegate_is_not_appended_twice_in_one_listing() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    let missing = temp.dir.join("missing-workspace").to_string_lossy().into_owned();
+    temp.logged(20, &["fiber_exited"]);
+    temp.logged(21, &["fiber_exited"]);
+    temp.indexed(21, &missing, Some(&testkit::id(20)));
+    temp.indexed(20, &missing, None);
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer, serde_json::json!({"sessions": [], "total": 0}));
+    assert_eq!(archived_lines(&temp.log_text(20)).len(), 1);
+    assert_eq!(archived_lines(&temp.log_text(21)).len(), 1);
+    let rows: Vec<Value> = temp
+        .recent_text()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 4, "{}", temp.recent_text());
+}
+
+#[test]
 fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
     let temp = Temp::new();
     let hub = temp.hub();
