@@ -1361,7 +1361,9 @@ fn committed_dirs_match_loop_allowlist() {
     assert_eq!(actual, expected);
 }
 
-/// The reviewer-eval root admits only the contradictory-consent fixture.
+/// The reviewer-eval root admits only the contradictory-consent fixture; a
+/// fully declared session emits one entry per replayable call
+/// (`docs/testing/fakes.md`, "Live calls and evals").
 #[test]
 fn fold_accepts_only_the_contradictory_consent_reviewer_eval_dir() {
     let roots = temp_roots();

@@ -137,32 +137,11 @@ pub(crate) fn read_first(text: &str) -> Result<First, String> {
 /// `block` alone on the last non-empty line. A `block` with an empty reason
 /// does not read; an `allow` may have none.
 pub(crate) fn read_second(text: &str) -> Result<Second, String> {
-    let mut lines = text.split('\n').collect::<Vec<_>>();
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
-        lines.pop();
-    }
-    let Some(verdict_line) = lines.pop() else {
+    let mut lines = text.split('\n').rev();
+    let Some(verdict_line) = lines.find(|line| !line.trim().is_empty()) else {
         return Err("expected a reason, then `allow` or `block` alone on the last line".to_owned());
     };
-    let verdict = verdict_line.trim();
-    let verdict = if let Some(inner) = verdict
-        .strip_prefix("**")
-        .and_then(|inner| inner.strip_suffix("**"))
-    {
-        inner
-    } else if let Some(inner) = verdict
-        .strip_prefix('*')
-        .and_then(|inner| inner.strip_suffix('*'))
-    {
-        inner
-    } else if let Some(inner) = verdict
-        .strip_prefix('`')
-        .and_then(|inner| inner.strip_suffix('`'))
-    {
-        inner
-    } else {
-        verdict
-    };
+    let verdict = unwrap_verdict(verdict_line.trim());
     let verdict = verdict.strip_suffix('.').unwrap_or(verdict).trim();
     let allow = verdict.eq_ignore_ascii_case("allow");
     let block = verdict.eq_ignore_ascii_case("block");
@@ -170,15 +149,31 @@ pub(crate) fn read_second(text: &str) -> Result<Second, String> {
         return Err("expected a reason, then `allow` or `block` alone on the last line".to_owned());
     }
 
-    if let Some(first) = lines.first_mut() {
-        *first = first.trim_start_matches(|character: char| {
+    let mut reason = String::new();
+    let mut has_line = false;
+    for line in lines {
+        if has_line {
+            reason.insert(0, '\n');
+        }
+        reason.insert_str(0, line);
+        has_line = true;
+    }
+    if let Some((first, rest)) = reason.split_once('\n') {
+        let first = first.trim_start_matches(|character: char| {
             character.is_whitespace() || matches!(character, '-' | '—' | ':')
         });
-        if first.is_empty() {
-            lines.remove(0);
-        }
+        reason = if first.is_empty() {
+            rest.to_owned()
+        } else {
+            format!("{first}\n{rest}")
+        };
+    } else {
+        reason = reason
+            .trim_start_matches(|character: char| {
+                character.is_whitespace() || matches!(character, '-' | '—' | ':')
+            })
+            .to_owned();
     }
-    let reason = lines.join("\n");
     let reason = reason.trim_end().to_owned();
     if block {
         if reason.is_empty() {
@@ -191,6 +186,18 @@ pub(crate) fn read_second(text: &str) -> Result<Second, String> {
             reason: (!reason.is_empty()).then_some(reason),
         })
     }
+}
+
+/// Removes one supported wrapper from a second-stage verdict.
+fn unwrap_verdict(verdict: &str) -> &str {
+    [("**", "**"), ("*", "*"), ("`", "`")]
+        .into_iter()
+        .find_map(|(prefix, suffix)| {
+            verdict
+                .strip_prefix(prefix)
+                .and_then(|inner| inner.strip_suffix(suffix))
+        })
+        .unwrap_or(verdict)
 }
 
 /// One word as a verdict reads it.

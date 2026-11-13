@@ -499,6 +499,10 @@ fn the_second_stage_reads_a_verdict_and_a_reason() {
     ] {
         assert!(read_second(text).is_err(), "{text:?}");
     }
+    assert_eq!(
+        read_second("block"),
+        Err("expected a reason, then `allow` or `block` alone on the last line".into())
+    );
 }
 
 #[test]
@@ -602,7 +606,11 @@ fn the_second_stage_reads_a_reason_and_a_verdict() {
         "reason\nverdict: allow",
         "reason\nallow...",
     ] {
-        assert!(read_second(text).is_err(), "{text:?}");
+        assert_eq!(
+            read_second(text),
+            Err("expected a reason, then `allow` or `block` alone on the last line".into()),
+            "{text:?}"
+        );
     }
     assert_eq!(read_second("—\nallow"), Ok(Second::Allow { reason: None }));
 }
