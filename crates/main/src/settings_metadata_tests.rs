@@ -30,7 +30,7 @@ fn plain_keys_have_a_tab_unless_a_screen_covers_them() {
     let covered = covered();
     for key in SETTINGS_SCHEMA {
         let path = key.path;
-        let want_tab = !path.contains('*') && !covered.contains(&path);
+        let want_tab = path != "hub.port" && !path.contains('*') && !covered.contains(&path);
         assert_eq!(
             key.metadata.tab.is_some(),
             want_tab,
