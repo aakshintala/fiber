@@ -2603,13 +2603,7 @@ fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
 fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
     let lower = values.partition_point(|value| value.total_cmp(&current).is_lt());
     let upper = values.partition_point(|value| !value.total_cmp(&current).is_gt());
-    let to = if lower < upper {
-        if forward {
-            (lower + 1) % values.len()
-        } else {
-            (lower + values.len() - 1) % values.len()
-        }
-    } else if forward {
+    let to = if forward {
         upper % values.len()
     } else {
         lower.checked_sub(1).unwrap_or(values.len() - 1)
@@ -2642,13 +2636,7 @@ fn next_text_value(
     let upper = values.partition_point(|value| {
         refresh_millis(value).is_some_and(|candidate| !candidate.cmp(&current_ms).is_gt())
     });
-    let to = if lower < upper {
-        if forward {
-            (lower + 1) % values.len()
-        } else {
-            (lower + values.len() - 1) % values.len()
-        }
-    } else if forward {
+    let to = if forward {
         upper % values.len()
     } else {
         lower.checked_sub(1).unwrap_or(values.len() - 1)

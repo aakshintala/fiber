@@ -93,6 +93,10 @@ pub(crate) fn retry_policy(config: &Config) -> r#loop::Retry {
 #[path = "idle_tests.rs"]
 mod idle_tests;
 
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod settings_tests;
+
 /// The session's one reasoning setting (`docs/model-routing.md`,
 /// "Thinking"): the `:level` suffix first, then the session's own choice,
 /// then the configured value (`models."<reference>".thinking` over the

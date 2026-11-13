@@ -757,6 +757,29 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
 }
 
 #[test]
+fn recent_listing_repairs_a_marker_without_an_archived_row() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(22, &["fiber_exited", "archived"]);
+    temp.exited_row(22);
+
+    // `docs/invocation.md`, "Archiving": a retry repairs the derived row
+    // without appending another archive event.
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer, serde_json::json!({"sessions": [], "total": 0}));
+    assert_eq!(archived_lines(&temp.log_text(22)).len(), 1);
+    let rows: Vec<Value> = temp
+        .recent_text()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["archived"], true);
+}
+
+#[test]
 fn recent_listing_archives_missing_workspaces_and_archived_mode_counts_it() {
     let temp = Temp::new();
     let hub = temp.hub();
@@ -842,6 +865,33 @@ fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
     .unwrap();
     assert_eq!(page["total"], 2);
     assert_eq!(page["sessions"][0]["session_id"], testkit::id(2));
+}
+
+#[test]
+fn an_explicit_archive_cascades_to_exited_delegate_descendants() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    for n in 30..=32 {
+        temp.logged(n, &["fiber_exited"]);
+        let parent = match n {
+            30 => None,
+            31 => Some(testkit::id(30)),
+            _ => Some(testkit::id(31)),
+        };
+        temp.indexed(n, "/w", parent.as_deref());
+    }
+
+    // `docs/invocation.md`, "Archiving": explicit parent archiving includes
+    // every exited delegate descendant.
+    assert!(
+        call(&hub, serde_json::json!({"session": testkit::id(30)}))
+            .unwrap()
+            .is_none()
+    );
+    for n in 30..=32 {
+        assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
+    }
+    assert_eq!(crate::recent::read_all(&temp.dir).len(), 6);
 }
 
 #[test]
