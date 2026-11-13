@@ -298,7 +298,7 @@ pub(crate) fn run_add(
         terminal,
     } = reads;
     let Streams { out: _, err } = streams;
-    crate::config::refuse_overlapping_repository_write(home, workspace, layer)?;
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     check_name(name)?;
     // Exactly one transport: both a url and a command, or neither, is a
     // usage error, as are `-e` and `--secret` with a url.
@@ -486,7 +486,7 @@ pub(crate) fn run_remove(
     name: &str,
     _streams: Streams<'_>,
 ) -> Result<(), CliError> {
-    crate::config::refuse_overlapping_repository_write(home, workspace, layer)?;
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     let (_, project) = project_of(home, workspace)?;
     if remove_entry(home, workspace, &project, layer, "mcp.servers", name)? {
         return Ok(());

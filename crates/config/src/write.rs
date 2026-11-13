@@ -486,14 +486,17 @@ impl Layer {
     }
 }
 
-fn refuse_overlapping_repository(
+/// Refuses a repository write when its `.fiber` directory is Fiber home.
+pub fn refuse_overlapping_repository(
     home: &Path,
     workspace: &Path,
     layer: Layer,
 ) -> Result<(), ConfigError> {
     if matches!(layer, Layer::Repository) && crate::same_repository_home(workspace, home) {
-        return Err(ConfigError::Override {
-            arg: "there is no repository layer when the workspace's .fiber directory is Fiber home; use the global form instead".into(),
+        return Err(ConfigError::Refused {
+            key: "repository configuration".into(),
+            file: crate::repository_config_file(workspace),
+            why: "there is no repository layer when the workspace's .fiber directory is Fiber home; use `fiber config set --global` instead",
         });
     }
     Ok(())

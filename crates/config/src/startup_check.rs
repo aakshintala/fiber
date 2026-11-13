@@ -201,7 +201,7 @@ pub fn mcp_servers(
         return Ok(McpServers { servers, refused });
     };
     let workspace = config.extensions().workspace().to_path_buf();
-    let declared = declared(&workspace, config.fiber_home_path()).ok();
+    let declared = declared(&workspace, config.extensions().home()).ok();
     // `serde_json::Map` is a `BTreeMap` without `preserve_order`
     // (`docs/dependencies.md`), so this is name order.
     for name in entries.keys() {

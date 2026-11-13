@@ -177,23 +177,7 @@ fn run_get_extension(
     }
 }
 
-/// Refuses a repository write when the workspace's `.fiber` directory is
-/// Fiber home.
-pub(crate) fn refuse_overlapping_repository_write(
-    home: &Path,
-    workspace: &Path,
-    layer: Layer,
-) -> Result<(), CliError> {
-    if matches!(layer, Layer::Repository) && config::same_repository_home(workspace, home) {
-        return Err(config::ConfigError::Override {
-            arg: "there is no repository layer when the workspace's .fiber directory is Fiber home; use the global form instead".into(),
-        }
-        .into());
-    }
-    Ok(())
-}
-
-/// Writes one key in a layer's file, parsing the value as JSON, or a bare
+/// Writes one key in one layer's file, parsing the value as JSON, or a bare
 /// string when it does not parse, as `-c` does. On success prints each
 /// loading notice as one line on standard error, each load's once per
 /// command run; nothing else.
@@ -206,7 +190,7 @@ fn run_set(
     err: &mut dyn Write,
     clock: &dyn contract::clock::Clock,
 ) -> Result<PathBuf, CliError> {
-    refuse_overlapping_repository_write(home, workspace, layer)?;
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
     let mut notices = Vec::new();

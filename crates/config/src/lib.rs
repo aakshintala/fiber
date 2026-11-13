@@ -99,10 +99,10 @@ pub use write::{
     EntryLayer, EntryPreview, FileOutcome, FileSaved, Layer, ListChange, ListEdit, NotesSaved,
     NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, Reset, Scope, atomic_error,
     clear_global_if_equals, edit_list, get_global, insert_entry, overlaps,
-    preview_read_only_changes, read_only_keys, remove_entry, remove_extension_settings,
-    replace_global, reset, save_reviewer_notes, set, set_global_if_unset,
-    set_repo_extension_setting, settings_file, update_global_entries, validate_read_only_entry,
-    version, write_atomic,
+    preview_read_only_changes, read_only_keys, refuse_overlapping_repository, remove_entry,
+    remove_extension_settings, replace_global, reset, save_reviewer_notes, set,
+    set_global_if_unset, set_repo_extension_setting, settings_file, update_global_entries,
+    validate_read_only_entry, version, write_atomic,
 };
 
 pub use keys::{KEYS as SETTINGS_SCHEMA, Key as SettingsKey};
@@ -316,10 +316,6 @@ impl Config {
     /// naming the key and the file.
     pub fn notices(&self) -> &[Notice] {
         &self.notices
-    }
-
-    pub(crate) fn fiber_home_path(&self) -> &Path {
-        self.extensions.home()
     }
 
     /// One extension's settings files.
