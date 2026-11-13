@@ -46,16 +46,7 @@ crates/hub/src/lib_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-
 crates/hub/src/idle_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/directories_tests.rs	fiber-4598	plan	2026-11-12T20:11:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4582	plan	2026-11-12T20:22:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/extensions/src/runtime.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/extensions/src/runtime/queued.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/extensions/src/hooks.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/extensions/src/hooks/door_tests.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/extensions/src/runtime_tests.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/main/src/hub_command_tests.rs	fiber-4598	plan	2026-11-12T20:24:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/extensions/src/lua/command_calls.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/extensions/src/lua.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/extensions/tests/process_activation.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
-crates/main/tests/extension_host/process_extensions.rs	fiber-4691	grant	2026-11-12T20:24:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/jobs/src/registry.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-leak-scan	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
