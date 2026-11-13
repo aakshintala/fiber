@@ -352,3 +352,14 @@ crates/main/src/configure/models_tests.rs	fiber-4636	plan	2026-11-13T19:03:50Z	r
 crates/main/tests/support/journey.rs	fiber-4636	plan	2026-11-13T19:03:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screens/journeys.rs	fiber-4636	plan	2026-11-13T19:03:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/screens/snapshots/screens__journeys__vendor_model_turn.snap	fiber-4636	plan	2026-11-13T19:03:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/settings_view.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/settings_view_tests.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/configure.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/configure_fake.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_settings_tests.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/commands.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/config_views_tests.rs	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_list_row.snap	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_slider_row.snap	fiber-4583	plan	2026-11-13T20:05:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
