@@ -98,15 +98,7 @@ crates/cli/src/hub_status.rs	fiber-4704	plan	2026-11-12T23:19:10Z	Amoghs-MacBook
 crates/main/tests/commands/stdout_errors.rs	fiber-4704	plan	2026-11-12T23:19:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/main.rs	fiber-4704	plan	2026-11-12T23:19:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/invocation.md	fiber-4704	plan	2026-11-12T23:19:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-12T23:24:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 crates/main/src/settings_metadata_tests.rs	fiber-4582	plan	2026-11-12T23:52:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-.github/workflows/ci.yml:658-659	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1084-1085	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1087-1088	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1093-1093	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1095-1096	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1100-1101	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-docs/ci.md:260-265	fiber-4663	plan	2026-11-13T00:01:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 crates/config/src/lib.rs	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/src/extension_settings.rs	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/src/write.rs	fiber-4702	plan	2026-11-13T00:17:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -141,3 +133,11 @@ crates/main/tests/commands/mod.rs	fiber-4704	grant	2026-11-13T00:30:13Z	roundhou
 .github/workflows/ci.yml:2287-2287	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
 docs/ci.md:24-28	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
 docs/ci.md:219-220	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
+.github/workflows/ci.yml:658-659	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1084-1085	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1087-1088	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1093-1093	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1095-1096	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+.github/workflows/ci.yml:1100-1101	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+docs/ci.md:260-265	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
