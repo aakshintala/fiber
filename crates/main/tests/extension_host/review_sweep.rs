@@ -1261,9 +1261,13 @@ const SHAPE_SIX_EVENTS: &str = include_str!(
     "../../../loop/tests/fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl"
 );
 
-/// A staged fold run: temporary consent and person-input roots, each
-/// carrying its committed directory name so folded ids read as the set
-/// derivation writes them.
+/// The contradictory-consent reviewer-eval session, compiled in so the
+/// fold test stages a copy without reading the repository at run time.
+const CONTRADICTORY_CONSENT_EVENTS: &str =
+    include_str!("../../../loop/tests/fixtures/reviewer_eval/contradictory-consent/events.jsonl");
+
+/// A staged fold run: temporary consent, person-input and reviewer-eval
+/// roots, carrying committed directory names so folded ids match the set.
 struct TempRoots {
     /// The temporary home, kept alive for the fold.
     _home: fakes::TempDir,
@@ -1271,20 +1275,24 @@ struct TempRoots {
     consent: std::path::PathBuf,
     /// The staged `review_person_input/` session directory.
     person: std::path::PathBuf,
+    /// The staged reviewer-eval fixture root.
+    reviewer_eval: std::path::PathBuf,
 }
 
-/// A staged fold run's roots: `reviewer_consent/` beside
-/// `review_person_input/`, both empty, under one temporary directory.
+/// A staged fold run's roots under one temporary directory.
 fn temp_roots() -> TempRoots {
     let home = fakes::TempDir::new("fiber-sweep-fold");
     let consent = home.path().join("reviewer_consent");
     let person = home.path().join("review_person_input");
+    let reviewer_eval = home.path().join("reviewer_eval");
     std::fs::create_dir_all(&consent).unwrap();
     std::fs::create_dir_all(&person).unwrap();
+    std::fs::create_dir_all(&reviewer_eval).unwrap();
     TempRoots {
         _home: home,
         consent,
         person,
+        reviewer_eval,
     }
 }
 
@@ -1299,7 +1307,7 @@ fn stage_session(dir: &std::path::Path, events: &str) -> std::path::PathBuf {
 /// folds the copy.
 fn fold_staged(roots: &TempRoots, name: &str, events: &str) -> FoldedDir {
     let dir = stage_session(&roots.consent.join(name), events);
-    match fold_session_dir(&dir, &roots.consent, &roots.person) {
+    match fold_session_dir(&dir, &roots.consent, &roots.person, &roots.reviewer_eval) {
         Ok(folded) => folded,
         Err(error) => panic!("a committed session folds: {error}"),
     }
@@ -1307,7 +1315,7 @@ fn fold_staged(roots: &TempRoots, name: &str, events: &str) -> FoldedDir {
 
 /// Folds `dir`, expecting the guard to refuse it, and returns the refusal.
 fn fold_err(roots: &TempRoots, dir: &std::path::Path) -> String {
-    match fold_session_dir(dir, &roots.consent, &roots.person) {
+    match fold_session_dir(dir, &roots.consent, &roots.person, &roots.reviewer_eval) {
         Err(error) => error,
         Ok(_) => panic!("an uncommitted dir folds"),
     }
@@ -1349,7 +1357,34 @@ fn committed_dirs_match_loop_allowlist() {
         expected.insert(name);
     }
     expected.insert(PERSON_INPUT_DIR);
+    expected.insert(REVIEWER_EVAL_DIR);
     assert_eq!(actual, expected);
+}
+
+/// The reviewer-eval root admits only the contradictory-consent fixture.
+#[test]
+fn fold_accepts_only_the_contradictory_consent_reviewer_eval_dir() {
+    let roots = temp_roots();
+    let dir = stage_session(
+        &roots.reviewer_eval.join(REVIEWER_EVAL_DIR),
+        CONTRADICTORY_CONSENT_EVENTS,
+    );
+    let folded = fold_session_dir(&dir, &roots.consent, &roots.person, &roots.reviewer_eval)
+        .expect("the committed reviewer-eval fixture folds");
+    assert_eq!(folded.unreplayable, 0);
+    assert_eq!(folded.entries.len(), 1);
+    assert_eq!(folded.entries[0].id, "contradictory-consent-1");
+    assert_eq!(folded.entries[0].label1, Some(Label::Pass));
+
+    let unknown = roots.reviewer_eval.join("untracked-owner-export");
+    std::fs::create_dir_all(&unknown).unwrap();
+    let error = fold_err(&roots, &unknown);
+    assert!(error.contains("untracked-owner-export"), "{error}");
+
+    let misplaced = roots.consent.join(REVIEWER_EVAL_DIR);
+    std::fs::create_dir_all(&misplaced).unwrap();
+    let error = fold_err(&roots, &misplaced);
+    assert!(error.contains(REVIEWER_EVAL_DIR), "{error}");
 }
 
 /// The committed-dir fold emits one entry per replayable call in file order
@@ -1575,7 +1610,12 @@ fn fold_rejects_an_uncommitted_dir_naming_it() {
 #[test]
 fn fold_accepts_the_person_input_session() {
     let roots = temp_roots();
-    let error = match fold_session_dir(&roots.person, &roots.consent, &roots.person) {
+    let error = match fold_session_dir(
+        &roots.person,
+        &roots.consent,
+        &roots.person,
+        &roots.reviewer_eval,
+    ) {
         Err(error) => error,
         Ok(_) => panic!("an empty session folds"),
     };
