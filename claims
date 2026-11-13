@@ -115,14 +115,6 @@ crates/cli/src/models.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro
 crates/cli/src/prune.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection_tests.rs	fiber-4598	grant	2026-11-13T00:26:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
 crates/main/tests/commands/mod.rs	fiber-4704	grant	2026-11-13T00:30:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
-.github/workflows/ci.yml:658-659	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1084-1085	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1087-1088	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1093-1093	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1095-1096	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-.github/workflows/ci.yml:1100-1101	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-docs/ci.md:260-265	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
-scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 crates/tui/src/settings_view.rs	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/settings_view_tests.rs	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
