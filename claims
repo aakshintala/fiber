@@ -49,7 +49,6 @@ docs/tui.md	fiber-4582	plan	2026-11-12T20:22:22Z	Amoghs-MacBook-Pro:/Users/aaksh
 crates/main/src/hub_command_tests.rs	fiber-4598	plan	2026-11-12T20:24:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/registry.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/test-leak-scan	fiber-4764	plan	2026-11-12T20:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/lib.rs	fiber-4598	plan	2026-11-12T20:37:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop/kitty_writer.rs	fiber-4746	plan	2026-11-12T20:38:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4746	plan	2026-11-12T20:38:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -116,14 +115,6 @@ crates/cli/src/models.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro
 crates/cli/src/prune.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection_tests.rs	fiber-4598	grant	2026-11-13T00:26:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
 crates/main/tests/commands/mod.rs	fiber-4704	grant	2026-11-13T00:30:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
-.github/workflows/ci.yml:255-256	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-.github/workflows/ci.yml:257-258	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-.github/workflows/ci.yml:259-260	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-.github/workflows/ci.yml:270-270	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-.github/workflows/ci.yml:859-860	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-.github/workflows/ci.yml:2287-2287	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-docs/ci.md:24-28	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
-docs/ci.md:219-220	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4764-macos-scripts-selftest	
 .github/workflows/ci.yml:658-659	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 .github/workflows/ci.yml:1084-1085	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 .github/workflows/ci.yml:1087-1088	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
