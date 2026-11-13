@@ -2653,7 +2653,8 @@ fn restore_detached_rows_admits_a_live_group_above_one_against_equal_mutation() 
 
 #[cfg(unix)]
 #[test]
-fn restore_detached_rows_rejects_the_group_one_boundary_without_probing_it() {
+fn restore_detached_rows_keeps_the_pgid_one_safety_guard() {
+    // Defense in depth: `support::group::alive` independently refuses pgids <= 1.
     let (_dir, registry) = world();
     let started = restore_row_started("j_rows_one", 1);
     let mut calls = 0;
