@@ -223,7 +223,7 @@ fn a_prototype_diff_selects_lint_and_no_tests() {
     ] {
         let selection = classify(&strings(files), &members());
         assert_eq!(selection, Selection::Crates(vec![]), "{files:?}");
-        let plan = plan(
+        let plan = plan_with_mutants(
             selection.mode(),
             selection.packages(),
             "pull_request",
@@ -241,7 +241,7 @@ fn a_prototype_diff_selects_lint_and_no_tests() {
 fn another_research_path_stays_docs_only_and_skips_lint() {
     let selection = classify(&strings(&["research/session-search/run.sh"]), &members());
     assert_eq!(selection, Selection::Docs);
-    let plan = plan(
+    let plan = plan_with_mutants(
         selection.mode(),
         selection.packages(),
         "pull_request",

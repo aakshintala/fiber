@@ -112,6 +112,13 @@ fn full_match_reuses() {
 }
 
 #[test]
+fn empty_pull_request_entry_head_does_not_reuse() {
+    let runs = json!({ "workflow_runs": [candidate(7, HEAD, "", PR, Some(BASE), "completed")] });
+    let jobs = jobs_for(7, successful_shards(SHARD_TOTAL));
+    assert_eq!(matched_with(&current(), &runs, &jobs), None);
+}
+
+#[test]
 fn draft_current_run_reruns() {
     let rerun = Current {
         draft: true,

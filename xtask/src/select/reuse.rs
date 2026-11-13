@@ -97,6 +97,9 @@ fn match_in_run(
                 }
             })
         })?;
+    if pr_head.is_empty() {
+        return None;
+    }
     let jobs = jobs_by_run.get(id.to_string()).and_then(Value::as_array)?;
     let shards: Vec<&Value> = jobs
         .iter()

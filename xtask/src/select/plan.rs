@@ -243,7 +243,7 @@ pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
 /// draft, `bug` whether an issue the pull request resolves is labelled
 /// `bug`, `mutants` whether the pull request runs its mutants and
 /// `mutant_count` how many mutants its diff holds.
-pub(crate) fn plan(
+pub(crate) fn plan_with_mutants(
     mode: &str,
     packages: &[String],
     event: &str,
@@ -262,8 +262,6 @@ pub(crate) fn plan(
     } else {
         0
     };
-    // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
-    // "The merge gate"), so the selection ignores it.
     let _ = draft;
     let jobs = BTreeMap::from([
         ("clippy_macos", false),
@@ -286,6 +284,39 @@ pub(crate) fn plan(
         ("release", !pr),
     ]);
     Plan { jobs, shards }
+}
+
+/// Inputs used to decide the final mutants selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MutantPlanInput {
+    pub(crate) labels: Vec<String>,
+    pub(crate) count: u64,
+    pub(crate) reuse: Option<super::reuse::MatchedReuse>,
+}
+
+/// Selects the final mutants job inside xtask. Ready pull requests run
+/// mutants; drafts require the `mutants` label; other events never do.
+pub(crate) fn plan(
+    mode: &str,
+    packages: &[String],
+    event: &str,
+    draft: bool,
+    bug: bool,
+    mutants: MutantPlanInput,
+) -> Plan {
+    let eligible = event == "pull_request"
+        && (!draft || mutants.labels.iter().any(|label| label == "mutants"));
+    let mut plan = plan_with_mutants(
+        mode,
+        packages,
+        event,
+        draft,
+        bug,
+        eligible && mutants.reuse.is_none(),
+        mutants.count,
+    );
+    plan.jobs.insert("mutants", plan.shards > 0);
+    plan
 }
 
 /// Add the pull-request-only macOS selections from the head paths and their
