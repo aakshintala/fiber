@@ -1,17 +1,4 @@
 crates/hub/src/feed_tests.rs	fiber-4598	plan	2026-11-12T18:47:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/jobs/src/registry.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/jobs_tests.rs	fiber-4465	plan	2026-11-12T20:34:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tools.md	fiber-4465	plan	2026-11-12T20:44:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/events.md	fiber-4465	plan	2026-11-12T20:50:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/jobs/src/registry_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/jobs/src/tool.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/jobs/src/tool_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/detached.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/detached_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/src/builtin.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/src/builtin_tests.rs	fiber-4465	plan	2026-11-12T21:39:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/check-docs	fiber-4465	plan	2026-11-12T21:40:24Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/feed.rs,crates/hub/src/feed_tests.rs,crates/hub/src/sessions.rs,crates/hub/src/sessions_tests.rs,crates/hub/src/archive.rs,crates/hub/src/archive_tests.rs,crates/hub/src/recent.rs,crates/hub/src/recent_tests.rs,crates/hub/src/connection.rs,crates/hub/src/lib.rs,crates/hub/src/lib_tests.rs,crates/hub/src/idle_tests.rs,crates/hub/src/directories_tests.rs,crates/config/src/keys.rs,crates/config/src/keys_tests.rs,crates/main/src/hub_command.rs,crates/main/src/hub_command_tests.rs,crates/main/src/settings.rs,crates/tui/src/settings_view.rs,crates/tui/src/settings_view_tests.rs,crates/main/tests/hub_daemon/hub_resume.rs	fiber-4598	grant	2026-11-12T22:23:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
 docs/tui.md	fiber-4675	plan	2026-11-13T03:14:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/src/keys.rs:469-470	fiber-4598	plan	2026-11-13T05:20:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
