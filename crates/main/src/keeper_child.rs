@@ -291,8 +291,17 @@ impl Runtime {
                             if let Some(pause) = &self.hooks.before_bind {
                                 pause();
                             }
-                            let (socket, listener) = doors::bind(&self.home, &dir)
-                                .map_err(|error| io::Error::other(error.to_string()))?;
+                            eprintln!("FIBER4351_TRACE before socket bind");
+                            let bound = doors::bind(&self.home, &dir);
+                            eprintln!(
+                                "FIBER4351_TRACE after socket bind: {}",
+                                match &bound {
+                                    Ok((socket, _)) => format!("ok {}", socket.display()),
+                                    Err(error) => format!("error {error}"),
+                                }
+                            );
+                            let (socket, listener) =
+                                bound.map_err(|error| io::Error::other(error.to_string()))?;
                             *log = Some(HeldLog {
                                 socket: socket.clone(),
                                 log: held,
@@ -758,6 +767,7 @@ impl Runtime {
         });
         let runtime = Arc::clone(self);
         thread::spawn(move || {
+            eprintln!("FIBER4351_TRACE before listen");
             let backoff = Arc::new(support::clock::Parker::new());
             let waker: Arc<dyn Wake> = backoff.clone();
             runtime.clock.subscribe(Arc::downgrade(&waker));
@@ -796,6 +806,7 @@ impl Runtime {
                     continue;
                 };
                 delay = Duration::from_millis(10);
+                eprintln!("FIBER4351_TRACE first accepted connection");
                 // One thread per candidate: a stalled one holds up nothing.
                 #[cfg(test)]
                 if runtime
@@ -1173,17 +1184,39 @@ fn write_frame(writer: &mut impl Write, line: &FromKeeper) -> io::Result<()> {
 }
 
 pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
+    std::panic::set_hook(Box::new(|info| {
+        let reason = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        eprintln!("FIBER4351_TRACE panic: {reason}");
+    }));
     let home = match config::fiber_home(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME")) {
         Ok(home) => home,
-        Err(_) => return 1,
+        Err(error) => {
+            eprintln!("FIBER4351_TRACE configuration/home failure: {error}");
+            return 1;
+        }
     };
     let control = match rustix::io::dup(std::io::stdout()) {
         Ok(fd) => UnixStream::from(fd),
-        Err(_) => return 1,
+        Err(error) => {
+            eprintln!("FIBER4351_TRACE stdout dup failure: {error}");
+            return 1;
+        }
     };
+    eprintln!("FIBER4351_TRACE entering serve");
     match serve(home, SessionId(id), clock, std::io::stdin().lock(), control) {
-        Ok(()) => 0,
-        Err(_) => 1,
+        Ok(()) => {
+            eprintln!("FIBER4351_TRACE successful return");
+            0
+        }
+        Err(error) => {
+            eprintln!("FIBER4351_TRACE error return: {error}");
+            1
+        }
     }
 }
 
