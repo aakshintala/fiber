@@ -141,3 +141,7 @@ docs/ci.md:219-220	fiber-4764	plan	2026-11-13T00:30:45Z	roundhouse-7010-plus-1:/
 .github/workflows/ci.yml:1100-1101	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 docs/ci.md:260-265	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
 scripts/test-flake-report:1250-1251	fiber-4663	plan	2026-11-13T00:54:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4663-flake-absent-artifact	
+crates/tui/src/settings_view.rs	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/settings_view_tests.rs	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_80x24.snap	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap	fiber-4676	plan	2026-11-13T01:04:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
