@@ -1085,6 +1085,17 @@ fn the_totals_row_opens_every_changed_file_in_grouped_order() {
 }
 
 #[test]
+fn space_sends_the_selected_file_diff_as_enter_does() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let expected_path = ranked(app.panel_state().changes())[0].0.to_owned();
+    let value = command(app.on_key(Key::Char(' '), now()));
+    assert_eq!(value["command"], "shell");
+    assert_eq!(value["args"]["command"], diff_command(&expected_path));
+}
+
+#[test]
 fn enter_sends_one_unsent_shell_command_for_the_selected_file() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 2);

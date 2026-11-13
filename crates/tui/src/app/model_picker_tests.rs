@@ -1366,6 +1366,17 @@ fn hub_refused(id: &str, message: &str) -> Line {
 }
 
 #[test]
+fn space_on_a_focused_model_row_chooses_as_enter_does() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    let line = sent(app.on_key(Key::Char(' '), now()));
+    assert_eq!(line["command"], "model");
+    assert_eq!(line["args"]["model"], "acme/m2");
+    assert!(!app.model_picker_open());
+}
+
+#[test]
 fn enter_sends_one_model_command_and_closes() {
     let (mut app, seam) = choosing_app();
     open(&mut app);

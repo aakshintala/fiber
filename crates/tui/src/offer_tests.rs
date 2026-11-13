@@ -352,6 +352,18 @@ fn up_wraps_to_send_and_down_returns_to_the_first_item() {
 }
 
 #[test]
+fn space_on_an_item_asks_for_its_source_and_on_send_sends() {
+    let mut offer = holding(1);
+    assert_eq!(
+        press(&mut offer, &Key::Char(' '), 40),
+        Some(OfferKey::Source)
+    );
+    let mut offer = holding(1);
+    press(&mut offer, &Key::Down, 40);
+    assert_eq!(press(&mut offer, &Key::Char(' '), 40), Some(OfferKey::Send));
+}
+
+#[test]
 fn enter_on_an_item_asks_for_its_source() {
     let mut offer = holding(2);
     assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Source));

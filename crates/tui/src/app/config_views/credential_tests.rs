@@ -80,6 +80,18 @@ fn empty_answer_and_selection_edges() {
 }
 
 #[test]
+fn space_chooses_the_focused_credential_label() {
+    let mut picker = ready(Some("home"));
+    assert_eq!(
+        picker.key(&Key::Char(' '), 24),
+        Pick::Choose {
+            label: "home".to_owned(),
+            session_only: false,
+        }
+    );
+}
+
+#[test]
 fn keys_clicks_and_session_only() {
     let mut picker = ready(Some("home"));
     assert_eq!(picker.key(&Key::Char('w'), 24), Pick::Stay);

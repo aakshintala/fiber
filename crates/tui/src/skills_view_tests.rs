@@ -917,6 +917,17 @@ fn entered(fake: &Fake, infos: &[SkillInfo]) -> Skills {
 }
 
 #[test]
+fn space_on_a_focused_skill_opens_its_text() {
+    let fake = text_fake("Test first.");
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    assert!(matches!(
+        skills.key(&Key::Char(' '), &ctx(&fake)),
+        Act::Stay
+    ));
+    assert_eq!(skills.frame(80, 22).title, "Skill tdd");
+}
+
+#[test]
 fn enter_shows_the_text_and_esc_returns_then_closes() {
     let fake = text_fake("Test first.\nSecond line.");
     let mut skills = opened(&fake, &[repository("tdd")]);

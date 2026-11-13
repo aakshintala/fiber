@@ -3399,6 +3399,16 @@ fn assert_annotation(settings: &Settings, width: u16, height: u16, name: &str) {
 }
 
 #[test]
+fn space_in_search_is_query_text_not_a_setting_action() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "a");
+    one(&mut settings, &fake, Key::Char(' '));
+    one(&mut settings, &fake, Key::Char('b'));
+    assert_eq!(query_of(&settings), "a b");
+    assert!(writes(&fake).is_empty());
+}
+
+#[test]
 fn settings_search_matches_label_and_path_across_tabs() {
     let fake = Fake::new(rows());
     // `reviewer` matches the label, `reviewer.model` the key path: both
