@@ -396,6 +396,49 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(xtask(&dir, &not_a_count, &[], "").0, 2);
 }
 
+#[test]
+fn plan_reads_head_diff_contents_for_macos_jobs() {
+    let dir = workspace();
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write(
+        "crates/a/src/target.rs",
+        "const TARGET: &str = \"target_os\";\n",
+    );
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "change macOS trigger paths"]);
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["clippy_macos"], true);
+    assert_eq!(jobs["scripts_self_test_macos"], true);
+}
+
 /// `HOME` and `TMPDIR` point at the temp dir, so a test that runs `git`
 /// or the built `xtask` reaches no real home.
 fn home(dir: &TempDir) -> String {

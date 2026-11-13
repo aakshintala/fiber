@@ -221,6 +221,14 @@ pub(crate) struct ChangedPath {
     pub(crate) state: PathState,
 }
 
+pub(crate) fn path_state_from_read(result: Result<String, std::io::Error>) -> PathState {
+    match result {
+        Ok(contents) => PathState::Present(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathState::Deleted,
+        Err(_) => PathState::Present(None),
+    }
+}
+
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {

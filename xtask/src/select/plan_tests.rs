@@ -11,6 +11,22 @@ fn changed(path: &str, contents: Option<&str>) -> ChangedPath {
 }
 
 #[test]
+fn a_failed_content_read_distinguishes_deletion_from_unreadable_files() {
+    assert_eq!(
+        path_state_from_read(Err(std::io::ErrorKind::NotFound.into())),
+        PathState::Deleted
+    );
+    assert_eq!(
+        path_state_from_read(Err(std::io::ErrorKind::PermissionDenied.into())),
+        PathState::Present(None)
+    );
+    assert_eq!(
+        path_state_from_read(Ok("target_os".to_owned())),
+        PathState::Present(Some("target_os".to_owned()))
+    );
+}
+
+#[test]
 fn macos_jobs_follow_pull_request_paths_and_contents() {
     let cases = [
         (vec![changed("src/lib.rs", Some("plain"))], false, false),

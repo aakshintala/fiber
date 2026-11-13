@@ -1048,13 +1048,7 @@ fn plan_changed_paths(base: &str) -> Result<Vec<select::ChangedPath>, String> {
     Ok(paths
         .into_iter()
         .map(|path| {
-            let path_state = match fs::read_to_string(&path) {
-                Ok(contents) => select::PathState::Present(Some(contents)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    select::PathState::Deleted
-                }
-                Err(_) => select::PathState::Present(None),
-            };
+            let path_state = select::path_state_from_read(fs::read_to_string(&path));
             select::ChangedPath {
                 path,
                 state: path_state,
