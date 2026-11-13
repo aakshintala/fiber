@@ -205,7 +205,7 @@ fn a_session_binds_its_socket_and_one_that_never_got_a_prompt_leaves_nothing() {
     );
     log.append(&started(), None, None).unwrap();
 
-    let _ = session.close(log);
+    session.close(log).unwrap_or(());
 
     assert!(!path.exists(), "the socket is unlinked on exit");
     assert!(
@@ -264,7 +264,7 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
         Err(failed.clone())
     });
     assert_eq!(ran, Err(failed));
-    let _ = session.close(log);
+    session.close(log).unwrap_or(());
 
     assert!(
         dir.is_dir(),
@@ -307,7 +307,7 @@ fn a_socket_path_at_the_platforms_limit_binds() {
     let session = session.unwrap();
 
     assert_eq!(socket(&dir).as_os_str().len(), max);
-    let _ = session.close(log);
+    session.close(log).unwrap_or(());
 }
 
 #[test]

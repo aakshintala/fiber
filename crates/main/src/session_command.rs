@@ -1849,6 +1849,10 @@ mod tests;
 /// appends the session's `recent.jsonl` row with what it stopped on, its
 /// last `session_status` (`docs/state.md`, "Fiber home").
 /// A session `close` deleted, never prompted, leaves nothing behind.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "closing carries the session lifecycle inputs and the process result together"
+)]
 fn close_with_result(
     session: Session,
     log: Arc<Log>,

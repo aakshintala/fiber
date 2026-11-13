@@ -103,7 +103,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
                     Ok(())
                 })
                 .unwrap();
-            let _ = session.close(log);
+            session.close(log).unwrap_or(());
             done.send(()).unwrap();
         });
         Deadline::after(fakes::deadline::WAIT).recv_or_fail(&started, "session serving");

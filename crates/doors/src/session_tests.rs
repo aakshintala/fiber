@@ -798,7 +798,7 @@ fn close_joins_a_reader_that_is_still_connected() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     {
@@ -1228,7 +1228,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     assert!(
@@ -2013,7 +2013,7 @@ fn a_shell_registered_after_close_is_cancelled() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     assert!(
@@ -2769,7 +2769,7 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     let (done_tx, done) = mpsc::channel();
     let gate = Arc::clone(&session.gate);
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         done_tx.send(()).unwrap();
     });
     Deadline::after(DEADLINE)
@@ -2895,7 +2895,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     Deadline::after(DEADLINE)
@@ -4146,7 +4146,7 @@ fn the_state_setter_does_nothing_once_close_begins() {
     let log = opened.log;
     let (done_tx, done) = mpsc::channel();
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         let _ignored = done_tx.send(());
     });
     Deadline::after(DEADLINE)
@@ -4423,7 +4423,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
         .spawn({
             let out = Arc::clone(&out);
             move || {
-                super::print(watcher, Box::new(SharedOut(out)));
+                super::print(watcher, Box::new(SharedOut(out))).unwrap_or(());
                 done.send(()).unwrap_or(());
             }
         })
@@ -4501,7 +4501,7 @@ fn print_ends_at_moved_while_the_log_is_held() {
         .spawn({
             let out = Arc::clone(&out);
             move || {
-                super::print(watcher, Box::new(SharedOut(out)));
+                super::print(watcher, Box::new(SharedOut(out))).unwrap_or(());
                 done.send(()).unwrap_or(());
             }
         })
@@ -4967,7 +4967,7 @@ fn close_prints_durable_lines_dropped_before_stop() {
     let (done_tx, done_rx) = mpsc::channel();
     let closing = Arc::clone(&log);
     thread::spawn(move || {
-        let _ = session.close(closing);
+        session.close(closing).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     drop(log);
@@ -6106,7 +6106,7 @@ fn acks_for<'a>(lines: &'a [Value], id: &str) -> Vec<&'a Value> {
 fn close_on_thread(session: Session, log: Arc<Log>) -> (thread::ThreadId, mpsc::Receiver<()>) {
     let (done_tx, done) = mpsc::channel();
     let closer = thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     (closer.thread().id(), done)

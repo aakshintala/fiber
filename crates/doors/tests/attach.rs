@@ -65,7 +65,7 @@ fn close(log: Arc<Log>, inbox: Receiver<(Result<(), Failure>, Session)>) -> Resu
         .expect("waited for the inbox thread to finish");
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        let _ = session.close(log);
+        session.close(log).unwrap_or(());
         match done.send(()) {
             Ok(()) | Err(_) => {}
         }
