@@ -141,7 +141,6 @@ scripts/check	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/
 .github/workflows/ci.yml	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/test-script-selftests	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/relay_tests.rs	fiber-4693	plan	2026-11-13T03:30:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml:1388-1389	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
 .github/workflows/ci.yml:1407-1408	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
 .github/workflows/ci.yml:1419-1419	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
@@ -152,3 +151,19 @@ crates/hub/src/relay_tests.rs	fiber-4693	plan	2026-11-13T03:30:13Z	Amoghs-MacBoo
 docs/ci.md:438-440	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
 crates/cli/src/doctor.rs	fiber-4704	plan	2026-11-13T04:26:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/doctor/doctor_tests.rs	fiber-4704	plan	2026-11-13T04:26:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/relay_tests.rs:5228-5229	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5397-5397	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5401-5402	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5403-5404	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5507-5507	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5513-5514	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5515-5516	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5871-5871	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5877-5878	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5879-5880	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5909-5909	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5913-5914	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5915-5916	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5988-5988	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5994-5995	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
+crates/hub/src/relay_tests.rs:5996-5997	fiber-4693	plan	2026-11-13T04:42:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4693-relay-history-hang	
