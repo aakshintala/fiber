@@ -1349,6 +1349,7 @@ jobs:
             exit 0
           fi
           cat "$mutant_list"
+          cargo build -q -p fakes --example process-extension
           # The Linux x86_64 tests passed on this head before the shard
           # started, so the baseline run adds nothing (docs/ci.md).
           sudo loginctl enable-linger "$USER"
@@ -1379,9 +1380,15 @@ jobs:
           # OOMPolicy=kill fails the whole scope instead of letting nextest count a killed test as caught.
           run_log=/dev/shm/mutants-run-$SHARD.log
           if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"; then
-            :
+            status=0
           else
             status=$?
+          fi
+          if grep -rFq 'is not built; run cargo build' mutants.out/log; then
+            echo "::error title=Missing process-extension fake::Mutants shard $SHARD scenario log reports a fake was not built"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
               | sort -nr | head -n 1 | cut -d' ' -f2- || true)
             echo "cargo mutants failed with status $status; last mutant:"
