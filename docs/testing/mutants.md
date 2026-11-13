@@ -59,8 +59,9 @@ hooks in `support`, and no workflow or script runs one.
 cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
 in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
 timeout, not as caught. In-source unit tests run before integration-test
-binaries, so only mutants caught by an in-source unit test must be caught
-within 120 s. Here, “binary-level” refers only to integration-test binaries.
+binaries, so a mutant caught by a unit test stops early; a mutant caught only
+by an integration-test binary must be caught within 120 s. Here, “binary-level”
+refers only to integration-test binaries.
 A mutant can turn a wait that returns early into one that runs out its whole
 bound, as a flipped comparison in a
 `wait_timeout_while` predicate does, so the deadlines one test can run out in
