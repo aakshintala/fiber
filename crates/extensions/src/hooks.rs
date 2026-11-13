@@ -2470,6 +2470,7 @@ impl Hooks for SessionExtensions {
         // flushes what ended before the first one. The guard drops before
         // the sweep, so a concurrent late start never waits on this lock.
         *lock(&self.inbox) = Some(inbox.clone());
+        self.runtime.set_inbox(inbox.clone());
         // Collected under the weak-map lock and released before handing the
         // sender over, deduped so a shared VM is handed it once.
         for extension in self.attached_vms() {

@@ -231,17 +231,10 @@ impl Cancel for InnerCancel {
     }
 }
 
-/// The inner path's own-cut bypass: a head-only tool runs uncapped, so its
-/// own head slice never applies and the script sees the whole result. A
-/// both-ends tool keeps its prepared form without even asking for an
-/// uncapped one, so its tail and the spill that follows its bound stay as
-/// they are; a tool without its own cut answers `None` and is also kept.
-/// An uncapped form that grows a tail is discarded, so a head-only bound
-/// with a both-ends uncapped form still runs as prepared.
+/// The inner path's own-cut bypass: an uncapped form is adopted only when
+/// it is head-only, so a returned form that retains a tail stays prepared.
+/// A tool without its own cut answers `None` and is also kept.
 fn uncap_head_only(tool: Arc<dyn contract::tool::Tool>) -> Arc<dyn contract::tool::Tool> {
-    if tool.bound().end != 0 {
-        return tool;
-    }
     match tool.with_cap(usize::MAX) {
         Some(uncapped) if uncapped.bound().end == 0 => uncapped,
         _ => tool,
@@ -490,16 +483,9 @@ impl crate::Loop {
         // into an outer one.
         let effects = Arc::new(prepared.effects);
         let worker_effects = Arc::clone(&effects);
-        // An inner head-only cut runs uncapped, so a tool's own head
-        // slice never applies on this path and the script sees the whole
-        // file (`docs/tools.md`, "Bounded results"). The scope stays on
-        // head-only tools: a both-ends bound keeps its tail, and the spill
-        // follows its bound for the ends it holds
-        // (`crates/tools/src/shell/spill.rs`, `Config::bound`), so
-        // uncapping it here would change inner shell results and how much
-        // they hold; its 1 MiB spill stays as it is (see #4361). A tool
-        // without its own cut answers `None` and runs as prepared, and a
-        // both-ends tool keeps its bound.
+        // An inner uncapped form is adopted only when it is head-only.
+        // Shell's such form disables spill; direct shell calls keep their
+        // original bound and artifact configuration.
         let tool = uncap_head_only(prepared.tool);
         // The entered inner run's worker context, gated like the outer
         // call's, so `info` clones nothing.

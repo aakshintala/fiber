@@ -21,11 +21,13 @@ which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
 (`lint` and `test_linux`, plus `bug_red_linux` when an issue its
 body resolves carries the `bug` label) and macOS arm64 jobs
-(`bug_red_macos` on the same bug pull requests, and `clippy_macos`
-when its diff touches a file containing `target_os`, which lints the
-selected crates on the macOS arm64 runner ("On every pull request that
-changes code")). Each macOS job holds one macOS slot against the 5-slot
-cap while it runs; no Linux-side job changes. Draft and ready pull requests select
+(`bug_red_macos` on the same bug pull requests, `clippy_macos`
+when its diff touches a file containing `target_os`, and
+`scripts_self_test_macos` when its diff touches `scripts/`; the latter two
+run on the macOS arm64 runner ("On every pull request that changes code")).
+Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
+Linux-side job changes. The scripts job is selected only for pull requests
+with a path under `scripts/`, never on the backstop. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
@@ -217,6 +219,19 @@ fires on pull requests only, never on the backstop. Its known gap: a
 macOS-only error in a file containing no `target_os` does not trigger the
 job.
 
+When a pull request's names-only diff contains a path under `scripts/`, a
+`scripts_self_test_macos` job runs these self-tests on macOS arm64 by invoking
+each script with the runner's system `/bin/bash`: `scripts/test-leak-scan`,
+`scripts/test-look-diff`, `scripts/test-flaky-tests`,
+`scripts/test-flake-report`, `scripts/test-retry-filter`,
+`scripts/test-stress-plan`, `scripts/test-journey-report`,
+`scripts/test-mutants-rotation`, `scripts/test-mutants-shard-finish`,
+`scripts/test-bug-red` and `scripts/test-class-data`. They mirror the
+self-test block in `scripts/check`; the job does not call `scripts/check`.
+This includes the leak-scan self-test. It triggers only on pull requests,
+never on the backstop; the backstop already runs the macOS test leg. The job
+holds one macOS slot while it runs.
+
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
 ships. Cargo ignores the setting when it builds the test harness.
@@ -257,12 +272,13 @@ single-file integration binary keeps `Flaky tests: <binary>`. The retry is nexte
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
-artifact, failing closed on a missing artifact or a cancelled or skipped
-selected leg (an empty list with a true marker is a complete empty
-result): a leg whose tests failed but whose list was written still feeds
-the collate, which fails closed only when no readable list feeds it: no
-list at all, or an existing-but-empty list with a `false` marker that does
-not feed when no other list feeds it. The reporter files for the legs it
+artifact, tolerating a missing artifact so the collate can report that leg as
+partial when another selected leg has a readable list. It fails closed on a
+cancelled or skipped selected leg before downloading anything (an empty list
+with a true marker is a complete empty result): a leg whose tests failed but
+whose list was written still feeds the collate, which fails closed only when
+no readable list feeds it: no list at all, or an existing-but-empty list with
+a `false` marker, which does not feed when no other readable list exists. The reporter files for the legs it
 has. It then looks
 up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,

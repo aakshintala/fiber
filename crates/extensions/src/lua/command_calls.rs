@@ -14,12 +14,12 @@ use super::Hub;
 
 /// The end of one command. Subscribers wake outside the signal's lock.
 #[derive(Default)]
-pub(super) struct Ended {
+pub(crate) struct Ended {
     state: Mutex<(bool, Vec<Weak<dyn Wake>>)>,
 }
 
 impl Ended {
-    pub(super) fn end(&self) {
+    pub(crate) fn end(&self) {
         let subscribers = {
             let mut state = lock(&self.state);
             if state.0 {
@@ -63,18 +63,26 @@ enum State {
     Returned,
 }
 
-struct Reply {
+pub(crate) struct Reply {
     state: Mutex<State>,
     changed: Condvar,
     ended: Arc<Ended>,
 }
 
 impl Reply {
-    fn pending(&self) -> bool {
+    pub(crate) fn new(ended: Arc<Ended>) -> Self {
+        Self {
+            state: Mutex::new(State::Waiting),
+            changed: Condvar::new(),
+            ended,
+        }
+    }
+
+    pub(crate) fn pending(&self) -> bool {
         matches!(*lock(&self.state), State::Waiting)
     }
 
-    fn resolve(&self, completed: Box<ToolCallCompleted>) {
+    pub(crate) fn resolve(&self, completed: Box<ToolCallCompleted>) {
         let mut state = lock(&self.state);
         if matches!(*state, State::Waiting) {
             *state = State::Answered(completed);
@@ -82,7 +90,7 @@ impl Reply {
         }
     }
 
-    fn wait(&self) -> Box<ToolCallCompleted> {
+    pub(crate) fn wait(&self) -> Box<ToolCallCompleted> {
         let mut state = lock(&self.state);
         loop {
             if matches!(*state, State::Answered(_))
@@ -147,11 +155,7 @@ impl InnerCalls for CommandCalls {
         let Some(hub) = self.hub.upgrade() else {
             return Ok(cancelled());
         };
-        let reply = Arc::new(Reply {
-            state: Mutex::new(State::Waiting),
-            changed: Condvar::new(),
-            ended: self.ended.clone(),
-        });
+        let reply = Arc::new(Reply::new(self.ended.clone()));
         let wake: Arc<dyn Wake> = reply.clone();
         self.ended.subscribe(Arc::downgrade(&wake));
         reply.wake();
@@ -200,7 +204,7 @@ impl InnerCalls for CommandCalls {
     }
 }
 
-fn cancelled() -> Box<ToolCallCompleted> {
+pub(crate) fn cancelled() -> Box<ToolCallCompleted> {
     Box::new(ToolCallCompleted {
         status: CallStatus::Cancelled,
         reason: None,
