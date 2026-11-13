@@ -1136,12 +1136,168 @@ fn a_by_protocol_entry_no_model_uses_is_allowed() {
 }
 
 #[test]
+fn deprecated_table_references_are_skipped_but_absent_ids_fail() {
+    let deprecated = tool_model(json!({"status": "deprecated"}));
+
+    let mut package = fixed_package("s", "openai-responses");
+    package.drop_deprecated = true;
+    package.by_model = &[("old", r#"{"x":1}"#)];
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", deprecated.clone())]),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(
+        notes
+            .iter()
+            .any(|line| line.contains("t/old is deprecated in models.dev; left out"))
+    );
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old by_model entry skipped because the model is deprecated"
+    }));
+
+    // Deprecation is a source-catalog property, even when another leave-out
+    // rule takes precedence for the model's ordinary notice.
+    let non_callable = tool_model(json!({"status": "deprecated", "tool_call": false}));
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", non_callable)]),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old does not call tools with text output in models.dev; left out"
+    }));
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old by_model entry skipped because the model is deprecated"
+    }));
+
+    package.only = &["old"];
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", deprecated.clone())]),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old only entry skipped because the model is deprecated"
+    }));
+
+    // `only` may select a different model while a table still refers to the
+    // deprecated source model.
+    package.only = &["current"];
+    package.by_model = &[("old", r#"{"x":1}"#)];
+    let ((outputs, notes), _) = generate(
+        &catalog(
+            package.source,
+            &[
+                ("old", deprecated.clone()),
+                ("current", tool_model(json!({}))),
+            ],
+        ),
+        std::slice::from_ref(&package),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 1);
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old by_model entry skipped because the model is deprecated"
+    }));
+
+    package.only = &[];
+    package.by_model = &[("old", r#"{"x":1}"#)];
+    let correction = Correction {
+        package: "t".to_owned(),
+        model: "old".to_owned(),
+        fields: serde_json::from_value(json!({"name":"Old"})).unwrap(),
+        source: "https://vendor.example/old".to_owned(),
+        upstream: "https://github.com/models-dev/models.dev/pull/1".to_owned(),
+    };
+    let ((outputs, notes), _) = generate(
+        &catalog(package.source, &[("old", deprecated)]),
+        std::slice::from_ref(&package),
+        &[correction],
+    )
+    .unwrap();
+    assert_eq!(outputs[0].models, 0);
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/old correction entry skipped because the model is deprecated"
+    }));
+
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: table entry for `old` matches no generated model"
+    );
+}
+
+#[test]
+fn the_checked_in_snapshot_skips_a_deprecated_table_reference() {
+    let snapshot: Value = serde_json::from_str(include_str!("../tests/models-dev.json")).unwrap();
+    let mut package = fixed_package("anthropic", "anthropic-messages");
+    package.drop_deprecated = true;
+    package.by_model = &[("claude-haiku-4-5", r#"{"x":1}"#)];
+    let id = "claude-haiku-4-5";
+
+    let mut deprecated_snapshot = snapshot.clone();
+    deprecated_snapshot[package.source]["models"][id]["status"] = json!("deprecated");
+    let ((outputs, notes), _) =
+        generate(&deprecated_snapshot, std::slice::from_ref(&package), &[]).unwrap();
+    assert!(generated_model(&outputs[0], id).is_none());
+    assert!(notes.iter().any(|line| {
+        line == "models-dev: t/claude-haiku-4-5 by_model entry skipped because the model is deprecated"
+    }));
+
+    let mut missing_snapshot = snapshot;
+    missing_snapshot[package.source]["models"]
+        .as_object_mut()
+        .unwrap()
+        .remove(id);
+    assert_eq!(
+        generate_err(&package, &missing_snapshot),
+        "t: table entry for `claude-haiku-4-5` matches no generated model"
+    );
+}
+
+#[test]
+fn a_deprecated_reviewer_model_is_an_error() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.drop_deprecated = true;
+    package.provider = r#"{"name":"t","reviewer_model":"old"}"#;
+    let input = catalog(
+        package.source,
+        &[("old", tool_model(json!({"status":"deprecated"})))],
+    );
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: reviewer_model `old` is not a generated model"
+    );
+}
+
+#[test]
 fn a_stale_table_entry_is_an_error_naming_both() {
     let mut package = fixed_package("s", "p");
     package.by_model = &[("ghost", r#"{"x":1}"#)];
     let input = catalog(package.source, &[("m", tool_model(json!({})))]);
     assert_eq!(
         generate_err(&package, &input),
+        "t: table entry for `ghost` matches no generated model"
+    );
+    let other_package = fixed_package("elsewhere", "p");
+    let other_catalog = catalogs(&[
+        ("s", &[("m", tool_model(json!({})))]),
+        ("elsewhere", &[("ghost", tool_model(json!({})))]),
+    ]);
+    let error = match generate(&other_catalog, &[package, other_package], &[]) {
+        Err(error) => error,
+        Ok(_) => panic!("cross-package table entry unexpectedly matched"),
+    };
+    assert_eq!(
+        error,
         "t: table entry for `ghost` matches no generated model"
     );
     let mut package = fixed_package("s", "p");

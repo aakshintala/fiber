@@ -91,6 +91,14 @@ fn install(setup: &Setup, server: &ProviderServer, thinking: &str) -> String {
         "{}",
         installed.stderr
     );
+    let config_path = setup.home().join("config.json");
+    let mut config: Value = match std::fs::read(&config_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => panic!("reading {}: {error}", config_path.display()),
+    };
+    config["model_lists"]["models_dev"] = json!(false);
+    write_json(&config_path, &config);
     server.url().strip_prefix("http://").unwrap().to_owned()
 }
 

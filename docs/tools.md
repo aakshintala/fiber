@@ -206,8 +206,8 @@ by content.
 - A tool that declares no cap is cut at 16 KiB of model-facing content. The
   cut bounds what the model sees: an inner call's result reaches the calling
   script whole — neither the loop's cut nor the read tool's own cut applies
-  on that path. The shell's 1 MiB spill is the one bound that still applies
-  to an inner call ("Shell", "Result and output").
+  on that path. An inner shell call also bypasses the shell's own spill; a
+  direct shell call still spills past 1 MiB ("Shell", "Result and output").
   Image parts do not count toward the cap and are never cut; their limit is
   `docs/model-routing.md`, "Image limits".
   Configuration can override any tool's cap (`docs/configuration.md`). A tool may declare a larger or
@@ -786,11 +786,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   where it reports how it finished. The full output is in the
   session's `artifacts/`, and output streams as `tool_call_delta` while the call runs. After a
   move to the background, output goes to the job's output file.
-- Up to 1 MiB of output, the shell holds it, and the loop cuts it and writes
-  the artifact. Past 1 MiB, the shell writes the output, from its first byte,
-  to the call's artifact file in the session's `artifacts/` as it arrives, and
-  holds only the first and the last 8 KiB, or the two ends of a configured cap
-  ("Bounded results"). The file ends with the result's closing lines, such as
+- Up to 1 MiB of direct-call output, the shell holds it, and the loop cuts it
+  and writes the artifact. Past 1 MiB, the shell writes the output, from its
+  first byte, to the call's artifact file in the session's `artifacts/` as it
+  arrives, and holds only the first and the last 8 KiB, or the two ends of a
+  configured cap ("Bounded results"). An inner shell call runs with no shell
+  cap or spill artifact, so its complete output reaches the calling script;
+  the outer result to the model remains bounded ("Bounded results"). The file ends with the result's closing lines, such as
   `Exit code 0.`. The loop writes no second artifact, and the `after_tool`
   hooks get the cut output with the file's `path` and `size`
   (`docs/extensions.md`, "Hooks"). When the file cannot be created or

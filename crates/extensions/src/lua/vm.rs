@@ -654,7 +654,7 @@ impl Vm {
         // resolved path.
         match request {
             host::Request::Exec(mut req) => {
-                match host::exec::resolve_in_package(&req.program, &self.dir) {
+                match host::resolve::resolve_in_package(&req.program, &self.dir) {
                     Ok(path) => {
                         if self.host_script.is_none() {
                             req.program = path;

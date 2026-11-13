@@ -75,6 +75,7 @@ fn running() -> (Loop<TestBackend>, Arc<FakeClock>) {
 fn step(lp: &mut Loop<TestBackend>, input: Input) -> Option<i32> {
     let (_hub, idle) = mpsc::channel();
     lp.step(input, &idle)
+        .expect("loop step completes without terminal failure")
 }
 
 /// The drawn screen as text.
@@ -385,9 +386,10 @@ fn quitting_stops_the_ticker() {
         .spawn(move || done.send(lp.run(&rx)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        Deadline::after(DEADLINE)
+        (Deadline::after(DEADLINE)
             .recv(&finished)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}")),
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}")))
+        .expect("event loop result succeeds"),
         0
     );
 }

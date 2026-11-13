@@ -68,6 +68,10 @@ fn warm_built_fiber() {
 impl Setup {
     fn new() -> Self {
         let root = temp_root();
+        support::write_json(
+            &root.path().join("h/config.json"),
+            &json!({"model_lists": {"models_dev": false}}),
+        );
         // A hard link, not a copy: the bytes and inode are the built
         // binary's, so nothing new is executed (`docs/testing.md`, "Waits
         // and timeouts"), but the path is this test's own. It lives in

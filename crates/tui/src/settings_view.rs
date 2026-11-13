@@ -2772,13 +2772,23 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
             .map(|(name, layer)| format!("{name} ({layer})"))
             .collect::<Vec<_>>()
             .join(", "),
-        (_, Shown::Unset) => "Default".to_owned(),
+        (
+            SettingControl::Fixed(_) | SettingControl::Theme | SettingControl::Boolean,
+            Shown::Unset,
+        ) => "Default".to_owned(),
         (SettingControl::Boolean, Shown::Value(text)) => {
             if text == "true" { "[x] On" } else { "[ ] Off" }.to_owned()
         }
+        (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
+        (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Unset) => {
+            "Default ›".to_owned()
+        }
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Value(text)) => {
             format!("{} ›", list_text(text))
+        }
+        (SettingControl::Number | SettingControl::Text | SettingControl::Json, Shown::Unset) => {
+            "Default".to_owned()
         }
         (SettingControl::Number, Shown::Value(text)) => number_text(&row.key, text),
         (SettingControl::Text, Shown::Value(text)) if row.key == "model_lists.refresh_after" => {

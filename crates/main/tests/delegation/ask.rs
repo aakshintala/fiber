@@ -45,6 +45,10 @@ impl Setup {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
+        support::write_json(
+            &root.path().join("h/config.json"),
+            &json!({"model_lists": {"models_dev": false}}),
+        );
         Self { deadline, root }
     }
 

@@ -121,7 +121,7 @@ impl Setup {
         .unwrap();
         write(
             &self.home().join("config.json"),
-            &json!({"model": "acme/big"}),
+            &json!({"model": "acme/big", "model_lists": {"models_dev": false}}),
         );
     }
 

@@ -119,7 +119,10 @@ fn pty(markers: Vec<&'static [u8]>) -> (Pair, mpsc::Receiver<Vec<u8>>, super::Lo
 /// Steps `lp` over one terminal read.
 fn step(lp: &mut super::Loop<TestBackend>, bytes: &[u8]) {
     let (_, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(bytes.to_vec()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(bytes.to_vec()), &rx)).expect("event loop result succeeds"),
+        None
+    );
 }
 
 #[test]
@@ -300,7 +303,10 @@ fn after_the_editor_returns_the_pointer_shape_is_written_again() {
         },
     )
     .unwrap_or_else(|err| panic!("winsize: {err}"));
-    assert_eq!(lp.hand_over(|| None), None);
+    assert_eq!(
+        (lp.hand_over(|| None)).expect("event loop result succeeds"),
+        None
+    );
     lp.write_shape();
     (&pair.slave)
         .write_all(b"ENDMARK")

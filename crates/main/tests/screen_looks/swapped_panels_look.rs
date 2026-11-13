@@ -486,19 +486,24 @@ fn the_settings_view_matches_the_doc() {
     assert_eq!(grid.rows[usize::from(footer)].trim(), keys);
     assert!(is_bold(&grid, footer, "Enter"));
     assert!(!is_bold(&grid, footer, "change"));
-    // Move focus off the Quota notice slider before moving to Models.
-    run.write(b"\x1b[B");
-    run.wait_screen("the focused non-numeric Appearance row", |grid| {
-        focused_label(grid).is_some_and(|label| label != "Quota notice")
+    // Notifications: wait for the slider, then move to Bell before using
+    // Right to leave the tab.
+    run.wait_screen("the focused Quota notice slider", |grid| {
+        focused_label(grid).as_deref() == Some("Quota notice")
     });
-    run.write(b"\x1b[C");
     run.write(b"\x1b[B");
+    run.wait_screen("the focused Bell row", |grid| {
+        focused_label(grid).as_deref() == Some("Bell")
+    });
     run.write(b"\x1b[C");
     grid = run.wait_screen("the Models tab", |grid| {
         find_row(grid, "Default model").is_some_and(|y| {
             let text = grid.rows[usize::from(y)].trim_end();
             text.contains("scripted/s.json ›") && !text.contains("\"scripted/s.json\"")
         }) && find_row(grid, "Models").is_some_and(|y| is_bold(grid, y, "Models"))
+    });
+    grid = run.wait_screen("the focused non-numeric Models row", |grid| {
+        focused_label(grid).as_deref() == Some("Default model")
     });
     let model = row_with(&grid, "Default model");
     // settled: "the Models tab" checked the row text.

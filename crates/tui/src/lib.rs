@@ -46,6 +46,7 @@ mod layout;
 mod link;
 mod local_time;
 mod logical;
+mod login_logout_view;
 mod login_view;
 mod login_worker;
 mod logout_view;
@@ -145,7 +146,7 @@ pub use layout::{DEFAULT_PANEL_SHARE, DEFAULT_RAIL_SHARE, session_columns};
 pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
 pub use paging_session::{paging_session, ticket_session};
 
-pub use event_loop::run;
+pub use event_loop::{Error, run};
 
 pub use ext::{
     CallState, Failure, Input as RendererInput, KeyOutcome, LedgerResult, LedgerRow, RawSpan,

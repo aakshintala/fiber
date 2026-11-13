@@ -4,18 +4,12 @@
 
 use std::time::{Duration, Instant};
 
-use contract::JobId;
 use contract::clock::Clock;
 use contract::events::JobLine;
 use contract::jobs::{Lines, Stop};
+use contract::{JobId, MONITOR_DELIVERY_LIMIT as DELIVERY_LIMIT, MONITOR_LINE_LIMIT as LINE_LIMIT};
 
 use super::output::{Shared, lock};
-
-/// A line keeps this many characters.
-const LINE_LIMIT: usize = 500;
-
-/// A delivery keeps this many characters.
-const DELIVERY_LIMIT: usize = 3_000;
 
 /// The budget holds at most this many deliveries.
 const BUDGET: u64 = 10;
