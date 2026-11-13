@@ -21,18 +21,18 @@ pub(crate) use changed_tests::{
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
+pub(crate) use plan::MutantPlanInput;
 pub(crate) use plan::plan_with_changed_paths;
 #[cfg(test)]
 pub(crate) use plan::plan_with_mutants;
 pub(crate) use plan::{BaseOutcome, BaseResults, classify_base, new_breaks, parse_head_failures};
 pub(crate) use plan::{ChangedPath, PathState};
-pub(crate) use plan::{
-    MutantPlanInput, base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict,
-};
+pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 #[cfg(test)]
 pub(crate) use reuse::CommitSha;
+pub(crate) use reuse::MatchedReuse;
 pub(crate) use reuse::{
-    CommitSha as ReuseCommitSha, Current as ReuseCurrent, MatchedReuse,
+    CommitSha as ReuseCommitSha, Current as ReuseCurrent,
     PullRequestNumber as ReusePullRequestNumber, RunId as ReuseRunId, matched_reuse,
 };
 pub(crate) use runtime_read::runtime_read_mismatches;
