@@ -418,8 +418,7 @@ pub const KEYS: &[Key] = &[
         CountBelow(65536),
         NO,
         None,
-        tabbed(
-            SettingsTab::Advanced,
+        untabbed(
             "Hub port",
             "The 127.0.0.1 port an installed hub listens on besides its local socket; unset means the local socket only.",
         ),

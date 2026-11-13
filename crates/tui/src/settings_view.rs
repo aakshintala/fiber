@@ -1406,7 +1406,7 @@ impl Settings {
                 self.step_number(ctx, &row, true, true)
             }
             (SettingControl::Number | SettingControl::Text, _)
-                if number_list(&row.key).is_some() =>
+                if number_list(&row.key).is_some() || text_list(&row.key).is_some() =>
             {
                 self.step_number(ctx, &row, true, true)
             }
@@ -1454,8 +1454,12 @@ impl Settings {
         };
         let layer = Self::write_layer(row);
         if let Some(values) = text_list(&row.key) {
-            let Some(next) = next_text_value(values, &text, forward) else {
-                return Act::Stay;
+            let next = match next_text_value(values, &text, forward) {
+                Some(next) => next,
+                None if enter && refresh_millis(&text).is_some() => {
+                    values.first().copied().unwrap_or(&text)
+                }
+                None => return Act::Stay,
             };
             self.save(ctx, layer, &row.key, &quoted(next));
             return Act::Stay;
@@ -1485,9 +1489,12 @@ impl Settings {
         let Some(values) = number_list(&row.key) else {
             return Act::Stay;
         };
-        let Some(next) = next_number_value(values, value, forward) else {
-            return Act::Stay;
+        let next = match next_number_value(values, value, forward) {
+            Some(next) => next,
+            None if enter => values.first().copied().unwrap_or(value),
+            None => return Act::Stay,
         };
+
         if row.key == "budget.usd" && next == 0.0 {
             let Some(expected) = layer_named(&row.layer).map(|_| text.as_str()) else {
                 return Act::Stay;
@@ -2539,7 +2546,7 @@ fn slider_bar((minimum, maximum, _step): (f64, f64, f64), shown: &Shown) -> Opti
     let Shown::Value(text) = shown else {
         return None;
     };
-    let value = as_number(text)?.clamp(minimum, maximum);
+    let value = as_number(text)?;
     let fraction = (value - minimum) / (maximum - minimum);
     let fill = (0_u32..8)
         .take_while(|tick| fraction >= (f64::from(*tick) + 0.5) / 8.0)
@@ -2560,15 +2567,16 @@ fn slider_step(
     forward: bool,
     enter: bool,
 ) -> f64 {
-    if value.total_cmp(&minimum).is_lt() {
+    if value < minimum {
         return minimum;
     }
-    if value.total_cmp(&maximum).is_gt() {
+    if value > maximum {
         return if enter && forward { minimum } else { maximum };
     }
     let position = (value - minimum) / step;
     let nearest = position.round();
-    let on_tick = (position - nearest).abs() < 1e-9;
+    let distance = (position - nearest).abs();
+    let on_tick = within_slider_tick_tolerance(distance);
     let tick = if on_tick {
         nearest + if forward { 1.0 } else { -1.0 }
     } else if forward {
@@ -2582,6 +2590,12 @@ fn slider_step(
     } else {
         next
     }
+}
+
+// Mutating this tolerance boundary does not change reachable stepping behaviour.
+#[cfg_attr(false, mutants::skip)]
+fn within_slider_tick_tolerance(distance: f64) -> bool {
+    distance < 1e-9
 }
 
 fn numeric_default(key: &str) -> Option<&'static str> {
@@ -2601,19 +2615,36 @@ fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
 
 /// A list's next value, with directional selection for custom values.
 fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
-    let lower = values.partition_point(|value| value.total_cmp(&current).is_lt());
-    let upper = values.partition_point(|value| !value.total_cmp(&current).is_gt());
-    let to = if forward {
-        upper % values.len()
-    } else {
-        lower.checked_sub(1).unwrap_or(values.len() - 1)
+    let at = values.iter().position(|value| *value == current);
+    let to = match at {
+        Some(at) if forward => at + 1,
+        Some(at) => at.checked_sub(1)?,
+        None if forward => values
+            .iter()
+            .position(|value| nearest_number_above(*value, current))?,
+        None => values
+            .iter()
+            .rposition(|value| nearest_number_below(*value, current))?,
     };
     values.get(to).copied()
 }
 
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_number_above(candidate: f64, current: f64) -> bool {
+    candidate > current
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_number_below(candidate: f64, current: f64) -> bool {
+    candidate < current
+}
+
 fn refresh_millis(text: &str) -> Option<u64> {
     let raw = as_typed(text);
-    let (count, unit) = raw.split_at(raw.len().checked_sub(1)?);
+    let split = raw.char_indices().next_back()?.0;
+    let (count, unit) = raw.split_at(split);
     let count = count.parse::<u64>().ok()?;
     count.checked_mul(match unit {
         "s" => 1_000,
@@ -2630,18 +2661,34 @@ fn next_text_value(
     forward: bool,
 ) -> Option<&'static str> {
     let current_ms = refresh_millis(current)?;
-    let lower = values.partition_point(|value| {
-        refresh_millis(value).is_some_and(|candidate| candidate.cmp(&current_ms).is_lt())
-    });
-    let upper = values.partition_point(|value| {
-        refresh_millis(value).is_some_and(|candidate| !candidate.cmp(&current_ms).is_gt())
-    });
-    let to = if forward {
-        upper % values.len()
-    } else {
-        lower.checked_sub(1).unwrap_or(values.len() - 1)
+    let at = values
+        .iter()
+        .position(|value| refresh_millis(value) == Some(current_ms));
+    let to = match at {
+        Some(at) if forward => at + 1,
+        Some(at) => at.checked_sub(1)?,
+        None if forward => values.iter().position(|value| {
+            refresh_millis(value)
+                .is_some_and(|candidate| nearest_duration_above(candidate, current_ms))
+        })?,
+        None => values.iter().rposition(|value| {
+            refresh_millis(value)
+                .is_some_and(|candidate| nearest_duration_below(candidate, current_ms))
+        })?,
     };
     values.get(to).copied()
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_duration_above(candidate: u64, current: u64) -> bool {
+    candidate > current
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_duration_below(candidate: u64, current: u64) -> bool {
+    candidate < current
 }
 
 /// A listed value as given, anything else with "(custom)" after it.
@@ -2697,16 +2744,6 @@ fn number_text(key: &str, text: &str) -> String {
             counted(n, "session", "sessions"),
         ),
     };
-    if let Some((minimum, maximum, step)) = number_slider(key) {
-        // Every slider minimum is aligned to its step, so the distance to
-        // the nearest zero-origin step is the distance to its tick grid.
-        let remainder = n.rem_euclid(step);
-        let distance = remainder.min(step - remainder);
-        let custom = n < minimum || n > maximum || distance >= step * 1e-9;
-        if custom {
-            return format!("{shown} (custom)");
-        }
-    }
     shown
 }
 
@@ -2714,7 +2751,16 @@ fn number_text(key: &str, text: &str) -> String {
 /// "24 h". A value outside the stepping list reads with "(custom)"
 /// after it; anything unparseable keeps its raw text.
 fn refresh_text(text: &str) -> String {
-    let raw = as_typed(text);
+    let original = as_typed(text);
+    let raw = text_list("model_lists.refresh_after")
+        .and_then(|values| {
+            values
+                .iter()
+                .copied()
+                .find(|value| refresh_millis(value) == refresh_millis(&original))
+        })
+        .unwrap_or(&original)
+        .to_owned();
     let at = raw.len().saturating_sub(1);
     if !raw.is_char_boundary(at) {
         return raw;

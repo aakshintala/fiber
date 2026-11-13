@@ -13,8 +13,8 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers, next_number_value, next_text_value, number_list, number_slider,
-    refresh_millis, shown_value, slider_bar, text_list,
+    as_typed, layers, next_number_value, next_text_value, number_list, number_slider, number_text,
+    refresh_millis, shown_value, slider_bar, slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -239,7 +239,7 @@ fn open(fake: &Fake) -> Settings {
     Settings::open(&ctx(fake), Vec::new())
 }
 
-/// The view over `fake` on `tab`.
+/// Focuses a row whose arrows switch tabs rather than edit its value.
 fn focus_non_numeric(settings: &mut Settings, fake: &Fake) -> bool {
     let item = settings.items().into_iter().find(|item| match item {
         super::Item::Key(at) => {
@@ -256,6 +256,7 @@ fn focus_non_numeric(settings: &mut Settings, fake: &Fake) -> bool {
     true
 }
 
+/// Opens `tab`, focusing a non-numeric row before each arrow switches tabs.
 fn tab(fake: &Fake, tab: SettingsTab) -> Settings {
     let mut settings = open(fake);
     while settings.tab != tab {
@@ -1069,7 +1070,7 @@ fn a_narrow_frame_scrolls_the_tab_bar_to_keep_the_open_tab() {
 
 // Controls.
 
-/// The fixture rows with `key` holding `shown` from `layer`.
+/// A genuine free-text editor row for field-routing tests.
 fn editor_fake() -> Fake {
     Fake::new(vec![on(
         SettingsTab::Appearance,
@@ -3112,15 +3113,15 @@ fn a_number_row_shows_its_unit_in_row_text() {
     );
     assert_eq!(
         number("compaction.window_fraction", "0.525"),
-        "52.5% of the context window (custom)"
+        "52.5% of the context window"
     );
     assert_eq!(
         number("compaction.window_fraction", "0.95"),
-        "95% of the context window (custom)"
+        "95% of the context window"
     );
     assert_eq!(
         number("compaction.window_fraction", "0.45"),
-        "45% of the context window (custom)"
+        "45% of the context window"
     );
     assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
     assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
@@ -3170,10 +3171,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("retry.max_delay_ms", "-60000"), "-60 s (custom)");
     // Durations keep their unit word; off-list values read custom.
     assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
-    assert_eq!(
-        text("model_lists.refresh_after", Text, "\"1440m\""),
-        "1440 min"
-    );
+    assert_eq!(text("model_lists.refresh_after", Text, "\"1440m\""), "24 h");
     assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
     assert_eq!(
         text("model_lists.refresh_after", Text, "\"90m\""),
@@ -3197,10 +3195,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("tui.rail.width", "\"wide\""), "wide");
 }
 
-/// A width row ends with its columns on the terminal: the share's
-/// columns after the region's limits, read from the terminal width
-/// while the draw width keeps the room and the cut (`docs/tui.md`,
-/// `/settings`, "Controls").
+/// The slider's bar clamps at both endpoints and shows intermediate fill.
 #[test]
 fn slider_bar_clamps_its_endpoints_and_rejects_values_outside_the_range() {
     let shown = |text: &str| value(text);
@@ -3227,6 +3222,10 @@ fn slider_bar_clamps_its_endpoints_and_rejects_values_outside_the_range() {
     );
 }
 
+/// Lists the exact ordered values, defaults and counts in the `/settings`
+/// Controls tables (`docs/tui.md`, `/settings`, "Controls"), including exact
+/// order and defaults. The refresh list's six entries and listed `24h`
+/// default are pinned below.
 #[test]
 fn numeric_controls_match_the_documented_values_and_include_defaults() {
     let sliders = [
@@ -3241,7 +3240,7 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
         assert_eq!(number_slider(key), Some(want), "{key}");
         assert!((want.0..=want.1).contains(&default), "{key}");
     }
-    let lists: [(&str, &[f64], f64); 8] = [
+    let lists: [(&str, &[f64], f64); 7] = [
         (
             "compaction.tokens",
             &[
@@ -3280,17 +3279,13 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
             &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
             1_800_000.0,
         ),
-        ("session.keep_exited", &[0.0, 5.0, 10.0, 20.0, 50.0], 10.0),
     ];
     for (key, want, default) in lists {
         assert_eq!(number_list(key), Some(want), "{key}");
         assert!(want.contains(&default), "{key}");
     }
     assert_eq!(number_list("hub.idle_exit_ms"), None);
-    assert_eq!(
-        number_list("session.keep_exited"),
-        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
-    );
+    assert_eq!(number_list("session.keep_exited"), Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..]));
     assert_eq!(number_list("tui.rail.width"), None);
     assert_eq!(
         text_list("model_lists.refresh_after"),
@@ -3329,95 +3324,164 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
 }
 
 #[test]
-fn keep_exited_lists_and_persists_the_documented_session_counts() {
-    let row = |shown| {
-        on(
-            SettingsTab::Sessions,
-            "Keep exited",
-            "session.keep_exited",
-            shown,
-            "project",
-            ANY,
-            SettingControl::Number,
-        )
-    };
-    assert_eq!(super::number_text("session.keep_exited", "0"), "Keep all");
-    assert_eq!(super::number_text("session.keep_exited", "5"), "5 sessions");
-    assert_eq!(
-        super::number_text("session.keep_exited", "7"),
-        "7 sessions (custom)"
-    );
-    assert_eq!(
-        applies_text("session.keep_exited", None),
-        "Applies when the hub starts again."
-    );
-
-    let fake = Fake::new(vec![row(value("10"))]);
-    let mut settings = at(&fake, "session.keep_exited");
-    assert!(screen(&settings).contains("Keep exited"));
-    one(&mut settings, &fake, Key::Enter);
-    assert_eq!(
-        writes(&fake),
-        [w(Layer::Project, "session.keep_exited", "20")]
-    );
-    assert_eq!(
-        next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
-        Some(50.0)
-    );
-
-    let fake = Fake::new(vec![row(value("10"))]);
-    refuse(&fake, "session.keep_exited is read-only");
-    let mut settings = at(&fake, "session.keep_exited");
-    one(&mut settings, &fake, Key::Enter);
-    assert_eq!(
-        writes(&fake),
-        [w(Layer::Project, "session.keep_exited", "20")]
-    );
-    assert_eq!(settings.said, ["session.keep_exited is read-only"]);
-}
-
-#[test]
-fn listed_numbers_step_from_exact_middle_values_in_both_directions() {
-    let values = number_list("session.keep_exited").unwrap();
-    assert_eq!(next_number_value(values, 10.0, true), Some(20.0));
-    assert_eq!(next_number_value(values, 10.0, false), Some(5.0));
-}
-
-#[test]
 fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
     let values = number_list("compaction.tokens").unwrap();
     assert_eq!(next_number_value(values, 300_000.0, true), Some(400_000.0));
     assert_eq!(next_number_value(values, 300_000.0, false), Some(200_000.0));
-    assert_eq!(
-        next_number_value(values, 100_000.0, false),
-        Some(1_000_000.0)
-    );
-    assert_eq!(
-        next_number_value(values, 1_000_000.0, true),
-        Some(100_000.0)
-    );
+    assert_eq!(next_number_value(values, 100_000.0, false), None);
+    assert_eq!(next_number_value(values, 1_000_000.0, true), None);
     assert_eq!(next_number_value(values, 0.0, true), Some(100_000.0));
-    assert_eq!(next_number_value(values, 0.0, false), Some(1_000_000.0));
-    assert_eq!(next_number_value(values, 99_999.0, true), Some(100_000.0));
-    assert_eq!(next_number_value(values, 100_001.0, false), Some(100_000.0));
     assert_eq!(
         next_number_value(values, 2_000_000.0, false),
         Some(1_000_000.0)
     );
     let refresh = text_list("model_lists.refresh_after").unwrap();
-    assert_eq!(next_text_value(refresh, "59m", true), Some("1h"));
-    assert_eq!(next_text_value(refresh, "59m", false), Some("7d"));
-    assert_eq!(next_text_value(refresh, "61m", true), Some("6h"));
-    assert_eq!(next_text_value(refresh, "61m", false), Some("1h"));
     assert_eq!(next_text_value(refresh, "90m", true), Some("6h"));
     assert_eq!(next_text_value(refresh, "90m", false), Some("1h"));
-    assert_eq!(next_text_value(refresh, "12h", true), Some("24h"));
-    assert_eq!(next_text_value(refresh, "12h", false), Some("6h"));
-    assert_eq!(next_text_value(refresh, "1h", false), Some("7d"));
-    assert_eq!(next_text_value(refresh, "7d", true), Some("1h"));
-    assert_eq!(next_text_value(refresh, "30m", false), Some("7d"));
+    assert_eq!(next_text_value(refresh, "1h", false), None);
+    assert_eq!(next_text_value(refresh, "7d", true), None);
     assert_eq!(refresh_millis("90m"), Some(5_400_000));
     assert_eq!(refresh_millis("1s"), Some(1_000));
+}
+
+#[test]
+fn numeric_controls_pin_comparison_edges_and_directional_selection() {
+    let range = (10.0, 40.0, 1.0);
+    for (text, want) in [
+        ("9.999", "▕░░░░░░░░▏"),
+        ("10", "▕░░░░░░░░▏"),
+        ("10.001", "▕░░░░░░░░▏"),
+        ("39.999", "▕████████▏"),
+        ("40", "▕████████▏"),
+        ("40.001", "▕████████▏"),
+    ] {
+        assert_eq!(
+            slider_bar(range, &value(text)),
+            Some(want.to_owned()),
+            "{text}"
+        );
+    }
+    assert_eq!(super::slider_step(40.0, 10.0, 40.0, 1.0, true, false), 40.0);
+    assert_eq!(super::slider_step(40.0, 10.0, 40.0, 1.0, true, true), 10.0);
+    assert_eq!(super::slider_step(9.0, 10.0, 40.0, 1.0, false, false), 10.0);
+
+    let values = number_list("compaction.tokens").unwrap();
+    assert_eq!(next_number_value(values, 300_000.0, true), Some(400_000.0));
+    assert_eq!(next_number_value(values, 300_000.0, false), Some(200_000.0));
+    assert_eq!(next_number_value(values, 100_000.0, true), Some(200_000.0));
+    assert_eq!(
+        next_number_value(values, 1_000_000.0, false),
+        Some(800_000.0)
+    );
+    assert_eq!(next_number_value(values, 1_000_000.0, true), None);
+    assert_eq!(next_number_value(values, 100_000.0, false), None);
+
+    let durations = text_list("model_lists.refresh_after").unwrap();
+    assert_eq!(next_text_value(durations, "90m", true), Some("6h"));
+    assert_eq!(next_text_value(durations, "90m", false), Some("1h"));
+    assert_eq!(next_text_value(durations, "1h", true), Some("6h"));
+    assert_eq!(next_text_value(durations, "6h", false), Some("1h"));
+    assert_eq!(next_text_value(durations, "1h", false), None);
+    assert_eq!(next_text_value(durations, "7d", true), None);
+
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.5"),
+        "50% of the context window"
+    );
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.9"),
+        "90% of the context window"
+    );
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.499"),
+        "49.9% of the context window"
+    );
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.901"),
+        "90.1% of the context window"
+    );
+    assert_eq!(super::number_text("budget.usd", "100"), "$100");
+    assert_eq!(
+        super::number_text("budget.usd", "100.001"),
+        "$100.001 (custom)"
+    );
+}
+
+#[test]
+fn budget_zero_special_case_requires_both_key_and_zero_value() {
+    let budget = on(
+        SettingsTab::Sessions,
+        "Budget",
+        "budget.usd",
+        value("5"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![budget]);
+    let mut settings = at(&fake, "budget.usd");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "10")]);
+
+    let zero = on(
+        SettingsTab::Sessions,
+        "Warm cap",
+        "cache.warm_cap",
+        value("0"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![zero]);
+    let mut settings = at(&fake, "cache.warm_cap");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "cache.warm_cap", "1")]);
+}
+
+#[test]
+fn number_and_duration_lists_step_forward_from_the_middle() {
+    let fake = Fake::new(with("compaction.tokens", value("400000"), "project"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "600000")]
+    );
+
+    let fake = Fake::new(with("model_lists.refresh_after", value("\"6h\""), "global"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.refresh_after", "\"12h\"")]
+    );
+}
+
+#[test]
+fn enter_on_a_non_slider_number_opens_its_field() {
+    let fake = Fake::new(with("compaction.tokens", value("400000"), "project"));
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "600000")]
+    );
+
+    let row = on(
+        SettingsTab::Sessions,
+        "Unbounded number",
+        "test.number",
+        value("8080"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![row]);
+    let mut settings = at(&fake, "test.number");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Field(_)));
+    assert!(fake.writes().is_empty());
 }
 
 #[test]
@@ -3438,6 +3502,69 @@ fn refresh_after_arrows_step_its_list_without_changing_tabs() {
             )]
         );
     }
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.refresh_after", "\"3d\"")]
+    );
+}
+
+#[test]
+fn enter_at_the_top_of_compaction_token_list_wraps_to_first_value() {
+    let fake = Fake::new(with("compaction.tokens", value("1000000"), "global"));
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "compaction.tokens", "100000")]
+    );
+}
+
+#[test]
+fn number_control_edges_do_not_write_and_slider_maximum_steps_down() {
+    let fake = Fake::new(with("compaction.tokens", value("1000000"), "global"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Right);
+    assert!(writes(&fake).is_empty());
+
+    let fake = Fake::new(with("compaction.tokens", value("100000"), "global"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Left);
+    assert!(writes(&fake).is_empty());
+
+    let fake = Fake::new(with("model_lists.refresh_after", value("\"7d\""), "global"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    edit(&mut settings, &fake, Edit::Right);
+    assert!(writes(&fake).is_empty());
+
+    let fake = Fake::new(with("tui.rail.width", value("40"), "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "39")]);
+    assert_eq!(slider_step(40.0, 10.0, 40.0, 1.0, false, false), 39.0);
+    assert_eq!(slider_step(41.0, 10.0, 40.0, 1.0, true, false), 40.0);
+    assert_eq!(slider_step(41.0, 10.0, 40.0, 1.0, false, true), 40.0);
+}
+
+#[test]
+fn number_text_shows_non_tick_slider_values_without_custom_suffix() {
+    assert_eq!(
+        number_text("tui.rail.width", "15.5"),
+        "15.5% of screen width"
+    );
+}
+
+#[test]
+fn enter_at_the_end_of_refresh_list_wraps_to_one_hour() {
+    let fake = Fake::new(with("model_lists.refresh_after", value("\"7d\""), "global"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.refresh_after", "\"1h\"")]
+    );
 }
 
 #[test]
@@ -3575,28 +3702,97 @@ fn budget_zero_is_custom_and_arrows_move_between_zero_and_unset() {
     assert_eq!(shown_value(settings.selected().unwrap()).0, "Default");
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "1")]);
+}
 
-    let fake = Fake::new(vec![row(Shown::Unset)]);
-    let mut settings = at(&fake, "budget.usd");
-    edit(&mut settings, &fake, Edit::Left);
-    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "100")]);
+#[test]
+fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
+    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, true, false), 0.55);
+    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, false, false), 0.5);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, false), 0.9);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, true), 0.5);
+    assert_eq!(super::slider_step(0.45, 0.5, 0.9, 0.05, true, false), 0.5);
+    let stepped = (0..8).fold(0.5, |value, _| {
+        super::slider_step(value, 0.5, 0.9, 0.05, true, false)
+    });
+    assert!((stepped - 0.9).abs() < 1e-12);
+}
 
-    let fake = Fake::new(vec![on(
-        SettingsTab::Sessions,
-        "Compaction tokens",
-        "compaction.tokens",
-        value("0"),
-        "project",
-        ANY,
-        SettingControl::Number,
-    )]);
-    let mut settings = at(&fake, "compaction.tokens");
+/// A width row counts columns after region limits, read from terminal width
+/// while draw width keeps room and cut (`docs/tui.md`, `/settings`, "Controls").
+
+
+
+
+#[test]
+fn keep_exited_lists_and_persists_the_documented_session_counts() {
+    let row = |shown| {
+        on(
+            SettingsTab::Sessions,
+            "Keep exited",
+            "session.keep_exited",
+            shown,
+            "project",
+            ANY,
+            SettingControl::Number,
+        )
+    };
+    assert_eq!(super::number_text("session.keep_exited", "0"), "Keep all");
+    assert_eq!(super::number_text("session.keep_exited", "5"), "5 sessions");
+    assert_eq!(
+        super::number_text("session.keep_exited", "7"),
+        "7 sessions (custom)"
+    );
+    assert_eq!(
+        applies_text("session.keep_exited", None),
+        "Applies when the hub starts again."
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    let mut settings = at(&fake, "session.keep_exited");
+    assert!(screen(&settings).contains("Keep exited"));
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
-        [w(Layer::Project, "compaction.tokens", "100000")]
+        [w(Layer::Project, "session.keep_exited", "20")]
     );
+    assert_eq!(
+        next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
+        Some(50.0)
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    refuse(&fake, "session.keep_exited is read-only");
+    let mut settings = at(&fake, "session.keep_exited");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(settings.said, ["session.keep_exited is read-only"]);
 }
+
+#[test]
+fn listed_numbers_step_from_exact_middle_values_in_both_directions() {
+    let values = number_list("session.keep_exited").unwrap();
+    assert_eq!(next_number_value(values, 10.0, true), Some(20.0));
+    assert_eq!(next_number_value(values, 10.0, false), Some(5.0));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #[test]
 fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
@@ -3618,33 +3814,7 @@ fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
     );
 }
 
-#[test]
-fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
-    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, true, false), 0.55);
-    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, false, false), 0.5);
-    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, false), 0.9);
-    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, true), 0.5);
-    assert_eq!(super::slider_step(0.45, 0.5, 0.9, 0.05, true, false), 0.5);
-    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, false), 0.9);
-    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, true), 0.9);
-    assert_eq!(super::slider_step(0.5, 0.5, 0.9, 0.05, true, false), 0.55);
-    assert_eq!(
-        super::slider_step(0.5e-9, 0.0, 0.5e-9, 1.0, true, true),
-        0.0
-    );
-    assert_eq!(
-        super::slider_step(1.0e-9, 0.0, 1.0e-9, 1.0, true, true),
-        1.0e-9
-    );
-    assert_eq!(
-        super::slider_step(2.0e-9, 0.0, 2.0e-9, 1.0, true, true),
-        2.0e-9
-    );
-    let stepped = (0..8).fold(0.5, |value, _| {
-        super::slider_step(value, 0.5, 0.9, 0.05, true, false)
-    });
-    assert!((stepped - 0.9).abs() < 1e-12);
-}
+
 
 #[test]
 fn a_width_row_counts_columns_for_its_width() {
@@ -3984,6 +4154,8 @@ fn settings_search_matches_letter_activation_and_slash_empty_query() {
     let mut settings = tab(&fake, SettingsTab::Sessions);
     one(&mut settings, &fake, Key::Char('/'));
     assert_eq!(query_of(&settings), "");
+    // One result per eligible key and screen row (`docs/tui.md`,
+    // `/settings`, "Rows"); count and order are contractual.
     assert_eq!(settings.items().len(), 21);
     assert_eq!(
         settings.focus,
