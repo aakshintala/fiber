@@ -115,9 +115,6 @@ crates/cli/src/models.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro
 crates/cli/src/prune.rs	fiber-4704	plan	2026-11-13T00:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection_tests.rs	fiber-4598	grant	2026-11-13T00:26:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4598-auto-archive	
 crates/main/tests/commands/mod.rs	fiber-4704	grant	2026-11-13T00:30:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
-.github/workflows/ci.yml	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-.github/workflows/mutants-scheduled.yml	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/ci.md	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process.rs	fiber-4775	plan	2026-11-13T01:06:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-4775	plan	2026-11-13T01:11:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/fakes/src/process_extension.rs	fiber-4775	plan	2026-11-13T01:11:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -145,3 +142,11 @@ scripts/check	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/
 scripts/test-script-selftests	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-4780	plan	2026-11-13T03:24:40Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/relay_tests.rs	fiber-4693	plan	2026-11-13T03:30:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+.github/workflows/ci.yml:1388-1389	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+.github/workflows/ci.yml:1407-1408	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+.github/workflows/ci.yml:1419-1419	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+.github/workflows/ci.yml:1421-1422	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+.github/workflows/mutants-scheduled.yml:188-189	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+.github/workflows/mutants-scheduled.yml:190-191	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+.github/workflows/mutants-scheduled.yml:205-206	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
+docs/ci.md:438-440	fiber-4775	plan	2026-11-13T04:23:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4775-mutants-build-fake	
