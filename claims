@@ -235,7 +235,6 @@ crates/tui/src/skills_view.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-70
 crates/tui/src/skills_view_tests.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/offer.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/offer_tests.rs	fiber-4675	plan	2026-11-13T06:25:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-13T06:45:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/bug-red	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-bug-red	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4788	plan	2026-11-13T07:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -295,8 +294,6 @@ crates/extensions/src/repository/declared_tests.rs:851-851	fiber-4702	plan	2026-
 crates/main/src/cli_tests.rs:3-4	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
 crates/main/src/cli_tests.rs:4568-4569	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
 docs/configuration.md:34-35	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
-crates/main/src/keeper_child.rs	fiber-4351	plan	2026-11-13T08:59:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/keeper_child_tests.rs	fiber-4351	plan	2026-11-13T08:59:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/settings_view.rs	fiber-4702	plan	2026-11-13T09:18:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/settings_view_tests.rs	fiber-4702	plan	2026-11-13T09:18:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/configure.rs	fiber-4702	plan	2026-11-13T09:39:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -346,9 +343,6 @@ crates/main/tests/providers/model_picker_keys.rs	fiber-4675	plan	2026-11-13T12:0
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4675	plan	2026-11-13T12:00:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/terminal.rs	fiber-4675	plan	2026-11-13T12:00:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/snapshots/screens__journeys__model_picker_open.snap	fiber-4675	plan	2026-11-13T12:00:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/keeper.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/keeper_restore.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/resume.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 Cargo.lock:978-979	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
 crates/config/src/cache.rs:144-145	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
 crates/config/src/lib.rs:49-50	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
