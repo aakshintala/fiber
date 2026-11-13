@@ -37,18 +37,22 @@ fn installed_hub(setup: &Setup) -> hub_start::Served {
     )
 }
 
-fn closed_stdout(args: &[&str]) -> std::process::Output {
+fn run_with_hub(args: &[&str], stdout: Stdio) -> std::process::Output {
     let setup = Setup::new();
     let served = installed_hub(&setup);
-    let (reader, writer) = io::pipe().unwrap();
-    drop(reader);
     let mut command = setup.fiber(args);
-    command.stdout(Stdio::from(writer));
-    let output = support::run_to_exit(setup.deadline, "list command with closed stdout", command);
+    command.stdout(stdout);
+    let output = support::run_to_exit(setup.deadline, "command with redirected stdout", command);
     drop(served.hub);
     served.process.kill("TERM");
     assert_eq!(served.process.wait().code(), Some(143));
     output
+}
+
+fn closed_stdout(args: &[&str]) -> std::process::Output {
+    let (reader, writer) = io::pipe().unwrap();
+    drop(reader);
+    run_with_hub(args, Stdio::from(writer))
 }
 
 #[test]
@@ -73,18 +77,27 @@ fn hub_token_list_closed_stdout_exits_quietly() {
     );
 }
 
+#[test]
+fn doctor_closed_stdout_exits_quietly() {
+    let setup = Setup::new();
+    let (reader, writer) = io::pipe().unwrap();
+    drop(reader);
+    let mut command = setup.fiber(&["doctor"]);
+    command.stdout(Stdio::from(writer));
+    let output = support::run_to_exit(setup.deadline, "doctor with closed stdout", command);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stderr.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn full_stdout_remains_an_error() {
-    let setup = Setup::new();
-    let served = installed_hub(&setup);
     let full = fs::File::options().write(true).open("/dev/full").unwrap();
-    let mut command = setup.fiber(&["sessions"]);
-    command.stdout(Stdio::from(full));
-    let output = support::run_to_exit(setup.deadline, "list command with full stdout", command);
-    drop(served.hub);
-    served.process.kill("TERM");
-    assert_eq!(served.process.wait().code(), Some(143));
+    let output = run_with_hub(&["sessions"], Stdio::from(full));
     assert_eq!(output.status.code(), Some(1));
     assert!(!output.stderr.is_empty());
 }

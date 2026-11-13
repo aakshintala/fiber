@@ -221,7 +221,7 @@ pub fn doctor(
     ) {
         Ok(true) => 0,
         Ok(false) => 1,
-        Err(error) => crate::fail(error.into()),
+        Err(error) => crate::finish_code(Err::<i32, CliError>(error.into())),
     }
 }
 

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use contract::events::{Event, EventKind};
 use contract::session_search::LIMIT;
-use contract::{Envelope, SessionId};
+use contract::{Envelope, ErrorCode, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
@@ -696,6 +696,7 @@ fn a_failed_stdout_write_is_io_failed() {
     let crate::CliError::StandardOutput(error) = &failure else {
         panic!("expected a stdout failure, got {failure:?}");
     };
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
     assert_eq!(error.kind(), io::ErrorKind::Other);
     assert_eq!(error.to_string(), "closed");
 }

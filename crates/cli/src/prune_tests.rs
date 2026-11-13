@@ -983,6 +983,7 @@ impl Write for FailSecondWrite {
 
 fn check_forwarded_closed(got: Result<(), CliError>) {
     let failure = got.unwrap_err();
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
     assert!(
         matches!(
             failure,

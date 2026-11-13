@@ -248,7 +248,11 @@ fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
 fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
     match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(CliError::StandardOutput(error)) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+        Err(CliError::StandardOutput(error) | CliError::DoctorReport(error))
+            if error.kind() == io::ErrorKind::BrokenPipe =>
+        {
+            0
+        }
         Err(error) => fail(error.into()),
     }
 }
@@ -256,8 +260,12 @@ fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
 /// Writes one line to `out`: the line plus one line feed. A write failure
 /// is the shared standard-output failure, for the caller to propagate or
 /// ignore as it already did.
-fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Box<CliError>> {
-    writeln!(out, "{line}").map_err(|error| Box::new(CliError::StandardOutput(error)))
+#[allow(
+    clippy::result_large_err,
+    reason = "keep the typed stdout error and its original io::Error by value until shared finalization"
+)]
+fn write_line(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
+    writeln!(out, "{line}").map_err(CliError::StandardOutput)
 }
 
 /// Runs `run` with Fiber home and the current directory, mapping any
