@@ -401,12 +401,12 @@ pub(crate) fn read_set_file(path: &Path) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
-/// The committed `reviewer_consent/` sessions `--dirs` converts, ported
-/// from `COMMITTED_SYNTHETIC_SESSIONS`
-/// (`crates/loop/tests/support/review.rs`): only a directory carrying one
-/// of these names converts, so an untracked directory placed beside them is
-/// rejected. The parity test pins the port to the loop list.
-pub(crate) const COMMITTED_DIRS: [&str; 24] = [
+/// The committed session names `--dirs` accepts, ported from
+/// `COMMITTED_SYNTHETIC_SESSIONS` (`crates/loop/tests/support/review.rs`).
+/// Consent names must be directly under `reviewer_consent/`; the
+/// `contradictory-consent` name is accepted only under `reviewer_eval/`.
+/// The guard rejects untracked and misplaced directories.
+pub(crate) const COMMITTED_DIRS: [&str; 25] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
@@ -414,6 +414,7 @@ pub(crate) const COMMITTED_DIRS: [&str; 24] = [
     "control-5-approval-claim",
     "control-6-privileged-system-install",
     "control-7-guard-override-install",
+    "contradictory-consent",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",
@@ -436,6 +437,9 @@ pub(crate) const COMMITTED_DIRS: [&str; 24] = [
 /// The committed `review_person_input/` session name `--dirs` accepts
 /// beside the consent sessions.
 pub(crate) const PERSON_INPUT_DIR: &str = "review_person_input";
+
+/// The only reviewer-eval fixture directory accepted by `--dirs`.
+pub(crate) const REVIEWER_EVAL_DIR: &str = "contradictory-consent";
 
 /// Maps a committed session directory name to its first-family verdict,
 /// mirroring the set recipe
@@ -462,15 +466,16 @@ pub(crate) struct FoldedDir {
 
 /// Folds one committed session directory into sweep entries: the `--dirs`
 /// guard accepts only a canonicalized dir directly under the committed
-/// consent root or the person-input session itself, so no owner directory
-/// reaches the converter through a flag. The logged workspace lands
-/// verbatim as each entry's workspace; a compaction in the dir is an error
-/// naming the dir and its seq, since no selection answer off loop can
-/// rebuild a kept prefix faithfully.
+/// consent root, the person-input session itself, or the one reviewer-eval
+/// fixture under its root, so no owner directory reaches the converter
+/// through a flag. The logged workspace lands verbatim as each entry's
+/// workspace; a compaction in the dir is an error naming the dir and its seq,
+/// since no selection answer off loop can rebuild a kept prefix faithfully.
 pub(crate) fn fold_session_dir(
     dir: &Path,
     consent_root: &Path,
     person_root: &Path,
+    reviewer_eval_root: &Path,
 ) -> Result<FoldedDir, String> {
     let reject = || {
         format!(
@@ -481,14 +486,25 @@ pub(crate) fn fold_session_dir(
     let candidate = dir.canonicalize().map_err(|_| reject())?;
     let consent = consent_root.canonicalize().map_err(|_| reject())?;
     let person = person_root.canonicalize().map_err(|_| reject())?;
+    let reviewer_eval = reviewer_eval_root.canonicalize().map_err(|_| reject())?;
     let named = candidate
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .is_some_and(|name| COMMITTED_DIRS.contains(&name.as_str()));
+    let reviewer_eval_case = candidate.file_name().is_some_and(|name| {
+        name.to_string_lossy() == REVIEWER_EVAL_DIR
+            && candidate
+                .parent()
+                .is_some_and(|parent| parent == reviewer_eval)
+    });
     if candidate != person
         && !(named
+            && candidate
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy() != REVIEWER_EVAL_DIR)
             && candidate.is_dir()
             && candidate.parent().is_some_and(|parent| parent == consent))
+        && !(reviewer_eval_case && candidate.is_dir())
     {
         return Err(reject());
     }
