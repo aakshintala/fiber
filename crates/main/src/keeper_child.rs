@@ -54,7 +54,16 @@ fn trace_lock_holders(path: &std::path::Path, processes: &BTreeMap<String, Arc<P
     );
     let runtime_groups: Vec<_> = processes
         .iter()
-        .map(|(id, process)| (id.as_str(), process.pgid))
+        .map(|(id, process)| {
+            (
+                id.as_str(),
+                process.pgid,
+                lock(&process.state)
+                    .diagnostic_job_id
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_owned()),
+            )
+        })
         .collect();
     eprintln!(
         "FIBER4351_TRACE proc_lock_scan path={path:?} device={lock_device} matching_locks={matching_locks:?} runtime_process_groups={runtime_groups:?} (runtime-derived, not Supervisor fields)"
@@ -75,10 +84,10 @@ fn trace_lock_holders(path: &std::path::Path, processes: &BTreeMap<String, Arc<P
             continue;
         };
         for fd in fds.flatten() {
-            let Ok(target) = fs::read_link(fd.path()) else {
+            let Ok(fd_metadata) = fs::metadata(fd.path()) else {
                 continue;
             };
-            if target != path {
+            if fd_metadata.dev() != device || fd_metadata.ino() != inode {
                 continue;
             }
             let stat_path = entry.path().join("stat");
@@ -100,28 +109,22 @@ fn trace_lock_holders(path: &std::path::Path, processes: &BTreeMap<String, Arc<P
                 .ok()
                 .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
                 .unwrap_or_else(|| "unavailable".into());
+            let runtime_role = pgrp
+                .parse::<u32>()
+                .ok()
+                .and_then(|group| runtime_groups.iter().find(|(_, pgid, _)| *pgid == group));
             let role = if pid == std::process::id() {
-                "this_keeper"
-            } else if let Ok(group) = pgrp.parse::<u32>() {
-                if let Some((id, _)) = runtime_groups.iter().find(|(_, pgid)| *pgid == group) {
-                    if *id == "call_0" {
-                        "call_0 job_id=j_6fe0376e94d77e1f"
-                    } else if *id == "call_1" {
-                        "call_1"
-                    } else {
-                        "child_job"
-                    }
-                } else if cmdline.contains("keeper") && cmdline.contains("--id") {
-                    "earlier_keeper"
-                } else if cmdline.contains("hub_daemon") {
-                    "test_process"
-                } else {
-                    "unknown"
-                }
-            } else if cmdline.contains("hub_daemon") {
-                "test_process"
+                "this_keeper".to_owned()
+            } else if let Some((id, _, job_id)) = runtime_role {
+                format!("{id} job_id={job_id}")
+            } else if cmdline.contains("keeper") && cmdline.contains("--id") {
+                "earlier_keeper".to_owned()
+            } else if cmdline.contains("hub") && !cmdline.contains("hub_daemon") {
+                "hub".to_owned()
+            } else if cmdline.contains("hub_daemon") && cmdline.contains("keeper") {
+                "test_process".to_owned()
             } else {
-                "unknown"
+                "unknown".to_owned()
             };
             let fdnum = fd.file_name().to_string_lossy().into_owned();
             let info =
@@ -212,6 +215,7 @@ struct State {
     ended: bool,
     readers: usize,
     seq: u64,
+    diagnostic_job_id: Option<String>,
 }
 struct Process {
     pgid: u32,
@@ -617,6 +621,7 @@ impl Runtime {
                 ended: false,
                 readers: if streams.errors.is_some() { 2 } else { 1 },
                 seq: 0,
+                diagnostic_job_id: None,
             }),
             cv: Condvar::new(),
         });
@@ -1267,11 +1272,15 @@ impl Runtime {
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
                         && let Some(process) = lock(&self.processes).get(&id)
                     {
-                        lock(&process.state).adoption = Some(Adoption {
-                            output: output_path,
-                            errors: errors_path,
-                            lines,
-                        });
+                        {
+                            let mut state = lock(&process.state);
+                            state.diagnostic_job_id = Some(job_id.0.clone());
+                            state.adoption = Some(Adoption {
+                                output: output_path,
+                                errors: errors_path,
+                                lines,
+                            });
+                        }
                     }
                 }
                 ToKeeper::Confirmed(id) => {

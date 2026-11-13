@@ -633,15 +633,22 @@ fn crash_after(
     let lines = stdout(&mut child);
     let started = event(&lines, "job_started", setup.deadline);
     event(&lines, "tool_call_started", setup.deadline);
+    // The resumed `ask` process owns session opening; `doors::session::open_in`
+    // binds from that running process. The child id is recorded while it is live.
+    eprintln!(
+        "FIBER4351_TRACE test crash_after socket_creator_pid={} evidence=ask_resume_process_opened_session",
+        child.id()
+    );
     let job_group = fixture.ready.wait(setup.deadline.start_wait())[0];
     let output =
         session_dir(setup, &fixture.id).join(started["payload"]["output_path"].as_str().unwrap());
     settle(&output);
     let kill_marker = kill_marker_file(setup, &fixture.id);
     eprintln!(
-        "FIBER4351_TRACE test crash_after resumed_fiber_pid={} process_group_leader={} (socket_creator_not_proven)",
+        "FIBER4351_TRACE test crash_after resumed_fiber_pid={} process_group_leader={} socket_creator_pid={}",
         child.id(),
-        group
+        group,
+        child.id()
     );
     fakes::kill_group(group, "KILL").unwrap();
     assert!(!reap(child, setup.deadline).success());
