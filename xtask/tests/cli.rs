@@ -438,6 +438,50 @@ fn plan_does_not_select_scripts_job_for_deleted_script_path() {
 }
 
 #[test]
+fn plan_keeps_unreadable_script_path_present() {
+    let dir = workspace();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "-f", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "base probe"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write("scripts/probe", "#!/bin/sh\n# changed\n");
+    git(&dir, &["add", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "change probe"]);
+    std::fs::remove_file(dir.path().join("scripts/probe")).unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts/probe")).unwrap();
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["scripts_self_test_macos"], true);
+}
+
+#[test]
 fn plan_uses_rename_detected_head_diff_paths_for_scripts_job() {
     let args = [
         "plan",
