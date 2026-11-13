@@ -314,3 +314,6 @@ crates/extensions/src/repository/declared_tests.rs:851-851	fiber-4702	plan	2026-
 crates/main/src/cli_tests.rs:3-4	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
 crates/main/src/cli_tests.rs:4568-4569	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
 docs/configuration.md:34-35	fiber-4702	plan	2026-11-13T08:09:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4702-home-repo-layer	
+crates/config/src/cache.rs	fiber-4755	plan	2026-11-13T08:36:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/lib.rs	fiber-4755	plan	2026-11-13T08:36:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/tests/model_cache.rs	fiber-4755	plan	2026-11-13T08:36:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
