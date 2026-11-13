@@ -209,6 +209,18 @@ pub(crate) struct Plan {
     pub(crate) shards: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PathState {
+    Present(Option<Vec<u8>>),
+    Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChangedPath {
+    pub(crate) path: String,
+    pub(crate) state: PathState,
+}
+
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {
@@ -254,6 +266,8 @@ pub(crate) fn plan(
     // "The merge gate"), so the selection ignores it.
     let _ = draft;
     let jobs = BTreeMap::from([
+        ("clippy_macos", false),
+        ("scripts_self_test_macos", false),
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
         // Linux x86_64 runs the selected tests on every event; `test` runs
@@ -272,6 +286,26 @@ pub(crate) fn plan(
         ("release", !pr),
     ]);
     Plan { jobs, shards }
+}
+
+/// Add the pull-request-only macOS selections from the head paths and their
+/// current contents, while leaving release-path selection separate.
+pub(crate) fn plan_with_changed_paths(
+    mut plan: Plan,
+    pull_request: bool,
+    changed_paths: &[ChangedPath],
+) -> Plan {
+    let clippy_macos = pull_request && changed_paths.iter().any(|entry| {
+        matches!(&entry.state, PathState::Present(Some(contents)) if contents.windows(b"target_os".len()).any(|window| window == b"target_os"))
+    });
+    let scripts_self_test_macos = pull_request
+        && changed_paths.iter().any(|entry| {
+            entry.path.starts_with("scripts/") && matches!(entry.state, PathState::Present(_))
+        });
+    plan.jobs.insert("clippy_macos", clippy_macos);
+    plan.jobs
+        .insert("scripts_self_test_macos", scripts_self_test_macos);
+    plan
 }
 
 /// What the rerun at the base commit says about one test that failed at

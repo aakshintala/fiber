@@ -326,7 +326,7 @@ fn reviewed_session(
 #[test]
 fn a_rewritten_call_is_reviewed_as_the_call_that_will_run() {
     let (mut session, tool, _hooks, reviewer) = reviewed_session(
-        reviewer_texts(&["check", "allow looks fine"]),
+        reviewer_texts(&["check", "looks fine\nallow"]),
         vec![("probe", json!({"path": "a.txt"}))],
     );
     session.inbox.send(delivery("go")).unwrap();
@@ -389,7 +389,7 @@ fn a_rewritten_call_is_reviewed_as_the_call_that_will_run() {
 #[test]
 fn a_blocked_rewritten_call_logs_the_arguments_it_was_judged_with() {
     let (mut session, tool, _hooks, _reviewer) = reviewed_session(
-        reviewer_texts(&["check", "block no"]),
+        reviewer_texts(&["check", "no\nblock"]),
         vec![("probe", json!({"path": "a.txt"}))],
     );
     session.inbox.send(delivery("go")).unwrap();
@@ -429,7 +429,7 @@ fn permission_requested_rewrite_on_a_reviewer_escalation_carries_the_rewritten_a
     let hooks = Arc::new(FakeHooks::rewriting(json!({"path": "b.txt"})));
     hook(Arc::clone(&hooks), &mut session);
     let _reviewer = session.reviewer_limits(
-        reviewer_texts(&["check", "block no"]),
+        reviewer_texts(&["check", "no\nblock"]),
         r#loop::BlockLimits {
             consecutive: 1,
             session: 20,
@@ -612,7 +612,7 @@ fn a_blocked_call_renders_identically_after_a_resume() {
     );
     let hooks = Arc::new(FakeHooks::rewriting(json!({"path": "b.txt"})));
     hook(Arc::clone(&hooks), &mut session);
-    let blocked = session.reviewer(reviewer_texts(&["check", "block: too risky"]));
+    let blocked = session.reviewer(reviewer_texts(&["check", "too risky\nblock"]));
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert!(tool.runs().is_empty());
