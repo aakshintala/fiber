@@ -318,12 +318,7 @@ impl Registry {
     /// already holds. The recorded output path is retained without opening
     /// or validating it; the detached process writes the log. No start event
     /// is written and no id is minted.
-    pub fn restore_detached(
-        &self,
-        started: JobStarted,
-        _detached_root: &Path,
-        stop: Stop,
-    ) -> Result<Opened, OpenError> {
+    pub fn restore_detached(&self, started: JobStarted, stop: Stop) -> Result<Opened, OpenError> {
         let path = PathBuf::from(&started.output_path);
         if started.kind != Some(contract::events::JobKind::Detached) {
             return Err(OpenError {
@@ -387,6 +382,64 @@ impl Registry {
             emit: Arc::clone(&self.emit),
             lines: None,
         })
+    }
+
+    /// Replays the session log and restores outstanding detached groups whose
+    /// process identity still matches. Invalid or absent rows are silently
+    /// omitted; restoration never signals a group.
+    pub fn restore_detached_rows<I, E, F, T>(&self, lines: I, mut parts: F) -> Vec<(Opened, T)>
+    where
+        I: IntoIterator<Item = Result<contract::Envelope, E>>,
+        F: FnMut(u32) -> (Stop, T),
+    {
+        use contract::events::{Event, EventKind, JobKind};
+        use std::collections::{HashMap, HashSet};
+
+        let mut outstanding = HashMap::<JobId, JobStarted>::new();
+        let mut order = Vec::new();
+        let mut present = HashSet::new();
+        for line in lines {
+            let Ok(line) = line else { continue };
+            if line.kind() == EventKind::JobStarted {
+                let Ok(Some(Event::JobStarted(started))) = Event::from_envelope(&line) else {
+                    continue;
+                };
+                if started.kind == Some(JobKind::Detached) {
+                    let id = started.job_id.clone();
+                    if present.insert(id.clone()) {
+                        order.push(id.clone());
+                    }
+                    outstanding.insert(id, started);
+                }
+            } else if line.kind() == EventKind::JobCompleted {
+                let Ok(Some(Event::JobCompleted(ended))) = Event::from_envelope(&line) else {
+                    continue;
+                };
+                outstanding.remove(&ended.job_id);
+                present.remove(&ended.job_id);
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|id| {
+                let started = outstanding.remove(&id)?;
+                let pgid = started.pgid.filter(|pgid| *pgid > 1)?;
+                if !support::group::alive(pgid) {
+                    return None;
+                }
+                if let (Some(expected), Some(actual)) =
+                    (started.start_time, support::group::start_time(pgid))
+                    && expected != actual
+                {
+                    return None;
+                }
+                let (stop, tracking) = parts(pgid);
+                self.restore_detached(started, stop)
+                    .ok()
+                    .map(|opened| (opened, tracking))
+            })
+            .collect()
     }
 
     /// Records a job a keeper handed over, under the `job_started` the log

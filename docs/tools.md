@@ -1041,9 +1041,9 @@ The kinds are `docs/events.md`.
   requires review to stop. Rows without a process-group ID, dead groups and
   contradicted identities are dropped silently. Restore never signals. An
   approved stop rechecks identity, sends
-  TERM, escalates after the grace period if needed, and reports one cancelled
-  end when the group disappears. A group that disappears on its own ends once
-  as failed `indeterminate`. Detached ends are kept in the registry but do not
+  TERM, escalates after the grace period if needed, and reports one failed
+  `indeterminate` end if the group disappears. A group that disappears on its
+  own also ends once as failed `indeterminate`. Detached ends are kept in the registry but do not
   send a completion notice or write `job_completed`. A process without a
   durable `job_started` row is not restored; the unrecorded launch interval
   before that row is written remains outside resume recovery.

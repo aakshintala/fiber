@@ -35,6 +35,23 @@ use super::{
 
 #[cfg(unix)]
 #[test]
+fn detached_reader_rejects_a_regular_file_with_a_different_opened_identity() {
+    let dir = fakes::TempDir::new("fiber-detached-open-identity");
+    let admitted = dir.path().join("admitted.log");
+    let substituted = dir.path().join("substituted.log");
+    std::fs::write(&admitted, b"first").unwrap();
+    std::fs::write(&substituted, b"second").unwrap();
+    let before_open = std::fs::symlink_metadata(&admitted).unwrap();
+    let after_open = std::fs::metadata(&substituted).unwrap();
+    assert!(after_open.file_type().is_file());
+    assert!(
+        super::opened_file_is_rejected(&before_open, &after_open),
+        "a regular replacement with a different inode is rejected"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn detached_output_tail_rejects_nonregular_links_and_paths_outside_root() {
     let dir = fakes::TempDir::new("fiber-detached-output-tail-guard");
     let root = dir.path().join("detached");

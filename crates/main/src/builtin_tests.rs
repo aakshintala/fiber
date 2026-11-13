@@ -138,6 +138,14 @@ pub(super) fn skills() -> Arc<dyn contract::skills::Skills> {
 /// within half of nextest's 120 s kill. A passing run never waits on it;
 /// it only bounds a hang.
 const CALL_WITHIN: Duration = Duration::from_secs(10);
+const LOG_ADMISSION_FAILURE_IDS: [&str; 6] = [
+    "j_missing_file",
+    "j_directory",
+    "j_nested",
+    "j_outside",
+    "j_symlink",
+    "j_fifo",
+];
 
 /// Runs one builtin tool call on its own thread and returns its output.
 /// Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
@@ -174,11 +182,15 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     std::fs::write(&ended_path, b"").unwrap();
     std::fs::write(&unreadable_path, b"").unwrap();
     let (mut valid_child, valid_pgid, valid_start, valid_watchdog) = live_group();
+    let mut admission_groups: Vec<_> = (0..LOG_ADMISSION_FAILURE_IDS.len())
+        .map(|_| live_group())
+        .collect();
     let (mut contradicted_child, contradicted_pgid, contradicted_start, contradicted_watchdog) =
         live_group();
     let (mut ended_child, ended_pgid, ended_start, ended_watchdog) = live_group();
     let (mut unreadable_child, unreadable_pgid, _, unreadable_watchdog) = live_group();
     let (mut dead_child, dead_pgid, dead_start, dead_watchdog) = live_group();
+    let (mut no_row_child, no_row_pgid, _, no_row_watchdog) = live_group();
     assert!(fakes::kill_group(dead_pgid, "KILL").unwrap());
     let _status = dead_child.wait().expect("reap dead process");
     assert!(fakes::group_empties(
@@ -246,8 +258,8 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             &started_detached(
                 "j_missing_file",
                 &missing_path,
-                Some(valid_pgid),
-                Some(valid_start),
+                Some(admission_groups[0].1),
+                Some(admission_groups[0].2),
             ),
         ),
         event_line(
@@ -282,8 +294,8 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             &started_detached(
                 "j_directory",
                 &directory_path,
-                Some(valid_pgid),
-                Some(valid_start),
+                Some(admission_groups[1].1),
+                Some(admission_groups[1].2),
             ),
         ),
         event_line(
@@ -292,8 +304,8 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             &started_detached(
                 "j_nested",
                 &nested_path,
-                Some(valid_pgid),
-                Some(valid_start),
+                Some(admission_groups[2].1),
+                Some(admission_groups[2].2),
             ),
         ),
         event_line(
@@ -302,8 +314,8 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             &started_detached(
                 "j_outside",
                 &outside_path,
-                Some(valid_pgid),
-                Some(valid_start),
+                Some(admission_groups[3].1),
+                Some(admission_groups[3].2),
             ),
         ),
         event_line(
@@ -312,15 +324,20 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
             &started_detached(
                 "j_symlink",
                 &symlink_path,
-                Some(valid_pgid),
-                Some(valid_start),
+                Some(admission_groups[4].1),
+                Some(admission_groups[4].2),
             ),
         ),
         #[cfg(unix)]
         event_line(
             "s_test",
             15,
-            &started_detached("j_fifo", &fifo_path, Some(valid_pgid), Some(valid_start)),
+            &started_detached(
+                "j_fifo",
+                &fifo_path,
+                Some(admission_groups[5].1),
+                Some(admission_groups[5].2),
+            ),
         ),
     ];
     let mut log_text = String::new();
@@ -365,14 +382,7 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     );
     let text = fakes::text_of(&listed);
     assert!(text.contains("j_valid"), "restore is synchronous: {text}");
-    for admitted in [
-        "j_missing_file",
-        "j_directory",
-        "j_nested",
-        "j_outside",
-        "j_symlink",
-        "j_fifo",
-    ] {
+    for admitted in LOG_ADMISSION_FAILURE_IDS {
         assert!(
             text.contains(admitted),
             "invalid log path dropped {admitted}: {text}"
@@ -388,6 +398,7 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
         "j_no_pgid",
         "j_completed",
         "j_dead",
+        "no_row",
     ] {
         assert!(
             !text.contains(omitted),
@@ -396,25 +407,39 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     }
     let identities = registry.owned_identities();
     assert_eq!(identities.len(), 7, "every surviving path case is owned");
-    assert!(
-        identities
-            .iter()
-            .all(|identity| { identity.pgid == valid_pgid && identity.start_time == valid_start })
-    );
-    for id in [
-        "j_missing_file",
-        "j_directory",
-        "j_nested",
-        "j_outside",
-        "j_symlink",
-        "j_fifo",
-    ] {
+    let mut admission_groups = admission_groups
+        .drain(..)
+        .map(|(mut child, pgid, start_time, watchdog)| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _sent = tx.send(child.wait());
+            });
+            (pgid, start_time, watchdog, rx)
+        })
+        .collect::<Vec<_>>();
+    for id in LOG_ADMISSION_FAILURE_IDS {
         let args = serde_json::json!({"action":"stop", "job_id":id});
         let effects = jobs_tool.effects(args.as_object().unwrap()).unwrap();
         assert!(
             effects.declared.effects.is_empty(),
-            "confirmed identity keeps the normal stop fast path for {id}"
+            "confirmed identity stop is direct for {id}"
         );
+        let stopped = ran(Arc::clone(&jobs_tool), args.as_object().unwrap().clone());
+        assert!(
+            stopped.error.is_none(),
+            "jobs stop failed for {id}: {}",
+            fakes::text_of(&stopped)
+        );
+        let (pgid, _, watchdog, reaped) = admission_groups.remove(0);
+        assert!(
+            fakes::group_empties(pgid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+            "jobs stop did not reach {id}'s process group"
+        );
+        let _status = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&reaped)
+            .expect("reap stopped admission-failure process")
+            .expect("wait admission-failure process");
+        watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     }
     assert!(
         fakes::group_alive(valid_pgid),
@@ -432,8 +457,18 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
         fakes::group_alive(unreadable_pgid),
         "unreadable identity is retained without signalling"
     );
+    assert!(
+        fakes::group_alive(no_row_pgid),
+        "a live process with no durable start row is not restored or signalled"
+    );
 
-    for pgid in [valid_pgid, contradicted_pgid, ended_pgid, unreadable_pgid] {
+    for pgid in [
+        valid_pgid,
+        contradicted_pgid,
+        ended_pgid,
+        unreadable_pgid,
+        no_row_pgid,
+    ] {
         assert!(fakes::kill_group(pgid, "KILL").unwrap());
     }
     let _valid_status = valid_child.wait().expect("reap valid process");
@@ -446,6 +481,8 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     contradicted_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     ended_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     unreadable_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _no_row_status = no_row_child.wait().expect("reap no-row process");
+    no_row_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]

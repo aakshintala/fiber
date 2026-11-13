@@ -2274,11 +2274,7 @@ fn restore_detached_keeps_existing_log_and_writes_no_second_start() {
     let recorder = Arc::new(Recorder::default());
     let registry = Registry::new(dir.path().join("artifacts"), clock, recorder.clone());
     let opened = registry
-        .restore_detached(
-            detached_started("j_detached", &path),
-            &root,
-            Stop(Box::new(|| {})),
-        )
+        .restore_detached(detached_started("j_detached", &path), Stop(Box::new(|| {})))
         .unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"kept\\n");
     assert_eq!(opened.started.job_id, JobId("j_detached".into()));
@@ -2287,7 +2283,20 @@ fn restore_detached_keeps_existing_log_and_writes_no_second_start() {
         "restore writes no job_started"
     );
     assert!(registry.list_text().contains("j_detached detached running"));
-    drop(opened.end);
+    opened.end.0(contract::events::JobCompleted {
+        job_id: JobId("wrong_id".into()),
+        status: contract::events::Outcome::Failed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    assert!(
+        registry.list_text().contains("j_detached detached failed"),
+        "Registry::restore_detached must attach its recorded job id to End"
+    );
 }
 
 #[test]
@@ -2314,7 +2323,6 @@ fn restore_detached_admits_paths_outside_root_and_missing_files() {
     ] {
         let result = registry.restore_detached(
             detached_started(id, &path),
-            &root,
             Stop(Box::new(|| panic!("restore must not signal"))),
         );
         let opened = result.unwrap_or_else(|error| panic!("{} rejected: {error}", path.display()));
@@ -2346,12 +2354,10 @@ fn restore_detached_admits_fifo_without_opening_or_blocking() {
     let stop_calls = Arc::clone(&calls);
     let (result_tx, result_rx) = mpsc::channel();
     let worker_registry = Arc::clone(&registry);
-    let worker_root = root.clone();
     let worker_path = path.clone();
     let worker = thread::spawn(move || {
         let result = worker_registry.restore_detached(
             detached_started("j_fifo", &worker_path),
-            &worker_root,
             Stop(Box::new(move || {
                 stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             })),
@@ -2408,7 +2414,6 @@ fn restore_detached_admits_symlink_path_without_following_it() {
     let stop_calls = Arc::clone(&calls);
     let result = registry.restore_detached(
         detached_started("j_symlink", &path),
-        &root,
         Stop(Box::new(move || {
             stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         })),

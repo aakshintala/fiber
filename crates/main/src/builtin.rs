@@ -9,7 +9,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::diag::Timing;
-use contract::events::{Event, EventKind, JobKind, JobStarted, ToolInfo, ToolSource, ToolState};
+use contract::events::{ToolInfo, ToolSource, ToolState};
 use contract::search::SearchBackend;
 use contract::shapes::Failure;
 use contract::tool::Tool;
@@ -165,7 +165,17 @@ pub(crate) fn builtin_timed(
         .with_sandbox(sandbox)
         .with_detached(home.join("detached"))
         .non_interactive();
-    restore_detached_jobs(home, workspace, delegates.session(), jobs, &shell);
+    let dir = log::SessionDir::new(&log::sessions_dir(home, workspace), delegates.session());
+    let detached_root = home.join("detached");
+    for (opened, track) in jobs
+        .restore_detached_rows(log::lines(dir.path()).into_iter().flatten(), |pgid| {
+            shell.detached_restore_parts(pgid, detached_root.clone())
+        })
+    {
+        // The admission remains registered if tracking cannot start; its
+        // synchronous End records an indeterminate terminal state.
+        let _tracking = track(opened);
+    }
     if let Some(host) = &host {
         shell = shell.with_host(Arc::clone(host));
     }
@@ -254,73 +264,6 @@ pub(crate) fn builtin_timed(
     }
     let forget: Arc<dyn Fn() + Send + Sync> = Arc::new(move || files.forget());
     Ok((pairs, infos, driver, forget, images))
-}
-
-/// Re-admits outstanding detached rows before the shell and jobs tools can
-/// be exposed. This reads only this session's durable log and never signals.
-fn restore_detached_jobs(
-    home: &Path,
-    workspace: &Path,
-    session: &contract::SessionId,
-    registry: &jobs::Registry,
-    shell: &tools::Shell,
-) {
-    use std::collections::{HashMap, HashSet};
-
-    let dir = log::SessionDir::new(&log::sessions_dir(home, workspace), session);
-    let Ok(lines) = log::lines(dir.path()) else {
-        return;
-    };
-    let mut outstanding = HashMap::<contract::JobId, JobStarted>::new();
-    let mut order = Vec::new();
-    let mut present = HashSet::new();
-    for line in lines {
-        let Ok(line) = line else { continue };
-        if line.kind() == EventKind::JobStarted {
-            let Ok(Some(Event::JobStarted(started))) = Event::from_envelope(&line) else {
-                continue;
-            };
-            if started.kind == Some(JobKind::Detached) {
-                let id = started.job_id.clone();
-                if present.insert(id.clone()) {
-                    order.push(id.clone());
-                }
-                outstanding.insert(id, started);
-            }
-        } else if line.kind() == EventKind::JobCompleted {
-            let Ok(Some(Event::JobCompleted(ended))) = Event::from_envelope(&line) else {
-                continue;
-            };
-            outstanding.remove(&ended.job_id);
-            present.remove(&ended.job_id);
-        }
-    }
-
-    let detached_root = home.join("detached");
-    for id in order {
-        let Some(started) = outstanding.remove(&id) else {
-            continue;
-        };
-        let Some(pgid) = started.pgid.filter(|pgid| *pgid > 1) else {
-            continue;
-        };
-        if !support::group::alive(pgid) {
-            continue;
-        }
-        if let (Some(expected), Some(actual)) =
-            (started.start_time, support::group::start_time(pgid))
-            && expected != actual
-        {
-            continue;
-        }
-        let (stop, track) = shell.detached_restore_parts(pgid, detached_root.clone());
-        let Ok(opened) = registry.restore_detached(started, &detached_root, stop) else {
-            continue;
-        };
-        // Admission is retained if tracking cannot start: its synchronous
-        // End records an indeterminate terminal state without a signal.
-        let _tracking = track(opened);
-    }
 }
 
 /// The provider's hosted search of type `kind`, and what the `tools`

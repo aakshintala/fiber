@@ -4088,7 +4088,6 @@ fn a_restored_detached_stop_is_reviewed_and_its_end_starts_no_loop_delivery() {
                 start_time: None,
                 kind: Some(contract::events::JobKind::Detached),
             },
-            &detached,
             Stop(Box::new(move || {
                 stop_record.store(true, Ordering::SeqCst);
                 assert!(fakes::kill_group(pgid, "TERM").unwrap());

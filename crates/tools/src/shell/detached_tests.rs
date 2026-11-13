@@ -592,6 +592,57 @@ fn restored_fixture(
 }
 
 #[test]
+fn restored_signal_failure_reports_one_failed_end_without_signalling() {
+    let dir = fakes::TempDir::new("fiber-detached-restored-signal-failure");
+    let ready = Ready::new(dir.path());
+    let clock = FakeClock::new();
+    let (jobs, opened, restored, pgid, watchdog) = restored_fixture(
+        dir.path(),
+        &ready,
+        clock.clone(),
+        &format!("echo $$ > '{}'; exec sleep 60", ready.path().display()),
+    );
+    {
+        let mut stop = support::lock(&restored.control.stop);
+        stop.requested = true;
+        stop.result = Some(Err(std::io::Error::other("injected TERM failure")));
+    }
+    let (started_tx, started_rx) = mpsc::channel();
+    let spawner: Spawner = Arc::new(move |task| {
+        let started_tx = started_tx.clone();
+        std::thread::Builder::new()
+            .name("test-restored-signal-failure".into())
+            .spawn(move || {
+                let _sent = started_tx.send(());
+                task();
+            })
+            .map(drop)
+    });
+    super::track_restored(opened, restored, clock, &spawner).unwrap();
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&started_rx)
+        .expect("restored supervisor started");
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("restored signal failure reports End");
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    let error = ended.error.expect("failed signal carries an error");
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert!(error.message.contains("injected TERM failure"));
+    assert_eq!(jobs.end_count(), 1);
+    assert!(
+        fakes::group_alive(pgid),
+        "failed TERM did not signal the group"
+    );
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(fakes::group_empties(
+        pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
 fn restored_group_disappearance_reports_one_failed_indeterminate_end() {
     let dir = fakes::TempDir::new("fiber-detached-restored-spontaneous");
     let ready = Ready::new(dir.path());
@@ -697,7 +748,11 @@ fn restored_stop_escalates_after_grace_and_reports_one_cancelled_end() {
     let ended = jobs
         .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("restored supervisor reports after escalation empties the group");
-    assert_eq!(ended.status, contract::events::Outcome::Cancelled);
+    assert_eq!(ended.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        ended.error.as_ref().map(|error| error.code.clone()),
+        Some(contract::ErrorCode::Indeterminate)
+    );
     assert_eq!(jobs.end_count(), 1);
     assert!(fakes::group_empties(
         pgid,

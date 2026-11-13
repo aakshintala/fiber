@@ -1768,7 +1768,6 @@ fn restored_dead_leader_live_group_stop_is_reviewed_without_signalling_before_ap
     let opened = registry
         .restore_detached(
             started,
-            &root,
             Stop(Box::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             })),

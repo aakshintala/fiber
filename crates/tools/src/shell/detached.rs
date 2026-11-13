@@ -290,11 +290,11 @@ struct RestoredSupervisor {
 }
 
 impl RestoredSupervisor {
-    fn report_cancelled(self) {
+    fn report(self, status: Outcome, error: Option<ShellError>) {
         let completed = JobCompleted {
             job_id: self.opened.started.job_id.clone(),
-            status: Outcome::Cancelled,
-            error: None,
+            status,
+            error: error.map(failure),
             process: None,
             output_tail: super::background::output_tail_from(
                 &self.opened.path,
@@ -308,34 +308,16 @@ impl RestoredSupervisor {
     }
 
     fn fail_indeterminate(self) {
-        self.report_failed(ShellError::Indeterminate);
+        self.report(Outcome::Failed, Some(ShellError::Indeterminate));
     }
 
     fn fail_signal(self, source: io::Error) {
-        self.report_failed(ShellError::NotStarted { source });
-    }
-
-    fn report_failed(self, error: ShellError) {
-        let completed = JobCompleted {
-            job_id: self.opened.started.job_id.clone(),
-            status: Outcome::Failed,
-            error: Some(failure(error)),
-            process: None,
-            output_tail: super::background::output_tail_from(
-                &self.opened.path,
-                Some(&self.restored.log_root),
-            ),
-            notice: None,
-            changed_by: None,
-            protected_paths: None,
-        };
-        (self.opened.end.0)(completed);
+        self.report(Outcome::Failed, Some(ShellError::NotStarted { source }));
     }
 }
 
 /// Watches a restored group without a child handle. A spontaneous
-/// disappearance has no observable exit status; an approved stop is
-/// cancelled after the group disappears.
+/// disappearance has no observable exit status, even after an approved stop.
 fn supervise_restored(supervisor: RestoredSupervisor) {
     let pgid = supervisor.restored.pgid;
     let control = Arc::clone(&supervisor.restored.control);
@@ -359,7 +341,7 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
         }
         if !support::group::alive(pgid) {
             if cancelled {
-                supervisor.report_cancelled();
+                supervisor.report(Outcome::Failed, Some(ShellError::Indeterminate));
             } else {
                 supervisor.fail_indeterminate();
             }

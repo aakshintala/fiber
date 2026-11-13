@@ -903,8 +903,6 @@ pub(super) fn output_tail(path: &Path) -> Option<String> {
 /// Reads a detached log only when it is still a regular direct child of its
 /// expected root. `O_NOFOLLOW | O_NONBLOCK` closes the symlink/FIFO race.
 pub(super) fn output_tail_from(path: &Path, expected_root: Option<&Path>) -> Option<String> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
     if let Some(root) = expected_root
         && (!path.is_absolute() || path.parent() != Some(root) || path.file_name().is_none())
     {
@@ -914,15 +912,13 @@ pub(super) fn output_tail_from(path: &Path, expected_root: Option<&Path>) -> Opt
     if !metadata.file_type().is_file() {
         return None;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let flags = rustix::fs::OFlags::RDONLY
+        .union(rustix::fs::OFlags::NOFOLLOW)
+        .union(rustix::fs::OFlags::NONBLOCK);
+    let fd = rustix::fs::open(path, flags, rustix::fs::Mode::empty()).ok()?;
+    let mut file = std::fs::File::from(fd);
     let opened = file.metadata().ok()?;
-    if !opened.file_type().is_file()
-        || (opened.dev(), opened.ino()) != (metadata.dev(), metadata.ino())
-    {
+    if opened_file_is_rejected(&metadata, &opened) {
         return None;
     }
     let len = opened.len();
@@ -933,6 +929,13 @@ pub(super) fn output_tail_from(path: &Path, expected_root: Option<&Path>) -> Opt
     file.take(window).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(align_char_boundary(&bytes)).into_owned();
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn opened_file_is_rejected(metadata: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    !opened.file_type().is_file()
+        || (opened.dev(), opened.ino()) != (metadata.dev(), metadata.ino())
 }
 
 #[cfg(test)]
