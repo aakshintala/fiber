@@ -1051,7 +1051,7 @@ fn restored_drain_deadline_survivor_reports_only_at_deadline() {
     clock.advance_when_parked(
         Some(drain),
         Some(supervisor),
-        support::group::DRAIN - before,
+        support::group::DRAIN.saturating_sub(before),
         &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
