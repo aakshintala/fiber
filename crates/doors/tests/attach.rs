@@ -65,7 +65,7 @@ fn close(log: Arc<Log>, inbox: Receiver<(Result<(), Failure>, Session)>) -> Resu
         .expect("waited for the inbox thread to finish");
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        session.close(log);
+        let _ = session.close(log);
         match done.send(()) {
             Ok(()) | Err(_) => {}
         }
@@ -716,7 +716,7 @@ impl Write for Broken {
 }
 
 #[test]
-fn an_unwritable_stdout_is_an_io_failure() {
+fn attach_stdout_error_preserves_kind() {
     let opened = Opened::open(Vec::new());
     let log = Arc::clone(&opened.log);
     let inbox = run(opened.session, move |inbox| {
@@ -745,8 +745,8 @@ fn an_unwritable_stdout_is_an_io_failure() {
     let failed = failed.unwrap_err();
 
     assert!(
-        matches!(&failed, SessionError::StdoutFailed { .. }),
-        "a broken stdout is a write failure: {failed:?}"
+        matches!(&failed, SessionError::StdoutFailed { source } if source.kind() == std::io::ErrorKind::Other),
+        "the stdout error keeps its original kind: {failed:?}"
     );
     assert_eq!(failed.code(), ErrorCode::IoFailed);
     assert_eq!(close(opened.log, inbox), Ok(()));

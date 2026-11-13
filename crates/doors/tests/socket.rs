@@ -2952,7 +2952,7 @@ fn close_cancels_a_shell_blocked_in_its_tool() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        session.close(log);
+        let _ = session.close(log);
         if let Ok(()) = done_tx.send(()) {}
     });
     Deadline::after(DEADLINE)
